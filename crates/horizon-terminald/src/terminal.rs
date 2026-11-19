@@ -8,9 +8,8 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    CoreInput, CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalKeyInput,
-    TerminalProgramStatus, TerminalSpawnSpec, TerminalSummary, TerminalUpdate, core_channels,
-    run_terminal_core,
+    CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalProgramStatus,
+    TerminalSpawnSpec, TerminalSummary, TerminalUpdate, core_channels, run_terminal_core,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -546,7 +545,8 @@ fn spawn_terminal(
     let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
     let (senders, receivers) = core_channels();
 
-    let response_tx = command_tx.clone();
+    // What the loop writes to the PTY: its answers, and a client's bytes.
+    let (written_tx, written_rx) = crossbeam_channel::unbounded();
     let read_update_tx = update_tx.clone();
     thread::spawn(move || read_pty(&mut *reader, pty_tx, activity_tx, read_update_tx));
     let options = TerminalCoreOptions {
@@ -554,11 +554,18 @@ fn spawn_terminal(
         color_scheme: spec.color_scheme,
     };
     thread::spawn(move || {
-        run_terminal_core(size, options, pty_rx, receivers, response_tx, update_tx);
+        run_terminal_core(size, options, pty_rx, receivers, written_tx, update_tx);
     });
     let writer_killer = killer.clone();
     thread::spawn(move || {
-        run_writer(master, &mut *writer, writer_killer, command_rx, senders);
+        run_writer(
+            master,
+            &mut *writer,
+            writer_killer,
+            command_rx,
+            written_rx,
+            senders,
+        );
     });
 
     Ok((
@@ -629,85 +636,68 @@ fn run_writer(
     writer: &mut dyn Write,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     command_rx: Receiver<TerminalCommand>,
+    written: Receiver<Vec<u8>>,
     senders: CoreSenders,
 ) {
     let CoreSenders {
         resize_tx,
-        scroll_tx,
-        mouse_tx,
         input_tx,
-        focus_tx,
         color_scheme_tx,
         stream_tx,
     } = senders;
     let mut last_size = None;
-    while let Ok(command) = command_rx.recv() {
-        match command {
-            TerminalCommand::Input(bytes) => {
-                let _ = writer.write_all(&bytes);
-                let _ = writer.flush();
-            }
-            TerminalCommand::Key {
-                key,
-                modifiers,
-                event,
-            } => {
-                // Legacy key command: the v13 daemon treats it as a structured
-                // key input with no associated text, preserving wire
-                // compatibility with older clients.
-                let _ = input_tx.send(CoreInput::Key(TerminalKeyInput {
-                    key,
-                    modifiers,
-                    kind: event,
-                    text: None,
-                }));
-            }
-            TerminalCommand::KeyInput(input) => {
-                let _ = input_tx.send(CoreInput::Key(input));
-            }
-            TerminalCommand::TextInput(text) => {
-                let _ = input_tx.send(CoreInput::Text(text));
-            }
-            TerminalCommand::Paste(text) => {
-                let _ = input_tx.send(CoreInput::Paste(text));
-            }
-            TerminalCommand::Resize(size) => {
-                let size = size.normalized();
-                if last_size != Some(size) {
-                    last_size = Some(size);
-                    let _ = master.resize(PtySize {
-                        rows: size.rows,
-                        cols: size.cols,
-                        pixel_width: size.pixel_width,
-                        pixel_height: size.pixel_height,
-                    });
+    // (Once the loop is gone, nothing more is written; a command is still
+    // heard, a shutdown above all.)
+    let mut written = written;
+    loop {
+        crossbeam_channel::select! {
+            recv(written) -> bytes => match bytes {
+                Ok(bytes) => {
+                    let _ = writer.write_all(&bytes);
+                    let _ = writer.flush();
                 }
-                let _ = resize_tx.send(size);
-            }
-            TerminalCommand::Scroll(scroll) => {
-                let _ = scroll_tx.send(scroll);
-            }
-            TerminalCommand::Mouse(report) => {
-                let _ = mouse_tx.send(report);
-            }
-            TerminalCommand::Focus(focused) => {
-                let _ = focus_tx.send(focused);
-            }
-            TerminalCommand::SetColorScheme(scheme) => {
-                let _ = color_scheme_tx.send(scheme);
-            }
-            TerminalCommand::WantState => {
-                let _ = stream_tx.send(StreamCommand::Want);
-            }
-            TerminalCommand::StopState => {
-                let _ = stream_tx.send(StreamCommand::Stop);
-            }
-            TerminalCommand::OutputTaken(bytes) => {
-                let _ = stream_tx.send(StreamCommand::Taken(bytes));
-            }
-            TerminalCommand::Shutdown => {
-                let _ = killer.lock().unwrap().kill();
-                return;
+                Err(_) => written = crossbeam_channel::never(),
+            },
+            recv(command_rx) -> command => {
+                let Ok(command) = command else {
+                    return;
+                };
+                match command {
+                    // Through the loop, which writes it after what the PTY
+                    // has asked is answered.
+                    TerminalCommand::Input(bytes) => {
+                        let _ = input_tx.send(bytes);
+                    }
+                    TerminalCommand::Resize(size) => {
+                        let size = size.normalized();
+                        if last_size != Some(size) {
+                            last_size = Some(size);
+                            let _ = master.resize(PtySize {
+                                rows: size.rows,
+                                cols: size.cols,
+                                pixel_width: size.pixel_width,
+                                pixel_height: size.pixel_height,
+                            });
+                        }
+                        let _ = resize_tx.send(size);
+                    }
+                    TerminalCommand::SetColorScheme(scheme) => {
+                        let _ = color_scheme_tx.send(scheme);
+                    }
+                    TerminalCommand::WantState => {
+                        let _ = stream_tx.send(StreamCommand::Want);
+                    }
+                    TerminalCommand::StopState => {
+                        let _ = stream_tx.send(StreamCommand::Stop);
+                    }
+                    TerminalCommand::OutputTaken(bytes) => {
+                        let _ = stream_tx.send(StreamCommand::Taken(bytes));
+                    }
+                    TerminalCommand::Shutdown => {
+                        let _ = killer.lock().unwrap().kill();
+                        return;
+                    }
+                }
             }
         }
     }

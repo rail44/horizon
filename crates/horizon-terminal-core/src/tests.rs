@@ -1515,35 +1515,15 @@ where
 }
 
 #[test]
-fn terminal_commands_and_selection_commands_round_trip_through_serde() {
-    let point = TerminalSelectionPoint { row: 3, col: 7 };
-    let mouse = TerminalMouseReport {
-        kind: TerminalMouseKind::Drag,
-        button: TerminalMouseButton::Left,
-        point,
-        modifiers: TerminalMouseModifiers {
-            shift: true,
-            alt: false,
-            control: true,
-        },
-    };
+fn terminal_commands_round_trip_through_serde() {
     let commands = vec![
         TerminalCommand::Input(vec![0, 1, 255]),
-        TerminalCommand::Key {
-            key: KeyCode::Char('x'),
-            modifiers: Modifiers::CTRL | Modifiers::ALT,
-            event: KeyEventKind::Repeat,
-        },
-        TerminalCommand::Paste("paste".into()),
         TerminalCommand::Resize(TerminalSize {
             cols: 120,
             rows: 40,
             pixel_width: 960,
             pixel_height: 800,
         }),
-        TerminalCommand::Scroll(TerminalScroll { lines: -2, point }),
-        TerminalCommand::Mouse(mouse),
-        TerminalCommand::Focus(true),
         TerminalCommand::Shutdown,
     ];
     for command in commands {

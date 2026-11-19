@@ -13,17 +13,13 @@ use std::time::{Duration, Instant};
 
 mod channels;
 
-pub use channels::{CoreInput, CoreReceivers, CoreSenders, StreamCommand, core_channels};
+pub use channels::{CoreReceivers, CoreSenders, StreamCommand, core_channels};
 
 use crossbeam_channel::{Receiver, Sender};
-#[cfg(test)]
-use termwiz::input::{KeyCode, Modifiers};
 
-use crate::contract::{ClipboardDestination, TerminalCommand, TerminalUpdate};
+use crate::contract::{ClipboardDestination, TerminalUpdate};
 use crate::core::{TerminalColorScheme, TerminalCore, TerminalEvents};
 use crate::types::TerminalSize;
-#[cfg(test)]
-use crate::{contract::TerminalKeyInput, types::KeyEventKind};
 
 /// Construction-time options a real session feeds into `TerminalCore`,
 /// mirroring host-config-derived values the crate itself has no way to read
@@ -197,25 +193,25 @@ impl Stream {
 fn process_pty_chunk(
     core: &mut TerminalCore,
     bytes: &[u8],
-    command_tx: &Sender<TerminalCommand>,
+    to_pty: &Sender<Vec<u8>>,
     update_tx: &Sender<TerminalUpdate>,
     sync_flush_rx: &mut Receiver<Instant>,
     stream: &mut Stream,
 ) {
     let mut events = core.write_vt(bytes);
     stream.wrote(std::mem::take(&mut events.output), update_tx);
-    send_terminal_events(events, command_tx, update_tx);
+    send_terminal_events(events, to_pty, update_tx);
     rearm_sync_flush(core, sync_flush_rx);
 }
 
 /// Publish parser side effects in the same order for PTY input and timed flushes.
 fn send_terminal_events(
     events: TerminalEvents,
-    command_tx: &Sender<TerminalCommand>,
+    to_pty: &Sender<Vec<u8>>,
     update_tx: &Sender<TerminalUpdate>,
 ) {
     for bytes in events.pty_writes {
-        let _ = command_tx.send(TerminalCommand::Input(bytes));
+        let _ = to_pty.send(bytes);
     }
     if events.bell_count > 0 {
         let _ = update_tx.send(TerminalUpdate::Bell);
@@ -267,7 +263,7 @@ const PTY_DRAIN_BUDGET: usize = 8;
 fn drain_pty_output(
     core: &mut TerminalCore,
     pty_rx: &Receiver<Vec<u8>>,
-    command_tx: &Sender<TerminalCommand>,
+    to_pty: &Sender<Vec<u8>>,
     update_tx: &Sender<TerminalUpdate>,
     sync_flush_rx: &mut Receiver<Instant>,
     stream: &mut Stream,
@@ -276,7 +272,7 @@ fn drain_pty_output(
     while budget > 0 {
         match pty_rx.try_recv() {
             Ok(bytes) => {
-                process_pty_chunk(core, &bytes, command_tx, update_tx, sync_flush_rx, stream);
+                process_pty_chunk(core, &bytes, to_pty, update_tx, sync_flush_rx, stream);
                 budget -= 1;
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return true,
@@ -291,15 +287,12 @@ pub fn run_terminal_core(
     options: TerminalCoreOptions,
     pty_rx: Receiver<Vec<u8>>,
     receivers: CoreReceivers,
-    command_tx: Sender<TerminalCommand>,
+    to_pty: Sender<Vec<u8>>,
     update_tx: Sender<TerminalUpdate>,
 ) {
     let CoreReceivers {
         resize_rx,
-        scroll_rx,
-        mouse_rx,
         input_rx,
-        focus_rx,
         color_scheme_rx,
         stream_rx,
     } = receivers;
@@ -325,7 +318,7 @@ pub fn run_terminal_core(
         if !drain_pty_output(
             &mut core,
             &pty_rx,
-            &command_tx,
+            &to_pty,
             &update_tx,
             &mut sync_flush_rx,
             &mut stream,
@@ -352,54 +345,18 @@ pub fn run_terminal_core(
                 };
                 stream.said(command, &mut core, &update_tx);
             }
-            recv(scroll_rx) -> scroll => {
-                let Ok(scroll) = scroll else {
-                    return;
-                };
-                // (A wheel that is the program's: what the program is told.
-                // One that scrolls the history scrolls this terminal's, which
-                // nothing draws.)
-                if let Some(input) = core.handle_scroll(scroll) {
-                    let _ = command_tx.send(TerminalCommand::Input(input));
-                }
-            }
-            recv(mouse_rx) -> report => {
-                let Ok(report) = report else {
-                    return;
-                };
-                if let Some(input) = core.handle_mouse_report(report) {
-                    let _ = command_tx.send(TerminalCommand::Input(input));
-                }
-            }
             recv(input_rx) -> input => {
                 let Ok(input) = input else { return; };
-                // Keep already-received PTY queries ahead of every user
-                // delivery, while the shared input FIFO preserves key/text/
-                // paste order even when the core is busy draining output.
+                // What the PTY has already said is answered before a
+                // client's bytes are written: a reply to a query written
+                // after the Enter that starts the next program would be
+                // that program's input (`drain_pty_output`).
                 take_color_schemes(&mut core, &color_scheme_rx);
                 if !drain_pty_output(
-                    &mut core, &pty_rx, &command_tx, &update_tx,
+                    &mut core, &pty_rx, &to_pty, &update_tx,
                     &mut sync_flush_rx, &mut stream,
                 ) { return; }
-                let is_paste = matches!(input, CoreInput::Paste(_));
-                let input = match input {
-                    CoreInput::Key(input) => core.key_input(
-                        input.key, input.modifiers, input.kind, input.text.as_deref(),
-                    ),
-                    CoreInput::Text(text) => core.text_input(&text),
-                    CoreInput::Paste(text) => core.paste_input(&text),
-                };
-                if is_paste || !input.is_empty() {
-                    let _ = command_tx.send(TerminalCommand::Input(input));
-                }
-            }
-            recv(focus_rx) -> focused => {
-                let Ok(focused) = focused else {
-                    return;
-                };
-                if let Some(bytes) = core.focus_input(focused) {
-                    let _ = command_tx.send(TerminalCommand::Input(bytes));
-                }
+                let _ = to_pty.send(input);
             }
             recv(color_scheme_rx) -> scheme => {
                 let Ok(scheme) = scheme else {
@@ -417,7 +374,7 @@ pub fn run_terminal_core(
                 process_pty_chunk(
                     &mut core,
                     &bytes,
-                    &command_tx,
+                    &to_pty,
                     &update_tx,
                     &mut sync_flush_rx,
                     &mut stream,
@@ -429,7 +386,7 @@ pub fn run_terminal_core(
                     target: "horizon_terminal_core::session_loop",
                     "sync_flush_fired"
                 );
-                send_terminal_events(events, &command_tx, &update_tx);
+                send_terminal_events(events, &to_pty, &update_tx);
                 stream.released(&update_tx);
                 rearm_sync_flush(&core, &mut sync_flush_rx);
             }
@@ -518,10 +475,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(
-            command_rx.try_recv().unwrap(),
-            TerminalCommand::Input(b"\x1b[1;1R".to_vec())
-        );
+        assert_eq!(command_rx.try_recv().unwrap(), b"\x1b[1;1R".to_vec());
         assert!(command_rx.try_recv().is_err());
     }
 
@@ -738,61 +692,6 @@ mod tests {
         );
     }
 
-    /// End-to-end regression coverage for focus-report plumbing
-    /// (`docs/tasks/backlog.md` item 5): a `focus_rx` transition must stay
-    /// silent until the attached app has negotiated mode 1004 (`CSI ?1004h`,
-    /// sent here as ordinary PTY input, exactly as a real shell/TUI would),
-    /// and only then turn into a `CSI I`/`CSI O` `TerminalCommand::Input`
-    /// for the writer thread to send on to the PTY.
-    #[test]
-    fn run_terminal_core_reports_focus_only_once_mode_1004_is_enabled() {
-        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (senders, receivers) = core_channels();
-        let focus_tx = senders.focus_tx.clone();
-
-        std::thread::spawn(move || {
-            run_terminal_core(
-                TerminalSize::new(20, 10),
-                TerminalCoreOptions::default(),
-                pty_rx,
-                receivers,
-                command_tx,
-                update_tx,
-            );
-        });
-
-        // No app has asked for focus reporting yet -- a focus transition
-        // must not produce any PTY input at all.
-        focus_tx.send(true).unwrap();
-        assert!(
-            command_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-            "focus_input must stay silent until mode 1004 is negotiated"
-        );
-
-        // Negotiate mode 1004, then synchronize on its bytes coming back
-        // out of the stream: proof the write has been applied before the
-        // focus transition below is sent, with no sleep needed.
-        watch(&senders.stream_tx, &update_rx);
-        pty_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
-        next(&update_rx, "the mode's bytes", |update| {
-            matches!(update, TerminalUpdate::Output(_))
-        });
-
-        focus_tx.send(true).unwrap();
-        let focus_in = command_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("focus-in should be reported once mode 1004 is enabled");
-        std::assert_matches!(focus_in, TerminalCommand::Input(bytes) if bytes == b"\x1b[I");
-
-        focus_tx.send(false).unwrap();
-        let focus_out = command_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("focus-out should be reported once mode 1004 is enabled");
-        std::assert_matches!(focus_out, TerminalCommand::Input(bytes) if bytes == b"\x1b[O");
-    }
-
     /// End-to-end regression coverage for the live theme-apply re-push
     /// (see `TerminalCommand::SetColorScheme`'s doc comment): a scheme sent
     /// on `color_scheme_tx` demuxes onto `color_scheme_rx` and reaches
@@ -902,8 +801,8 @@ mod tests {
         let reply = command_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("OSC 11 query reply after the confirmed re-push");
-        std::assert_matches!(
-            reply, TerminalCommand::Input(bytes) if bytes == b"\x1b]11;rgb:0101/0202/0303\x07",
+        assert_eq!(
+            reply, b"\x1b]11;rgb:0101/0202/0303\x07",
             "an app-set OSC 11 override must keep winning over a re-pushed scheme"
         );
     }
@@ -934,15 +833,14 @@ mod tests {
     /// older.
     fn poll_query_reply(
         pty_tx: &Sender<Vec<u8>>,
-        command_rx: &Receiver<TerminalCommand>,
+        command_rx: &Receiver<Vec<u8>>,
         query: &[u8],
         expected: &[u8],
     ) -> bool {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             let _ = pty_tx.send(query.to_vec());
-            if let Ok(TerminalCommand::Input(bytes)) =
-                command_rx.recv_timeout(Duration::from_millis(50))
+            if let Ok(bytes) = command_rx.recv_timeout(Duration::from_millis(50))
                 && bytes == expected
             {
                 while command_rx.try_recv().is_ok() {}
@@ -955,21 +853,17 @@ mod tests {
     /// Regression test for query-reply ordering: a PTY chunk containing a
     /// terminal query (fish 4.x probes the background color with
     /// `OSC 11;?` around every prompt) that reaches the loop before a
-    /// keystroke must be answered before that keystroke is forwarded to
-    /// the shell. With the old randomized-`select!`-only servicing, the
-    /// Enter keystroke that execs the next program could win the race, and
-    /// the reply was then written into the *new* process's stdin -- gh's
-    /// survey prompt loop aborts on it with "unexpected escape sequence
-    /// from terminal: ['\x1b' ']']". Both interleavings below (the query
-    /// drained at the loop top, or answered by the key arm's own priority
-    /// drain after `select!` picked the key) enqueue the reply first, so
-    /// the assertion is deterministic on the fixed loop. (An unfixed loop
-    /// can still pass by luck -- roughly one chance in three here -- which
-    /// is exactly the flakiness users saw as an intermittent gh failure.)
+    /// client's keystroke must be answered before that keystroke is written
+    /// to the shell. Otherwise the Enter that execs the next program could
+    /// win the race, and the reply was then written into the *new*
+    /// process's stdin -- gh's survey prompt loop aborts on it with
+    /// "unexpected escape sequence from terminal: ['\x1b' ']']". A view's
+    /// terminal writes the keys; the loop writes them after its priority
+    /// drain of the PTY.
     #[test]
     fn pending_query_is_answered_before_a_queued_keystroke_is_forwarded() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (to_pty, written) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
         let input_tx = senders.input_tx.clone();
@@ -980,90 +874,55 @@ mod tests {
                 TerminalCoreOptions::default(),
                 pty_rx,
                 receivers,
-                command_tx,
+                to_pty,
                 update_tx,
             );
         });
 
         // Queue the query first, then the keystrokes it must not lose to.
         pty_tx.send(b"\x1b]11;?\x07".to_vec()).unwrap();
-        input_tx
-            .send(CoreInput::Key(TerminalKeyInput {
-                key: KeyCode::Enter,
-                modifiers: Modifiers::NONE,
-                kind: KeyEventKind::Press,
-                text: None,
-            }))
-            .unwrap();
-        input_tx
-            .send(CoreInput::Key(TerminalKeyInput {
-                key: KeyCode::Char('a'),
-                modifiers: Modifiers::NONE,
-                kind: KeyEventKind::Press,
-                text: None,
-            }))
-            .unwrap();
+        input_tx.send(b"\r".to_vec()).unwrap();
+        input_tx.send(b"a".to_vec()).unwrap();
 
-        let first = command_rx
+        let first = written
             .recv_timeout(Duration::from_millis(500))
             .expect("the query must be answered");
-        std::assert_matches!(
-            &first, TerminalCommand::Input(bytes) if bytes.starts_with(b"\x1b]11;rgb:"),
+        assert!(
+            first.starts_with(b"\x1b]11;rgb:"),
             "the OSC 11 reply must precede every queued keystroke, got {first:?}"
         );
-
-        let second = command_rx
+        let second = written
             .recv_timeout(Duration::from_millis(500))
-            .expect("the Enter keystroke must still be forwarded");
-        std::assert_matches!(
-            &second, TerminalCommand::Input(bytes) if bytes == b"\r",
-            "the Enter keystroke must be forwarded right after the reply, got {second:?}"
-        );
-
-        let third = command_rx
+            .expect("the Enter keystroke must still be written");
+        assert_eq!(second, b"\r", "the Enter keystroke right after the reply");
+        let third = written
             .recv_timeout(Duration::from_millis(500))
-            .expect("the 'a' keystroke must still be forwarded");
-        std::assert_matches!(
-            &third, TerminalCommand::Input(bytes) if bytes == b"a",
-            "the 'a' keystroke must keep its queue position, got {third:?}"
-        );
-
+            .expect("the 'a' keystroke must still be written");
+        assert_eq!(third, b"a", "the 'a' keystroke keeps its queue position");
         assert!(
-            command_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            written.recv_timeout(Duration::from_millis(100)).is_err(),
             "the query must be answered exactly once"
         );
     }
+
     #[test]
-    fn mixed_user_input_retains_fifo_order_before_the_core_starts() {
+    fn a_client_s_bytes_keep_their_order_before_the_core_starts() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (to_pty, written) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
         let mut expected = Vec::new();
-        // Queue before starting the consumer to cover a busy core, without a
-        // timing race between test setup and command processing.
+        // Queued before the consumer starts, to cover a busy core without a
+        // timing race between the test's setup and the loop.
         for index in 0..32 {
-            let text = format!("input-{index}");
-            senders
-                .input_tx
-                .send(CoreInput::Text(text.clone()))
-                .unwrap();
-            expected.push(text.into_bytes());
-            senders
-                .input_tx
-                .send(CoreInput::Paste("日本語".to_string()))
-                .unwrap();
-            expected.push("日本語".as_bytes().to_vec());
-            senders
-                .input_tx
-                .send(CoreInput::Key(TerminalKeyInput {
-                    key: KeyCode::Enter,
-                    modifiers: Modifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    text: None,
-                }))
-                .unwrap();
-            expected.push(b"\r".to_vec());
+            for bytes in [
+                format!("input-{index}").into_bytes(),
+                "日本語".as_bytes().to_vec(),
+                b"\r".to_vec(),
+            ] {
+                senders.input_tx.send(bytes.clone()).unwrap();
+                expected.push(bytes);
+            }
         }
         let worker = std::thread::spawn(move || {
             run_terminal_core(
@@ -1071,19 +930,15 @@ mod tests {
                 TerminalCoreOptions::default(),
                 pty_rx,
                 receivers,
-                command_tx,
+                to_pty,
                 update_tx,
             )
         });
         let actual: Vec<_> = (0..expected.len())
             .map(|_| {
-                match command_rx
+                written
                     .recv_timeout(Duration::from_secs(2))
-                    .expect("encoded input")
-                {
-                    TerminalCommand::Input(bytes) => bytes,
-                    other => panic!("unexpected core command: {other:?}"),
-                }
+                    .expect("the bytes written")
             })
             .collect();
         drop(senders);
@@ -1141,10 +996,8 @@ mod tests {
 
         // The answer goes to the program as any other reply does.
         let mut answered = false;
-        while let Ok(command) = command_rx.recv_timeout(Duration::from_millis(200)) {
-            if let TerminalCommand::Input(bytes) = command {
-                answered |= bytes.starts_with(b"\x1b]7501;?:states=");
-            }
+        while let Ok(bytes) = command_rx.recv_timeout(Duration::from_millis(200)) {
+            answered |= bytes.starts_with(b"\x1b]7501;?:states=");
         }
         assert!(answered, "the status query is answered on the PTY");
     }

@@ -44,7 +44,7 @@ pub mod plugin;
 mod session;
 mod shaping;
 
-pub use session::Session;
+pub use session::{Input, Session};
 use shaping::{Ink, Row, Shaper};
 
 mod styles {
@@ -539,9 +539,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 BlitzImeEvent::Preedit(text, _) => *composed.preedit.borrow_mut() = text.clone(),
                 BlitzImeEvent::Commit(text) => {
                     composed.preedit.borrow_mut().clear();
-                    composed
-                        .session
-                        .send(TerminalCommand::TextInput(text.clone()));
+                    composed.session.input(Input::Text(text.clone()));
                 }
                 _ => composed.preedit.borrow_mut().clear(),
             }
@@ -549,11 +547,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             // state.
             composed.session.redraw();
         })
-        .on_paste(move |text| {
-            pasted
-                .session
-                .send(TerminalCommand::Paste(text.to_string()))
-        })
+        .on_paste(move |text| pasted.session.input(Input::Paste(text.to_string())))
         .on("pointerdown", move |event| {
             let DomEventData::PointerDown(pointer) = &event.data else {
                 return;
@@ -578,7 +572,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             if !selects {
                 pressed.dragging.set(Some(false));
                 pressed.reporting.set(Some(button));
-                (pressed.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                (pressed.session).input(Input::Mouse(TerminalMouseReport {
                     kind: TerminalMouseKind::Press,
                     button,
                     point,
@@ -668,12 +662,10 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             let lines = turned.trunc();
             wheeled.wheel.set(turned - lines);
             if lines != 0. {
-                wheeled
-                    .session
-                    .send(TerminalCommand::Scroll(TerminalScroll {
-                        lines: lines as i32,
-                        point: cell_wheel(wheel.element.x, wheel.element.y),
-                    }));
+                wheeled.session.input(Input::Scroll(TerminalScroll {
+                    lines: lines as i32,
+                    point: cell_wheel(wheel.element.x, wheel.element.y),
+                }));
             }
             prevent_default();
         })
@@ -729,7 +721,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             if !focused {
                 sized.preedit.borrow_mut().clear();
             }
-            sized.session.send(TerminalCommand::Focus(focused));
+            sized.session.input(Input::Focus(focused));
         }
         if let Some(text) = sized.outgoing.borrow_mut().take() {
             copy(text);
@@ -786,7 +778,7 @@ fn drag(state: &Rc<State>, modifiers: TerminalMouseModifiers) {
                     let Some(button) = moved.reporting.get() else {
                         return;
                     };
-                    (moved.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                    (moved.session).input(Input::Mouse(TerminalMouseReport {
                         kind: TerminalMouseKind::Drag,
                         button,
                         point,
@@ -799,7 +791,7 @@ fn drag(state: &Rc<State>, modifiers: TerminalMouseModifiers) {
         move |x, y| {
             let (dragged, held) = (lifted.dragging.take(), lifted.reporting.take());
             if let (Some(false), Some(button)) = (dragged, held) {
-                (lifted.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                (lifted.session).input(Input::Mouse(TerminalMouseReport {
                     kind: TerminalMouseKind::Release,
                     button,
                     point: cell_on_page(&lifted, x, y),

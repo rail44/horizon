@@ -91,15 +91,6 @@
         }
       ]
     },
-    "KeyEventKind": {
-      "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from the view's key handling to `TerminalCore::key_stroke`,\nwhere the engine's encoder writes a repeat or a release differently\nfrom a press only where the program asked for event types.",
-      "enum": [
-        "Press",
-        "Repeat",
-        "Release"
-      ],
-      "type": "string"
-    },
     "ProgramBlockedOn": {
       "description": "What a blocked program is waiting for (the protocol's `kind`).",
       "enum": [
@@ -285,6 +276,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "Bytes for the PTY: what a view's terminal wrote for a key, a paste,\na report to the program. The session loop writes them after what\nthe PTY has already said is answered (`docs/terminal-stream-design.md`).",
           "properties": {
             "Input": {
               "items": {
@@ -303,73 +295,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "Legacy key event, kept for older peers and raw headless/test input.\nA v13 daemon treats this as a `KeyInput` with `text: None`.",
-          "properties": {
-            "Key": {
-              "properties": {
-                "event": {
-                  "$ref": "#/$defs/KeyEventKind"
-                },
-                "key": {
-                  "description": "termwiz's own serde shape, pinned by the termwiz version — an\nexternal type the schema artifact cannot introspect, so it\nappears there as \"any value\". A termwiz bump that changes this\nencoding is invisible to the schema checker and must be reviewed\nas the wire change it is."
-                },
-                "modifiers": {
-                  "description": "See `key`: termwiz-owned serde shape, \"any value\" in the schema."
-                }
-              },
-              "required": [
-                "key",
-                "modifiers",
-                "event"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Key"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Structured key event carrying optional generated text. Sent by a v13\nUI when the negotiated version is at least 13; encoded by the daemon\naccording to the terminal's live Kitty keyboard mode.",
-          "properties": {
-            "KeyInput": {
-              "$ref": "#/$defs/TerminalKeyInput"
-            }
-          },
-          "required": [
-            "KeyInput"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Committed text for which no key event is available, most notably an\nIME commit. Encoded as a Kitty CSI-u event with key code 0 when flags\n8 + 16 are active, otherwise written as raw UTF-8.",
-          "properties": {
-            "TextInput": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "TextInput"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Paste": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "Paste"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "properties": {
             "Resize": {
               "$ref": "#/$defs/TerminalSize"
@@ -377,43 +302,6 @@
           },
           "required": [
             "Resize"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Scroll": {
-              "$ref": "#/$defs/TerminalScroll"
-            }
-          },
-          "required": [
-            "Scroll"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Mouse": {
-              "$ref": "#/$defs/TerminalMouseReport"
-            }
-          },
-          "required": [
-            "Mouse"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A pane focus transition (`true` = gained focus, `false` = lost it),\nforwarded to `TerminalCore::focus_input` so it can be reported to\nthe attached app as `CSI I`/`CSI O` if it negotiated mode 1004. The\nsource is `app::runtime::wire_focus_reporting`, which composes\nHorizon's own window focus with which visible pane is active.",
-          "properties": {
-            "Focus": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "Focus"
           ],
           "type": "object"
         },
@@ -476,91 +364,6 @@
       ],
       "type": "object"
     },
-    "TerminalKeyInput": {
-      "description": "A structured key event: key identity plus the platform-produced text,\nif any, that this key generated. Carried by `TerminalCommand::KeyInput`.",
-      "properties": {
-        "key": {
-          "description": "termwiz's own serde shape, pinned by the termwiz version — an\nexternal type the schema artifact cannot introspect, so it appears\nthere as \"any value\". A termwiz bump that changes this encoding is\ninvisible to the schema checker and must be reviewed as the wire\nchange it is."
-        },
-        "kind": {
-          "$ref": "#/$defs/KeyEventKind"
-        },
-        "modifiers": {
-          "description": "See `key`: termwiz-owned serde shape, \"any value\" in the schema."
-        },
-        "text": {
-          "description": "Platform-produced text for this key event, copied from GPUI's\n`Keystroke::key_char`. `None` means the key generated no text or the\nplatform did not provide it.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "key",
-        "modifiers",
-        "kind"
-      ],
-      "type": "object"
-    },
-    "TerminalMouseButton": {
-      "enum": [
-        "Left",
-        "Middle",
-        "Right"
-      ],
-      "type": "string"
-    },
-    "TerminalMouseKind": {
-      "enum": [
-        "Press",
-        "Release",
-        "Drag"
-      ],
-      "type": "string"
-    },
-    "TerminalMouseModifiers": {
-      "properties": {
-        "alt": {
-          "type": "boolean"
-        },
-        "control": {
-          "type": "boolean"
-        },
-        "shift": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "shift",
-        "alt",
-        "control"
-      ],
-      "type": "object"
-    },
-    "TerminalMouseReport": {
-      "properties": {
-        "button": {
-          "$ref": "#/$defs/TerminalMouseButton"
-        },
-        "kind": {
-          "$ref": "#/$defs/TerminalMouseKind"
-        },
-        "modifiers": {
-          "$ref": "#/$defs/TerminalMouseModifiers"
-        },
-        "point": {
-          "$ref": "#/$defs/TerminalSelectionPoint"
-        }
-      },
-      "required": [
-        "kind",
-        "button",
-        "point",
-        "modifiers"
-      ],
-      "type": "object"
-    },
     "TerminalNotification": {
       "description": "A desktop-notification request a terminal app posted through the PTY\nstream — OSC 9 (iTerm2-style: body only) or OSC 777 `notify`\n(rxvt-style: optional summary + body). Extracted from the raw bytes\nbefore the engine sees them (`core::osc_notify`) and delivered to the\nclient as [`TerminalUpdate::Notification`].",
       "properties": {
@@ -615,41 +418,6 @@
       },
       "required": [
         "state"
-      ],
-      "type": "object"
-    },
-    "TerminalScroll": {
-      "properties": {
-        "lines": {
-          "format": "int32",
-          "type": "integer"
-        },
-        "point": {
-          "$ref": "#/$defs/TerminalSelectionPoint"
-        }
-      },
-      "required": [
-        "lines",
-        "point"
-      ],
-      "type": "object"
-    },
-    "TerminalSelectionPoint": {
-      "properties": {
-        "col": {
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "row": {
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "row",
-        "col"
       ],
       "type": "object"
     },

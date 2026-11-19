@@ -24,14 +24,34 @@ use horizon_shell_runtime::TerminalSessionHandle;
 use horizon_shell_runtime::terminal_glyphs as drawn_glyphs;
 use horizon_terminal_core::{
     ClipboardDestination, KeyStroke, TerminalCommand, TerminalCore, TerminalFrame,
-    TerminalKeyInput, TerminalScrollWindow, TerminalSelectionKind, TerminalSelectionPoint,
-    TerminalUpdate,
+    TerminalKeyInput, TerminalMouseReport, TerminalScroll, TerminalScrollWindow,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalUpdate,
 };
 
 type Wake = Arc<Mutex<Option<Waker>>>;
-/// What the platform said of a key: the physical key's name, and the
-/// text the key makes.
-type Platform = Option<(String, Option<String>)>;
+
+/// What a view's user does to the terminal: the session's terminal writes
+/// what it is for the PTY, and the daemon is sent the bytes.
+#[derive(Clone, Debug)]
+pub enum Input {
+    /// A key, with what the platform said of it beside what the core's
+    /// vocabulary carries: the physical key's name and the text the key
+    /// makes.
+    Key {
+        input: TerminalKeyInput,
+        code: String,
+        made: Option<String>,
+    },
+    /// Text with no key behind it: an input method's commit.
+    Text(String),
+    Paste(String),
+    /// A press, a release, a drag or a move, for a program that asked for
+    /// the mouse.
+    Mouse(TerminalMouseReport),
+    Focus(bool),
+    /// The wheel: the history's, or the program's.
+    Scroll(TerminalScroll),
+}
 
 pub struct Session {
     commands: Sender<TerminalCommand>,
@@ -50,11 +70,10 @@ pub struct Session {
     /// terminal has changed since.
     read: RefCell<(u64, Option<TerminalFrame>)>,
     changed: Cell<bool>,
-    /// What a view asked for the PTY before the terminal's state had come:
-    /// asked of the session's terminal, in order, once it is there. (Sent
-    /// to the daemon's instead, a key would go to the PTY by another way
-    /// than the keys after it, and could arrive after them.)
-    held: RefCell<Vec<(TerminalCommand, Platform)>>,
+    /// What a view's user did before the session had a terminal (its
+    /// state had not come, or no view showed it): done on the session's
+    /// terminal, in order, once it is there.
+    held: RefCell<Vec<Input>>,
     /// How many views show the session.
     views: Cell<usize>,
     /// How many times a state has come whole, and how many bytes of output
@@ -148,10 +167,9 @@ impl Session {
         // (The frame's number goes on: a view shown again is to draw the
         // next one it is given.)
         self.read.borrow_mut().1 = None;
-        // What was held for a terminal that never came is the daemon's.
-        for (command, _) in std::mem::take(&mut *self.held.borrow_mut()) {
-            let _ = self.commands.send(command);
-        }
+        // Nothing typed while no terminal was there is typed later; whether
+        // the view has the focus is told when it is shown again.
+        (self.held.borrow_mut()).retain(|input| matches!(input, Input::Focus(_)));
     }
 
     /// Whether the session has a terminal of its own now.
@@ -159,20 +177,16 @@ impl Session {
         self.mirror.borrow().is_some()
     }
 
-    /// What a view asks for the PTY: the bytes for a key, a paste, a
-    /// report to the program, are the session's terminal's to write, and
-    /// the daemon is sent the bytes; a size and the colors a program is
-    /// answered with are the daemon's.
+    /// What is for the daemon: a size, the colors a program is answered
+    /// with, bytes for the PTY, the session's end.
     pub fn send(&self, command: TerminalCommand) {
-        self.ask(command, None);
+        let _ = self.commands.send(command);
     }
 
-    /// A key, with what the platform said of it beside what the wire's
-    /// vocabulary carries: the physical key's name and the text the key
-    /// makes. The session's terminal has the engine's own encoder write
-    /// it from those.
+    /// A key, with what the platform said of it: the physical key's name
+    /// and the text the key makes.
     pub fn key(&self, input: TerminalKeyInput, code: String, made: Option<String>) {
-        self.ask(TerminalCommand::KeyInput(input), Some((code, made)));
+        self.input(Input::Key { input, code, made });
     }
 
     /// Starts a selection at a cell of the screen. The selection is the
@@ -226,24 +240,17 @@ impl Session {
         }
     }
 
-    fn ask(&self, command: TerminalCommand, platform: Platform) {
+    /// What a view's user does to the terminal, written by the session's
+    /// terminal for the PTY; held until the session has one.
+    pub fn input(&self, input: Input) {
         let mut mirror = self.mirror.borrow_mut();
         let Some(terminal) = mirror.as_mut() else {
-            if self.views.get() == 0 {
-                // Nothing shows the session: the daemon's terminal is
-                // asked, the only one there is.
-                let _ = self.commands.send(command);
-                return;
+            let mut held = self.held.borrow_mut();
+            // Only the last word on the focus counts.
+            if matches!(input, Input::Focus(_)) {
+                held.retain(|held| !matches!(held, Input::Focus(_)));
             }
-            match command {
-                TerminalCommand::Resize(_)
-                | TerminalCommand::SetColorScheme(_)
-                | TerminalCommand::Input(_)
-                | TerminalCommand::Shutdown => {
-                    let _ = self.commands.send(command);
-                }
-                for_the_terminal => (self.held.borrow_mut()).push((for_the_terminal, platform)),
-            }
+            held.push(input);
             return;
         };
         let to_the_pty = |bytes: Vec<u8>| {
@@ -251,9 +258,8 @@ impl Session {
                 let _ = self.commands.send(TerminalCommand::Input(bytes));
             }
         };
-        match command {
-            TerminalCommand::KeyInput(input) => {
-                let (code, made) = platform.unwrap_or((String::new(), input.text.clone()));
+        match input {
+            Input::Key { input, code, made } => {
                 to_the_pty(terminal.key_stroke(&KeyStroke {
                     code: &code,
                     key: input.key,
@@ -262,22 +268,18 @@ impl Session {
                     made: made.as_deref(),
                 }));
             }
-            TerminalCommand::TextInput(text) => to_the_pty(terminal.text_input(&text)),
-            TerminalCommand::Paste(text) => to_the_pty(terminal.paste_input(&text)),
-            TerminalCommand::Mouse(report) => {
+            Input::Text(text) => to_the_pty(terminal.text_input(&text)),
+            Input::Paste(text) => to_the_pty(terminal.paste_input(&text)),
+            Input::Mouse(report) => {
                 to_the_pty(terminal.handle_mouse_report(report).unwrap_or_default());
             }
-            TerminalCommand::Focus(focused) => {
+            Input::Focus(focused) => {
                 to_the_pty(terminal.focus_input(focused).unwrap_or_default());
             }
-            TerminalCommand::Scroll(scroll) => match terminal.handle_scroll(scroll) {
+            Input::Scroll(scroll) => match terminal.handle_scroll(scroll) {
                 Some(bytes) => to_the_pty(bytes),
                 None => self.changed.set(true),
             },
-            for_the_daemon => {
-                let _ = self.commands.send(for_the_daemon);
-                return;
-            }
         }
         // What was done here is drawn from here: nothing arrives for it.
         drop(mirror);
@@ -334,8 +336,8 @@ impl Session {
             false => Vec::new(),
         };
         drop(mirror);
-        for (command, platform) in held {
-            self.ask(command, platform);
+        for input in held {
+            self.input(input);
         }
         if taken > 0 {
             self.bytes.set(self.bytes.get() + taken);

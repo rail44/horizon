@@ -8,8 +8,8 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender};
 use horizon::terminal::Session;
 use horizon_terminal_core::{
-    CoreInput, CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalKeyInput,
-    TerminalSize, TerminalUpdate, core_channels, run_terminal_core,
+    CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalSize, TerminalUpdate,
+    core_channels, run_terminal_core,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -43,18 +43,28 @@ pub fn shell(program: &str, size: TerminalSize) -> Session {
 
     let read_updates = update_tx.clone();
     thread::spawn(move || read_pty(&mut *reader, pty_tx, read_updates));
-    let responses = commands.clone();
+    // What the loop writes to the PTY: its answers, and the view's bytes.
+    let (written_tx, written_rx) = crossbeam_channel::unbounded();
     thread::spawn(move || {
         run_terminal_core(
             size,
             TerminalCoreOptions::default(),
             pty_rx,
             receivers,
-            responses,
+            written_tx,
             update_tx,
         );
     });
-    thread::spawn(move || run_writer(master, &mut *writer, killer, command_rx, senders));
+    thread::spawn(move || {
+        run_writer(
+            master,
+            &mut *writer,
+            killer,
+            command_rx,
+            written_rx,
+            senders,
+        );
+    });
     Session::from_channels(commands, updates)
 }
 
@@ -76,69 +86,64 @@ fn run_writer(
     writer: &mut dyn Write,
     mut killer: Box<dyn ChildKiller + Send + Sync>,
     command_rx: Receiver<TerminalCommand>,
+    written: Receiver<Vec<u8>>,
     senders: CoreSenders,
 ) {
-    while let Ok(command) = command_rx.recv() {
-        match command {
-            TerminalCommand::Input(bytes) => {
-                let _ = writer.write_all(&bytes);
-                let _ = writer.flush();
-            }
-            TerminalCommand::Key {
-                key,
-                modifiers,
-                event,
-            } => {
-                let _ = senders.input_tx.send(CoreInput::Key(TerminalKeyInput {
-                    key,
-                    modifiers,
-                    kind: event,
-                    text: None,
-                }));
-            }
-            TerminalCommand::KeyInput(input) => {
-                let _ = senders.input_tx.send(CoreInput::Key(input));
-            }
-            TerminalCommand::TextInput(text) => {
-                let _ = senders.input_tx.send(CoreInput::Text(text));
-            }
-            TerminalCommand::Paste(text) => {
-                let _ = senders.input_tx.send(CoreInput::Paste(text));
-            }
-            TerminalCommand::Resize(size) => {
-                let size = size.normalized();
-                let _ = master.resize(PtySize {
-                    rows: size.rows,
-                    cols: size.cols,
-                    pixel_width: size.pixel_width,
-                    pixel_height: size.pixel_height,
-                });
-                let _ = senders.resize_tx.send(size);
-            }
-            TerminalCommand::Scroll(scroll) => {
-                let _ = senders.scroll_tx.send(scroll);
-            }
-            TerminalCommand::Mouse(report) => {
-                let _ = senders.mouse_tx.send(report);
-            }
-            TerminalCommand::Focus(focused) => {
-                let _ = senders.focus_tx.send(focused);
-            }
-            TerminalCommand::SetColorScheme(scheme) => {
-                let _ = senders.color_scheme_tx.send(scheme);
-            }
-            TerminalCommand::WantState => {
-                let _ = senders.stream_tx.send(StreamCommand::Want);
-            }
-            TerminalCommand::StopState => {
-                let _ = senders.stream_tx.send(StreamCommand::Stop);
-            }
-            TerminalCommand::OutputTaken(bytes) => {
-                let _ = senders.stream_tx.send(StreamCommand::Taken(bytes));
-            }
-            TerminalCommand::Shutdown => {
-                let _ = killer.kill();
-                return;
+    let CoreSenders {
+        resize_tx,
+        input_tx,
+        color_scheme_tx,
+        stream_tx,
+    } = senders;
+    // (Once the loop is gone, nothing more is written; a command is still
+    // heard, a shutdown above all.)
+    let mut written = written;
+    loop {
+        crossbeam_channel::select! {
+            recv(written) -> bytes => match bytes {
+                Ok(bytes) => {
+                    let _ = writer.write_all(&bytes);
+                    let _ = writer.flush();
+                }
+                Err(_) => written = crossbeam_channel::never(),
+            },
+            recv(command_rx) -> command => {
+                let Ok(command) = command else {
+                    return;
+                };
+                match command {
+                    // Through the loop, which writes it after what the PTY
+                    // has asked is answered.
+                    TerminalCommand::Input(bytes) => {
+                        let _ = input_tx.send(bytes);
+                    }
+                    TerminalCommand::Resize(size) => {
+                        let size = size.normalized();
+                        let _ = master.resize(PtySize {
+                            rows: size.rows,
+                            cols: size.cols,
+                            pixel_width: size.pixel_width,
+                            pixel_height: size.pixel_height,
+                        });
+                        let _ = resize_tx.send(size);
+                    }
+                    TerminalCommand::SetColorScheme(scheme) => {
+                        let _ = color_scheme_tx.send(scheme);
+                    }
+                    TerminalCommand::WantState => {
+                        let _ = stream_tx.send(StreamCommand::Want);
+                    }
+                    TerminalCommand::StopState => {
+                        let _ = stream_tx.send(StreamCommand::Stop);
+                    }
+                    TerminalCommand::OutputTaken(bytes) => {
+                        let _ = stream_tx.send(StreamCommand::Taken(bytes));
+                    }
+                    TerminalCommand::Shutdown => {
+                        let _ = killer.kill();
+                        return;
+                    }
+                }
             }
         }
     }

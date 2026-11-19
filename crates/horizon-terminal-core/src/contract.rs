@@ -6,7 +6,7 @@ use termwiz::input::{KeyCode, Modifiers};
 use uuid::Uuid;
 
 use crate::core::TerminalColorScheme;
-use crate::types::{KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSize};
+use crate::types::{KeyEventKind, TerminalSize};
 
 // The v10 remoc cutover deleted this module's envelope bindings — the
 // `terminal_control`/`terminal_command`/`terminal_update` kind constants,
@@ -39,7 +39,8 @@ pub struct TerminalSummary {
 }
 
 /// A structured key event: key identity plus the platform-produced text,
-/// if any, that this key generated. Carried by `TerminalCommand::KeyInput`.
+/// if any, that this key generated. A view's terminal writes it
+/// (`TerminalCore::key_stroke`); it does not cross the wire.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalKeyInput {
     /// termwiz's own serde shape, pinned by the termwiz version — an
@@ -61,40 +62,11 @@ pub struct TerminalKeyInput {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalCommand {
+    /// Bytes for the PTY: what a view's terminal wrote for a key, a paste,
+    /// a report to the program. The session loop writes them after what
+    /// the PTY has already said is answered (`docs/terminal-stream-design.md`).
     Input(Vec<u8>),
-    /// Legacy key event, kept for older peers and raw headless/test input.
-    /// A v13 daemon treats this as a `KeyInput` with `text: None`.
-    Key {
-        /// termwiz's own serde shape, pinned by the termwiz version — an
-        /// external type the schema artifact cannot introspect, so it
-        /// appears there as "any value". A termwiz bump that changes this
-        /// encoding is invisible to the schema checker and must be reviewed
-        /// as the wire change it is.
-        #[schemars(with = "serde_json::Value")]
-        key: KeyCode,
-        /// See `key`: termwiz-owned serde shape, "any value" in the schema.
-        #[schemars(with = "serde_json::Value")]
-        modifiers: Modifiers,
-        event: KeyEventKind,
-    },
-    /// Structured key event carrying optional generated text. Sent by a v13
-    /// UI when the negotiated version is at least 13; encoded by the daemon
-    /// according to the terminal's live Kitty keyboard mode.
-    KeyInput(TerminalKeyInput),
-    /// Committed text for which no key event is available, most notably an
-    /// IME commit. Encoded as a Kitty CSI-u event with key code 0 when flags
-    /// 8 + 16 are active, otherwise written as raw UTF-8.
-    TextInput(String),
-    Paste(String),
     Resize(TerminalSize),
-    Scroll(TerminalScroll),
-    Mouse(TerminalMouseReport),
-    /// A pane focus transition (`true` = gained focus, `false` = lost it),
-    /// forwarded to `TerminalCore::focus_input` so it can be reported to
-    /// the attached app as `CSI I`/`CSI O` if it negotiated mode 1004. The
-    /// source is `app::runtime::wire_focus_reporting`, which composes
-    /// Horizon's own window focus with which visible pane is active.
-    Focus(bool),
     /// Re-pushes the host's live theme-derived color scheme into a
     /// *running* session's `TerminalCore` (`TerminalCore::set_color_scheme`),
     /// so a subsequent OSC 10/11/12 query reply reflects a live theme apply
