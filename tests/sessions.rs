@@ -231,6 +231,24 @@ impl Opened {
         self.app.resolve();
     }
 
+    /// [`press`](Self::press) as a window has it: the page is drawn
+    /// between the pointer coming over the element, its button going
+    /// down, and its button coming up.
+    fn press_over_frames(&self, class: &str, text: &str, right: bool) {
+        use horizon_ui::testing::{Pointer, pointer_with};
+        let texts = self.texts(class);
+        let at = (texts.iter().position(|said| said.starts_with(text)))
+            .unwrap_or_else(|| panic!("no {class} {text:?} in {texts:?}"));
+        let (x, y) = self.middle(self.nodes(class)[at]);
+        for step in [Pointer::Move, Pointer::Down, Pointer::Up] {
+            pointer_with(&self.app, x, y, step, right);
+            for _ in 0..2 {
+                self.app.run_effects();
+                self.app.resolve();
+            }
+        }
+    }
+
     /// The titles of the rows, in the order they are drawn.
     fn titles(&self) -> Vec<String> {
         self.texts("title")
@@ -394,8 +412,25 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
         rows[4].starts_with("wikiagent") && rows[4].ends_with("Updated two pages."),
         "{rows:?}"
     );
-    // (A terminal whose program says nothing has no state to be in since.)
-    assert_eq!(rows[3], "shellterminal");
+    // (A terminal whose program says nothing has no state to be in since;
+    // the line for its words is there, empty.)
+    assert_eq!(rows[3].trim_end_matches('\u{a0}'), "shellterminal");
+    // A row is as tall whatever its session is doing or says.
+    let heights = |opened: &Opened| -> Vec<i64> {
+        let document = opened.app.document();
+        let document = document.borrow();
+        (opened.nodes("row").into_iter())
+            .map(|row| {
+                document
+                    .get_client_bounding_rect(row)
+                    .expect("a box")
+                    .height
+                    .round() as i64
+            })
+            .collect()
+    };
+    let tall = heights(&opened);
+    assert!(tall.iter().all(|height| *height == tall[0]), "{tall:?}");
 
     // The keys: a step, and the next that waits, round the list.
     assert_eq!(opened.chosen().as_deref(), Some("build"));
@@ -589,6 +624,26 @@ fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
     opened.until("the session's pane", || {
         opened.model(Workspace::active_session_id) == Some(made.finished)
     });
+}
+
+#[test]
+fn a_session_is_ended_with_the_pointer_as_a_window_has_it() {
+    let opened = open();
+    let places = Places::made("frames");
+    let made = make(&opened, &places);
+    opened.list();
+    opened.until("the rows", || opened.titles().len() == 5);
+    let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
+    let foot = || opened.texts("foot").join(" ");
+
+    // (The page drawn between a button going down and coming up, the menu
+    // is still there for the click, and the row under it hears none.)
+    opened.press_over_frames("title", "tests", true);
+    assert_eq!(opened.texts("item").len(), 3);
+    opened.press_over_frames("item", "Terminate", false);
+    assert!(foot().contains("Terminate “tests”?"), "{}", foot());
+    opened.press_over_frames("hint", "yTerminate", false);
+    opened.until("the session ended", || !has(made.derived));
 }
 
 #[test]
@@ -827,6 +882,9 @@ fn menu_if_asked(opened: &Opened) {
     if let Ok(title) = std::env::var("HORIZON_SESSIONS_MENU") {
         opened.press("title", &title, true);
         opened.until("the menu", || !opened.texts("item").is_empty());
+        if let Ok(item) = std::env::var("HORIZON_SESSIONS_ITEM") {
+            opened.press_over_frames("item", &item, false);
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! The list's view: a project's sessions under its name, each a line of
-//! its title, what it is, its state and since when, with its words under
-//! it where it has some; a band of the keys under them. What the list does
+//! its title, what it is, its state and since when, and a line under it
+//! for its words where it has some; a band of the keys under them. What the list does
 //! ([`Act`]) is done by its key, by a press on it in the band, or, for
 //! what is done to a session, from the menu on the session's row (its
 //! `⋯`, or a right-click on the row); a click on a row goes to its
@@ -381,13 +381,14 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
                     format!("{}px", 12 + depth * 16)
                 })
                 .child(headline)
-                .when(
-                    move || detail().is_some(),
-                    move || {
-                        el("div")
-                            .class(styles::META)
-                            .text_dyn(move || detail().unwrap_or_default())
-                    },
+                // The line under the title is there whether the session has
+                // words or not (a no-break space holds it), so a row is as
+                // tall whatever its session is doing, and the rows under
+                // it stay where they are.
+                .child(
+                    el("div")
+                        .class(styles::META)
+                        .text_dyn(move || detail().unwrap_or_else(|| "\u{a0}".to_string())),
                 ),
         )
         .child(

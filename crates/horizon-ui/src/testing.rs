@@ -25,7 +25,7 @@ pub fn pointer(app: &App, x: f32, y: f32, step: Pointer) {
 
 /// [`pointer`], with the secondary button in place of the main one where
 /// `secondary`.
-fn pointer_with(app: &App, x: f32, y: f32, step: Pointer, secondary: bool) {
+pub fn pointer_with(app: &App, x: f32, y: f32, step: Pointer, secondary: bool) {
     use blitz_traits::events::{
         BlitzPointerEvent, BlitzPointerId, MouseEventButton, MouseEventButtons, PointerCoords,
     };
