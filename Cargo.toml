@@ -153,6 +153,7 @@ notify-rust = "4"
 # The runtime a preview's plugin runs in (`src/preview.rs`).
 wasmtime = { version = "50", default-features = false, features = [
     "async",
+    "cache",
     "demangle",
     "runtime",
     "cranelift",
