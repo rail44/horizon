@@ -1195,9 +1195,31 @@ pub fn compile(path: &Path) -> Result<Compiled, String> {
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
     config.epoch_interruption(true);
+    config.cache(compiled_cache());
     let engine = Engine::new(&config).map_err(said)?;
     let component = Component::from_file(&engine, path).map_err(said)?;
     Ok(Compiled { engine, component })
+}
+
+/// Where a plugin's file compiled is kept, so that the same file is not
+/// compiled again by the next process that reads it:
+/// `$XDG_CACHE_HOME/horizon/wasm`, else `~/.cache/horizon/wasm`. One per
+/// process, as each starts a thread of its own; none if there is no
+/// such directory to make.
+fn compiled_cache() -> Option<wasmtime::Cache> {
+    static CACHE: std::sync::OnceLock<Option<wasmtime::Cache>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let named = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+            let home = match named("XDG_CACHE_HOME") {
+                Some(value) => PathBuf::from(value),
+                None => PathBuf::from(named("HOME")?).join(".cache"),
+            };
+            let mut config = wasmtime::CacheConfig::new();
+            config.with_directory(home.join("horizon").join("wasm"));
+            wasmtime::Cache::new(config).ok()
+        })
+        .clone()
 }
 
 /// What the host offers a plugin: WASI, and the interfaces of
