@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_components::{Chip, MenuButton, MenuItem, Tone};
+use horizon_components::{Chip, MenuButton, MenuItem, MenuLabel, Tone};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
@@ -324,7 +324,7 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
             .collect();
         let run = by_menu.clone();
         MenuButton {
-            label: "⋯",
+            label: MenuLabel::More,
             items,
             open,
             on_select: Callback::new(move |index: usize| run(acts[index])),

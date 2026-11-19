@@ -5,7 +5,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon_components::{ColorPicker, Drags, MenuButton, MenuItem, Range, Select, Slider};
+use horizon_components::{
+    ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, Range, Select, Slider,
+};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
@@ -254,7 +256,7 @@ fn a_menu_button_opens_its_items_and_one_is_done_by_click_or_key() {
             .on("click", move |_| *behind.borrow_mut() += 1)
             .child(
                 MenuButton {
-                    label: "⋯",
+                    label: MenuLabel::More,
                     items: vec![
                         item("Go to", "Enter"),
                         item("Terminal", "t"),
@@ -315,7 +317,7 @@ fn a_menu_button_opens_upward_where_below_would_pass_what_it_is_in() {
         let within = el("div").class("within");
         within.child(el("div").class("filler")).child(
             MenuButton {
-                label: "⋯",
+                label: MenuLabel::Text("More"),
                 items: ["one", "two", "three"]
                     .map(|label| MenuItem {
                         label: label.to_string(),

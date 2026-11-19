@@ -26,9 +26,14 @@ mod styles {
     .menu { position: relative; flex: none; align-self: flex-start; outline: none;
             font-size: var(--meta-size);
             line-height: var(--meta-line);
-        .trigger { padding: 0 var(--u4); border-radius: var(--radius); color: var(--text-muted);
+        .trigger { display: flex; align-items: center; justify-content: center; gap: 2px;
+                   box-sizing: border-box; min-width: calc(var(--u4) * 5);
+                   height: calc(var(--u4) * 5); padding: 0 var(--u4);
+                   border-radius: var(--radius); color: var(--text-muted);
                    cursor: pointer; }
         .trigger:hover { background: var(--hover); color: var(--text); }
+        .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-muted); }
+        .trigger:hover .dot { background: var(--text); }
         .items { position: absolute; z-index: 60; right: 0; top: 100%; margin-top: var(--u4);
                  padding: var(--u4); border-radius: var(--radius-large);
                  border: var(--line) solid var(--border); background: var(--background);
@@ -42,6 +47,7 @@ mod styles {
         .key { color: var(--text-muted); }
     }
     .menu.open .trigger { background: var(--hover); color: var(--text); }
+    .menu.open .dot { background: var(--text); }
 "}
 }
 
@@ -55,10 +61,20 @@ pub struct MenuItem {
     pub danger: bool,
 }
 
-/// A button saying `label` that opens a list of `items`.
+/// What a menu button shows on itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MenuLabel<'a> {
+    /// Three dots, for what more there is to do. They are drawn, not
+    /// written: a font's `⋯` is as wide as the font has it, and where.
+    #[default]
+    More,
+    /// A word or two.
+    Text(&'a str),
+}
+
+/// A button that opens a list of `items`.
 pub struct MenuButton<'a> {
-    /// What the button says: a word, or `⋯` for what more there is.
-    pub label: &'a str,
+    pub label: MenuLabel<'a>,
     pub items: Vec<MenuItem>,
     /// Whether the list is open. Set to open it from elsewhere; the keys
     /// come to it as it opens.
@@ -162,14 +178,17 @@ impl Component for MenuButton<'_> {
             stop_propagation();
         })
         .child(
-            el("div")
-                .class(styles::TRIGGER)
-                .text(label)
-                // (A press on the button is not one on what it is in.)
-                .on("click", move |_| {
-                    open.set(!open.get_untracked());
-                    stop_propagation();
-                }),
+            match label {
+                MenuLabel::More => el("div")
+                    .class(styles::TRIGGER)
+                    .children((0..3).map(|_| el("span").class(styles::DOT))),
+                MenuLabel::Text(text) => el("div").class(styles::TRIGGER).text(text),
+            }
+            // (A press on the button is not one on what it is in.)
+            .on("click", move |_| {
+                open.set(!open.get_untracked());
+                stop_propagation();
+            }),
         )
         .when(
             move || open.get(),

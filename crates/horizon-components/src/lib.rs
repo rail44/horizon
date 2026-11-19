@@ -30,7 +30,7 @@ pub use chip::{Chip, Tone};
 pub use color::{ColorPicker, hex, parse_hex};
 pub use field::{Field, Prompt};
 pub use gallery::gallery;
-pub use menu::{MenuButton, MenuItem};
+pub use menu::{MenuButton, MenuItem, MenuLabel};
 pub use select::Select;
 pub use slider::{Range, Slider};
 

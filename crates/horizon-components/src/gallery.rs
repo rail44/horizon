@@ -5,7 +5,9 @@
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::{Callback, Component, El, el};
 
-use super::{Button, ButtonKind, ButtonSize, Chip, Field, MenuButton, MenuItem, Prompt, Tone};
+use super::{
+    Button, ButtonKind, ButtonSize, Chip, Field, MenuButton, MenuItem, MenuLabel, Prompt, Tone,
+};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -92,7 +94,7 @@ fn buttons() -> El {
 fn menus() -> El {
     let menu = |open: bool| {
         MenuButton {
-            label: "⋯",
+            label: MenuLabel::More,
             items: vec![
                 MenuItem {
                     label: "Go to".to_string(),
