@@ -1,8 +1,10 @@
 //! The list's view: a project's sessions under its name, each a line of
 //! its title, what it is, its state and since when, with its words under
-//! it where it has some; a band of the keys under them. A typed key is a
-//! command of the list's, and `/` asks for the field a search is typed
-//! into.
+//! it where it has some; a band of the keys under them. What the list does
+//! ([`Act`]) is done by its key, by a press on it in the band, or, for
+//! what is done to a session, from the menu on the session's row (its
+//! `⋯`, or a right-click on the row); a click on a row goes to its
+//! session. `/` asks for the field a search is typed into.
 //!
 //! The list is shown in a pane ([`pane`]), where it stays, and in a sheet
 //! over the workspace ([`over`]), which going to a session leaves. The
@@ -13,7 +15,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_components::{Chip, Tone};
+use horizon_components::{Chip, MenuButton, MenuItem, Tone};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
@@ -22,7 +24,7 @@ use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With};
-use horizon_ui::{El, each_layout, el, prevent_default, stop_propagation};
+use horizon_ui::{Callback, El, each_layout, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
 use crate::list::{self, Group, Row};
@@ -48,6 +50,8 @@ mod styles {
                padding: var(--u8) var(--u12) var(--u8) 0; cursor: pointer;
                border: 1px solid transparent; }
         .row:hover { background: var(--band); }
+        .actions { flex: none; margin-left: var(--u8); opacity: 0; }
+        .row:hover .actions, .row.selected .actions { opacity: 1; }
         .row.selected { background: var(--selection); }
         .bar { flex: none; align-self: stretch; width: 2px;
                margin: calc(var(--u8) * -1) 0; }
@@ -66,11 +70,13 @@ mod styles {
                 font-size: var(--micro-size); line-height: var(--micro-line);
                 color: var(--text-muted); }
         .foot { flex: none; display: flex; flex-wrap: wrap; align-items: center;
-                gap: 0 var(--u12); padding: var(--u4) var(--u12);
+                gap: 0 var(--u4); padding: var(--u4) var(--u8);
                 border-top: var(--line) solid var(--border); font-size: var(--micro-size);
                 line-height: var(--micro-line); color: var(--text-muted); }
         .foot.asked { color: var(--danger); }
-        .hint { display: flex; align-items: center; gap: var(--u4); }
+        .hint { display: flex; align-items: center; gap: var(--u4); padding: 0 var(--u4);
+                border-radius: var(--radius); cursor: pointer; }
+        .hint:hover { background: var(--hover); }
         .key { font-weight: 600; color: var(--text); }
     }
     .sessions:focus .row.selected { border-color: var(--accent); }
@@ -79,15 +85,91 @@ mod styles {
     "}
 }
 
-/// The keys in the band, and what each does.
-const KEYS: [(&str, &str); 6] = [
-    ("Enter", "Go to"),
-    ("t", "Terminal"),
-    ("x", "Terminate"),
-    ("X", "With derived"),
-    ("n", "Next waiting"),
-    ("/", "Search"),
+/// What the list does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Act {
+    /// Goes to the chosen session.
+    GoTo,
+    /// Opens a terminal where the chosen session works.
+    Terminal,
+    /// Asks whether to end the chosen session.
+    Terminate,
+    /// Asks whether to end the chosen session and those derived from it.
+    TerminateDerived,
+    /// Chooses the next session that waits.
+    NextWaiting,
+    /// Asks for the search's field.
+    Search,
+}
+
+/// What the band shows, in order.
+const BAND: [Act; 6] = [
+    Act::GoTo,
+    Act::Terminal,
+    Act::Terminate,
+    Act::TerminateDerived,
+    Act::NextWaiting,
+    Act::Search,
 ];
+
+/// What a row's menu does to its session, in order.
+const ON_A_ROW: [Act; 4] = [
+    Act::GoTo,
+    Act::Terminal,
+    Act::Terminate,
+    Act::TerminateDerived,
+];
+
+impl Act {
+    /// The key that does it.
+    fn key(self) -> &'static str {
+        match self {
+            Self::GoTo => "Enter",
+            Self::Terminal => "t",
+            Self::Terminate => "x",
+            Self::TerminateDerived => "X",
+            Self::NextWaiting => "n",
+            Self::Search => "/",
+        }
+    }
+
+    /// What the band calls it.
+    fn short(self) -> &'static str {
+        match self {
+            Self::GoTo => "Go to",
+            Self::Terminal => "Terminal",
+            Self::Terminate => "Terminate",
+            Self::TerminateDerived => "With derived",
+            Self::NextWaiting => "Next waiting",
+            Self::Search => "Search",
+        }
+    }
+
+    /// What a row's menu calls it.
+    fn named(self) -> &'static str {
+        match self {
+            Self::GoTo => "Go to",
+            Self::Terminal => "Open a terminal there",
+            Self::Terminate => "Terminate",
+            Self::TerminateDerived => "Terminate with derived",
+            Self::NextWaiting => "Next waiting",
+            Self::Search => "Search",
+        }
+    }
+
+    /// The act a typed key is, where it is one.
+    fn of_key(key: &Key) -> Option<Self> {
+        let typed = match key {
+            Key::Named(NamedKey::Enter) => "Enter",
+            Key::Character(character) => character.as_str(),
+            _ => return None,
+        };
+        BAND.into_iter().find(|act| act.key() == typed)
+    }
+}
+
+/// Does an act.
+type Run = Rc<dyn Fn(Act)>;
 
 /// What differs with where the list is shown.
 struct Shown {
@@ -188,8 +270,10 @@ fn tone(session: &Session) -> Tone {
 }
 
 /// A session's row. It is made once for a session and follows what the
-/// session comes to be.
-fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, gone: Rc<dyn Fn()>) -> El {
+/// session comes to be. A click goes to the session; its menu, on its `⋯`
+/// or a right-click, does the rest to it. `within` is the list's scrolled
+/// element, which the menu stays inside.
+fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, within: El) -> El {
     let named = id.clone();
     let this = Memo::new(move |_| {
         order.with(|order| order.iter().find(|row| row.session.id == named).cloned())
@@ -211,7 +295,42 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, gone: Rc<dy
             activity.detail.clone()
         })
     };
-    let (picked, shown) = (id.clone(), id.clone());
+    let picked = id.clone();
+    // The menu is open on the chosen session.
+    let open = RwSignal::new(false);
+    let opened = id.clone();
+    Effect::new(move |_| {
+        if open.get() {
+            state.chosen.set(Some(opened.clone()));
+        }
+    });
+    // "With derived" is offered where some are derived from the session.
+    let derived = id.clone();
+    let has_derived = move || {
+        state.sessions.with(|_| ());
+        state.derived_from(&derived) > 0
+    };
+    let by_menu = run.clone();
+    let menu = move |has_derived: &bool| {
+        let acts: Vec<Act> = (ON_A_ROW.into_iter())
+            .filter(|act| *act != Act::TerminateDerived || *has_derived)
+            .collect();
+        let items = (acts.iter())
+            .map(|act| MenuItem {
+                label: act.named().to_string(),
+                key: Some(act.key().to_string()),
+                danger: matches!(act, Act::Terminate | Act::TerminateDerived),
+            })
+            .collect();
+        let run = by_menu.clone();
+        MenuButton {
+            label: "⋯",
+            items,
+            open,
+            on_select: Callback::new(move |index: usize| run(acts[index])),
+            within: Some(within),
+        }
+    };
     // The title's line says everything of the session but its words,
     // which are under it where there are some. What state it is in is
     // the chip's to say, and nothing else of the row's.
@@ -271,10 +390,18 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, gone: Rc<dy
                     },
                 ),
         )
-        .on("click", move |_| state.chosen.set(Some(picked.clone())))
-        .on("dblclick", move |_| {
-            control::show(&shown);
-            gone();
+        .child(
+            el("div")
+                .class(styles::ACTIONS)
+                .each(move || vec![has_derived()], |has| *has, menu),
+        )
+        .on("click", move |_| {
+            state.chosen.set(Some(picked.clone()));
+            run(Act::GoTo);
+        })
+        .on("contextmenu", move |_| {
+            open.set(true);
+            prevent_default();
         });
     rows.borrow_mut().insert(id, element);
     element
@@ -328,14 +455,78 @@ fn list(shown: Shown) -> El {
         now
     });
 
+    let step = move |by: isize, waiting: bool| {
+        let rows = order.get_untracked();
+        let Some(at) = (state.chosen.get_untracked())
+            .and_then(|chosen| rows.iter().position(|row| row.session.id == chosen))
+        else {
+            return;
+        };
+        let count = rows.len() as isize;
+        // The next that waits is looked for round the list; a step stops
+        // at its ends.
+        let next = match waiting {
+            true => (1..=count)
+                .map(|step| (at as isize + step).rem_euclid(count) as usize)
+                .find(|at| list::waits(&rows[*at].session)),
+            false => Some((at as isize + by).clamp(0, count - 1) as usize),
+        };
+        if let Some(next) = next {
+            state.chosen.set(Some(rows[next].session.id.clone()));
+        }
+    };
+    let ask = move |derived: bool| {
+        let Some(session) = state.chosen_session() else {
+            return;
+        };
+        let count = state.derived_from(&session.id);
+        state.asked.set(Some(Asked {
+            derived: (derived && count > 0).then_some(count),
+            title: session.title,
+            session: session.id,
+        }));
+    };
+    // What was asked is answered: the session ended, or kept.
+    let answer = move |end: bool| {
+        if let Some(asked) = state.asked.get_untracked()
+            && end
+        {
+            match asked.derived {
+                Some(_) => control::terminate_with_derived(&asked.session),
+                None => control::terminate(&asked.session),
+            }
+        }
+        state.asked.set(None);
+    };
+    let gone = shown.gone.clone();
+    let run: Run = Rc::new(move |act| match act {
+        Act::GoTo => {
+            if let Some(session) = state.chosen_session() {
+                control::show(&session.id);
+                gone();
+            }
+        }
+        Act::Terminal => {
+            if let Some(session) = state.chosen_session() {
+                control::open_terminal(&session.id);
+                gone();
+            }
+        }
+        Act::Terminate => ask(false),
+        Act::TerminateDerived => ask(true),
+        Act::NextWaiting => step(0, true),
+        Act::Search => state.searching.set(true),
+    });
+
     let elements: Rows = Rows::default();
     let made = elements.clone();
-    let gone = shown.gone.clone();
-    let list = el("div").class(styles::ROWS).each(
+    let by_rows = run.clone();
+    let scrolled = el("div").class(styles::ROWS);
+    let list = scrolled.each(
         move || groups.get(),
         |group: &Group| group.root.clone(),
         move |group: &Group| {
-            let (root, made, gone) = (group.root.clone(), made.clone(), gone.clone());
+            let (root, made, run) = (group.root.clone(), made.clone(), by_rows.clone());
             let (named, counted) = (root.clone(), root.clone());
             let of = move |root: &str| {
                 groups.with(|groups| groups.iter().find(|group| group.root == root).cloned())
@@ -355,7 +546,8 @@ fn list(shown: Shown) -> El {
                     move || of(&root).map(|group| group.rows).unwrap_or_default(),
                     |row: &Row| row.session.id.clone(),
                     move |row: &Row| {
-                        self::row(state, order, row.session.id.clone(), &made, gone.clone())
+                        let id = row.session.id.clone();
+                        self::row(state, order, id, &made, run.clone(), scrolled)
                     },
                 )
         },
@@ -410,6 +602,8 @@ fn list(shown: Shown) -> El {
                 false => input,
             })
     };
+    let by_band = run.clone();
+    let left = shown.gone.clone();
     let foot = move || match state.asked.get() {
         Some(asked) => {
             let question = match asked.derived {
@@ -422,11 +616,22 @@ fn list(shown: Shown) -> El {
             el("div")
                 .class((styles::FOOT, styles::ASKED))
                 .child(el("span").text(&question))
-                .children([("y", "Terminate"), ("Esc", "Keep")].map(hint))
+                .child(hint(("y", "Terminate"), move || answer(true)))
+                .child(hint(("Esc", "Keep"), move || answer(false)))
         }
-        None => el("div")
-            .class(styles::FOOT)
-            .children(KEYS.into_iter().chain(shown.left_with).map(hint)),
+        None => {
+            let left = left.clone();
+            el("div")
+                .class(styles::FOOT)
+                .children(BAND.into_iter().map(|act| {
+                    let run = by_band.clone();
+                    hint((act.key(), act.short()), move || run(act))
+                }))
+                .children((shown.left_with.into_iter()).map(move |said| {
+                    let left = left.clone();
+                    hint(said, move || left())
+                }))
+        }
     };
 
     let root = root
@@ -441,26 +646,6 @@ fn list(shown: Shown) -> El {
             move |_| foot(),
         );
 
-    let step = move |by: isize, waiting: bool| {
-        let rows = order.get_untracked();
-        let Some(at) = (state.chosen.get_untracked())
-            .and_then(|chosen| rows.iter().position(|row| row.session.id == chosen))
-        else {
-            return;
-        };
-        let count = rows.len() as isize;
-        // The next that waits is looked for round the list; a step stops
-        // at its ends.
-        let next = match waiting {
-            true => (1..=count)
-                .map(|step| (at as isize + step).rem_euclid(count) as usize)
-                .find(|at| list::waits(&rows[*at].session)),
-            false => Some((at as isize + by).clamp(0, count - 1) as usize),
-        };
-        if let Some(next) = next {
-            state.chosen.set(Some(rows[next].session.id.clone()));
-        }
-    };
     root.on("keydown", move |event| {
         let DomEventData::KeyDown(key) = &event.data else {
             return;
@@ -474,14 +659,8 @@ fn list(shown: Shown) -> El {
             _ => "",
         };
         // Asked whether to end a session, the keys answer.
-        if let Some(asked) = state.asked.get_untracked() {
-            if character == "y" {
-                match asked.derived {
-                    Some(_) => control::terminate_with_derived(&asked.session),
-                    None => control::terminate(&asked.session),
-                }
-            }
-            state.asked.set(None);
+        if state.asked.get_untracked().is_some() {
+            answer(character == "y");
             prevent_default();
             stop_propagation();
             return;
@@ -501,36 +680,14 @@ fn list(shown: Shown) -> El {
             stop_propagation();
             return;
         }
-        let ask = |derived: bool| {
-            let Some(session) = state.chosen_session() else {
-                return;
-            };
-            let count = state.derived_from(&session.id);
-            state.asked.set(Some(Asked {
-                derived: (derived && count > 0).then_some(count),
-                title: session.title,
-                session: session.id,
-            }));
-        };
         match (&key.key, character) {
             (_, "j") | (Key::Named(NamedKey::ArrowDown), _) => step(1, false),
             (_, "k") | (Key::Named(NamedKey::ArrowUp), _) => step(-1, false),
-            (_, "n") => step(0, true),
-            (Key::Named(NamedKey::Enter), _) => {
-                if let Some(session) = state.chosen_session() {
-                    control::show(&session.id);
-                    (shown.gone)();
+            (key, _) if Act::of_key(key).is_some() => {
+                if let Some(act) = Act::of_key(key) {
+                    run(act);
                 }
             }
-            (_, "t") => {
-                if let Some(session) = state.chosen_session() {
-                    control::open_terminal(&session.id);
-                    (shown.gone)();
-                }
-            }
-            (_, "x") => ask(false),
-            (_, "X") => ask(true),
-            (_, "/") => state.searching.set(true),
             // (A search that stands is taken back.)
             (Key::Named(NamedKey::Escape), _)
                 if shown.escape_takes_a_search_back && !state.query.get_untracked().is_empty() =>
@@ -545,9 +702,16 @@ fn list(shown: Shown) -> El {
     root.focus()
 }
 
-fn hint((key, does): (&str, &str)) -> El {
+/// A key in the band and what it does, which a press does too. The press
+/// leaves the keys where they were.
+fn hint((key, does): (&str, &str), press: impl Fn() + 'static) -> El {
     el("span")
         .class(styles::HINT)
         .child(el("span").class(styles::KEY).text(key))
         .child(el("span").text(does))
+        .on("pointerdown", |_| prevent_default())
+        .on("click", move |_| {
+            press();
+            prevent_default();
+        })
 }

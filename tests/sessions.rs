@@ -185,6 +185,52 @@ impl Opened {
         )
     }
 
+    /// The elements of a class within the list, in document order.
+    fn nodes(&self, class: &str) -> Vec<NodeId> {
+        let document = self.app.document();
+        let document = document.borrow();
+        let mut lists = Vec::new();
+        collect(
+            &document,
+            document.root_element().id,
+            "sessions",
+            &mut lists,
+        );
+        let mut found = Vec::new();
+        for list in lists {
+            collect(&document, list, class, &mut found);
+        }
+        found
+    }
+
+    /// The middle of an element of the page.
+    fn middle(&self, node: NodeId) -> (f32, f32) {
+        let document = self.app.document();
+        let document = document.borrow();
+        let bounds = (document.get_client_bounding_rect(node)).expect("a box");
+        (
+            (bounds.x + bounds.width / 2.) as f32,
+            (bounds.y + bounds.height / 2.) as f32,
+        )
+    }
+
+    /// A click, or a right-click, on the middle of the element of the
+    /// list's class `class` whose text begins with `text`.
+    fn press(&self, class: &str, text: &str, right: bool) {
+        let texts = self.texts(class);
+        let at = (texts.iter().position(|said| said.starts_with(text)))
+            .unwrap_or_else(|| panic!("no {class} {text:?} in {texts:?}"));
+        let (x, y) = self.middle(self.nodes(class)[at]);
+        match right {
+            true => horizon_ui::testing::right_click_at(&self.app, x, y),
+            false => horizon_ui::testing::click_at(&self.app, x, y),
+        }
+        self.app.run_effects();
+        self.app.resolve();
+        self.app.run_effects();
+        self.app.resolve();
+    }
+
     /// The titles of the rows, in the order they are drawn.
     fn titles(&self) -> Vec<String> {
         self.texts("title")
@@ -334,7 +380,7 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
     );
     assert!(bands[1].ends_with("notes1"), "{bands:?}");
     // Each row says what its session is and does, and its state.
-    let rows = opened.texts("row");
+    let rows = opened.texts("label");
     assert!(
         rows[0].starts_with("buildagentapproval") && rows[0].ends_with("Run bash"),
         "{rows:?}"
@@ -386,7 +432,7 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
         .update(|model| _ = model.mark_session_seen(made.finished));
     opened.until("the order", || {
         opened.titles() == ["build", "tests", "measure", "shell", "wiki"]
-            && !opened.texts("row")[2].contains("unseen")
+            && !opened.texts("label")[2].contains("unseen")
     });
     let _ = made.first;
 }
@@ -479,6 +525,70 @@ fn the_chosen_session_is_gone_to_and_a_terminal_opened_where_it_works() {
     );
     // The list is still there beside it.
     assert_eq!(opened.titles().len(), 6);
+}
+
+#[test]
+fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
+    let opened = open();
+    let places = Places::made("pointer");
+    let made = make(&opened, &places);
+    opened.list();
+    opened.until("the rows", || opened.titles().len() == 5);
+    let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
+    let foot = || opened.texts("foot").join(" ");
+
+    // A right-click on a row chooses it and opens its menu: what can be
+    // done to it, each with its key. "With derived" is offered where some
+    // are derived from it.
+    opened.press("title", "tests", true);
+    assert_eq!(opened.chosen().as_deref(), Some("tests"));
+    assert_eq!(
+        opened.texts("item"),
+        ["Go toEnter", "Open a terminal theret", "Terminatex"]
+    );
+    opened.press("title", "build", true);
+    assert_eq!(opened.chosen().as_deref(), Some("build"));
+    assert_eq!(opened.texts("item").len(), 4);
+
+    // An item does what its key does: asked, and kept from the band.
+    opened.press("item", "Terminate with derived", false);
+    assert!(opened.texts("item").is_empty());
+    assert!(
+        foot().contains("Terminate “build” and the 1 derived from it?"),
+        "{}",
+        foot()
+    );
+    opened.press("hint", "EscKeep", false);
+    assert!(foot().contains("Go to"), "{}", foot());
+    assert!(has(made.waiting) && has(made.derived));
+
+    // A row's `⋯` opens the same menu; ended from the band.
+    opened.press("title", "tests", true);
+    opened.key(Key::Named(NamedKey::Escape));
+    assert!(opened.texts("item").is_empty());
+    let triggers = opened.nodes("trigger");
+    let (x, y) = opened.middle(triggers[1]);
+    horizon_ui::testing::click_at(&opened.app, x, y);
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert_eq!(opened.texts("item").len(), 3);
+    opened.press("item", "Terminate", false);
+    opened.press("hint", "yTerminate", false);
+    opened.until("the session ended", || !has(made.derived));
+    opened.until("the rows", || opened.titles().len() == 4);
+
+    // The band's keys are pressed too: the next that waits, round the
+    // list from what took the ended one's place.
+    assert_eq!(opened.chosen().as_deref(), Some("measure"));
+    opened.press("hint", "nNext waiting", false);
+    assert_eq!(opened.chosen().as_deref(), Some("build"));
+
+    // A click on a row goes to its session.
+    assert!(!opened.model(|model| model.pane_location_for_session(made.finished).is_some()));
+    opened.press("title", "measure", false);
+    opened.until("the session's pane", || {
+        opened.model(Workspace::active_session_id) == Some(made.finished)
+    });
 }
 
 #[test]
@@ -693,6 +803,7 @@ fn paint_the_list() {
     if std::env::var_os("HORIZON_SESSIONS_ASK").is_some() {
         opened.character("X");
     }
+    menu_if_asked(&opened);
     let (width, height) = (1200u32, 800u32);
     let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
     let mut pixels = Vec::new();
@@ -708,6 +819,15 @@ fn paint_the_list() {
         picture.extend_from_slice(&[*red, *green, *blue]);
     }
     std::fs::write(out, picture).expect("the picture written");
+}
+
+/// For a picture: the menu of the row `HORIZON_SESSIONS_MENU` names
+/// opened by a right-click, where it names one.
+fn menu_if_asked(opened: &Opened) {
+    if let Ok(title) = std::env::var("HORIZON_SESSIONS_MENU") {
+        opened.press("title", &title, true);
+        opened.until("the menu", || !opened.texts("item").is_empty());
+    }
 }
 
 #[test]
@@ -799,6 +919,7 @@ fn paint_the_sidebar() {
     make(&opened, &places);
     opened.until("the list", || lists(&opened).len() == 1);
     opened.until("the rows", || opened.titles().len() == 5);
+    menu_if_asked(&opened);
     let (width, height) = (1200u32, 800u32);
     let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
     let mut pixels = Vec::new();
