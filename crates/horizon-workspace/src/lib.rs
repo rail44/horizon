@@ -5,6 +5,7 @@
 //! shell. `SessionId` lives here too: it is the identity the model
 //! attaches to panes, and the rest of each shell re-exports it.
 
+mod arrange;
 pub mod commands;
 mod layout;
 pub mod lineage;
@@ -20,6 +21,7 @@ pub mod store;
 pub mod title;
 pub mod types;
 
+pub use arrange::Arrangement;
 pub use mode::{Cursor, Direction};
 pub use operations::{CloseCursorOutcome, Side};
 pub use persistence::{
