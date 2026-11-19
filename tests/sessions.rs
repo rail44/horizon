@@ -173,6 +173,18 @@ impl Opened {
         )
     }
 
+    /// The middle of the box the pane `pane` is drawn in.
+    fn middle_of(&self, pane: horizon_workspace::PaneId) -> (f32, f32) {
+        let element = self.shell.pane_element(pane).expect("the pane is drawn");
+        let document = self.app.document();
+        let document = document.borrow();
+        let bounds = (document.get_client_bounding_rect(element)).expect("a box");
+        (
+            (bounds.x + bounds.width / 2.) as f32,
+            (bounds.y + bounds.height / 2.) as f32,
+        )
+    }
+
     /// The titles of the rows, in the order they are drawn.
     fn titles(&self) -> Vec<String> {
         self.texts("title")
@@ -595,4 +607,73 @@ fn paint_the_list() {
         picture.extend_from_slice(&[*red, *green, *blue]);
     }
     std::fs::write(out, picture).expect("the picture written");
+}
+
+#[test]
+fn the_list_left_of_the_tab_group_is_not_cut_by_what_it_opens() {
+    use horizon_workspace::{PluginPane, Side};
+
+    let opened = open();
+    let places = Places::made("left");
+    let made = make(&opened, &places);
+    // The list on the left of the group, put there from the group's strip.
+    opened.shell.model.update(|model| {
+        model.enter_workspace_mode();
+        model.move_cursor(horizon_workspace::Direction::Up);
+    });
+    opened.shell.create_plugin(
+        PluginPane {
+            name: "sessions".to_string(),
+            title: "Sessions".to_string(),
+            state: serde_json::Value::Null,
+        },
+        horizon::workspace::Placement::Split(Side::Left),
+    );
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.until("the rows", || opened.titles().len() == 5);
+    let list = opened.model(|model| model.cursor_pane_id().expect("the list has the keys"));
+    // (Laid out, the list has the keys.)
+    opened.app.run_effects();
+    opened.app.resolve();
+    let beside = |opened: &Opened| {
+        opened.model(|model| match model.layout() {
+            horizon_workspace::types::LayoutNode::Split { children, .. } => children.len(),
+            _ => 0,
+        })
+    };
+    assert_eq!(beside(&opened), 2);
+
+    // Enter on a session no pane shows: its pane is in the group, and the
+    // list keeps its place and its width.
+    opened.character("n");
+    assert_eq!(opened.chosen().as_deref(), Some("measure"));
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the session's pane", || {
+        opened.model(|model| model.pane_location_for_session(made.finished).is_some())
+    });
+    assert_eq!(beside(&opened), 2);
+    let in_group = opened.model(|model| {
+        let pane = model
+            .pane_location_for_session(made.finished)
+            .expect("a pane");
+        model.active_tab().expect("a tab").root.first_pane() != Some(list)
+            && model.tab_panes(pane).contains(&pane)
+    });
+    assert!(in_group);
+
+    // `t` from the list: a terminal in a tab of the group, not a group
+    // made of the list.
+    let (x, y) = opened.middle_of(list);
+    horizon_ui::testing::click_at(&opened.app, x, y);
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert!(opened.model(|model| model.is_active_pane(list)));
+    let tabs = opened.model(Workspace::tab_count);
+    opened.character("t");
+    opened.until("the terminal", || {
+        opened.model(Workspace::tab_count) == tabs + 1
+    });
+    assert_eq!(opened.model(|model| model.tab_groups().len()), 1);
+    assert_eq!(beside(&opened), 2);
 }

@@ -118,12 +118,12 @@ fn tab_operations_act_on_the_group_the_cursor_is_in() {
 }
 
 #[test]
-fn a_new_tab_on_a_pane_under_no_group_makes_its_place_a_group() {
+fn the_new_tab_command_on_a_pane_under_no_group_makes_its_place_a_group() {
     let mut workspace = Workspace::mvp();
     let list = with_a_list_on_the_left(&mut workspace);
     workspace.activate_pane(list);
 
-    workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
+    workspace.new_tab_at_cursor_with_new_session(SessionKind::Terminal);
 
     let groups = workspace.tab_groups();
     assert_eq!(groups.len(), 2);
@@ -221,7 +221,7 @@ fn a_tree_with_groups_round_trips_through_its_saved_state() {
     let mut workspace = Workspace::mvp();
     let list = with_a_list_on_the_left(&mut workspace);
     workspace.activate_pane(list);
-    workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
+    workspace.new_tab_at_cursor_with_new_session(SessionKind::Terminal);
 
     let json = workspace.to_persisted_json().expect("serialize");
     let restored = Workspace::from_persisted_json(&json).expect("restore");
@@ -249,4 +249,40 @@ fn a_saved_state_of_version_1_is_not_read() {
         | Err(WorkspaceStateError::UnsupportedVersion { .. }) => {}
         other => panic!("expected a version 1 state refused, got {other:?}"),
     }
+}
+
+#[test]
+fn a_tab_opened_by_anything_else_goes_in_the_group_that_last_had_focus() {
+    let mut workspace = Workspace::mvp();
+    let group = root_group(&workspace);
+    let list = with_a_list_on_the_left(&mut workspace);
+    workspace.activate_pane(list);
+
+    // (As the command line, or the list's own "terminal here", opens one.)
+    workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+
+    assert_eq!(workspace.tab_groups().len(), 1);
+    assert_eq!(workspace.tab_group(group).expect("the group").tabs.len(), 3);
+    assert!(workspace.visible_pane_ids().contains(&list));
+}
+
+#[test]
+fn with_no_group_a_tab_opens_in_a_new_one_right_of_the_rest() {
+    let mut workspace = Workspace::mvp();
+    let list = with_a_list_on_the_left(&mut workspace);
+    let group = root_group_of(&workspace);
+    workspace.close_tab_in(group, 0);
+    workspace.close_tab_in(group, 0);
+    assert!(workspace.tab_groups().is_empty());
+
+    workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+
+    match workspace.layout() {
+        LayoutNode::Split { children, .. } => {
+            assert_eq!(children[0].node.first_key(), NodeKey::Pane(list));
+            std::assert_matches!(children[1].node, LayoutNode::Tabs(_));
+        }
+        _ => panic!("expected the list and a new group right of it"),
+    }
+    assert!(workspace.layout().is_canonical());
 }

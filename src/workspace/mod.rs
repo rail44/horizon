@@ -839,7 +839,7 @@ impl Shell {
         self.change(|model| {
             let from = model.active_session_id();
             let made = Some(match placement {
-                Placement::NewTab => model.open_tab_with_new_session_activated(kind, true),
+                Placement::NewTab => model.new_tab_at_cursor_with_new_session(kind),
                 Placement::Split(side) => model.split_cursor_with_new_session(kind, side, true),
             });
             model.exit_workspace_mode();
@@ -1026,9 +1026,9 @@ impl Shell {
     pub fn create_plugin(&self, plugin: horizon_workspace::PluginPane, placement: Placement) {
         self.change(|model| {
             match placement {
-                Placement::NewTab => model.open_tab_with_view_activated(plugin, true),
-                Placement::Split(side) => model.split_cursor_with_view(plugin, side),
-            };
+                Placement::NewTab => _ = model.new_tab_at_cursor_with_view(plugin),
+                Placement::Split(side) => _ = model.split_cursor_with_view(plugin, side),
+            }
             model.exit_workspace_mode();
         });
     }
@@ -1036,6 +1036,11 @@ impl Shell {
     /// The agent view a pane shows.
     pub fn agent(&self, pane: PaneId) -> Option<Agent> {
         self.kept().panes.borrow().get(&pane)?.agent
+    }
+
+    /// The node a pane is drawn in, while it is drawn.
+    pub fn pane_element(&self, pane: PaneId) -> Option<horizon_ui::blitz_dom::NodeId> {
+        Some(self.kept().panes.borrow().get(&pane)?.element.0)
     }
 
     /// The terminal a pane shows.

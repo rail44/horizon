@@ -1,7 +1,7 @@
 use super::mode::Cursor;
 use super::types::{
-    NodeKey, Pane, PaneId, PaneSummary, SessionKind, SessionSummary, Tab, TabGroup, TabGroupId,
-    TabSummary, Workspace, WorkspaceSession,
+    NodeKey, Pane, PaneId, SessionKind, SessionSummary, Tab, TabGroup, TabGroupId, TabSummary,
+    Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -310,36 +310,6 @@ impl Workspace {
                 activity: (self.tab_session_id(tab))
                     .and_then(|session| self.session(session))
                     .and_then(|session| session.activity.clone()),
-            })
-            .collect()
-    }
-
-    pub(crate) fn pane_summaries(&self) -> Vec<PaneSummary> {
-        let visible = self.visible_pane_ids();
-        self.root
-            .pane_ids()
-            .into_iter()
-            .filter_map(|pane_id| {
-                let pane = self.panes.iter().find(|pane| pane.id == pane_id)?;
-                let around = self.root.tabs_around(pane_id);
-                let (tab_index, pane_index) = match around.last() {
-                    Some((group, tab)) => {
-                        let group = self.root.group(*group)?;
-                        let tab_index = group.tabs.iter().position(|kept| kept.id == *tab)?;
-                        let pane_index = (group.tabs[tab_index].root.pane_ids().iter())
-                            .position(|id| *id == pane_id)?;
-                        (tab_index, pane_index)
-                    }
-                    None => (0, 0),
-                };
-                Some(PaneSummary {
-                    tab_index,
-                    pane_index,
-                    title: self.pane_title(pane),
-                    plugin: pane.plugin.name.clone(),
-                    active: self.focus == Some(pane_id),
-                    tab_active: visible.contains(&pane_id),
-                })
             })
             .collect()
     }

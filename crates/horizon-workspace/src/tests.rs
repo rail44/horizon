@@ -1,7 +1,7 @@
 #[path = "tests/groups.rs"]
 mod groups;
 
-use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
+use super::types::{LayoutNode, SessionSummary, TabSummary};
 use super::*;
 use crate::SessionId;
 use crate::operations::Content;
@@ -862,34 +862,6 @@ fn activate_visible_pane_switches_active_pane() {
     assert_eq!(workspace.active_visible_index(), 0);
     assert!(!workspace.activate_visible_pane(5));
     assert_eq!(workspace.active_visible_index(), 0);
-}
-
-#[test]
-fn pane_summaries_include_split_panes_by_tab() {
-    let mut workspace = Workspace::mvp();
-    workspace.split_active(SessionKind::Terminal, SessionId::new());
-
-    assert_eq!(
-        workspace.pane_summaries(),
-        vec![
-            PaneSummary {
-                tab_index: 0,
-                pane_index: 0,
-                title: "Terminal #1".to_string(),
-                plugin: "terminal".to_string(),
-                active: false,
-                tab_active: true,
-            },
-            PaneSummary {
-                tab_index: 0,
-                pane_index: 1,
-                title: "Terminal #2".to_string(),
-                plugin: "terminal".to_string(),
-                active: true,
-                tab_active: true,
-            },
-        ]
-    );
 }
 
 #[test]

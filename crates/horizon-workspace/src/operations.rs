@@ -1,6 +1,6 @@
 use super::types::{
-    LayoutNode, NodeKey, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabGroup,
-    TabGroupId, TabId, Workspace, WorkspaceSession,
+    LayoutChild, LayoutNode, NodeKey, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab,
+    TabGroup, TabGroupId, TabId, Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -94,36 +94,59 @@ impl Workspace {
         }
     }
 
-    /// The group a new tab goes in: the one the cursor is on or in. A
-    /// cursor on a pane under no group makes that pane's place a group,
-    /// the pane its first tab (`docs/workspace-layout-design.md`). With
-    /// no cursor (an empty workspace), the root group.
-    fn group_for_new_tab(&mut self) -> TabGroupId {
+    /// The group a new tab goes in. At the cursor (the New Tab command):
+    /// the group the cursor is on or in, and on a pane under no group,
+    /// that pane's place made a group, the pane its first tab
+    /// (`docs/workspace-layout-design.md`). Otherwise -- a tab opened by
+    /// anything else -- the group the cursor is on or in, else the one that
+    /// last had focus; with no group at all, a new one right of the rest.
+    fn group_for_new_tab(&mut self, at_cursor: bool) -> TabGroupId {
         if let Some(group) = self.cursor_group() {
             return group;
         }
-        if let Some(pane) = self.cursor_pane_id() {
+        if at_cursor && let Some(pane) = self.cursor_pane_id() {
             let group = TabGroup::of(LayoutNode::Pane(pane), pane);
             let id = group.id;
             if self.root.replace_pane(pane, group) {
                 return id;
             }
         }
-        match &self.root {
-            LayoutNode::Tabs(group) => group.id,
-            // (A tree with no pane and no group at its root is not one this
-            // model makes; an empty workspace's root is a group.)
-            _ => {
-                let group = TabGroup::empty();
-                let id = group.id;
-                self.root = LayoutNode::Tabs(group);
-                id
-            }
+        if let Some(group) = self.last_group() {
+            return group;
         }
+        let group = TabGroup::empty();
+        let id = group.id;
+        self.root = match std::mem::replace(&mut self.root, LayoutNode::Tabs(group.clone())) {
+            // (An empty workspace's root is the group a tab goes in.)
+            LayoutNode::Tabs(empty) if empty.tabs.is_empty() => LayoutNode::Tabs(group),
+            // (Right of the whole of what was there.)
+            rest => {
+                let mut root = LayoutNode::Split {
+                    axis: SplitAxis::Horizontal,
+                    children: vec![
+                        LayoutChild {
+                            node: rest,
+                            weight: 1.0,
+                        },
+                        LayoutChild {
+                            node: LayoutNode::Tabs(group),
+                            weight: 1.0,
+                        },
+                    ],
+                };
+                root.flatten();
+                root
+            }
+        };
+        id
     }
 
     pub(crate) fn open_tab(&mut self, content: Content) -> PaneId {
-        let group_id = self.group_for_new_tab();
+        self.open_tab_in(content, false)
+    }
+
+    fn open_tab_in(&mut self, content: Content, at_cursor: bool) -> PaneId {
+        let group_id = self.group_for_new_tab(at_cursor);
         let pane = self.new_pane(content);
         let pane_id = pane.id;
         self.panes.push(pane);
@@ -157,6 +180,21 @@ impl Workspace {
             workspace.open_tab(Content::Session(kind, session_id));
         });
         session_id
+    }
+
+    /// The New Tab command's: a tab over a new session of `kind`, in the
+    /// group the cursor is on or in, or -- on a pane under no group --
+    /// in a group made in that pane's place.
+    pub fn new_tab_at_cursor_with_new_session(&mut self, kind: SessionKind) -> SessionId {
+        let session_id = SessionId::new();
+        self.open_tab_in(Content::Session(kind, session_id), true);
+        session_id
+    }
+
+    /// [`Self::new_tab_at_cursor_with_new_session`] for a session-less
+    /// view.
+    pub fn new_tab_at_cursor_with_view(&mut self, plugin: PluginPane) -> PaneId {
+        self.open_tab_in(Content::View(plugin), true)
     }
 
     /// [`Self::open_tab_with_new_session_activated`] for a session-less
