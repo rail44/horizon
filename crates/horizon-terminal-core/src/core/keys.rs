@@ -12,6 +12,7 @@ use super::TerminalCore;
 use crate::types::KeyEventKind;
 
 /// A key event as a view has it.
+#[derive(Clone, Copy)]
 pub struct KeyStroke<'a> {
     /// The physical key by its name in the UI Events specification
     /// (`KeyA`, `Digit1`, `ArrowUp`), or empty where the platform did not
@@ -390,7 +391,47 @@ impl TerminalCore {
         }
         let mut written = Vec::new();
         encoder.encode_to_vec(&event, &mut written).ok()?;
+        if held.contains(Mods::CTRL | Mods::SHIFT)
+            && self.legacy_shift_dropped(key, &event, &written)
+        {
+            // Written as Control and the letter, as with no Shift held.
+            let lower = one.map(|one| one.to_lowercase().to_string());
+            let unshifted = KeyStroke {
+                modifiers: stroke.modifiers - Modifiers::SHIFT,
+                made: lower.as_deref(),
+                ..*stroke
+            };
+            return self.encoded(key, &unshifted);
+        }
         Some(written)
+    }
+
+    /// Whether Control and Shift with a letter is to be written as Control
+    /// and the letter (`^A`), where the program has asked for nothing: no
+    /// kitty keyboard flags and no xterm modifyOtherKeys 2. The engine
+    /// writes the kitty protocol's `CSI 97;6u` there, as kitty does; xterm
+    /// and most terminals write `^A`, and a program that asked for nothing
+    /// (bash's readline) takes the CSI form for text
+    /// (docs/terminal-stream-design.md).
+    ///
+    /// The engine says nothing of whether modifyOtherKeys 2 is set, so it
+    /// is read from what the encoder writes: for this key the encoder's
+    /// output with modifyOtherKeys 2 (`CSI 27;6;65~`) differs from its
+    /// output without it, and if the terminal's options write the same as
+    /// options with it turned off, it is off.
+    fn legacy_shift_dropped(&self, key: Key, event: &Event, written: &[u8]) -> bool {
+        let letter = us_unshifted(key).is_some_and(|c| c.is_ascii_lowercase());
+        let asked = (self.terminal.kitty_keyboard_flags()).is_ok_and(|flags| flags.bits() != 0);
+        if !letter || asked || written.is_empty() {
+            return false;
+        }
+        let Ok(mut plain) = Encoder::new() else {
+            return false;
+        };
+        plain.set_options_from_terminal(&self.terminal);
+        plain.set_modify_other_keys_state_2(false);
+        let mut without = Vec::new();
+        plain.encode_to_vec(event, &mut without).is_ok() && without == written
     }
 }
 
@@ -441,11 +482,9 @@ mod tests {
                 KeyCode::Char('a'),
                 ctrl | shift,
                 Some("A"),
-                // (The engine's own way: Shift held with a Control chord
-                // is told, in the form the kitty protocol has, with no
-                // mode asked for. Horizon's encoder wrote the control
-                // character.)
-                "\\u{1b}[97;6u",
+                // (Shift dropped where the program asked for nothing, as
+                // xterm does: see `legacy_shift_dropped`.)
+                "\\u{1}",
             ),
             ("KeyA", KeyCode::Char('a'), alt, Some("a"), "\\u{1b}a"),
             (
@@ -523,5 +562,31 @@ mod tests {
             key("KeyA", KeyCode::Char('a'), Modifiers::NONE, Some("a")),
             "a"
         );
+    }
+
+    /// Control and Shift with a letter is Control and the letter where
+    /// the program has asked for nothing (xterm's modifyOtherKeys 1
+    /// included, as xterm has it), and what the program asked for where
+    /// it has: modifyOtherKeys 2's form, the kitty protocol's.
+    #[test]
+    fn control_and_shift_with_a_letter_is_what_the_program_asked_for() {
+        let chord = |core: &TerminalCore, modifiers| {
+            written(core, "KeyA", KeyCode::Char('a'), modifiers, Some("A"))
+        };
+        let (ctrl_shift, all) = (
+            Modifiers::CTRL | Modifiers::SHIFT,
+            Modifiers::CTRL | Modifiers::SHIFT | Modifiers::ALT,
+        );
+        let mut core = TerminalCore::new(TerminalSize::new(80, 24));
+        assert_eq!(chord(&core, ctrl_shift), "\\u{1}");
+        assert_eq!(chord(&core, all), "\\u{1b}\\u{1}");
+        core.write_vt(b"\x1b[>4;1m");
+        assert_eq!(chord(&core, ctrl_shift), "\\u{1}");
+        core.write_vt(b"\x1b[>4;2m");
+        assert_eq!(chord(&core, ctrl_shift), "\\u{1b}[27;6;65~");
+        core.write_vt(b"\x1b[>4;0m");
+        assert_eq!(chord(&core, ctrl_shift), "\\u{1}");
+        core.write_vt(b"\x1b[>1u");
+        assert_eq!(chord(&core, ctrl_shift), "\\u{1b}[97;6u");
     }
 }

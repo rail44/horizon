@@ -371,6 +371,13 @@ bash 5.3 と fish 4.9 に、`echo left` の後にこの列を送り、`right` �
 
 自前のエンコーダは `^A` を書いていた(bash では行頭への移動)。
 
+他のターミナルのソースの調査(xterm、Alacritty、WezTerm、foot、VTE、Konsole、
+Windows Terminal、rio、iTerm2 は `^A`、kitty は `ESC[97;6u`、Contour は素の `A`)の後、
+オーナーの判断で、プログラムが何も頼んでいないとき(kitty のフラグなし、modifyOtherKeys が
+2 でない)は Shift を外して `^A` にした。経緯と判定の方法は `docs/terminal-stream-design.md`。
+Ghostty のソースでは、`src/input/key_encode.zig` の `ctrlSeq` のコメントが、この形を
+「kitty だけと一致する意図した逸脱」と書いている(手元のビルドに含まれる 1.4.1-dev)。
+
 ### 確かめていないこと(追記 2 の時点)
 
 - 実際の窓で、この追記の形(フレーム経路の削除、キーの全面移行)を使ったときの動作。
