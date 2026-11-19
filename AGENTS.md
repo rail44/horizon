@@ -351,13 +351,14 @@ variables. Domain logic lives in shared crates; `src/` holds the views and
 their wiring:
 
 - `workspace/` — the shell root (`Shell`): draws the shared workspace model
-  (tab strip, recursive splits), keeps the sessions (the close-vs-detach
+  (one tree of panes, splits and tab groups, each group with its strip --
+  `docs/workspace-layout-design.md`), keeps the sessions (the close-vs-detach
   seam), workspace mode, the key map, command dispatch (`execute`), the
   sheet over the workspace (`over.rs`) and what the shell puts in it
   (palette, view chooser, model picker; an extension puts its own view
   there, as the session manager is), the
   control plane's requests, and the runtime reloads. The model itself —
-  tabs, panes, layout tree, session attachments, mode state, the pure
+  the workspace's tree, panes, session attachments, mode state, the pure
   command model, the `workspace_snapshot` payload — is
   `crates/horizon-workspace`.
 - `terminald.rs` / `agentd.rs` — the two runtimes as the shell holds them:

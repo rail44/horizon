@@ -57,14 +57,17 @@ manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
   terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
-  opens an agent tab).
-- `split right`: opens the same view chooser, but the chosen view splits the
-  active pane horizontally instead of opening a new tab.
-- `split down`: same as `split right`, but splits vertically.
+  opens an agent tab) for a tab in the tab group the cursor is in.
+- `split right`, `split left`, `split down`, `split up`: open the same view
+  chooser, but the chosen view goes beside what the cursor is on instead of
+  in a new tab. In workspace mode, `k` from a group's top pane puts the
+  cursor on the group's tab strip: a split from there goes beside the whole
+  group, and stays on screen whatever tab the group shows
+  (`docs/workspace-layout-design.md`).
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
 - `detached`: shows detached sessions such as `Terminal #2` and attaches the
-  selected session back into the active tab as a split.
+  selected session back as a split in the tab group that last had focus.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 - `manage sessions`: opens the list of sessions over the workspace (see

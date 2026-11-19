@@ -43,7 +43,9 @@ The design's spine — there are two different "selected pane" concepts:
 - **cursor** — the pane/tab Horizon operations act on (new). In
   workspace mode, navigation keys move the cursor. `Enter` commits:
   focus follows the cursor and passthrough resumes. `Esc` cancels: the
-  cursor snaps back to the focus, which never moved.
+  cursor snaps back to the focus, which never moved. The cursor rests on
+  a pane or on a tab group's strip, the group as a whole
+  (`docs/workspace-layout-design.md`).
 
 Consequences that make the split load-bearing:
 
@@ -180,7 +182,7 @@ mode reachable" were already separate concerns; this just adds one more
 condition to the read side) and is airtight *by construction* in both
 transition directions — no call site has to remember to flip a flag on
 the way into or out of empty, since the answer is recomputed fresh from
-`tab_count()` every time. (b) would have needed a parallel, mostly-
+whether the workspace has a pane every time. (b) would have needed a parallel, mostly-
 duplicate binding table for the pane-independent subset (in practice
 just `:`, since `t`/`a`/`s`/`x`/`tab`/hjkl/Enter/Esc are all either
 already pane-independent through the *same* mechanism (`t`/`a` open the
