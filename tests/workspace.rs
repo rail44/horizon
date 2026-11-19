@@ -1151,18 +1151,22 @@ fn a_shell_with_nothing_happening_has_nothing_to_draw() {
         is_composing: false,
         state: KeyState::Pressed,
     }));
-    while turn(&mut live) {}
+    // The echo is in the view only once a turn said there was something to
+    // draw and the draw took it in. It may come in with the draws the key
+    // itself asked for: the PTY echoes in well under a millisecond, as fast
+    // as those are drawn, so a wait for a draw after them would wait for
+    // nothing.
+    let terminal = shell.terminal(pane).expect("a terminal");
     let started = Instant::now();
-    while !turn(&mut live) {
-        assert!(started.elapsed() < Duration::from_secs(5), "no echo drawn");
+    while !terminal.text().trim_end().ends_with("$ a") {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "no echo drawn: {}",
+            terminal.text()
+        );
+        turn(&mut live);
         std::thread::sleep(Duration::from_millis(5));
     }
-    let terminal = shell.terminal(pane).expect("a terminal");
-    assert!(
-        terminal.text().trim_end().ends_with("$ a"),
-        "{}",
-        terminal.text()
-    );
 }
 
 #[test]
