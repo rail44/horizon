@@ -203,7 +203,7 @@ pub(super) fn view(shell: Shell) -> El {
         if let Some(outer) = outer {
             outer.remove();
         }
-        let top = arrange(&shape, &[], shell, &strips, false);
+        let top = arrange(&shape, &[], shell, &strips, None);
         strips.keep_only(&shape);
         root.child(top);
         let kept = shell.kept();
@@ -218,14 +218,66 @@ pub(super) fn view(shell: Shell) -> El {
     root
 }
 
-fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips, in_tab: bool) -> El {
+/// The edges of a tab's card a part of it is at.
+#[derive(Clone, Copy)]
+struct Edges {
+    top: bool,
+    right: bool,
+    bottom: bool,
+    left: bool,
+}
+
+impl Edges {
+    const ALL: Self = Self {
+        top: true,
+        right: true,
+        bottom: true,
+        left: true,
+    };
+
+    /// The edges the child at `index` of `count` is at, along a split
+    /// across (side by side) or down.
+    fn of_child(self, across: bool, index: usize, count: usize) -> Self {
+        let (first, last) = (index == 0, index + 1 == count);
+        match across {
+            true => Self {
+                left: self.left && first,
+                right: self.right && last,
+                ..self
+            },
+            false => Self {
+                top: self.top && first,
+                bottom: self.bottom && last,
+                ..self
+            },
+        }
+    }
+}
+
+/// Builds the boxes of `shape`: `in_tab` the edges of a tab's card the
+/// shape is at, where it is in a tab.
+fn arrange(
+    shape: &Shape,
+    path: &[usize],
+    shell: Shell,
+    strips: &Strips,
+    in_tab: Option<Edges>,
+) -> El {
     let (axis, children) = match shape {
         Shape::Pane(id) => return shell.kept().panes.borrow()[id].element,
         Shape::Group { id, shown } => {
+            let alone = matches!(
+                shown.as_ref().map(|(_, shape)| &**shape),
+                Some(Shape::Pane(_))
+            );
+            let parted = matches!(
+                shown.as_ref().map(|(_, shape)| &**shape),
+                Some(Shape::Split { .. })
+            );
             let content = match shown {
                 // (A path counts a split's children: the group is passed
                 // through.)
-                Some((_, shape)) => arrange(shape, path, shell, strips, true),
+                Some((_, shape)) => arrange(shape, path, shell, strips, Some(Edges::ALL)),
                 // With no tab, the views a tab can show, to pick one from.
                 None => {
                     let search = picker::Search::new();
@@ -241,7 +293,15 @@ fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips, in_tab:
             return el("div")
                 .class(styles::GROUP)
                 .child(strips.of(shell, *id))
-                .child(el("div").class(styles::SHOWN_TAB).child(content));
+                .child(
+                    el("div")
+                        .class(styles::SHOWN_TAB)
+                        .class((
+                            alone.then_some(styles::ALONE),
+                            parted.then_some(styles::PARTED),
+                        ))
+                        .child(content),
+                );
         }
         Shape::Split { axis, children } => (*axis, children),
     };
@@ -252,20 +312,27 @@ fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips, in_tab:
             styles::SPLIT,
             if across { styles::ACROSS } else { styles::DOWN },
         ))
-        .class(in_tab.then_some(styles::IN_TAB));
+        .class(in_tab.is_some().then_some(styles::IN_TAB));
+    let count = children.len();
     let cells: Vec<El> = (children.iter().enumerate())
         .map(|(index, child)| {
             let at = [path, &[index]].concat();
             let weighed = at.clone();
+            let edges = in_tab.map(|edges| edges.of_child(across, index, count));
+            let at_edge = |of: fn(Edges) -> bool, class| edges.filter(|e| of(*e)).map(|_| class);
             el("div")
                 .class(styles::CELL)
+                .class(at_edge(|e| e.top, styles::EDGE_TOP))
+                .class(at_edge(|e| e.right, styles::EDGE_RIGHT))
+                .class(at_edge(|e| e.bottom, styles::EDGE_BOTTOM))
+                .class(at_edge(|e| e.left, styles::EDGE_LEFT))
                 .style_dyn("flex-grow", move || {
                     shell
                         .model
                         .with(|model| weight(model, &weighed))
                         .to_string()
                 })
-                .child(arrange(child, &at, shell, strips, in_tab))
+                .child(arrange(child, &at, shell, strips, edges))
         })
         .collect();
     let resize = Resize {

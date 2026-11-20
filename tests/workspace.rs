@@ -441,9 +441,9 @@ fn a_boundary_dragged_changes_the_panes_shares_and_builds_nothing() {
     let after = opened.bounds(panes[0]);
     // (Two panes in a tab's card, a line between them.)
     let card = opened.bounds(opened.all("shown-tab")[0]);
-    // (Within the card's border and the little it keeps in from it.)
+    // (Each over the card's border at its edge, the line between them.)
     assert!(
-        (before.2 - (card.2 - 2. - 4. - 5.) / 2.).abs() < 1.,
+        (before.2 - (card.2 - 5.) / 2.).abs() < 1.,
         "{before:?} {card:?}"
     );
     // Its right edge where the boundary was let go of.
@@ -473,7 +473,10 @@ fn the_keys_of_the_mode_change_the_shares_of_the_split_around_the_cursor() {
     opened.chord();
     opened.character(">");
     let wider = widths();
-    assert!(wider[1] > even[1] && wider[0] < even[0], "{even:?} {wider:?}");
+    assert!(
+        wider[1] > even[1] && wider[0] < even[0],
+        "{even:?} {wider:?}"
+    );
     // No split down around it: `+` changes nothing.
     opened.character("+");
     assert_eq!(widths(), wider);

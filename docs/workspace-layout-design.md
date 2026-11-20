@@ -167,17 +167,25 @@ What is drawn is chosen so that what holds what reads from the drawing
   apart by a line, so a split in a tab reads apart from one between
   cards (`in-tab`).
 - A group's strip is above its card, with no frame of its own. The tabs
-  share its width; those not shown are their words, a faint line between
-  two of them, and the shown one is outlined.
+  share its width, in the body's size; those not shown are their words, a
+  faint line between two of them, and the shown one is outlined in the
+  accent.
 - A pane's tab label names it where the pane is all of its tab. Any
   other pane -- one of a split tab, one in no group -- has a tag in its
   top right corner, clear of a terminal's text, which begins at the
   left: its name and the grip it is taken by. The tag shows while the
   pointer is over the pane or in workspace mode, so the pane with the
   focus does not repeat its tab's label.
-- The pane with the focus has its border in the accent. In workspace
-  mode every pane is veiled and the cursor's is tinted with the accent;
-  on a strip, its shown tab is.
+- The pane with the focus has its line in the accent. In workspace mode
+  every pane is veiled and the cursor's is tinted with the accent; on a
+  strip, its shown tab is. A tab that is one pane is that pane's card, so
+  the card's own line is the one marked and the whole card tinted. The
+  panes of a split in a tab are parts of the card: a pane reaches over the
+  card's line where it is at the card's edge, rounded at the card's
+  corners (`Edges` in `src/workspace/arrangement.rs`), and its line, in
+  no color but where it is marked, lies on the card's. A pane keeps what
+  it shows a few pixels in from its line, clear of the rounded corners,
+  which clip it.
 - A sheet over the workspace (the palette, a chooser, a dialog) is framed
   as the cards are, what is behind it dimmed.
 
