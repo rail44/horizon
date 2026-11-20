@@ -428,6 +428,23 @@ impl Workspace {
         true
     }
 
+    /// Shows the tab `pane` is in (the innermost, where there are more),
+    /// with the focus where it is. `false` where it is shown already, or
+    /// the pane is in no tab.
+    pub fn show_tab_of(&mut self, pane: PaneId) -> bool {
+        let Some(&(group, tab)) = self.root.tabs_around(pane).last() else {
+            return false;
+        };
+        let Some(found) = self.root.group_mut(group) else {
+            return false;
+        };
+        if found.shown == tab {
+            return false;
+        }
+        found.shown = tab;
+        true
+    }
+
     /// Closes the tab at `index` of the group the cursor is on or in.
     /// Closing the workspace's last tab is allowed: it leaves a valid,
     /// persistable, empty workspace.

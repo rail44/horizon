@@ -2,9 +2,10 @@
 //! (`horizon:ui/workspace`'s `cursor`, board #95): while the focus is in
 //! a view that holds one, every pane but the one the view is in is veiled
 //! as in the mode, and the pane that shows the session the cursor was
-//! moved to is the cursor's -- or, where that pane's tab is not shown, the
-//! tab's label is. The keys stay the view's, and nothing else changes: no
-//! tab is shown, no pane gets the focus.
+//! moved to is the cursor's, its tab shown. The keys stay the view's, and
+//! no pane gets the focus. A tab of the group the view is in is not shown
+//! -- the view would go with the tab it is in -- and its label is the
+//! cursor's in its place.
 
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
 use horizon_ui::{El, each_layout};
@@ -81,6 +82,29 @@ impl Shell {
             };
             if shell.lent.get_untracked() != lent {
                 shell.lent.set(lent);
+            }
+            // The tab the cursor's pane is in, shown, but in the view's own
+            // group.
+            if let Some(Lent { from, on: Some(on) }) = lent {
+                let shown = shell.model.with_untracked(|model| {
+                    let group = model.group_of(on);
+                    group.is_some() && group != from.and_then(|from| model.group_of(from))
+                });
+                if shown {
+                    let mut changed = false;
+                    shell.model.update(|model| changed = model.show_tab_of(on));
+                    // (The view's pane is put back in the boxes made again
+                    // for the tab shown: it is given the keys again. A
+                    // view over the workspace is in none of them.)
+                    let active = from.is_some_and(|from| {
+                        shell
+                            .model
+                            .with_untracked(|model| model.is_active_pane(from))
+                    });
+                    if changed && active {
+                        shell.kept().refocus.set(true);
+                    }
+                }
             }
         });
     }

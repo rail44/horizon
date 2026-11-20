@@ -450,6 +450,116 @@ fn where_the_chosen_session_is_the_workspace_shows_as_workspace_mode_does() {
 }
 
 #[test]
+fn the_chosen_sessions_tab_in_another_group_is_shown() {
+    // The list in a group on the left, the terminal in one on the right,
+    // with a second terminal shown over it.
+    let config = horizon_config::parse(
+        r#"
+        startup_layout = "two"
+        [layouts.two]
+        split = "horizontal"
+        children = [
+          { tabs = [ { view = "sessions" } ] },
+          { workspace = true },
+        ]
+        "#,
+    )
+    .unwrap();
+    let opened = open_with(Opening {
+        config,
+        ..Opening::default()
+    });
+    opened.until("the layout", || {
+        opened.model(|model| model.all_pane_ids().len()) == 2 && opened.titles().len() == 1
+    });
+    let terminal = opened.model(|model| {
+        model.pane_location_for_session(model.active_terminal_session_id().expect("the terminal"))
+    });
+    let terminal = terminal.expect("its pane");
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("'".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened.shell.model.update(|model| {
+        model.commit_workspace_mode_to(terminal);
+    });
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("'".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened.character("t");
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the second terminal", || opened.titles().len() == 2);
+    let visible = || {
+        opened.model(|model| {
+            (model.visible_panes().iter())
+                .map(|pane| pane.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    let hidden = *(opened.model(|model| model.all_pane_ids()).iter())
+        .find(|pane| !visible().contains(pane))
+        .expect("a terminal in a tab not shown");
+    let list = (visible().into_iter())
+        .find(|pane| opened.model(|model| model.group_of(*pane) != model.group_of(hidden)))
+        .expect("the list");
+    // The keys the list's, as workspace mode gives them.
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("'".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened
+        .shell
+        .model
+        .update(|model| model.commit_workspace_mode_to(list));
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("'".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened.key(Key::Named(NamedKey::Escape));
+    let settle = || {
+        for _ in 0..3 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    settle();
+    // The list's cursor on the terminal not shown, the first row: its tab,
+    // in the other group, is shown, and the list stays.
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #1"));
+    assert!(visible().contains(&hidden));
+    assert!(visible().contains(&list));
+    settle();
+    let element = opened.shell.pane_element(hidden).expect("drawn");
+    let marked = horizon_ui::testing::find(&opened.app, element, "cursor");
+    assert_eq!(marked.first(), Some(&element));
+}
+
+#[test]
 fn the_sessions_are_listed_by_project_with_what_waits_first() {
     let opened = open();
     let places = Places::made("listed");

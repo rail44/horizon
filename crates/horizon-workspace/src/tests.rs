@@ -852,6 +852,21 @@ fn activate_tab_index_switches_tab_and_focuses_its_active_pane() {
 }
 
 #[test]
+fn show_tab_of_shows_a_panes_tab_and_leaves_the_focus() {
+    let mut workspace = Workspace::mvp();
+    let first = workspace.visible_panes()[0].id;
+    workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
+    let second = workspace.visible_panes()[0].id;
+    assert_eq!(workspace.active_tab_index(), 1);
+
+    assert!(workspace.show_tab_of(first));
+    assert_eq!(workspace.visible_panes()[0].id, first);
+    assert!(workspace.is_active_pane(second));
+    // Shown already: nothing.
+    assert!(!workspace.show_tab_of(first));
+}
+
+#[test]
 fn active_tab_index_tracks_active_tab() {
     let mut workspace = Workspace::mvp();
     workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
