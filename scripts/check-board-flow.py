@@ -299,7 +299,7 @@ def main():
         "HORIZON_AGENT_EVENT_LOG": str(root / "agent.jsonl"), "HORIZON_AGENT_STATE_DB": str(root / "agent.duckdb"),
         "HORIZON_LOGD_SOCKET": str(root / "logd.sock"), "HORIZON_LOGD_BINARY": str(binaries / "horizon-logd"),
         "HORIZON_AGENTD_SOCKET": str(root / "agentd.sock"), "HORIZON_AGENTD_BINARY": str(binaries / "horizon-agentd"),
-        "OPENAI_API_KEY": "local-fixture-only", "HORIZON_SKIP_TARGET_SEED": "1",
+        "OPENAI_API_KEY": "local-fixture-only",
     })
     processes = []
     server = None

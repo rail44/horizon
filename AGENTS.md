@@ -231,40 +231,37 @@ patch revision together, and compares that copy with the new revision's
 `View::redraw`.
 
 Every worktree builds into its own `target/` — nothing is shared
-between checkouts at any level, so cross-worktree correctness is
-trivial. What makes a fresh worktree fast is the **target seed hook**
-(`hooks/post-checkout`, run automatically by `git worktree add`): it
-reflinks the main checkout's `target/` into the new worktree (btrfs
-copy-on-write — metadata-only, seconds for a multi-GB tree) and then
-strips workspace-member artifacts (`cargo clean -p` per member, names
-from `cargo metadata`), so the worktree rebuilds its own code but never
-the dependency graph. The member strip is
-load-bearing, not an optimization: copied member fingerprints reference
-the main checkout's sources and would otherwise validate as fresh,
-handing the worktree main's binaries instead of its own. Do not skip it.
-`HORIZON_SKIP_TARGET_SEED=1` disables seeding (e.g. to measure cold
-builds). The hook degrades to a cold build on any failure. Plain
-`git worktree add` runs it directly (agentd session worktrees, review
-checkouts), once the clone's hooks are the tracked ones — one-time setup
-per clone:
+between checkouts at the artifact level, so cross-worktree correctness
+is trivial. What makes a fresh worktree fast is **kache**, a machine's
+own install rather than this repository's: a `rustc-wrapper` that
+caches compiler invocations by their inputs and restores their outputs
+into each worktree's own `target/`, hitting across worktrees at
+different paths, build-script crates included. Its default
+`seed_new_targets` also copies registry and git dependency units — never
+workspace members or path dependencies — into a target that has not
+built yet. Once per machine:
 
 ```sh
-git config core.hooksPath hooks
+cargo install kache --locked
+kache init
 ```
 
-Claude Code's own worktrees do not: Claude Code runs its git
-with `core.hooksPath=/dev/null`, so the tracked `.claude/settings.json`
-runs the same seed through `hooks/claude-worktree-seed` on
-`PostToolUse(EnterWorktree)` and `SubagentStart` (an
-`isolation: "worktree"` subagent never calls EnterWorktree). To check a
-worktree was seeded, compare its `target/CACHEDIR.TAG` mtime with the
-main checkout's: the reflink copy keeps it, a cold build writes a new one.
+`kache init` sets `rustc-wrapper = "kache"` in `~/.cargo/config.toml`
+(and a Cargo shim and a shell line; see kache's own docs). Without it
+Cargo builds as it always did, each worktree from scratch. Measured
+2026-11-21 on a fresh worktree of main, the gate's four builds (the
+workspace, the extensions, clippy, the tests) took about 230-270 s with
+a warm cache, against about 425 s with the reflink seed hook that
+preceded it, which never held clippy's or the tests' dependency units.
+On this machine's `noatime` volume kache cannot tell which units no
+build uses, so a long-lived `target/` keeps growing until it is cleaned.
 
-Two build-sharing schemes preceded this and were both retired; their
-history lives in `.cargo/config.toml`'s comment; that file holds no
-artifact-sharing setting. If phantom errors (E0432 on symbols that exist, a
-sibling's binaries running as yours) ever appear, suspect artifact-level
-sharing having crept back in.
+The build-sharing schemes before this — a shared build-dir, sccache, the
+reflink seed — and why each was retired are in `.cargo/config.toml`'s
+comment; that file holds no artifact-sharing setting. If phantom errors
+(E0432 on symbols that exist, a sibling's binaries running as yours)
+ever appear, build with `KACHE_DISABLED=1` to tell kache's restores
+from the code.
 
 ## Configuration
 

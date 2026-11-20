@@ -780,7 +780,8 @@ The existing `crates/horizon-agentd/src/worktree.rs` already separates Git
 creation from session startup: `create_isolated_worktree` takes a source
 checkout and session id, creates a branch/worktree from that checkout's HEAD,
 and returns `WorktreeInfo`. Ordinary `git worktree add` also preserves the
-repository's post-checkout build-seeding hook. This is a suitable reuse point.
+repository's post-checkout build-seeding hook (retired 2026-11-21 for kache,
+see AGENTS.md "Build setup"). This is a suitable reuse point.
 
 The proposed responsibility split is:
 

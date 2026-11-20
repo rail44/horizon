@@ -4,12 +4,10 @@
 # artifact level, so cross-worktree correctness is trivial: there is no
 # file two checkouts could both claim.
 #
-# Fresh worktrees are fast anyway: `git worktree add` runs
-# `hooks/post-checkout`, which reflinks the main checkout's `target/`
-# into the new worktree (btrfs copy-on-write) and strips
-# workspace-member artifacts so the worktree always rebuilds its own
-# code but never the dependency graph. See that hook and AGENTS.md
-# "Build setup".
+# Fresh worktrees are fast through kache, installed per machine with its
+# `rustc-wrapper` in `~/.cargo/config.toml`, not here: it restores
+# compiler outputs by their inputs into each worktree's own `target/`.
+# See AGENTS.md "Build setup".
 #
 # History, for whoever is tempted to reintroduce sharing here:
 # - 2026-07-30: a shared `build.build-dir` + a per-worktree
@@ -21,9 +19,15 @@
 #   (verified empirically: stable within a worktree, split across
 #   worktrees), and the expensive units — gpui, arrow, aws-lc-sys — are
 #   all in that class, so fresh worktrees stayed ~11-minute builds.
-# - 2026-08-02 (evening): both removed in favor of the reflink seed
-#   hook, which delivers ~5s worktree creation + ~33s member-only
-#   builds with no compiler-level sharing at all (owner decision).
+# - 2026-08-02 (evening): both removed in favor of a reflink seed hook
+#   (`hooks/post-checkout`): it copied the main checkout's `target/` into
+#   a new worktree and stripped the members (owner decision).
+# - 2026-11-21: the seed hook removed for kache (owner decision). The
+#   main checkout's `target/` only ever held what running Horizon
+#   builds, so clippy re-checked ~720 crates and the test build rebuilt
+#   ~120 dependency units in every worktree; kache hit ~95-99% of them
+#   across worktrees at different paths, build-script crates included,
+#   and a member changed in one worktree did not reach another.
 #
 # It carries this history, holds no artifact-sharing setting, and is the
 # place a build knob every checkout needs goes.
