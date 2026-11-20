@@ -129,6 +129,19 @@ out. While it moves, the view or strip it would go to is marked and its
 title goes beside the pointer. A press that does not go a few pixels is
 no move, so a click on a tab's label is still the click.
 
+## Shares
+
+A split's parts share it by their weights. The pointer changes them by
+dragging the boundary between two parts. In workspace mode the keys do
+(`crates/horizon-workspace/src/resize.rs`), on the innermost split
+around what the cursor is on along the key's axis -- a split in a tab is
+nearer than the one its group is in: `<` and `>` across, `-` and `+`
+down, give the cursor's part a step (5% of the split) less or more, from
+the part after it, or before it where it is the last; `=` makes the parts
+of the innermost split around it, along either axis, even. Neither way
+leaves a part less than a tenth of what it shares with the other. The
+mode stays.
+
 ## Persistence
 
 `workspace.json` is version 2: the root node with the groups inside it,

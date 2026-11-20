@@ -75,6 +75,9 @@ manual smoke checks:
   view is dragged by its tab's label, or by the tag with its name that shows
   in the pane's top right corner while the pointer is over it: dropped on
   another view the two swap, dropped on a tab strip it is a new tab there.
+- In workspace mode, `<` `>` narrow and widen the part of a split the cursor
+  is on, `-` `+` make it shorter and taller, and `=` makes the split's parts
+  even; a boundary dragged with the pointer does the same.
 - `apply layout`: puts the workspace in one of the layouts `config.toml`
   names (`[layouts.<name>]`, see `config.example.toml`): the list of
   sessions kept on the left of everything else, for one. `startup_layout`
