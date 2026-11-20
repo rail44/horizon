@@ -31,6 +31,16 @@ exact pin し、同時に上げる。** 手元の rustc 1.96 で v2 feature 付�
   承認が届かないので、この更新と一緒に `HORIZON_ACP_EXT_VERSION` を 5 から
   6 に上げた。語彙（`_horizon/*` と `_meta.horizon`）は変えていない。
 
+2026-11-20 に 5.4.0 / 1.19.0（SDK が `=1.19.0` で固定）へ上げた。
+
+- schema の v2 で増えたのは、`unstable_session_cursors` feature の下の
+  session cursor（Horizon はこの feature を有効にしていない）と、
+  `PromptRequest` の任意の `idempotency_key`。elicitation の文字列の
+  `pattern` は消えた。Horizon のコードはどれも使っておらず、変更は要らな
+  かった。
+- 前回の実測に従って `HORIZON_ACP_EXT_VERSION` を 6 から 7 に上げた。語彙は
+  変えていない。
+
 crate の実行モデルで守ること。
 
 - tokio 依存なし。`ByteStreams::new(write, read)` は `futures::io` の trait を

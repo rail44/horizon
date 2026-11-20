@@ -1181,5 +1181,5 @@
     "_horizon/doom_loop"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 6
+  "x-session-protocol-version": 7
 }
