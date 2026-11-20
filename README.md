@@ -69,7 +69,10 @@ manual smoke checks:
 - In workspace mode, `H` `J` `K` `L` (Shift and a direction, or Shift and an
   arrow) swap the pane the cursor is on -- or, on a tab strip, the whole tab
   group -- with its neighbor in that direction. `move to new tab` moves the
-  pane the cursor is on into a new tab of its tab group.
+  pane the cursor is on into a new tab of its tab group. With the pointer, a
+  view is dragged by the grip at the top of its pane (or by its tab's label):
+  dropped on another view the two swap, dropped on a tab strip it is a new
+  tab there.
 - `apply layout`: puts the workspace in one of the layouts `config.toml`
   names (`[layouts.<name>]`, see `config.example.toml`): the list of
   sessions kept on the left of everything else, for one. `startup_layout`

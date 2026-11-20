@@ -148,6 +148,7 @@ impl Strips {
         let owner = self.owner.child();
         let strip = owner.with(|| strip(shell, group));
         self.made.borrow_mut().insert(group, (strip, owner));
+        (shell.kept().strip_elements.borrow_mut()).push((group, strip));
         strip
     }
 
@@ -295,7 +296,12 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
         .class(styles::TABS)
         .class_dyn(move || {
             let on = shell.model.with(|model| model.workspace_cursor());
-            (on == Some(Cursor::Strip(group))).then_some(styles::CURSOR)
+            (
+                (on == Some(Cursor::Strip(group))).then_some(styles::CURSOR),
+                shell
+                    .is_drop(super::moving::Target::Strip(group))
+                    .then_some(styles::DROP),
+            )
         })
         .each(
             move || (0..tabs.with(Vec::len)).collect::<Vec<_>>(),
@@ -332,6 +338,17 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
                             model.exit_workspace_mode();
                             model.activate_tab_in(group, index);
                         });
+                    })
+                    // (Taken by its label, a tab moves its active pane.)
+                    .on("pointerdown", move |event| {
+                        let DomEventData::PointerDown(pointer) = &event.data else {
+                            return;
+                        };
+                        let pane = (shell.model)
+                            .with_untracked(|model| model.tab_active_pane(group, index));
+                        if let Some(pane) = pane {
+                            shell.begin_moving(pane, pointer.page_x(), pointer.page_y());
+                        }
                     })
             },
         )

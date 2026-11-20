@@ -292,6 +292,66 @@ fn shift_and_a_direction_swap_panes_and_a_pane_moves_to_a_new_tab() {
 }
 
 #[test]
+fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
+    use horizon_ui::testing::{Pointer, pointer};
+    let opened = open();
+    opened.chord();
+    opened.character("s");
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    let settle = || {
+        for _ in 0..2 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    let hidden = || opened.all("hidden").len();
+
+    // Each pane has a grip; taken and moved over the other pane, that pane
+    // is marked and the view's title goes beside the pointer.
+    let handles = opened.all("handle");
+    assert_eq!(handles.len(), 2);
+    let elements = opened.all("pane");
+    let from = opened.middle(handles[0]);
+    let to = opened.middle(elements[1]);
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    settle();
+    assert_eq!(hidden(), 1, "the title waits for a move");
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    settle();
+    assert_eq!(opened.all("drop"), vec![elements[1]]);
+    assert_eq!(opened.all("lifted"), vec![elements[0]]);
+    assert_eq!(hidden(), 0);
+    // Dropped there, the two swap places.
+    pointer(&opened.app, to.0, to.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.panes(), vec![panes[1], panes[0]]);
+    assert!(opened.all("drop").is_empty());
+    assert_eq!(hidden(), 1);
+
+    // A press that does not go far is no move.
+    let handle = opened.middle(opened.all("handle")[0]);
+    pointer(&opened.app, handle.0, handle.1, Pointer::Down);
+    pointer(&opened.app, handle.0 + 1., handle.1, Pointer::Drag);
+    pointer(&opened.app, handle.0 + 1., handle.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.panes(), vec![panes[1], panes[0]]);
+
+    // Dropped on the group's strip, the view is a new tab of the group.
+    let tabs = opened.model(Workspace::tab_count);
+    let strip = opened.middle(opened.all("tabs")[0]);
+    pointer(&opened.app, handle.0, handle.1, Pointer::Down);
+    pointer(&opened.app, strip.0, strip.1, Pointer::Drag);
+    settle();
+    assert_eq!(opened.all("drop"), opened.all("tabs"));
+    pointer(&opened.app, strip.0, strip.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
+    assert_eq!(opened.panes(), vec![panes[1]]);
+}
+
+#[test]
 fn tabs_open_cycle_and_are_picked_from_the_strip() {
     let opened = open();
     let first = opened.all("pane");
@@ -1459,4 +1519,56 @@ fn split_left_from_a_strip_puts_a_terminal_beside_the_whole_group() {
     assert_eq!(opened.model(Workspace::active_tab_index), 1);
     assert!(opened.panes().contains(&left));
     opened.named(NamedKey::Escape);
+}
+
+/// Paints a view being moved over another, in this machine's theme, to
+/// the file `HORIZON_MOVING_OUT` names (a PPM): a picture for a person to
+/// look at. Run by hand.
+#[test]
+#[ignore = "writes a picture for a person: set HORIZON_MOVING_OUT"]
+fn paint_a_view_moving() {
+    use anyrender::ImageRenderer as _;
+    use horizon_ui::testing::{Pointer, pointer};
+
+    let out = std::env::var("HORIZON_MOVING_OUT").expect("HORIZON_MOVING_OUT");
+    let mine = horizon_config::load();
+    let config = horizon_config::RawConfig {
+        theme: mine.theme.clone(),
+        ui: mine.ui.clone(),
+        terminal: mine.terminal.clone(),
+        ..horizon_config::RawConfig::default()
+    };
+    let opened = open_with(Opening {
+        config,
+        ..Opening::default()
+    });
+    opened.chord();
+    opened.character("s");
+    let elements = opened.all("pane");
+    let handle = opened.middle(opened.all("handle")[0]);
+    let to = opened.middle(elements[1]);
+    pointer(&opened.app, handle.0, handle.1, Pointer::Move);
+    pointer(&opened.app, handle.0, handle.1, Pointer::Down);
+    if std::env::var_os("HORIZON_MOVING_HOVER").is_none() {
+        pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    }
+    for _ in 0..3 {
+        opened.app.run_effects();
+        opened.app.resolve();
+    }
+    let (width, height) = (1200u32, 800u32);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let mut picture = format!("P6\n{width} {height}\n255\n").into_bytes();
+    for [red, green, blue, _] in pixels.as_chunks::<4>().0 {
+        picture.extend_from_slice(&[*red, *green, *blue]);
+    }
+    std::fs::write(out, picture).expect("the picture written");
 }

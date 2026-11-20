@@ -63,6 +63,7 @@ mod keymap;
 mod keys;
 mod layouts;
 mod models;
+mod moving;
 mod over;
 mod palette;
 mod picker;
@@ -77,6 +78,7 @@ pub(crate) mod styles {
                  font-family: var(--font-family); font-size: var(--body-size);
                  line-height: var(--body-line);
         &.resizing { user-select: none; }
+        &.moving { user-select: none; cursor: grabbing; }
         .tabs { flex: none; display: flex; gap: var(--u4); padding: var(--u4) var(--u28) var(--u4) var(--u8);
                 background: var(--tab-track); border-top: var(--line) solid var(--border);
                 border-bottom: var(--line) solid var(--border); }
@@ -109,6 +111,26 @@ pub(crate) mod styles {
         .pane > * { flex: 1; min-height: 0; }
         .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                         background: var(--background); opacity: 0.5; pointer-events: none; }
+        .pane.drop { border-color: var(--accent); }
+        .pane.lifted { opacity: 0.5; }
+        .pane > .landing { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
+                           background: var(--accent); opacity: 0.12; pointer-events: none; }
+        .pane > .grip { position: absolute; left: 0; right: 0; top: 0; z-index: 60;
+                        display: flex; justify-content: center; pointer-events: none; }
+        .grip > .handle { display: flex; padding: 0 var(--u8); pointer-events: auto;
+                          border-radius: 0 0 var(--radius) var(--radius);
+                          background: var(--surface-raised); color: var(--text-muted);
+                          opacity: 0; cursor: grab; }
+        .pane:hover > .grip > .handle { opacity: 1; }
+        &.moving .pane:hover > .grip > .handle { opacity: 0; }
+        .grip > .handle:hover { color: var(--text); }
+        .tabs.drop { border-color: var(--accent); background: var(--surface-selected); }
+        .carried { position: absolute; z-index: 200; padding: var(--u4) var(--u8);
+                   border: var(--line) solid var(--border); border-radius: var(--radius);
+                   background: var(--surface-raised); box-shadow: var(--shadow-popup);
+                   font-size: var(--meta-size); line-height: var(--meta-line);
+                   white-space: nowrap; pointer-events: none; }
+        .carried.hidden { display: none; }
         .empty { flex: 1; display: flex; align-items: center; justify-content: center;
                  color: var(--text-muted); outline: none; }
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
@@ -361,6 +383,9 @@ struct PaneView {
 /// What the shell keeps beside the model.
 struct Kept {
     panes: RefCell<HashMap<PaneId, PaneView>>,
+    /// Each tab group's strip, as made: where a view moved with the
+    /// pointer would be a new tab.
+    strip_elements: RefCell<Vec<(horizon_workspace::types::TabGroupId, El)>>,
     /// The sessions of the model, whether a pane shows them or not:
     /// closing a pane lets go of its view and keeps its session.
     sessions: Held<TerminalPlugin>,
@@ -445,6 +470,8 @@ pub struct Shell {
     chosen: RwSignal<usize>,
     /// The boundary being dragged.
     resizing: RwSignal<Option<arrangement::Resize>>,
+    /// The view being moved with the pointer.
+    moving: RwSignal<Option<moving::Moving>>,
     /// Changed to have the panes arranged again though the tab's shape is
     /// the same: a pane's view was let go of, to be made again.
     rearranged: RwSignal<u32>,
@@ -649,9 +676,22 @@ impl Shell {
                         (false, _) => None,
                     },
                 )
+                .class_dyn(move || {
+                    (
+                        shell
+                            .is_drop(moving::Target::Pane(id))
+                            .then_some(styles::DROP),
+                        shell.is_moving(id).then_some(styles::LIFTED),
+                    )
+                })
                 .on("pointerdown", move |_| shell.pane_pressed(id))
                 .child(content)
                 .when(move || shell.mode.get(), || el("div").class(styles::VEIL))
+                .when(
+                    move || shell.is_drop(moving::Target::Pane(id)),
+                    || el("div").class(styles::LANDING),
+                )
+                .child(moving::grip(shell, id))
         });
         PaneView {
             element,
@@ -1118,9 +1158,11 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         query: RwSignal::new(String::new()),
         chosen: RwSignal::new(0),
         resizing: RwSignal::new(None),
+        moving: RwSignal::new(None),
         rearranged: RwSignal::new(0),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
+            strip_elements: RefCell::default(),
             sessions,
             agents,
             spawn_agent: opening.agents,
@@ -1190,23 +1232,29 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     root.attr("tabindex", "0")
         .class(styles::WORKSPACE)
         .class_dyn(move || {
-            shell
-                .resizing
-                .with(Option::is_some)
-                .then_some(styles::RESIZING)
+            (
+                shell
+                    .resizing
+                    .with(Option::is_some)
+                    .then_some(styles::RESIZING),
+                shell.moving_any().then_some(styles::MOVING),
+            )
         })
         // On the keys' way in: a view with the focus, a terminal above
         // all, would otherwise have the shell's chords before the shell.
         .on_capture("keydown", move |event| keys::pressed(shell, event))
         .on("pointermove", move |event| {
-            arrangement::dragged(shell, event)
+            arrangement::dragged(shell, event);
+            moving::moved(shell, event);
         })
         .on("pointerup", move |_| {
             if shell.resizing.with_untracked(Option::is_some) {
                 shell.resizing.update(|resizing| *resizing = None);
             }
+            moving::released(shell);
         })
         .child(arrangement::view(shell))
+        .child(moving::carried(shell))
         .each(
             // (An extension's view is put in a sheet made around it when it
             // is asked for: the view is the extension's to remove.)

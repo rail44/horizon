@@ -121,6 +121,15 @@ moved into a new tab.
   group it is in -- a pane in no group goes to the group a new tab would
   -- shown, with the focus. A pane alone in its tab already stays.
 
+With the pointer (`src/workspace/moving.rs`), a view is taken by the grip
+at the top of its pane, which shows while the pointer is over the pane,
+or by its tab's label, which takes the tab's active pane. Dropped on
+another view, the two swap; dropped on a group's strip, it is a new tab
+of that group -- the same operations the keys and Move to New Tab carry
+out. While it moves, the view or strip it would go to is marked and its
+title goes beside the pointer. A press that does not go a few pixels is
+no move, so a click on a tab's label is still the click.
+
 ## Persistence
 
 `workspace.json` is version 2: the root node with the groups inside it,

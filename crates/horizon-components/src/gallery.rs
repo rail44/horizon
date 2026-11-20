@@ -304,7 +304,7 @@ pub fn gallery() -> El {
             "icon",
             vec![(
                 "Phosphor's, regular, in the color of the text around it",
-                vec![Icon::DotsThree.view()],
+                vec![Icon::DotsThree.view(), Icon::DotsSix.view()],
             )],
         ))
         .child(buttons())

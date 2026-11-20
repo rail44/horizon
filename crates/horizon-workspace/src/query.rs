@@ -372,6 +372,18 @@ impl Workspace {
         self.root.group(self.current_group()?)?.shown_tab()
     }
 
+    /// What the pane `pane` is called, as its tab would be: its session's
+    /// title, or its view's.
+    pub fn pane_label(&self, pane: PaneId) -> Option<String> {
+        let pane = self.panes.iter().find(|candidate| candidate.id == pane)?;
+        Some(self.pane_title(pane))
+    }
+
+    /// The active pane of the tab at `index` of `group`.
+    pub fn tab_active_pane(&self, group: TabGroupId, index: usize) -> Option<PaneId> {
+        Some(self.root.group(group)?.tabs.get(index)?.active)
+    }
+
     pub(crate) fn tab_title(&self, tab: &Tab) -> String {
         self.panes
             .iter()
