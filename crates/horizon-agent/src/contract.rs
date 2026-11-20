@@ -1102,6 +1102,20 @@ pub enum ApprovalKind {
         grants: Vec<horizon_sandbox::FilesystemGrant>,
         reason: String,
     },
+    /// A sandboxed `bash` call wrote inside the session's primary checkout
+    /// before the session was allowed to: the sandbox excludes an
+    /// unapproved primary checkout from its own writable root, and no
+    /// filesystem grant narrower than the checkout lifts that exclusion,
+    /// so a `FilesystemDenialRetry` here could never succeed. Approval is
+    /// the session's one primary-checkout approval -- the same one an
+    /// `fs_write`/`fs_edit` there asks for -- and reruns the SAME call,
+    /// still sandboxed; denying forwards `prior_result` as-is. Appended
+    /// last (2026-11-20) for the same append-only reason as
+    /// [`ApprovalKind::MachServiceGrant`].
+    PrimaryCheckoutRetry {
+        root: std::path::PathBuf,
+        prior_result: ToolCallResult,
+    },
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was

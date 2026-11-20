@@ -196,6 +196,9 @@ impl SandboxedApprovalOrigin {
             SandboxedApprovalOrigin::MachServiceGrant { services, .. } => {
                 crate::tools::output::annotate_mach_service_grant_approval(output, services);
             }
+            SandboxedApprovalOrigin::PrimaryCheckout { .. } => {
+                crate::tools::output::annotate_primary_checkout_approval(output);
+            }
         }
     }
 }
@@ -504,6 +507,12 @@ mod tests {
                     services: vec!["com.apple.example".into()],
                 },
                 "judge",
+            ),
+            (
+                SandboxedApprovalOrigin::PrimaryCheckout {
+                    source: ApprovalSource::Human,
+                },
+                "human",
             ),
         ] {
             let mut output = error_output("ran");

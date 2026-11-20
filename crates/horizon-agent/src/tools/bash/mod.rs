@@ -76,6 +76,10 @@ pub(crate) enum SandboxedApprovalOrigin {
         source: ApprovalSource,
         services: Vec<String>,
     },
+    /// The session's primary-checkout approval, given for a call the
+    /// sandbox refused a write there (`ApprovalKind::PrimaryCheckoutRetry`);
+    /// this call is its sandboxed retry, now with the checkout writable.
+    PrimaryCheckout { source: ApprovalSource },
 }
 
 impl SandboxedApprovalOrigin {
@@ -86,7 +90,8 @@ impl SandboxedApprovalOrigin {
             Self::Tier1Auto => None,
             Self::ManualDomainRetry { source, .. }
             | Self::FilesystemGrant { source, .. }
-            | Self::MachServiceGrant { source, .. } => Some(*source),
+            | Self::MachServiceGrant { source, .. }
+            | Self::PrimaryCheckout { source } => Some(*source),
         }
     }
 }

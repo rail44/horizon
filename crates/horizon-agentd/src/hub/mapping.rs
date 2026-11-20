@@ -587,6 +587,12 @@ pub(super) fn approval_kind(kind: &contract::ApprovalKind) -> acp::ApprovalKind 
                 reason: reason.clone(),
             }
         }
+        contract::ApprovalKind::PrimaryCheckoutRetry { root, prior_result } => {
+            acp::ApprovalKind::PrimaryCheckoutRetry {
+                root: root.clone(),
+                prior_result: tool_result(prior_result),
+            }
+        }
     }
 }
 
@@ -599,6 +605,9 @@ pub(super) fn approval_title(kind: &contract::ApprovalKind) -> &'static str {
         contract::ApprovalKind::DomainGrant { .. } => "Allow network access",
         contract::ApprovalKind::MachServiceGrant { .. } => "Allow system services and retry",
         contract::ApprovalKind::SandboxAreaGrant { .. } => "Allow write access to this area",
+        contract::ApprovalKind::PrimaryCheckoutRetry { .. } => {
+            "Allow edits in the main checkout and retry"
+        }
     }
 }
 

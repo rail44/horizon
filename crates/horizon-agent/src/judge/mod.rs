@@ -355,6 +355,18 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             requested_domains: Vec::new(),
             host_execution_requested: false,
         },
+        // What approval buys is write access to the whole checkout for the
+        // rest of the session, stated as the tree it opens.
+        ApprovalKind::PrimaryCheckoutRetry { root, .. } => JudgeApprovalContext {
+            requested_filesystem_grants: vec![horizon_sandbox::FilesystemGrant {
+                path: root.clone(),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
+            }],
+            requested_domains: Vec::new(),
+            host_execution_requested: false,
+        },
         ApprovalKind::Standard => JudgeApprovalContext {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),

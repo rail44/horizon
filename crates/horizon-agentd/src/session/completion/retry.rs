@@ -52,6 +52,43 @@ pub(super) fn fold_mach_service_denied(
     );
 }
 
+/// A sandboxed `bash` call wrote inside the session's primary checkout,
+/// which it has not been allowed to write. The approval offered is the one
+/// a `fs_write`/`fs_edit` there asks for, worded the same: whether the
+/// session may edit the checkout directly is the owner's call, made when
+/// the session first tries -- a filesystem grant on the attempted path
+/// could never lift the checkout's exclusion, so offering one only asked
+/// the same question again after every approval.
+pub(super) fn fold_primary_checkout_denied(
+    state: &Arc<AgentdState>,
+    live_state: &LiveState,
+    commands_tx: &crossbeam_channel::Sender<Command>,
+    session_id: SessionId,
+    original_request: ToolCallRequest,
+    root: PathBuf,
+    result: ToolCallResult,
+) {
+    let reason = format!(
+        "`{}` tried to write inside the shared primary checkout `{}`. Allow direct edits \
+         for this session and retry the same call, still sandboxed, or deny so it can call \
+         `worktree_enter` to work in a disposable worktree instead?",
+        original_request.tool_id,
+        root.display()
+    );
+    begin_reissued_approval(
+        state,
+        live_state,
+        session_id,
+        original_request,
+        ApprovalKind::PrimaryCheckoutRetry {
+            root,
+            prior_result: result,
+        },
+        reason,
+        commands_tx,
+    );
+}
+
 /// A tier-1 sandboxed `bash` call's network egress was refused for one or
 /// more `domains` (`docs/agent-approval-design.md` leg 4b) -- surface a
 /// fresh, differently-named approval offer ("allow domain X for this

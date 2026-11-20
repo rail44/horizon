@@ -2,6 +2,7 @@
 
 use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::frame::AgentFrame;
+use std::path::PathBuf;
 
 /// A tool or approval outcome, delivered from its worker
 /// back to the session loop. `crates/horizon-agentd/src/session/setup.rs`
@@ -53,6 +54,10 @@ pub enum ToolCompletion<R = ToolCallResult> {
     /// approval records the service set for this session and reruns the
     /// same call, still sandboxed; denying forwards `result` as-is.
     MachServiceDenied { services: Vec<String>, result: R },
+    /// A sandboxed attempt wrote inside the session's primary checkout,
+    /// which the session has not been allowed to write
+    /// (`ApprovalKind::PrimaryCheckoutRetry`). `root` is the checkout.
+    PrimaryCheckoutDenied { root: PathBuf, result: R },
 }
 
 /// Compatibility name for the bash module's existing callers. New async
@@ -94,7 +99,10 @@ impl ToolCompletion {
             | Self::Background(result)
             | Self::DomainDenied { result, .. }
             | Self::FilesystemDenied { result, .. }
-            | Self::MachServiceDenied { result, .. } => (&result.call_id, &result.occurrence_id),
+            | Self::MachServiceDenied { result, .. }
+            | Self::PrimaryCheckoutDenied { result, .. } => {
+                (&result.call_id, &result.occurrence_id)
+            }
         };
         let request = frame.tool_call_request(call_id)?;
         (should_fold_completion(frame, call_id) && &request.occurrence_id == occurrence_id)
@@ -109,7 +117,8 @@ impl<R> ToolCompletion<R> {
             | Self::Background(result)
             | Self::DomainDenied { result, .. }
             | Self::FilesystemDenied { result, .. }
-            | Self::MachServiceDenied { result, .. } => Some(result),
+            | Self::MachServiceDenied { result, .. }
+            | Self::PrimaryCheckoutDenied { result, .. } => Some(result),
             Self::ApprovalJudged(_) | Self::DomainGrantRequired { .. } => None,
         }
     }
@@ -127,6 +136,10 @@ impl<R> ToolCompletion<R> {
             },
             Self::MachServiceDenied { services, result } => ToolCompletion::MachServiceDenied {
                 services,
+                result: map(result),
+            },
+            Self::PrimaryCheckoutDenied { root, result } => ToolCompletion::PrimaryCheckoutDenied {
+                root,
                 result: map(result),
             },
             Self::ApprovalJudged(judgment) => ToolCompletion::ApprovalJudged(judgment),

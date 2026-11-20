@@ -15,11 +15,19 @@ use crate::config::BashToolConfig;
 use crate::contract::ToolCallIdentity;
 use crate::tools::output::{annotate_denied_domains, annotate_sandboxed};
 
+/// Where a refused write is not answered with a filesystem grant: the
+/// workspace's Git metadata, and a primary checkout the session has not
+/// been allowed to write.
+pub(super) struct Protected<'a> {
+    pub(super) git_metadata: &'a [PathBuf],
+    pub(super) unapproved_primary_checkout: Option<&'a Path>,
+}
+
 pub(super) fn complete(
     identity: &ToolCallIdentity,
     captured: Captured,
     denied_domains: Vec<String>,
-    git_metadata: &[PathBuf],
+    protected: Protected<'_>,
     timeout: Duration,
     cwd_handle: &Arc<Mutex<PathBuf>>,
     config: &BashToolConfig,
@@ -36,6 +44,10 @@ pub(super) fn complete(
         ..
     } = captured;
     let denied_domains = dedup_denied_hosts(denied_domains);
+    let Protected {
+        git_metadata,
+        unapproved_primary_checkout,
+    } = protected;
     let git_metadata_denied = divert_git_metadata_denials(&mut denials, git_metadata);
     let annotate = |value: &mut Response, denials: &horizon_sandbox::ContainmentDenials| {
         annotate_common(value, denials, git_metadata_denied);
@@ -70,6 +82,25 @@ pub(super) fn complete(
     }
     if !drained {
         note_undrained(&mut value, Duration::from_secs(config.drain_grace_secs));
+    }
+    // A write inside a primary checkout this session may not yet write is
+    // refused by the checkout's exclusion from its own writable root, which
+    // no grant narrower than the checkout lifts: only the session's
+    // primary-checkout approval does, so that is what is asked for.
+    if let Some(root) = unapproved_primary_checkout
+        && denials
+            .filesystem
+            .iter()
+            .any(|denial| is_under_any(&denial.attempted_path, &primary_roots(root)))
+    {
+        crate::tools::output::annotate_filesystem_denials(&mut value, &denials.filesystem);
+        if !denied_domains.is_empty() {
+            annotate_denied_domains(&mut value, &denied_domains);
+        }
+        return BashCompletion::PrimaryCheckoutDenied {
+            root: root.to_path_buf(),
+            result: value,
+        };
     }
     // Filesystem retry takes precedence over domain retry. Both kinds of
     // evidence remain in the output, even if the shell itself exited zero.
@@ -222,6 +253,14 @@ fn nested_dot_git_entries(tree: &Path) -> Vec<PathBuf> {
 
 /// Whether `path` (or, when its leaf does not exist yet, its nearest
 /// existing ancestor once canonicalized) lies under one of `roots`.
+/// The checkout as given and as resolved: denials carry resolved paths.
+fn primary_roots(root: &Path) -> Vec<PathBuf> {
+    [Some(root.to_path_buf()), root.canonicalize().ok()]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 fn is_under_any(path: &Path, roots: &[PathBuf]) -> bool {
     if roots.iter().any(|root| path.starts_with(root)) {
         return true;
@@ -402,6 +441,15 @@ mod tests {
         domains: Vec<String>,
         git_metadata: &[PathBuf],
     ) -> (BashCompletion, PathBuf) {
+        finish_in(captured, domains, git_metadata, None)
+    }
+
+    fn finish_in(
+        captured: Captured,
+        domains: Vec<String>,
+        git_metadata: &[PathBuf],
+        unapproved_primary_checkout: Option<&Path>,
+    ) -> (BashCompletion, PathBuf) {
         let cwd = Arc::new(Mutex::new(PathBuf::from("/workspace")));
         let identity = crate::test_support::tool_identity(&crate::contract::ToolCallId(
             "result-precedence".into(),
@@ -410,7 +458,10 @@ mod tests {
             &identity,
             captured,
             domains,
-            git_metadata,
+            Protected {
+                git_metadata,
+                unapproved_primary_checkout,
+            },
             Duration::from_secs(1),
             &cwd,
             &crate::config::AgentToolsConfig::default().bash,
@@ -455,6 +506,39 @@ mod tests {
                 .contains("output capture stopped")
         );
         assert_eq!(cwd, PathBuf::from("/workspace/next"));
+    }
+
+    /// A write refused inside a primary checkout the session may not yet
+    /// write asks for the primary-checkout approval: a filesystem grant
+    /// there could never lift the checkout's exclusion.
+    #[test]
+    fn a_denial_inside_an_unapproved_primary_checkout_asks_for_that_checkout() {
+        let (completion, _) = finish_in(
+            captured(Some(0), false),
+            vec!["example.test".into()],
+            &[],
+            Some(Path::new("/outside")),
+        );
+        let BashCompletion::PrimaryCheckoutDenied { root, result } = completion else {
+            panic!("a primary-checkout denial must not offer a filesystem grant");
+        };
+        assert_eq!(root, PathBuf::from("/outside"));
+        assert_eq!(result.output["denied_filesystem_paths"][0], "/outside/file");
+        assert_eq!(result.output["denied_domains"][0], "example.test");
+    }
+
+    #[test]
+    fn a_denial_outside_the_primary_checkout_still_offers_a_filesystem_grant() {
+        let (completion, _) = finish_in(
+            captured(Some(0), false),
+            Vec::new(),
+            &[],
+            Some(Path::new("/workspace")),
+        );
+        assert!(matches!(
+            completion,
+            BashCompletion::FilesystemDenied { .. }
+        ));
     }
 
     #[test]

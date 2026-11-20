@@ -134,6 +134,27 @@
             "reason"
           ],
           "type": "object"
+        },
+        {
+          "description": "Appended last: the wire's `oneOf` indices stay put.",
+          "properties": {
+            "prior_result": {
+              "$ref": "#/$defs/ToolResult"
+            },
+            "root": {
+              "type": "string"
+            },
+            "type": {
+              "const": "primary_checkout_retry",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "root",
+            "prior_result"
+          ],
+          "type": "object"
         }
       ]
     },

@@ -148,6 +148,11 @@ pub enum ApprovalKind {
         grants: Vec<horizon_sandbox::FilesystemGrant>,
         reason: String,
     },
+    /// Appended last: the wire's `oneOf` indices stay put.
+    PrimaryCheckoutRetry {
+        root: std::path::PathBuf,
+        prior_result: ToolResult,
+    },
 }
 
 /// Mirrors `contract::ToolCallResult` (crates/horizon-agent/src/contract/tool_result.rs).
@@ -314,6 +319,10 @@ mod tests {
                     excluded_subpaths: vec![PathBuf::from(".git")],
                 }],
                 reason: "finish the integration".into(),
+            },
+            ApprovalKind::PrimaryCheckoutRetry {
+                root: PathBuf::from("/work/main"),
+                prior_result: prior_result(),
             },
         ];
         for kind in kinds {

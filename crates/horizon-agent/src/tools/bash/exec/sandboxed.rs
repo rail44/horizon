@@ -149,7 +149,10 @@ pub(in crate::tools::bash) fn run_sandboxed(
         identity,
         captured,
         denied_domains,
-        &git_metadata_paths(workspace_root),
+        result::Protected {
+            git_metadata: &git_metadata_paths(workspace_root),
+            unapproved_primary_checkout: (!primary_checkout_writable).then_some(workspace_root),
+        },
         timeout,
         cwd_handle,
         config,

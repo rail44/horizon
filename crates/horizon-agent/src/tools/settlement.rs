@@ -48,7 +48,8 @@ pub(super) fn settle(
                     let result = match &approval.kind {
                         ApprovalKind::DomainDenialRetry { prior_result, .. }
                         | ApprovalKind::FilesystemDenialRetry { prior_result, .. }
-                        | ApprovalKind::MachServiceGrant { prior_result, .. } => prior_result,
+                        | ApprovalKind::MachServiceGrant { prior_result, .. }
+                        | ApprovalKind::PrimaryCheckoutRetry { prior_result, .. } => prior_result,
                         // Named rather than `_`, so that a new kind does not
                         // compile until it says whether it holds a prior result.
                         // Nothing ran before an area request was offered,

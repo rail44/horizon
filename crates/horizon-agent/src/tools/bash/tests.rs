@@ -50,6 +50,13 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a mach-service-denied request for \
              {call_id:?} ({services:?})"
         ),
+        BashCompletion::PrimaryCheckoutDenied {
+            result: ToolCallResult { call_id, .. },
+            root,
+        } => panic!(
+            "expected a finished bash completion, got a primary-checkout request for \
+             {call_id:?} ({root:?})"
+        ),
         BashCompletion::DomainGrantRequired {
             call_id, domains, ..
         } => panic!(

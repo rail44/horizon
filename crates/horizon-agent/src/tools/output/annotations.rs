@@ -87,6 +87,9 @@ pub(crate) fn annotate_denied_mach_services(output: &mut Response, services: &[S
     output.evidence_mut().denied_mach_services = Some(services.to_vec());
     output.mark_failed();
 }
+pub(crate) fn annotate_primary_checkout_approval(output: &mut Response) {
+    output.evidence_mut().approval_scope = Some("primary_checkout".into());
+}
 pub(crate) fn annotate_mach_service_grant_approval(output: &mut Response, services: &[String]) {
     output.evidence_mut().mach_service_grant_approved = Some(true);
     output.evidence_mut().approved_mach_services = Some(services.to_vec());

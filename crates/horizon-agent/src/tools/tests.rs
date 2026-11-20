@@ -174,6 +174,13 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a mach-service-denied request for \
              {call_id:?} ({services:?})"
         ),
+        BashCompletion::PrimaryCheckoutDenied {
+            result: ToolCallResult { call_id, .. },
+            root,
+        } => panic!(
+            "expected a finished bash completion, got a primary-checkout request for \
+             {call_id:?} ({root:?})"
+        ),
         BashCompletion::DomainGrantRequired {
             call_id, domains, ..
         } => panic!(
@@ -2724,6 +2731,15 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
                  request instead for {call_id:?} ({services:?})"
             );
         }
+        BashCompletion::PrimaryCheckoutDenied {
+            result: ToolCallResult { call_id, .. },
+            root,
+        } => {
+            panic!(
+                "expected a finished, ungrantable-annotated result, got a primary-checkout \
+                 request instead for {call_id:?} ({root:?})"
+            );
+        }
         BashCompletion::DomainGrantRequired {
             call_id, domains, ..
         } => {
@@ -3734,6 +3750,161 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     unregister_session_runtime(session_id);
     fs::remove_dir_all(workspace).unwrap();
     fs::remove_dir_all(outside).unwrap();
+}
+
+/// A sandboxed `bash` write inside a primary checkout the session may not
+/// yet write asks for the primary-checkout approval -- not a filesystem
+/// grant, which could never lift the checkout's exclusion (7053a147 was
+/// asked the same grant seven times) -- and approving it reruns the call,
+/// still sandboxed, with the checkout writable.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_bash_write_in_an_unapproved_primary_checkout_asks_for_the_checkout_and_then_writes() {
+    use crate::contract::OccurrenceId;
+
+    let workspace = temp_workspace("primary-checkout-bash-write");
+    let written = workspace.join("probe.txt");
+    fs::write(&written, "before\n").unwrap();
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace.clone())
+        .with_primary_checkout(Some(workspace.clone()))
+        .build();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
+    );
+
+    let call_id = ToolCallId("bash-primary-checkout".to_string());
+    let input = json!({ "command": format!("printf after >> {}", written.display()) });
+    let first = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: input.clone().into(),
+        occurrence_id: OccurrenceId("occ-first".to_string()),
+    };
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &first);
+    std::assert_matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
+    );
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the first sandboxed attempt should finish");
+    let BashCompletion::PrimaryCheckoutDenied { root, result } = completion else {
+        panic!("a primary-checkout write must ask for the checkout: {completion:?}");
+    };
+    assert_eq!(root, workspace);
+    assert_eq!(fs::read_to_string(&written).unwrap(), "before\n");
+
+    let retry = OccurrenceId("occ-retry".to_string());
+    let frame = live_state.extend_events([
+        Event::ToolCallRequested(ToolCallRequest {
+            occurrence_id: retry.clone(),
+            ..first.clone()
+        }),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "allow direct edits in the primary checkout and retry".to_string(),
+            kind: ApprovalKind::PrimaryCheckoutRetry {
+                root,
+                prior_result: result,
+            },
+            occurrence_id: retry.clone(),
+        }),
+    ]);
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
+        ApprovalDecision::Approve,
+    );
+    std::assert_matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+    );
+    assert!(tool_state.primary_checkout_writable());
+
+    let result = expect_finished(
+        bash_results_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the approved retry should finish"),
+    );
+    assert_eq!(result.occurrence_id, retry);
+    assert_eq!(result.output["exit_code"], 0);
+    assert_eq!(fs::read_to_string(&written).unwrap(), "before\nafter");
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(workspace).unwrap();
+}
+
+#[test]
+fn a_denied_primary_checkout_retry_forwards_the_prior_result_and_keeps_the_checkout_closed() {
+    let workspace = temp_workspace("primary-checkout-denied");
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace.clone())
+        .with_primary_checkout(Some(workspace.clone()))
+        .build();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
+    );
+    let call_id = ToolCallId("bash-primary-checkout-denied".to_string());
+    let first = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo must-not-run" }).into(),
+        occurrence_id: crate::contract::OccurrenceId("first-attempt".into()),
+    };
+    let request = ToolCallRequest {
+        occurrence_id: crate::contract::OccurrenceId("declined-retry".into()),
+        ..first.clone()
+    };
+    let prior_result = ToolCallResult::new(
+        call_id.clone(),
+        first.occurrence_id.clone(),
+        json!({ "is_error": true }),
+    );
+    let frame = live_state.extend_events([
+        Event::ToolCallRequested(first.clone()),
+        Event::ToolCallStarted(first.identity()),
+        Event::ToolCallRequested(request.clone()),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "allow direct edits in the primary checkout and retry".to_string(),
+            kind: ApprovalKind::PrimaryCheckoutRetry {
+                root: workspace.clone(),
+                prior_result: prior_result.clone(),
+            },
+            occurrence_id: request.occurrence_id.clone(),
+        }),
+    ]);
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
+        ApprovalDecision::Deny { reason: None },
+    );
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
+        panic!("deny must forward the first attempt's result: {outcome:?}");
+    };
+    assert_eq!(result, prior_result);
+    assert!(!tool_state.primary_checkout_writable());
+    assert!(
+        bash_results_rx
+            .recv_timeout(Duration::from_millis(200))
+            .is_err()
+    );
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(workspace).unwrap();
 }
 
 #[test]

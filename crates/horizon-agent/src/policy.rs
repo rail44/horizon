@@ -127,8 +127,9 @@ pub(crate) fn plan_prepared_call(
         }))
     };
     // `bash` is not classified here: the sandbox makes the primary checkout
-    // read-only, so an attempt to write is a containment denial and takes the
-    // ordinary filesystem-retry approval. Only the fs tools, which run
+    // read-only, so an attempt to write is a containment denial, which asks
+    // for this same primary-checkout approval after the fact
+    // (`ApprovalKind::PrimaryCheckoutRetry`). Only the fs tools, which run
     // outside the OS sandbox, need this pre-execution gate.
     // A registered tool's package declared it contained (`tools::external`).
     if crate::tools::is_external_tool(&request.tool_id) {

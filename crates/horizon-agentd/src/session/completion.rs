@@ -20,7 +20,7 @@ use super::state::AgentdState;
 mod retry;
 use retry::{
     fold_domain_denied, fold_domain_grant_required, fold_filesystem_denied,
-    fold_mach_service_denied,
+    fold_mach_service_denied, fold_primary_checkout_denied,
 };
 
 /// Accept the exact live attempt before dispatch. Workers do not mutate the
@@ -84,6 +84,15 @@ pub(super) fn fold_tool_completion(
             session_id,
             request,
             services,
+            result,
+        ),
+        ToolCompletion::PrimaryCheckoutDenied { root, result } => fold_primary_checkout_denied(
+            state,
+            live_state,
+            commands_tx,
+            session_id,
+            request,
+            root,
             result,
         ),
     }

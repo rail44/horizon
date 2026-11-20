@@ -365,6 +365,14 @@ fn resolve_bash(
             prior_result,
             approval_source,
         ),
+        ApprovalKind::PrimaryCheckoutRetry { prior_result, .. } => resolve_primary_checkout_retry(
+            session_id,
+            runtime,
+            request,
+            decision,
+            prior_result,
+            approval_source,
+        ),
         ApprovalKind::DomainGrant { .. } => declined_result(
             runtime,
             &request.call_id,
@@ -715,6 +723,45 @@ fn resolve_mach_service_grant(
                     SandboxedApprovalOrigin::MachServiceGrant {
                         source: approval_source,
                         services,
+                    }
+                },
+                git_metadata_roots,
+            )
+        }
+    }
+}
+
+/// A sandboxed `bash` call wrote inside the session's unapproved primary
+/// checkout (`ApprovalKind::PrimaryCheckoutRetry`). A deny forwards
+/// `prior_result` unchanged; an approve records the session's one
+/// primary-checkout approval -- the same one `fs_write`/`fs_edit` there
+/// record -- and reruns the SAME call still sandboxed, with the checkout no
+/// longer excluded from its writable root.
+fn resolve_primary_checkout_retry(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &PreparedCall<'_>,
+    decision: &ApprovalDecision,
+    prior_result: ToolCallResult,
+    approval_source: ApprovalSource,
+) -> ApprovalOutcome {
+    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
+    match decision {
+        ApprovalDecision::Deny { .. } => forward_prior_result(runtime, prior_result),
+        ApprovalDecision::Approve => {
+            let Some(workspace_root) = runtime.tool_state.workspace_root() else {
+                return forward_prior_result(runtime, prior_result);
+            };
+            begin_sandboxed_run(
+                session_id,
+                runtime,
+                request,
+                Some(&prior_result),
+                workspace_root,
+                || {
+                    runtime.tool_state.approve_primary_checkout();
+                    SandboxedApprovalOrigin::PrimaryCheckout {
+                        source: approval_source,
                     }
                 },
                 git_metadata_roots,
