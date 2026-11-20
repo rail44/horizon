@@ -3,7 +3,7 @@
 An image a program in a terminal names by a link is looked at without
 leaving Horizon: Claude Code, for one, writes each image it reads as an
 OSC 8 hyperlink to its file (`[image] ~/.claude/…/focus.png`). The link,
-clicked with the platform's key held, opens the image over the
+clicked with Ctrl held (Cmd on macOS), opens the image over the
 workspace, in the same sheet the palette and the list of sessions use;
 a press outside it or Escape takes it away.
 
@@ -12,9 +12,19 @@ parts, each of which is general and not the viewer's alone.
 
 ## A link followed is the shell's to open
 
-The terminal view hands every link clicked with the platform's key to
-whoever placed it (`TerminalView::open_link`). The shell
-(`src/workspace/links.rs`) opens:
+The terminal view hands every link clicked with Ctrl held (Cmd on
+macOS) to whoever placed it (`TerminalView::open_link`). Not Super off
+macOS: the desktop takes Super with the pointer for itself (GNOME moves
+the window with it).
+
+Only an OSC 8 hyperlink is a link; text that reads as a URI is not.
+Claude Code, like other programs that ask `supports-hyperlinks`, writes
+one only to a terminal it recognizes by its environment, and Horizon's
+is none it knows by name: `horizon-terminald` sets `FORCE_HYPERLINK=1`
+for what a terminal runs, unless the environment it inherited already
+sets it.
+
+The shell (`src/workspace/links.rs`) opens:
 
 - an `http`/`https` URI with the desktop, as before;
 - a `file://` URI that names a file on this machine -- no host,

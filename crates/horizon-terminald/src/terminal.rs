@@ -525,6 +525,14 @@ fn spawn_terminal(
     if std::env::var_os("COLORTERM").is_none() {
         command.env("COLORTERM", "truecolor");
     }
+    // The terminal view follows OSC 8 hyperlinks and nothing else, and
+    // programs that ask `supports-hyperlinks` (Claude Code among them)
+    // write them only to a terminal they recognize by its environment;
+    // this says so, unless the inherited environment already says
+    // otherwise.
+    if std::env::var_os("FORCE_HYPERLINK").is_none() {
+        command.env("FORCE_HYPERLINK", "1");
+    }
     command.env("HORIZON_SOCKET", &spec.control_socket);
     command.env("HORIZON_SESSION_ID", session_id.to_string());
     command.cwd(cwd);
