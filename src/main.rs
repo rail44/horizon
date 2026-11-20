@@ -9,12 +9,10 @@ use std::cell::Cell;
 use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
 
-use anyrender_vello::VelloWindowRenderer;
-use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use horizon::agentd::{Agentd, RuntimeModels};
 use horizon::terminal::Session;
 use horizon::terminald::Terminald;
-use horizon::{control, desktop_notify, restore, window, workspace};
+use horizon::{application, control, desktop_notify, restore, window, workspace};
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
 };
@@ -134,20 +132,6 @@ fn run_window() {
         agentd.answer(waker, &shell);
     });
 
-    // `horizon-ui` lays the document out for each frame.
-    blitz_shell::set_frame(horizon_ui::frame);
-    blitz_shell::set_window_focused(window::set_active);
-    horizon::primary::connect(
-        blitz_shell::set_primary_selection_text,
-        blitz_shell::request_primary_selection_text,
-    );
-    let event_loop = create_default_event_loop();
-    let (proxy, events) = BlitzShellProxy::new(event_loop.create_proxy());
-    let mut application = BlitzApplication::new(proxy, events);
-    application.add_window(WindowConfig::new(
-        Box::new(Live(app)),
-        VelloWindowRenderer::new(),
-    ));
     // The daemons and their sessions outlive the window.
-    event_loop.run_app(application).expect("the event loop");
+    application::run(Box::new(Live(app)));
 }

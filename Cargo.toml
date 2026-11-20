@@ -77,10 +77,12 @@ any_spawner = { version = "0.3", features = ["futures-executor"] }
 # Blitz at the head of upstream's fix for hit testing through a clip
 # (DioxusLabs/blitz#1324, 58 commits past 0.3.0-beta.4): content scrolled
 # out of a box does not take the clicks meant for what is drawn over it.
-# `blitz-shell` is Horizon's own copy of that revision's, changed where
-# marked.
+# What Horizon needs of the window beyond blitz-shell is done around it,
+# in `src/application.rs`, which also holds a copy of blitz-shell's
+# `View::redraw` at this revision: moving the revision means comparing
+# that copy with the new one's.
 [patch.crates-io]
-blitz-shell = { path = "vendor/blitz-shell" }
+blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
@@ -126,8 +128,12 @@ anyrender = "0.14"
 anyrender_vello = "0.15"
 # The terminal's screen is a widget that paints itself: both crates draw
 # one only with this feature on.
+blitz-dom = { workspace = true }
 blitz-paint = { workspace = true }
 blitz-shell = { workspace = true, features = ["custom-widget"] }
+blitz-traits = { workspace = true }
+# The window's event loop around blitz-shell's (`src/application.rs`).
+winit = "=0.31.0-beta.4"
 crossbeam-channel = "0.5"
 ignore = "0.4"
 # Whether a `file://` link names a file on this machine (`src/workspace/links.rs`).
@@ -180,9 +186,6 @@ png = "0.18"
 # A component written as text, for what the host says of one it cannot
 # take (`src/plugin_host.rs`).
 wat = "1"
-# The scenarios' window (`benches/scenarios/window.rs`) pumps the event
-# loop itself: the version `vendor/blitz-shell` is built on.
-winit = "=0.31.0-beta.4"
 
 # Scenarios that time the views a frame at a time, with no window
 # (`docs/performance-scenarios.md`). Not a test and not in the gate.

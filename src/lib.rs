@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod agentd;
+pub mod application;
 pub mod background;
 pub mod board;
 pub mod control;

@@ -223,10 +223,12 @@ needed. Each is a workspace member whose crate is empty for any other
 target; the root package builds for the host alone.
 
 Blitz is a beta, pinned to one release and patched past it in the root
-`Cargo.toml` (`[patch.crates-io]`); `vendor/blitz-shell` is Horizon's own
-copy of that revision's `blitz-shell`, changed where its comments say
-"Added to upstream" or "Changed from upstream". A Blitz bump moves the pin,
-the patch revision and that copy together.
+`Cargo.toml` (`[patch.crates-io]`). What Horizon needs of the window
+beyond `blitz-shell` is done around it, not in a copy of it:
+`src/application.rs` wraps its application and holds a copy of its
+`View::redraw` at the pinned revision. A Blitz bump moves the pin and the
+patch revision together, and compares that copy with the new revision's
+`View::redraw`.
 
 Every worktree builds into its own `target/` — nothing is shared
 between checkouts at any level, so cross-worktree correctness is
@@ -412,6 +414,10 @@ their wiring:
   `docs/cli-control-plane-design.md`.
 - `restore.rs` — the workspace kept from the last run, as far as the
   runtimes still have its sessions.
+- `application.rs` — the window's event loop: `blitz-shell`'s
+  application, wrapped for what Horizon needs of the window that it does
+  not do (the frame laid out by `horizon-ui`, the input method's cursor
+  area, the window's focus, the primary selection).
 - `desktop_notify.rs` / `window.rs` / `primary.rs` — what reaches the
   desktop: notifications, whether the window has the focus, the primary
   selection.

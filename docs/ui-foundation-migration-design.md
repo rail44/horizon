@@ -85,11 +85,21 @@ shell depends on a revision past its last release, so its dependency
 graph stays out of the root lockfile. The GPUI shell keeps working until
 the new one is at parity, and is then deleted.
 
-`blitz-shell` is vendored in the repository (`shell-blitz/vendor/`) with
+`blitz-shell` was vendored in the repository (`shell-blitz/vendor/`) with
 two changes: the input method is enabled with its cursor area, and the
 shell hands each frame's layout to the layer (`set_frame`) instead of
 resolving the document itself. `blitz-dom`, `blitz-paint` and
 `blitz-traits` are pinned by revision. Nothing is posted upstream.
+
+(2026-11-20: the vendored copy is gone. Its changes, and the two added
+since — the window's focus and the primary selection — are done around
+`blitz-shell`'s application in `src/application.rs`, as dioxus-native
+wraps it, and `blitz-shell` is pinned by revision like the rest. The
+frame is the one change that needs a copy of upstream code there: its
+`View::redraw` resolves the document itself just before it paints, so
+`src/application.rs` paints with a copy of it that has the layer lay the
+document out instead. A Blitz bump compares that copy with the new
+revision's.)
 
 Until it replaces the GPUI shell, the new shell does not share that
 shell's daemons. The runtime clients drain and restart a daemon whose build
