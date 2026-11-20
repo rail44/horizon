@@ -89,11 +89,11 @@ pub(crate) mod styles {
         .tabs { flex: none; display: flex; padding: 0 0 var(--u4); }
         .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 var(--u4) 0 var(--u8);
                      border: var(--line) solid transparent; border-radius: var(--radius);
-                     font-size: var(--meta-size); line-height: calc(var(--u4) * 5);
+                     font-size: var(--body-size); line-height: calc(var(--u4) * 6);
                      color: var(--text-muted); cursor: pointer; }
         .tab-label:not(.active) + .tab-label:not(.active) {
             border-left-color: var(--surface-chrome); border-radius: 0; }
-        .tab-label.active { border-color: var(--border); color: var(--text); }
+        .tab-label.active { border-color: var(--accent); color: var(--text); }
         .tab-label .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
                             text-overflow: ellipsis; }
         .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: var(--radius);
@@ -123,16 +123,32 @@ pub(crate) mod styles {
         .split.in-tab.down > .divider { height: 1px; border-top: var(--u2) solid var(--background);
                                         border-bottom: var(--u2) solid var(--background); }
 
-        /* A pane: a card of its own in no group, and in a group's card a
-           pane with no frame but where the focus is, in the accent. A card
-           keeps what it holds a little in from its rounded corners. In
-           workspace mode every pane is veiled, the cursor's in the accent. */
+        /* A pane: a card of its own in no group, and so is a tab that is one
+           pane. The focus is its line in the accent; in workspace mode every
+           pane is veiled, the cursor's in the accent. What it shows is kept
+           in from its rounded corners. */
         .pane { position: relative; flex: 1; min-width: 0; min-height: 0;
                 box-sizing: border-box; display: flex; flex-direction: column;
-                overflow: hidden; padding: var(--u2); border: var(--line) solid var(--border);
+                overflow: hidden; padding: var(--u4); border: var(--line) solid var(--border);
                 border-radius: var(--radius-large); background: var(--background); }
-        .shown-tab .pane { padding: 0; border-color: transparent; border-radius: 0; }
         .pane.focused { border-color: var(--accent); }
+        .shown-tab.alone { padding: 0; border: none; border-radius: 0; background: transparent; }
+        /* The panes of a split in a tab are parts of its card: a pane's line
+           is over the card's where it is at the card's edge, rounded at the
+           card's corners, and shows only where the focus is. */
+        .shown-tab.parted { padding: 0; overflow: visible; }
+        .shown-tab.parted .pane { border-color: transparent; border-radius: 0;
+                                  background: transparent; }
+        .shown-tab.parted .pane.focused, .shown-tab.parted .pane.drop {
+            border-color: var(--accent); }
+        .cell.edge-top > .pane { margin-top: calc(var(--line) * -1); }
+        .cell.edge-right > .pane { margin-right: calc(var(--line) * -1); }
+        .cell.edge-bottom > .pane { margin-bottom: calc(var(--line) * -1); }
+        .cell.edge-left > .pane { margin-left: calc(var(--line) * -1); }
+        .cell.edge-top.edge-left > .pane { border-top-left-radius: var(--radius-large); }
+        .cell.edge-top.edge-right > .pane { border-top-right-radius: var(--radius-large); }
+        .cell.edge-bottom.edge-left > .pane { border-bottom-left-radius: var(--radius-large); }
+        .cell.edge-bottom.edge-right > .pane { border-bottom-right-radius: var(--radius-large); }
         .pane > * { flex: 1; min-height: 0; }
         .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                         background: var(--background); opacity: 0.5; pointer-events: none; }
@@ -150,8 +166,8 @@ pub(crate) mod styles {
                        flex: none; display: none; align-items: center; gap: var(--u4);
                        max-width: 50%; padding: 0 var(--u8) 0 var(--u4);
                        border: var(--line) solid var(--surface-chrome); border-radius: var(--radius);
-                       background: var(--band); font-size: var(--micro-size);
-                       line-height: var(--micro-line); color: var(--text-muted);
+                       background: var(--band); font-size: var(--meta-size);
+                       line-height: var(--meta-line); color: var(--text-muted);
                        white-space: nowrap; overflow: hidden; cursor: grab; opacity: 0; }
         .pane > .tag.titled { display: flex; }
         /* (It takes a press while it does not show too: the pointer is over
