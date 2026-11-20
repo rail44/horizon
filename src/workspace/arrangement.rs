@@ -358,6 +358,7 @@ fn arrange(
             split.child(
                 el("div")
                     .class(styles::DIVIDER)
+                    .child(el("div").class(styles::GRIP))
                     .on("pointerdown", move |_| {
                         let resize = resize.clone();
                         shell.resizing.update(|resizing| *resizing = Some(resize));

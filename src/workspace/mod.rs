@@ -112,19 +112,25 @@ pub(crate) mod styles {
                      border: var(--line) solid var(--border); border-radius: var(--radius-large);
                      background: var(--background); }
 
-        /* Cards apart by a gap; the panes of a split in a tab by a line, in
-           a boundary as wide to take as a gap is. */
+        /* Cards apart by a gap; the panes of a split in a tab by a line: a
+           boundary that is its line alone, taken by its grip, as wide to
+           take as a gap is and over the panes on either side. */
         .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
         .split.down { flex-direction: column; }
         .cell { flex-shrink: 1; flex-basis: 0; min-width: 0; min-height: 0; display: flex; }
         .divider { flex: none; }
         .split.across > .divider { width: var(--u8); cursor: col-resize; }
         .split.down > .divider { height: var(--u8); cursor: row-resize; }
-        .split.in-tab > .divider { background: var(--border); }
-        .split.in-tab.across > .divider { width: 1px; border-left: var(--u2) solid var(--background);
-                                          border-right: var(--u2) solid var(--background); }
-        .split.in-tab.down > .divider { height: 1px; border-top: var(--u2) solid var(--background);
-                                        border-bottom: var(--u2) solid var(--background); }
+        .split.in-tab > .divider { position: relative; }
+        .split.in-tab.across > .divider { width: 0; border-left: var(--line) solid var(--border); }
+        .split.in-tab.down > .divider { height: 0; border-top: var(--line) solid var(--border); }
+        .split.in-tab > .divider > .grip { position: absolute; z-index: 2; }
+        .split.in-tab.across > .divider > .grip {
+            top: 0; bottom: 0; left: calc((var(--u2) + var(--line)) * -1);
+            right: calc(var(--u2) * -1); }
+        .split.in-tab.down > .divider > .grip {
+            left: 0; right: 0; top: calc((var(--u2) + var(--line)) * -1);
+            bottom: calc(var(--u2) * -1); }
 
         /* A pane: a card of its own in no group, and so is a tab that is one
            pane. The focus is its line in the accent; in workspace mode every
@@ -136,20 +142,30 @@ pub(crate) mod styles {
                 border-radius: var(--radius-large); background: var(--background); }
         .pane.focused { border-color: var(--accent); }
         .shown-tab.alone { padding: 0; border: none; border-radius: 0; background: transparent; }
-        /* The panes of a split in a tab are parts of its card: a pane's line
-           is over the card's where it is at the card's edge, rounded at the
-           card's corners, and shows only where the focus is. */
+        /* The panes of a split in a tab are parts of its card, with no line
+           of their own: the card's and the boundaries' are theirs. The
+           focus is drawn just outside the pane, over the line there -- the
+           card's at its edge, a boundary's beside it -- the same width
+           and so on it at any display scale; rounded at the card's
+           corners. What a pane shows is kept in from a boundary as a gap
+           keeps it. */
         .shown-tab.parted { padding: 0; overflow: visible; }
-        .pane.part { border-color: transparent; border-radius: 0; background: transparent; }
-        .pane.part.focused, .pane.part.drop { border-color: var(--accent); }
-        .pane.part.edge-top { margin-top: calc(var(--line) * -1); }
-        .pane.part.edge-right { margin-right: calc(var(--line) * -1); }
-        .pane.part.edge-bottom { margin-bottom: calc(var(--line) * -1); }
-        .pane.part.edge-left { margin-left: calc(var(--line) * -1); }
-        .pane.part.edge-top.edge-left { border-top-left-radius: var(--radius-large); }
-        .pane.part.edge-top.edge-right { border-top-right-radius: var(--radius-large); }
-        .pane.part.edge-bottom.edge-left { border-bottom-left-radius: var(--radius-large); }
-        .pane.part.edge-bottom.edge-right { border-bottom-right-radius: var(--radius-large); }
+        .pane.part { border: none; border-radius: 0; background: transparent;
+                     padding: calc(var(--u4) + var(--u2) + var(--line)); }
+        .pane.part.focused, .pane.part.drop { z-index: 1;
+                                              outline: var(--line) solid var(--accent); }
+        .pane.part.edge-top { padding-top: var(--u4); }
+        .pane.part.edge-right { padding-right: var(--u4); }
+        .pane.part.edge-bottom { padding-bottom: var(--u4); }
+        .pane.part.edge-left { padding-left: var(--u4); }
+        .pane.part.edge-top.edge-left {
+            border-top-left-radius: calc(var(--radius-large) - var(--line)); }
+        .pane.part.edge-top.edge-right {
+            border-top-right-radius: calc(var(--radius-large) - var(--line)); }
+        .pane.part.edge-bottom.edge-left {
+            border-bottom-left-radius: calc(var(--radius-large) - var(--line)); }
+        .pane.part.edge-bottom.edge-right {
+            border-bottom-right-radius: calc(var(--radius-large) - var(--line)); }
         .pane > * { flex: 1; min-height: 0; }
         .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                         background: var(--background); opacity: 0.5; pointer-events: none; }
