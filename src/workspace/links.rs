@@ -11,8 +11,9 @@ use horizon_ui::blitz_traits::net::Url;
 use super::{Shell, plugins};
 
 impl Shell {
-    /// Follows `link`, a URI a view was asked to open.
-    pub(super) fn follow_link(&self, link: &str) {
+    /// Follows `link`, a URI a view was asked to open: what a terminal
+    /// pane does with a link clicked with the platform's key held.
+    pub fn follow_link(&self, link: &str) {
         if is_openable_url(link) {
             (self.kept().open_url)(link);
             return;

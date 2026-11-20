@@ -1,7 +1,12 @@
 //! The image viewer (`plugins/image`): a `file://` link to an image,
-//! clicked in a terminal with the platform's key held, is opened with it,
-//! over the workspace; a link to a file no extension opens is left alone,
-//! and a web page's goes to the desktop as before.
+//! followed, is opened with it, over the workspace; a link to a file no
+//! extension opens is left alone, and a web page's goes to the desktop as
+//! before.
+//!
+//! The links are followed as the shell's terminal panes follow them
+//! (`Shell::follow_link`); one test clicks one in a terminal, for the
+//! pane's way to it. That the terminal's view hands every link over is
+//! the view's test (`tests/terminal.rs`).
 //!
 //! The extension is the one cargo builds (`./scripts/extensions.sh
 //! build`).
@@ -20,7 +25,6 @@ use horizon_ui::blitz_traits::events::{
     MouseEventButtons, PointerCoords, UiEvent,
 };
 use horizon_ui::reactive_graph::traits::WithUntracked;
-
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
@@ -32,10 +36,6 @@ const PNG: [u8; 74] = [
     134, 25, 144, 57, 0, 155, 126, 11, 245, 114, 176, 185, 60, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
     96, 130,
 ];
-
-/// What a link's text is: wide enough to be pressed on wherever the row
-/// begins.
-const LINK: &str = "the-link-the-link-the-link-the-link";
 
 struct Opened {
     app: App,
@@ -80,8 +80,6 @@ fn open() -> Opened {
         root: top.unwrap(),
     };
     opened.until("the extensions", || opened.shell.extensions_read());
-
-    opened.until("a prompt", || opened.screen().trim_end().ends_with('$'));
     opened
 }
 
@@ -143,52 +141,9 @@ impl Opened {
         self.app.resolve();
     }
 
-    /// Runs `command` in the terminal, as typed.
-    fn run(&self, command: &str) {
-        for character in command.chars() {
-            self.key(Key::Character(character.to_string()));
-        }
-        self.key(Key::Named(NamedKey::Enter));
-    }
-
-    /// Writes a link to `uri` on the terminal's first row, and presses on
-    /// it with the platform's key held.
+    /// Follows `uri` as a terminal pane does a link clicked in it.
     fn follow(&self, uri: &str) {
-        // (`%` begins a conversion in printf's format.)
-        let uri = uri.replace('%', "%%");
-        self.run(&format!(
-            r"clear; printf '\033]8;;{uri}\033\\{LINK}\033]8;;\033\\\n'"
-        ));
-        self.until("the link", || {
-            self.screen().lines().next() == Some(LINK) && self.screen().trim_end().ends_with('$')
-        });
-        let terminal = self.all("terminal");
-        let (x, y, _, _) = self.bounds(*terminal.first().expect("the terminal"));
-        let (x, y) = (x + 40., y + 6.);
-        let event = |buttons| BlitzPointerEvent {
-            id: BlitzPointerId::Mouse,
-            is_primary: true,
-            coords: PointerCoords {
-                page_x: x,
-                page_y: y,
-                screen_x: x,
-                screen_y: y,
-                client_x: x,
-                client_y: y,
-            },
-            button: MouseEventButton::Main,
-            buttons,
-            mods: Modifiers::META,
-            details: Default::default(),
-            element: Default::default(),
-            active_pointers: Default::default(),
-        };
-        self.app
-            .dispatch(UiEvent::PointerMove(event(MouseEventButtons::None)));
-        self.app
-            .dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
-        self.app
-            .dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
+        self.shell.follow_link(uri);
         self.app.run_effects();
         self.app.resolve();
     }
@@ -252,19 +207,13 @@ fn directory(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
 fn a_link_to_an_image_is_opened_over_the_workspace_and_escape_takes_it_away() {
     let directory = directory("over", &[("shot one.png", &PNG)]);
     let opened = open();
-    let file = directory.join("shot one.png");
-    opened.follow(&format!("file://{}", file.display()).replace(' ', "%20"));
+    let uri = format!("file://{}", directory.join("shot%20one.png").display());
+    opened.follow(&uri);
 
     opened.until("the image", || opened.images().len() == 1);
     let image = opened.images()[0];
     let src = opened.src(image);
-    assert!(
-        src.starts_with(&format!(
-            "file://{}?",
-            directory.join("shot%20one.png").display()
-        )),
-        "{src}"
-    );
+    assert!(src.starts_with(&format!("{uri}?")), "{src}");
     // Drawn at its own size once it is read.
     opened.until("the image's size", || {
         let (_, _, width, height) = opened.bounds(image);
@@ -277,7 +226,7 @@ fn a_link_to_an_image_is_opened_over_the_workspace_and_escape_takes_it_away() {
     opened.until("the instance let go of", || opened.shell.commanded() == 0);
     // Opened again, it is fetched again: the file may have been written
     // since.
-    opened.follow(&format!("file://{}", file.display()).replace(' ', "%20"));
+    opened.follow(&uri);
     opened.until("the image again", || opened.images().len() == 1);
     assert_ne!(opened.src(opened.images()[0]), src);
     let _ = std::fs::remove_dir_all(&directory);
@@ -308,19 +257,73 @@ fn an_image_larger_than_the_window_is_made_smaller_to_fit_its_shape_kept() {
 
 #[test]
 fn a_link_to_a_file_no_extension_opens_is_left_alone_and_a_web_page_goes_to_the_desktop() {
-    let directory = directory("alone", &[("notes.txt", b"words")]);
+    let directory = directory("alone", &[("notes.txt", b"words"), ("shot.png", &PNG)]);
     let opened = open();
+    // A file no extension opens, an image on another machine, and what is
+    // no file.
     opened.follow(&format!("file://{}", directory.join("notes.txt").display()));
-    opened.follow("file://elsewhere.example/tmp/shot.png");
-    for _ in 0..20 {
-        opened.app.run_effects();
-        opened.app.resolve();
-    }
-    assert!(opened.images().is_empty());
+    let elsewhere = format!(
+        "file://elsewhere.example{}",
+        directory.join("shot.png").display()
+    );
+    opened.follow(&elsewhere);
+    opened.follow("vscode://file/tmp/shot.png");
     assert_eq!(opened.shell.commanded(), 0);
+    assert!(opened.images().is_empty());
     assert!(opened.to_the_desktop.borrow().is_empty());
 
     opened.follow("https://example.com/x");
     assert_eq!(*opened.to_the_desktop.borrow(), ["https://example.com/x"]);
+    assert_eq!(opened.shell.commanded(), 0);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_link_to_an_image_clicked_in_a_terminal_with_the_platform_s_key_opens_it() {
+    let directory = directory("clicked", &[("shot.png", &PNG)]);
+    let opened = open();
+    opened.until("a prompt", || opened.screen().trim_end().ends_with('$'));
+    let uri = format!("file://{}", directory.join("shot.png").display());
+    let command = format!(r"clear; printf '\033]8;;{uri}\033\\a-link-to-the-shot\033]8;;\033\\\n'");
+    for character in command.chars() {
+        opened.key(Key::Character(character.to_string()));
+    }
+    opened.key(Key::Named(NamedKey::Enter));
+    // (The link is written once: no screen before it has it.)
+    opened.until("the link", || {
+        opened.screen().lines().next() == Some("a-link-to-the-shot")
+    });
+
+    // Pressed on, on the first row, with the key held.
+    let terminal = opened.all("terminal");
+    let (x, y, _, _) = opened.bounds(*terminal.first().expect("the terminal"));
+    let (x, y) = (x + 40., y + 6.);
+    let event = |buttons| BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        button: MouseEventButton::Main,
+        buttons,
+        mods: Modifiers::META,
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    };
+    (opened.app).dispatch(UiEvent::PointerMove(event(MouseEventButtons::None)));
+    (opened.app).dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
+    (opened.app).dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
+    opened.until("the image", || opened.images().len() == 1);
+    assert!(
+        opened
+            .src(opened.images()[0])
+            .starts_with(&format!("{uri}?"))
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }

@@ -649,6 +649,37 @@ fn a_link_clicked_with_the_platform_s_key_is_opened() {
     assert_eq!(opened_urls.borrow().len(), 1);
 }
 
+/// What a link is followed with is whoever placed the view's to say
+/// (the shell opens a web page with the desktop and a file with an
+/// extension): the view hands over a link of any scheme.
+#[test]
+fn a_link_of_any_scheme_is_handed_to_whoever_placed_the_view() {
+    use horizon_ui::blitz_traits::events::MouseEventButton;
+
+    let opened = open();
+    opened.run(
+        r"printf '\033]8;;file:///tmp/a.png\033\\a-file\033]8;;\033\\\n\033]8;;vscode://x\033\\a-scheme\033]8;;\033\\\n'",
+    );
+    opened.wait("the links", |text| {
+        text.lines().any(|line| line == "a-file") && text.lines().any(|line| line == "a-scheme")
+    });
+    for line in ["a-file", "a-scheme"] {
+        let (x, y) = opened.cell(opened.row_of(line), 2);
+        pointer(&opened.app, x, y, Pointer::Move);
+        press_with(
+            &opened.app,
+            x,
+            y,
+            MouseEventButton::Main,
+            keyboard_types::Modifiers::META,
+        );
+    }
+    assert_eq!(
+        *opened.opened_urls.borrow(),
+        ["file:///tmp/a.png", "vscode://x"]
+    );
+}
+
 #[test]
 fn a_selection_is_the_primary_selection_and_the_middle_button_pastes_it() {
     use std::sync::Mutex;
