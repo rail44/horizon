@@ -336,7 +336,8 @@ the agent) is not shown this way.
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
 a Commands-only palette. An empty (zero-tab) workspace is an implicit
-command surface: `:` works directly there, no `ctrl+'` first. Session
+command surface: `:` works directly there, no `ctrl+'` first, and it
+shows the view chooser, which what is typed searches. Session
 management (attach/terminate detached sessions) is a separate modal
 opened via its "Manage Sessions" command. See
 README.md for the manual command checklist (`new tab`, `split pane`,

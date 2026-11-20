@@ -234,6 +234,18 @@ it false again, so the bypass stops applying and ordinary raw-field
 gating resumes immediately — matching "non-empty behavior changes not
 at all."
 
+## What an empty workspace shows (2026-11-20)
+
+An empty workspace shows the view chooser in its card, as the sheet over
+the workspace shows it for `New Tab…` (board #95): a search field over
+the views a tab can show, the first one chosen. It has the focus, and
+what is typed searches it; the arrows move the choice, Enter or a click
+opens the chosen view in a tab. So the mode's own keys are not taken
+from the keyboard there (`src/workspace/keys.rs`): `t` and `a` are
+letters of the search, and `:` alone is still the palette's. The list
+has a search state of its own (`picker::Search`), apart from the
+sheet's, so the palette opened over it does not change what it lists.
+
 Explicitly out of scope here (per issue 003's own resolution note): the
 pane-bound visual signals themselves (cursor-pane border, scrim dim) for
 a *non-empty* workspace are untouched.

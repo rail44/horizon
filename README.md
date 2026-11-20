@@ -52,7 +52,9 @@ palette now that session management has its own modal (see below). With
 zero tabs open (e.g. after `terminate active session` closes the last one),
 `:` opens the palette directly with no `ctrl+'` first — an empty workspace
 is an implicit command surface, since there is no pane input left to
-protect; `ctrl+'` is a harmless no-op in that state. It supports these
+protect; `ctrl+'` is a harmless no-op in that state. It shows the views a
+new tab can show: what is typed searches them, and `Enter` (or a click)
+opens the chosen one. It supports these
 manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another

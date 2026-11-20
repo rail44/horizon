@@ -169,6 +169,12 @@ pub(crate) mod styles {
         .carried.hidden { display: none; }
         .empty { flex: 1; display: flex; align-items: center; justify-content: center;
                  color: var(--text-muted); outline: none; }
+        /* What a workspace with no tab shows: the views a tab can show, to
+           search and pick from, framed as a card is. */
+        .choices { width: 380px; display: flex; overflow: hidden;
+                   border: var(--line) solid var(--border); border-radius: var(--radius-large);
+                   background: var(--background); color: var(--text); }
+        .choices > .picker { width: 100%; max-height: 320px; }
 
         /* What is over the workspace: a sheet framed as the cards are, what
            is behind it dimmed. */
@@ -486,6 +492,8 @@ struct Kept {
     /// asked for.
     over: RefCell<Option<Over>>,
     over_asked: Cell<u64>,
+    /// The list a workspace with no tab shows, while it has none.
+    choices: Cell<Option<El>>,
     /// The extensions carrying out commands of their own.
     commanded: RefCell<Vec<commands::Commanded>>,
     commanded_count: Cell<u64>,
@@ -518,9 +526,9 @@ pub struct Shell {
     /// the pane with the focus.
     cursor: Memo<Option<PaneId>>,
     modal: RwSignal<Option<Modal>>,
-    /// What is typed into the open list, and which of its rows is chosen.
-    query: RwSignal<String>,
-    chosen: RwSignal<usize>,
+    /// What is typed into the list over the workspace, and which of its
+    /// rows is chosen.
+    search: picker::Search,
     /// The boundary being dragged.
     resizing: RwSignal<Option<arrangement::Resize>>,
     /// The view being moved with the pointer.
@@ -554,8 +562,7 @@ impl Shell {
 
     /// Opens a list over everything, empty of what was typed before.
     fn open(&self, modal: Modal) {
-        self.query.set(String::new());
-        self.chosen.set(0);
+        self.search.clear();
         self.modal.set(Some(modal));
     }
 
@@ -788,9 +795,14 @@ impl Shell {
         });
         let element =
             pane.and_then(|id| self.kept().panes.borrow().get(&id).map(|view| view.element));
-        match element {
-            Some(element) => element.focus_within(),
-            None => self.root.focus(),
+        // (With no tab, the list the workspace shows has the keys.)
+        let choices = (self.model.with_untracked(Workspace::tab_count) == 0)
+            .then(|| self.kept().choices.get())
+            .flatten();
+        match (element, choices) {
+            (Some(element), _) => element.focus_within(),
+            (None, Some(choices)) => choices.focus_within(),
+            (None, None) => self.root.focus(),
         };
     }
 
@@ -1211,8 +1223,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         mode: Memo::new(move |_| model.with(Workspace::is_workspace_mode_active)),
         cursor: Memo::new(move |_| model.with(Workspace::cursor_pane_id)),
         modal: RwSignal::new(None),
-        query: RwSignal::new(String::new()),
-        chosen: RwSignal::new(0),
+        search: picker::Search::new(),
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),
         rearranged: RwSignal::new(0),
@@ -1247,6 +1258,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             sessions_feed: Arc::default(),
             over: RefCell::default(),
             over_asked: Cell::new(0),
+            choices: Cell::new(None),
             commanded: RefCell::default(),
             commanded_count: Cell::new(0),
             board_activity: RwSignal::new(HashMap::new()),
@@ -1329,7 +1341,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             move |modal| {
                 let inside = match modal {
                     Modal::Palette => palette::view(shell),
-                    Modal::Chooser(placement) => chooser::view(shell, *placement),
+                    Modal::Chooser(placement) => chooser::view(shell, shell.search, *placement),
                     Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
                     Modal::Models(session) => match shell.kept().models.clone() {
                         Some(source) => models::view(shell, *session, source),

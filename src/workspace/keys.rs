@@ -58,6 +58,16 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     if !shell.mode.get_untracked() {
         return;
     }
+    // With no tab, what is typed searches the views a tab can show, which
+    // the workspace shows then; `:` is still the commands'.
+    if shell.model.with_untracked(Workspace::tab_count) == 0 {
+        if character == ":" {
+            shell.open(Modal::Palette);
+            prevent_default();
+            stop_propagation();
+        }
+        return;
+    }
     // In the mode, no key is the view's.
     prevent_default();
     stop_propagation();

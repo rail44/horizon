@@ -484,6 +484,47 @@ fn a_shell_that_exits_takes_its_pane_and_the_last_leaves_an_empty_workspace() {
 }
 
 #[test]
+fn a_workspace_with_no_tab_shows_the_views_a_tab_can_show_to_pick_from() {
+    let opened = open();
+    opened.model_closing(opened.panes()[0]);
+    opened.until("an empty workspace", || {
+        opened.model(Workspace::tab_count) == 0
+    });
+    let names = || -> Vec<String> {
+        let choices = opened.all("choices");
+        assert_eq!(choices.len(), 1);
+        let names = horizon_ui::testing::find(&opened.app, choices[0], "name");
+        let document = opened.app.document();
+        let document = document.borrow();
+        (names.into_iter())
+            .map(|name| document.get_node(name).unwrap().text_content())
+            .collect()
+    };
+    let every = names();
+    assert!(every.iter().any(|name| name == "Terminal"), "{every:?}");
+    assert!(every.iter().any(|name| name == "Board"), "{every:?}");
+
+    // `:` is still the commands', and what is typed into them is theirs.
+    opened.character(":");
+    assert!(opened.shell.modal() == Some(Modal::Palette));
+    opened.commit("split");
+    assert_eq!(names(), every);
+    opened.named(NamedKey::Escape);
+    assert_eq!(opened.shell.modal(), None);
+
+    // What is typed searches the views, not the mode's keys (`t`, `a`).
+    for character in ["b", "o", "a"] {
+        opened.character(character);
+    }
+    assert_eq!(names(), ["Board"]);
+    assert_eq!(opened.model(Workspace::tab_count), 0);
+    // Enter opens the one chosen, in a tab.
+    opened.named(NamedKey::Enter);
+    opened.until("a tab", || opened.model(Workspace::tab_count) == 1);
+    assert!(opened.all("choices").is_empty());
+}
+
+#[test]
 fn the_configurations_chords_run_commands_and_replace_the_modes() {
     let opened = open();
     let config = horizon_config::parse(
