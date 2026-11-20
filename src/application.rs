@@ -8,8 +8,9 @@
 //!
 //! - Each frame is laid out by `horizon-ui` ([`horizon_ui::frame`]), and
 //!   painted by [`redraw`] here instead of by blitz-shell's
-//!   `View::redraw`, which lays the document out itself just before it
-//!   paints: the work that follows a layout would come too late, and the
+//!   `View::redraw` -- the first one by [`complete_resume`] instead of by
+//!   its `View::complete_resume` -- which lay the document out themselves
+//!   just before they paint: the work that follows a layout would come too late, and the
 //!   layout `horizon-ui` rounds to the display's pixels would be rounded
 //!   to whole CSS pixels again.
 //! - The input method is enabled with its cursor area declared as a
@@ -22,6 +23,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::task::{Wake, Waker};
 
 use anyrender::{RenderContext, WindowRenderer};
 use anyrender_vello::VelloWindowRenderer;
@@ -207,9 +209,84 @@ impl ApplicationHandler for Application {
                         self.request(event_loop, request);
                     }
                 }
+                // The first frame is painted here too, laid out as every
+                // other is.
+                BlitzShellEvent::ResumeReady { window_id } => {
+                    if let Some(view) = self.inner.windows.get_mut(&window_id) {
+                        complete_resume(view);
+                    }
+                    (self.inner.proxy).send_event(BlitzShellEvent::Poll { window_id });
+                }
                 event => self.inner.handle_blitz_shell_event(event_loop, event),
             }
         }
+    }
+}
+
+/// Finishes the window's renderer, once it is ready, and paints the first
+/// frame.
+///
+/// A copy of blitz-shell's `View::complete_resume` at the revision
+/// `Cargo.toml` pins, with `horizon_ui::frame` where that resolves the
+/// document, as [`redraw`] has it: compare it with the new revision's when
+/// Blitz is moved. The waker it gives the window is blitz-shell's
+/// `create_waker`'s, which blitz-shell does not export.
+fn complete_resume(view: &mut View<Renderer>) {
+    if !view.renderer.complete_resume() {
+        return;
+    }
+    let window_id = view.window_id();
+
+    // Resync the renderer to the current viewport: resizes that arrived
+    // while the renderer was pending did not reach it.
+    let animation_time = view.current_animation_time();
+    horizon_ui::frame(animation_time);
+    let mut inner = view.doc.inner_mut();
+    let (width, height) = inner.viewport().window_size;
+    let scale = inner.viewport().scale_f64();
+    let insets = view.safe_area_insets;
+
+    inner.can_create_surfaces(&mut view.renderer as _);
+
+    // The render surface covers the entire window, including the safe area
+    view.renderer.set_size(
+        width + insets.left + insets.right,
+        height + insets.top + insets.bottom,
+    );
+
+    view.renderer.render(|scene| {
+        paint_scene(
+            scene,
+            &mut inner,
+            scale,
+            width,
+            height,
+            insets.left,
+            insets.top,
+        )
+    });
+    drop(inner);
+
+    view.waker = Some(Waker::from(Arc::new(PollOnWake {
+        proxy: view.proxy.clone(),
+        window_id,
+    })));
+}
+
+/// Wakes the window's document to be polled.
+struct PollOnWake {
+    proxy: BlitzShellProxy,
+    window_id: WindowId,
+}
+
+impl Wake for PollOnWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let window_id = self.window_id;
+        self.proxy.send_event(BlitzShellEvent::Poll { window_id });
     }
 }
 

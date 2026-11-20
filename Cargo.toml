@@ -82,9 +82,9 @@ any_spawner = { version = "0.3", features = ["futures-executor"] }
 # (DioxusLabs/blitz#1324, 58 commits past 0.3.0-beta.4): content scrolled
 # out of a box does not take the clicks meant for what is drawn over it.
 # What Horizon needs of the window beyond blitz-shell is done around it,
-# in `src/application.rs`, which also holds a copy of blitz-shell's
-# `View::redraw` at this revision: moving the revision means comparing
-# that copy with the new one's, and moving `taffy` above to the revision
+# in `src/application.rs`, which also holds copies of blitz-shell's
+# `View::redraw` and `View::complete_resume` at this revision: moving the
+# revision means comparing those copies with the new one's, and moving `taffy` above to the revision
 # the new one takes. Once upstream's own rounding to the display's
 # pixels is in (DioxusLabs/blitz#902), `crates/horizon-ui/src/display_scale.rs`
 # rounds no more.
