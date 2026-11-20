@@ -241,8 +241,11 @@ Blitz is a beta, pinned to one release and patched past it in the root
 beyond `blitz-shell` is done around it, not in a copy of it:
 `src/application.rs` wraps its application and holds a copy of its
 `View::redraw` at the pinned revision. A Blitz bump moves the pin and the
-patch revision together, and compares that copy with the new revision's
-`View::redraw`.
+patch revision together, compares that copy with the new revision's
+`View::redraw`, and moves the workspace's `taffy` to the revision the
+new Blitz takes: `horizon-ui` rounds blitz-dom's layout again to the
+display's pixels with it (`crates/horizon-ui/src/display_scale.rs`), and
+its types must be blitz-dom's own.
 
 Every worktree builds into its own `target/` — nothing is shared
 between checkouts at the artifact level, so cross-worktree correctness

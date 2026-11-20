@@ -10,8 +10,8 @@
 //!   painted by [`redraw`] here instead of by blitz-shell's
 //!   `View::redraw`, which lays the document out itself just before it
 //!   paints: the work that follows a layout would come too late, and the
-//!   borders `horizon-ui` gives back after rounding would be rounded away
-//!   again.
+//!   layout `horizon-ui` rounds to the display's pixels would be rounded
+//!   to whole CSS pixels again.
 //! - The input method is enabled with its cursor area declared as a
 //!   capability ([`InputMethodShell`]), without which winit discards every
 //!   cursor area it is told later.

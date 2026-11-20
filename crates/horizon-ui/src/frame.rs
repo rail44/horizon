@@ -6,7 +6,7 @@ use std::rc::Rc;
 use any_spawner::Executor;
 use blitz_dom::BaseDocument;
 
-use crate::borders::restore_thin_borders;
+use crate::display_scale::{restyle_on_a_new_scale, round_to_device_pixels};
 use crate::input_method::place_input_method;
 use crate::shared::{Shared, current, enter, shared};
 
@@ -80,8 +80,9 @@ pub(crate) fn frame_of(shared: &Rc<Shared>, seconds: f64) {
     for _ in 0..LAYOUTS_A_FRAME {
         {
             let mut document = shared.document.borrow_mut();
+            restyle_on_a_new_scale(&mut document, &shared.styled_at);
             document.resolve(seconds);
-            restore_thin_borders(&mut document);
+            round_to_device_pixels(&mut document);
             after_layout(shared, &mut document);
         }
         if !shared.relayout.take() {

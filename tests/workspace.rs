@@ -1333,6 +1333,86 @@ fn block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale() {
 }
 
 #[test]
+fn a_tabs_outline_is_one_display_pixel_on_every_side_at_a_fractional_scale() {
+    use anyrender::ImageRenderer as _;
+    use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+
+    for scale in [1.25f32, 1.5, 1.75] {
+        let opened = open();
+        let (width, height) = (1200u32, 800u32);
+        (opened.app.document().borrow_mut()).set_viewport(Viewport::new(
+            width,
+            height,
+            scale,
+            ColorScheme::Light,
+        ));
+        opened.app.resolve();
+        let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+        let mut pixels = Vec::new();
+        let document = opened.app.document();
+        renderer.render_to_vec(
+            |scene| {
+                let mut document = document.borrow_mut();
+                blitz_paint::paint_scene(scene, &mut document, scale as f64, width, height, 0, 0)
+            },
+            &mut pixels,
+        );
+        let at = |x: i64, y: i64| {
+            let pixel = (y as usize * width as usize + x as usize) * 4;
+            [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+        };
+        let label = opened.all("tab-label")[0];
+        let (x, y, wide, tall) = opened.bounds(label);
+        let (left, top) = ((x * scale).round() as i64, (y * scale).round() as i64);
+        let (right, bottom) = (
+            ((x + wide) * scale).round() as i64,
+            ((y + tall) * scale).round() as i64,
+        );
+        let (middle_x, middle_y) = ((left + right) / 2, (top + bottom) / 2);
+        let background = at(left - 4, middle_y);
+        // Each side, from a few pixels outside the box to a few inside it:
+        // what is not the page's ground there is the side's line.
+        let sides = [
+            (
+                "top",
+                (top - 3..top + 3)
+                    .map(|y| at(middle_x, y))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "bottom",
+                (bottom - 3..bottom + 3).map(|y| at(middle_x, y)).collect(),
+            ),
+            (
+                "left",
+                (left - 3..left + 3).map(|x| at(x, middle_y)).collect(),
+            ),
+            (
+                "right",
+                (right - 3..right + 3).map(|x| at(x, middle_y)).collect(),
+            ),
+        ];
+        let lines: Vec<(&str, Vec<[u8; 3]>)> = (sides.into_iter())
+            .map(|(side, run)| {
+                (
+                    side,
+                    run.into_iter()
+                        .filter(|pixel| *pixel != background)
+                        .collect(),
+                )
+            })
+            .collect();
+        for (side, line) in &lines {
+            assert_eq!(line.len(), 1, "the {side} side at {scale}: {line:?}");
+        }
+        assert!(
+            lines.iter().all(|(_, line)| line == &lines[0].1),
+            "the sides at {scale} are not drawn alike: {lines:?}"
+        );
+    }
+}
+
+#[test]
 fn a_terminals_copy_chord_is_not_typed_into_it() {
     let opened = open();
     let pane = opened.panes()[0];

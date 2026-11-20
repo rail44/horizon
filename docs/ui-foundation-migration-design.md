@@ -173,6 +173,7 @@ so what only a window shows is looked at on a real desktop.
   it had, and blitz-dom panics on one that is gone. A view hides such a
   part another way: no height or no width, and not visible (the board
   thread's band, column and composer; the wiki's margin).
-- Blitz is a beta. Each problem met so far (thin borders, hit testing
-  through a clip, the input method's position, focus) was worked around
-  from Horizon's side.
+- Blitz is a beta. Each problem met so far (layout rounded to whole CSS
+  pixels at a fractional display scale, styles not computed again when
+  that scale changes, hit testing through a clip, the input method's
+  position, focus) was worked around from Horizon's side.

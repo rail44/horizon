@@ -15,6 +15,9 @@ horizon-ui-macros = { path = "../horizon-ui-macros" }
 # over `wit/plugin.wit` (`src/guest.rs`).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 blitz-dom = { workspace = true }
+# blitz-dom's layout, rounded again to the display's pixels
+# (`src/display_scale.rs`).
+taffy = { workspace = true }
 # The formats an image the document fetches is decoded from: blitz-dom
 # decodes with `image` and turns none of its formats on itself
 # (`src/files.rs`).
