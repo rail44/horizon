@@ -224,9 +224,17 @@ mod tests {
         let mut store = WorkspaceStateStore::new(path.clone());
 
         store.save(json).unwrap();
-        store.save(json).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), json);
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        // The same state again is not written: what is on disk now (put
+        // there by something else) stays.
+        fs::write(&path, "elsewhere").unwrap();
+        store.save(json).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "elsewhere");
+        // Other state is.
+        let changed = "{\"tabs\":[],\"version\":2}";
+        store.save(changed).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), changed);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -236,12 +244,17 @@ mod tests {
         let path = root.join("workspace.json");
         fs::create_dir_all(&root).unwrap();
         fs::write(&path, b"{\n  \"version\": 1, \"tabs\": []\n}\n").unwrap();
-        let mut store = WorkspaceStateStore::new(path);
+        let mut store = WorkspaceStateStore::new(path.clone());
 
         let LoadResult::Valid(json) = store.load(1).unwrap() else {
             panic!("expected valid state");
         };
+        // What was read is what is on disk: saving it again writes
+        // nothing, and what is on disk now (put there by something else)
+        // stays.
+        fs::write(&path, "elsewhere").unwrap();
         store.save(&json).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "elsewhere");
         fs::remove_dir_all(root).unwrap();
     }
 }

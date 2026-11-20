@@ -71,8 +71,16 @@ mod tests {
         // Japanese test data is deliberate (repo convention): the clamp
         // must count chars, not bytes, or CJK titles would truncate to a
         // third of the intended length.
-        let source = "日本語のタイトルです";
-        let derived = derive_session_title(source).expect("a non-empty title");
-        assert_eq!(derived.chars().count(), source.chars().count());
+        // 50 chars, 150 bytes: past the clamp counted either way, so a
+        // clamp counting bytes keeps a third of what one counting chars
+        // keeps.
+        let source = "日本語のタイトルです".repeat(5);
+        let derived = derive_session_title(&source).expect("a non-empty title");
+        assert_eq!(derived.chars().count(), MAX_TITLE_CHARS);
+        assert!(derived.ends_with('…'), "{derived}");
+        assert!(
+            source.starts_with(derived.trim_end_matches('…')),
+            "{derived}"
+        );
     }
 }

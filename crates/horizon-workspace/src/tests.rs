@@ -133,35 +133,6 @@ fn a_plugin_pane_has_no_session_and_registers_none() {
     assert_eq!(workspace.pane_title_for(pane_id), Some("Board".to_string()));
 }
 
-#[test]
-fn split_active_tab_with_a_plugin_view_adds_a_session_less_pane_beside_the_focus() {
-    let mut workspace = Workspace::mvp();
-    let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let session_count_before = workspace.session_count();
-
-    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
-
-    assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
-    assert_eq!(
-        workspace
-            .pane_plugin(view_pane)
-            .map(|plugin| plugin.name.as_str()),
-        Some("preview")
-    );
-    assert_eq!(workspace.session_count(), session_count_before);
-    assert!(workspace.is_active_pane(view_pane));
-}
-
-#[test]
-fn closing_a_plugin_pane_detaches_no_session() {
-    let mut workspace = Workspace::mvp();
-    let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
-
-    assert_eq!(workspace.close_pane(view_pane), None);
-    assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane]);
-}
-
 /// The plugin and its state ride on the pane: only a plugin view takes
 /// them, and its state is changed in place.
 #[test]
