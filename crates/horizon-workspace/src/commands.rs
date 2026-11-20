@@ -31,9 +31,10 @@ command_ids! {
         SplitLeft,
         SplitUp,
         NewTab,
-        /// Moves the pane the cursor is on into a new tab of the tab
-        /// group it is in (`docs/workspace-layout-design.md`).
-        MoveToNewTab,
+        /// Moves the pane the cursor is on into another tab, or a new one
+        /// of its group, chosen from a list
+        /// (`docs/workspace-layout-design.md`).
+        MoveToTab,
         FocusNextPane,
         CloseActivePane,
         CloseActiveTab,
@@ -171,11 +172,11 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Open the view chooser to open a new tab.",
             ),
-            CommandId::MoveToNewTab => (
-                "move-to-new-tab",
-                "Move to New Tab",
+            CommandId::MoveToTab => (
+                "move-to-tab",
+                "Move to Tab…",
                 CommandCategory::Workspace,
-                "Move the pane under the cursor into a new tab of its tab group.",
+                "Move the pane under the cursor into another tab, or a new tab of its tab group.",
             ),
             CommandId::FocusNextPane => (
                 "focus-next-pane",
@@ -313,7 +314,7 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // (A pane alone in its tab is that tab already; the model says
         // where nothing would change, and does nothing.)
-        CommandId::MoveToNewTab => state.visible_pane_count > 0,
+        CommandId::MoveToTab => state.visible_pane_count > 0,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
         // closing the tab when the pane is the last one
         // (`Workspace::close_cursor_pane_or_tab`), but a palette-invoked
@@ -377,7 +378,7 @@ mod tests {
                 CommandId::SplitLeft,
                 CommandId::SplitUp,
                 CommandId::NewTab,
-                CommandId::MoveToNewTab,
+                CommandId::MoveToTab,
                 CommandId::FocusNextPane,
                 CommandId::CloseActivePane,
                 CommandId::CloseActiveTab,
@@ -398,7 +399,7 @@ mod tests {
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[2].title, "Split Left…");
         assert_eq!(commands[4].title, "New Tab…");
-        assert_eq!(commands[5].title, "Move to New Tab");
+        assert_eq!(commands[5].title, "Move to Tab…");
         assert_eq!(commands[9].title, "Terminate Active Session");
         assert_eq!(commands[12].title, "Reload Terminal Runtime");
         assert_eq!(commands[13].title, "Reload Config");
@@ -633,10 +634,10 @@ mod tests {
         assert_eq!(split.len(), 1);
         assert_eq!(split[0].spec.id, CommandId::SplitRight);
 
-        // (New Tab first: what Enter takes, with Move to New Tab after it.)
+        // (New Tab first: what Enter takes, with Move to Tab after it.)
         let new_tab = filter_command_entries(entries, "new tab");
         let ids: Vec<CommandId> = new_tab.iter().map(|entry| entry.spec.id).collect();
-        assert_eq!(ids, [CommandId::NewTab, CommandId::MoveToNewTab]);
+        assert_eq!(ids, [CommandId::NewTab, CommandId::MoveToTab]);
     }
 
     #[test]

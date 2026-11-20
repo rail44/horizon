@@ -234,7 +234,7 @@ fn the_modes_cursor_moves_between_panes_and_x_closes_the_one_it_is_on() {
 }
 
 #[test]
-fn shift_and_a_direction_swap_panes_and_a_pane_moves_to_a_new_tab() {
+fn shift_and_a_direction_swap_panes_and_m_moves_a_pane_to_another_tab() {
     let opened = open();
     opened.chord();
     opened.character("s");
@@ -260,22 +260,31 @@ fn shift_and_a_direction_swap_panes_and_a_pane_moves_to_a_new_tab() {
     assert_eq!(opened.panes(), panes);
     opened.named(NamedKey::Escape);
 
-    // Move to New Tab: the pane with the focus is a tab of its own in the
-    // group, shown, with the keys.
+    // Move to Tab, `m`: a new tab of the group first, the pane with the
+    // focus a tab of its own there, shown, with the keys. The mode stays.
     let tabs = opened.model(Workspace::tab_count);
-    opened
-        .shell
-        .execute(horizon_workspace::commands::CommandId::MoveToNewTab);
-    opened.app.resolve();
+    opened.chord();
+    opened.character("m");
+    assert_eq!(opened.shell.modal(), Some(Modal::MoveTo));
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.shell.modal(), None);
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
     assert_eq!(opened.panes(), vec![panes[1]]);
     assert!(opened.model(|model| model.is_active_pane(panes[1])));
-    // Alone in its tab, it stays where it is.
-    opened
-        .shell
-        .execute(horizon_workspace::commands::CommandId::MoveToNewTab);
-    opened.app.resolve();
+    assert!(opened.mode());
+    // Alone in its tab, a new tab leaves it where it is.
+    opened.character("m");
+    opened.named(NamedKey::Enter);
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
+    // The other tab, not shown, after it: the pane goes beside that tab's
+    // active pane, and its own tab, empty, goes.
+    opened.character("m");
+    assert_eq!(opened.all("item").len(), 2);
+    opened.named(NamedKey::ArrowDown);
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.model(Workspace::tab_count), tabs);
+    assert_eq!(opened.panes(), panes);
+    assert!(opened.model(|model| model.is_active_pane(panes[1])));
 }
 
 #[test]

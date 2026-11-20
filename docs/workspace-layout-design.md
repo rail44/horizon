@@ -117,14 +117,20 @@ moved into a new tab.
   freely, and is that tab's active pane.
 - Nothing is swapped with what it is in (a pane and its own group's
   strip), and nothing at an edge.
-- Move to New Tab moves the pane the cursor is on into a new tab of the
-  group it is in -- a pane in no group goes to the group a new tab would
-  -- shown, with the focus. A pane alone in its tab already stays.
+- Move to Tab… (`m` in workspace mode, `src/workspace/move_to.rs`) moves
+  the pane the cursor is on to a place chosen from a list: a new tab of
+  the group it is in first -- a pane in no group goes to the group a new
+  tab would; a pane alone in its tab already stays -- then every other tab
+  on screen, shown or not, by its title (and its group's place, where
+  there are more than one). Into a tab, it goes beside that tab's active
+  pane, after it, across, and the Shift keys or the shares' keys put it
+  where it is wanted from there. Either way the tab is shown and the pane
+  has the focus; the mode stays.
 
 With the pointer (`src/workspace/moving.rs`), a view is taken by its
 tab's label, which takes the tab's active pane, or by its tag (below).
 Dropped on another view, the two swap; dropped on a group's strip, it is a new tab
-of that group -- the same operations the keys and Move to New Tab carry
+of that group -- the same operations the keys and Move to Tab… carry
 out. While it moves, the view or strip it would go to is marked and its
 title goes beside the pointer. A press that does not go a few pixels is
 no move, so a click on a tab's label is still the click.

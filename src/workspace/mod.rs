@@ -64,6 +64,7 @@ mod keys;
 mod layouts;
 mod links;
 mod models;
+mod move_to;
 mod moving;
 mod over;
 mod palette;
@@ -426,6 +427,8 @@ pub enum Modal {
     Extension(u64),
     /// Which of the configuration's layouts to put the workspace in.
     Layouts,
+    /// Which tab the pane the cursor is on is moved to.
+    MoveTo,
 }
 
 /// A view an extension has over the workspace.
@@ -1366,6 +1369,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                     },
                     Modal::Extension(_) => el("div"),
                     Modal::Layouts => layouts::view(shell),
+                    Modal::MoveTo => move_to::view(shell),
                 };
                 over::view(shell, inside)
             },

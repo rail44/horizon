@@ -30,6 +30,7 @@ pub use persistence::{
     InventoryError, InventoryReconcile, SessionInventory, WORKSPACE_STATE_VERSION,
     WorkspaceStateError,
 };
+pub use reorder::Destination;
 pub use resize::RESIZE_STEP;
 pub use session_id::SessionId;
 pub use types::{PaneId, PluginPane, SessionKind, SplitAxis, Workspace};

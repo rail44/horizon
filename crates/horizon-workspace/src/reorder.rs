@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use super::mode::{Cursor, Direction};
 use super::nav::{layout_rects, nearest_in_direction};
-use super::types::{LayoutNode, NodeKey, PaneId, Tab, TabGroupId, TabId, Workspace};
+use super::types::{LayoutNode, NodeKey, PaneId, SplitAxis, Tab, TabGroupId, TabId, Workspace};
 
 impl LayoutNode {
     /// The node `key` names, if one here does.
@@ -66,6 +66,31 @@ impl LayoutNode {
                     tab.root.each_tab_mut(each);
                 }
             }
+        }
+    }
+}
+
+/// A tab the pane the cursor is on can be moved to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Destination {
+    pub tab: TabId,
+    pub title: String,
+    /// The place of the tab's group among the groups on screen.
+    pub group: usize,
+}
+
+impl LayoutNode {
+    /// The group the tab `tab` is in, if one here has it.
+    fn group_with_tab(&self, tab: TabId) -> Option<TabGroupId> {
+        match self {
+            Self::Pane(_) => None,
+            Self::Split { children, .. } => {
+                (children.iter()).find_map(|child| child.node.group_with_tab(tab))
+            }
+            Self::Tabs(group) => match group.tabs.iter().any(|of| of.id == tab) {
+                true => Some(group.id),
+                false => group.tabs.iter().find_map(|of| of.root.group_with_tab(tab)),
+            },
         }
     }
 }
@@ -199,6 +224,78 @@ impl Workspace {
         true
     }
 
+    /// Moves the pane `pane` into the tab `tab`, beside that tab's active
+    /// pane (after it, across), the tab shown and the pane with focus.
+    /// `false`, a no-op, when either is unknown, or the pane is in that
+    /// tab already.
+    pub fn move_pane_to_tab(&mut self, pane: PaneId, tab: TabId) -> bool {
+        if !self.root.contains(NodeKey::Pane(pane))
+            || self
+                .root
+                .tabs_around(pane)
+                .iter()
+                .any(|(_, around)| *around == tab)
+        {
+            return false;
+        }
+        let Some(mut rest) = self.root.without_pane(pane) else {
+            return false;
+        };
+        rest.flatten();
+        let (Some(group), Some(beside)) = (
+            rest.group_with_tab(tab),
+            rest.tab(tab).map(|tab| tab.active),
+        ) else {
+            return false;
+        };
+        if !rest.split_beside(
+            NodeKey::Pane(beside),
+            LayoutNode::Pane(pane),
+            SplitAxis::Horizontal,
+            false,
+        ) {
+            return false;
+        }
+        rest.flatten();
+        self.root = rest;
+        if let Some(group) = self.root.group_mut(group) {
+            group.shown = tab;
+        }
+        self.note_focus(pane);
+        true
+    }
+
+    /// Where the pane the cursor is on can be moved to with
+    /// [`Self::move_cursor_pane_to_tab`]: every tab on screen but its own,
+    /// in the order of their groups, outermost first, and of their strips.
+    pub fn tabs_to_move_to(&self) -> Vec<Destination> {
+        let Some(pane) = self.cursor_pane_id() else {
+            return Vec::new();
+        };
+        let own = self.root.tabs_around(pane).last().map(|(_, tab)| *tab);
+        let groups = self.root.visible_groups();
+        (groups.iter().enumerate())
+            .flat_map(|(place, group)| {
+                (group.tabs.iter())
+                    .filter(move |tab| Some(tab.id) != own)
+                    .map(move |tab| Destination {
+                        tab: tab.id,
+                        title: self.tab_title(tab),
+                        group: place,
+                    })
+            })
+            .collect()
+    }
+
+    /// The Move to Tab command, to a tab of [`Self::tabs_to_move_to`]'s:
+    /// the pane the cursor is on (focus, out of workspace mode) into it.
+    pub fn move_cursor_pane_to_tab(&mut self, tab: TabId) -> bool {
+        let Some(pane) = self.cursor_pane_id() else {
+            return false;
+        };
+        self.move_pane_to_tab(pane, tab)
+    }
+
     /// The Move to New Tab command: the pane the cursor is on (focus, out
     /// of workspace mode) into a new tab of the group it is in; a pane in
     /// no group goes to the group a new tab would ([`Self::open_tab`]'s).
@@ -271,6 +368,52 @@ mod tests {
                 .collect(),
             other => vec![other.first_key()],
         }
+    }
+
+    #[test]
+    fn a_pane_moves_into_another_tab_beside_its_active_pane() {
+        let (mut workspace, left, right, group, first, second) = row();
+        let tabs: Vec<TabId> = (workspace.root.group(group).unwrap().tabs.iter())
+            .map(|tab| tab.id)
+            .collect();
+        // From `left`, every tab can be gone to; from `first`, its own is not.
+        workspace.workspace_mode = WorkspaceMode::Commands {
+            cursor: Some(Cursor::Pane(left)),
+        };
+        let to: Vec<TabId> = (workspace.tabs_to_move_to().iter())
+            .map(|to| to.tab)
+            .collect();
+        assert_eq!(to, tabs);
+        workspace.workspace_mode = WorkspaceMode::Commands {
+            cursor: Some(Cursor::Pane(first)),
+        };
+        let to: Vec<TabId> = (workspace.tabs_to_move_to().iter())
+            .map(|to| to.tab)
+            .collect();
+        assert_eq!(to, [tabs[1]]);
+
+        // `left` into the tab not shown: beside its active pane, the tab
+        // shown, the focus on it.
+        assert!(workspace.move_pane_to_tab(left, tabs[1]));
+        assert_eq!(
+            order(&workspace),
+            [NodeKey::Group(group), NodeKey::Pane(right)]
+        );
+        let shown = workspace.root.group(group).unwrap();
+        assert_eq!(shown.shown, tabs[1]);
+        let LayoutNode::Split { axis, children } = &shown.tabs[1].root else {
+            panic!("a split in the tab");
+        };
+        assert_eq!(*axis, SplitAxis::Horizontal);
+        let panes: Vec<NodeKey> = children
+            .iter()
+            .map(|child| child.node.first_key())
+            .collect();
+        assert_eq!(panes, [NodeKey::Pane(second), NodeKey::Pane(left)]);
+        assert!(workspace.is_active_pane(left));
+        assert!(workspace.root.is_canonical());
+        // Into the tab it is in already: nothing.
+        assert!(!workspace.move_pane_to_tab(left, tabs[1]));
     }
 
     #[test]
