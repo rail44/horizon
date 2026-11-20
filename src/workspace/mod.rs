@@ -93,7 +93,8 @@ pub(crate) mod styles {
                      color: var(--text-muted); cursor: pointer; }
         .tab-label:not(.active) + .tab-label:not(.active) {
             border-left-color: var(--surface-chrome); border-radius: 0; }
-        .tab-label.active { border-color: var(--accent); color: var(--text); }
+        .tab-label.active { border-color: var(--border); color: var(--text); }
+        .tab-label.active.focused { border-color: var(--accent); }
         .tab-label .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
                             text-overflow: ellipsis; }
         .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: var(--radius);
