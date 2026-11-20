@@ -432,7 +432,7 @@ impl LayoutNode {
     }
 
     /// Whether this node is the one `key` names.
-    fn is(&self, key: NodeKey) -> bool {
+    pub(crate) fn is(&self, key: NodeKey) -> bool {
         match (self, key) {
             (Self::Pane(id), NodeKey::Pane(wanted)) => *id == wanted,
             (Self::Tabs(group), NodeKey::Group(wanted)) => group.id == wanted,

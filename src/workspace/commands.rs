@@ -257,6 +257,7 @@ impl Shell {
             // A file that cannot be read leaves what is in use as it is.
             CommandId::ApplyLayout => self.open(Modal::Layouts),
             CommandId::ResetExtensions => _ = self.reset_extensions(None, |_| {}),
+            CommandId::MoveToNewTab => self.change(|model| _ = model.move_cursor_pane_to_new_tab()),
             CommandId::ReloadConfig => match kept.reload.as_ref().map(|reload| reload()) {
                 Some(Ok(config)) => self.apply_config(&config),
                 Some(Err(error)) => eprintln!("horizon config: reload failed: {error}"),

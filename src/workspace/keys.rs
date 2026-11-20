@@ -1,6 +1,7 @@
 //! The shell's keys: the chord that turns workspace mode on and off, and
 //! in the mode the keys that move its cursor and act on what it is on
-//! (`docs/workspace-mode-design.md`).
+//! (`docs/workspace-mode-design.md`). A direction moves the cursor, and
+//! with Shift swaps what the cursor is on with what it would move to.
 
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
@@ -64,12 +65,18 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
         return;
     }
     let step = |direction| shell.change(|model| model.move_cursor(direction));
+    let swap = |direction| shell.change(|model| _ = model.swap_cursor(direction));
+    let shifted = key.modifiers.shift();
     match &key.key {
         Key::Character(_) => match character {
             "h" => step(Direction::Left),
             "j" => step(Direction::Down),
             "k" => step(Direction::Up),
             "l" => step(Direction::Right),
+            "H" => swap(Direction::Left),
+            "J" => swap(Direction::Down),
+            "K" => swap(Direction::Up),
+            "L" => swap(Direction::Right),
             "t" => shell.execute(CommandId::NewTab),
             "s" => shell.execute(CommandId::SplitRight),
             "a" if kept.spawn_agent.is_some() => {
@@ -79,6 +86,10 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
             ":" => shell.open(Modal::Palette),
             _ => {}
         },
+        Key::Named(NamedKey::ArrowLeft) if shifted => swap(Direction::Left),
+        Key::Named(NamedKey::ArrowDown) if shifted => swap(Direction::Down),
+        Key::Named(NamedKey::ArrowUp) if shifted => swap(Direction::Up),
+        Key::Named(NamedKey::ArrowRight) if shifted => swap(Direction::Right),
         Key::Named(NamedKey::ArrowLeft) => step(Direction::Left),
         Key::Named(NamedKey::ArrowDown) => step(Direction::Down),
         Key::Named(NamedKey::ArrowUp) => step(Direction::Up),

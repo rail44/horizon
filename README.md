@@ -66,6 +66,10 @@ manual smoke checks:
   (`docs/workspace-layout-design.md`).
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
+- In workspace mode, `H` `J` `K` `L` (Shift and a direction, or Shift and an
+  arrow) swap the pane the cursor is on -- or, on a tab strip, the whole tab
+  group -- with its neighbor in that direction. `move to new tab` moves the
+  pane the cursor is on into a new tab of its tab group.
 - `apply layout`: puts the workspace in one of the layouts `config.toml`
   names (`[layouts.<name>]`, see `config.example.toml`): the list of
   sessions kept on the left of everything else, for one. `startup_layout`

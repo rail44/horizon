@@ -102,6 +102,25 @@ which may be the list itself.
 Groups are made only from a pane under no group, so a group inside a
 tab of another group does not arise from these operations.
 
+## Reordering
+
+The views are reordered without changing the tree's shape: two of them
+swap places (board #94). What changes the shape is a split, or a pane
+moved into a new tab.
+
+- In workspace mode, Shift and a direction (`H` `J` `K` `L`, or Shift and
+  an arrow) swap what the cursor is on with what the cursor would move
+  to in that direction; the cursor goes with it, and the mode stays. On
+  a pane, the pane moves; on a strip, the group moves as a whole.
+- A group goes in no tab of another group: swapped with what is in a
+  group, it swaps with that group as a whole. A pane swaps into a tab
+  freely, and is that tab's active pane.
+- Nothing is swapped with what it is in (a pane and its own group's
+  strip), and nothing at an edge.
+- Move to New Tab moves the pane the cursor is on into a new tab of the
+  group it is in -- a pane in no group goes to the group a new tab would
+  -- shown, with the focus. A pane alone in its tab already stays.
+
 ## Persistence
 
 `workspace.json` is version 2: the root node with the groups inside it,

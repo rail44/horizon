@@ -247,6 +247,51 @@ fn the_modes_cursor_moves_between_panes_and_x_closes_the_one_it_is_on() {
 }
 
 #[test]
+fn shift_and_a_direction_swap_panes_and_a_pane_moves_to_a_new_tab() {
+    let opened = open();
+    opened.chord();
+    opened.character("s");
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+
+    // In the mode, Shift and a direction swap what the cursor is on with
+    // what it would move to; the cursor goes with it, and the mode stays.
+    opened.chord();
+    opened.key(Key::Character("H".into()), Modifiers::SHIFT);
+    assert!(opened.mode());
+    assert_eq!(opened.panes(), vec![panes[1], panes[0]]);
+    let elements = opened.all("pane");
+    assert_eq!(opened.all("cursor").len(), 1);
+    assert_eq!(
+        opened.bounds(opened.all("cursor")[0]),
+        opened.bounds(elements[0])
+    );
+    opened.key(Key::Named(NamedKey::ArrowRight), Modifiers::SHIFT);
+    assert_eq!(opened.panes(), panes);
+    // At the edge, nothing.
+    opened.key(Key::Character("L".into()), Modifiers::SHIFT);
+    assert_eq!(opened.panes(), panes);
+    opened.named(NamedKey::Escape);
+
+    // Move to New Tab: the pane with the focus is a tab of its own in the
+    // group, shown, with the keys.
+    let tabs = opened.model(Workspace::tab_count);
+    opened
+        .shell
+        .execute(horizon_workspace::commands::CommandId::MoveToNewTab);
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
+    assert_eq!(opened.panes(), vec![panes[1]]);
+    assert!(opened.model(|model| model.is_active_pane(panes[1])));
+    // Alone in its tab, it stays where it is.
+    opened
+        .shell
+        .execute(horizon_workspace::commands::CommandId::MoveToNewTab);
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
+}
+
+#[test]
 fn tabs_open_cycle_and_are_picked_from_the_strip() {
     let opened = open();
     let first = opened.all("pane");

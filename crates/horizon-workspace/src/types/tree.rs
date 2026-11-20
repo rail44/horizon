@@ -7,7 +7,7 @@ use super::{PaneId, TabGroupId, TabId};
 /// where a horizontal and a vertical split cross, or where a tab group
 /// is (`docs/recursive-layout-design.md`). The tree is kept in canonical
 /// form by the layout operations in `super::layout`, not by these types.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LayoutNode {
     Pane(PaneId),
     Split {
@@ -21,7 +21,7 @@ pub enum LayoutNode {
 /// divide their container's extent proportionally to their own weight
 /// against the sum of all siblings' weights (no constraint solver -- see
 /// `docs/recursive-layout-design.md`'s Sizing decision).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayoutChild {
     pub node: LayoutNode,
     pub weight: f32,
@@ -35,7 +35,7 @@ pub enum SplitAxis {
 
 /// Tabs, one of them shown. Only the root may have none: the empty
 /// workspace.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TabGroup {
     pub id: TabGroupId,
     pub tabs: Vec<Tab>,
@@ -44,7 +44,7 @@ pub struct TabGroup {
 
 /// A tab: a tree of its own, and the pane in it focus goes to when the
 /// tab is shown again.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Tab {
     pub id: TabId,
     pub root: LayoutNode,

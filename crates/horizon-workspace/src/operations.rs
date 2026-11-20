@@ -100,7 +100,7 @@ impl Workspace {
     /// (`docs/workspace-layout-design.md`). Otherwise -- a tab opened by
     /// anything else -- the group the cursor is on or in, else the one that
     /// last had focus; with no group at all, a new one right of the rest.
-    fn group_for_new_tab(&mut self, at_cursor: bool) -> TabGroupId {
+    pub(crate) fn group_for_new_tab(&mut self, at_cursor: bool) -> TabGroupId {
         if let Some(group) = self.cursor_group() {
             return group;
         }

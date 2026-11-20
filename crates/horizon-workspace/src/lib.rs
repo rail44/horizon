@@ -14,6 +14,7 @@ mod nav;
 mod operations;
 pub mod persistence;
 mod query;
+mod reorder;
 mod session;
 mod session_id;
 pub mod snapshot;
