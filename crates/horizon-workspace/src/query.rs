@@ -1,7 +1,7 @@
 use super::mode::Cursor;
 use super::types::{
-    NodeKey, Pane, PaneId, SessionKind, SessionSummary, Tab, TabGroup, TabGroupId, TabSummary,
-    Workspace, WorkspaceSession,
+    NodeKey, Pane, PaneId, SessionKind, SessionSummary, Tab, TabGroup, TabGroupId, TabId,
+    TabSummary, Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -389,6 +389,16 @@ impl Workspace {
     /// The active pane of the tab at `index` of `group`.
     pub fn tab_active_pane(&self, group: TabGroupId, index: usize) -> Option<PaneId> {
         Some(self.root.group(group)?.tabs.get(index)?.active)
+    }
+
+    /// The tab `pane` is in, the innermost where there are more.
+    pub fn tab_of(&self, pane: PaneId) -> Option<TabId> {
+        self.root.tabs_around(pane).last().map(|(_, tab)| *tab)
+    }
+
+    /// The tab at `index` in `group`'s strip.
+    pub fn tab_in(&self, group: TabGroupId, index: usize) -> Option<TabId> {
+        Some(self.root.group(group)?.tabs.get(index)?.id)
     }
 
     pub(crate) fn tab_title(&self, tab: &Tab) -> String {

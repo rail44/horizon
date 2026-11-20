@@ -104,6 +104,7 @@ pub(crate) mod styles {
         .tab-label .close:hover { background: var(--surface-selected); }
         .tabs.cursor .tab-label.active { background: var(--selection); border-color: var(--accent); }
         .tabs.drop { border-radius: var(--radius); background: var(--surface-selected); }
+        .tab-label.drop { background: var(--surface-selected); }
         .tab { flex: 1; min-height: 0; display: flex; }
         .group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
         .shown-tab { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden;
@@ -139,18 +140,16 @@ pub(crate) mod styles {
            is over the card's where it is at the card's edge, rounded at the
            card's corners, and shows only where the focus is. */
         .shown-tab.parted { padding: 0; overflow: visible; }
-        .shown-tab.parted .pane { border-color: transparent; border-radius: 0;
-                                  background: transparent; }
-        .shown-tab.parted .pane.focused, .shown-tab.parted .pane.drop {
-            border-color: var(--accent); }
-        .cell.edge-top > .pane { margin-top: calc(var(--line) * -1); }
-        .cell.edge-right > .pane { margin-right: calc(var(--line) * -1); }
-        .cell.edge-bottom > .pane { margin-bottom: calc(var(--line) * -1); }
-        .cell.edge-left > .pane { margin-left: calc(var(--line) * -1); }
-        .cell.edge-top.edge-left > .pane { border-top-left-radius: var(--radius-large); }
-        .cell.edge-top.edge-right > .pane { border-top-right-radius: var(--radius-large); }
-        .cell.edge-bottom.edge-left > .pane { border-bottom-left-radius: var(--radius-large); }
-        .cell.edge-bottom.edge-right > .pane { border-bottom-right-radius: var(--radius-large); }
+        .pane.part { border-color: transparent; border-radius: 0; background: transparent; }
+        .pane.part.focused, .pane.part.drop { border-color: var(--accent); }
+        .pane.part.edge-top { margin-top: calc(var(--line) * -1); }
+        .pane.part.edge-right { margin-right: calc(var(--line) * -1); }
+        .pane.part.edge-bottom { margin-bottom: calc(var(--line) * -1); }
+        .pane.part.edge-left { margin-left: calc(var(--line) * -1); }
+        .pane.part.edge-top.edge-left { border-top-left-radius: var(--radius-large); }
+        .pane.part.edge-top.edge-right { border-top-right-radius: var(--radius-large); }
+        .pane.part.edge-bottom.edge-left { border-bottom-left-radius: var(--radius-large); }
+        .pane.part.edge-bottom.edge-right { border-bottom-right-radius: var(--radius-large); }
         .pane > * { flex: 1; min-height: 0; }
         .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                         background: var(--background); opacity: 0.5; pointer-events: none; }
@@ -160,6 +159,10 @@ pub(crate) mod styles {
                           background: var(--background); opacity: 0.5; pointer-events: none; }
         .pane > .landing { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
                            background: var(--accent); opacity: 0.12; pointer-events: none; }
+        .pane > .landing.to-left { right: 50%; }
+        .pane > .landing.to-right { left: 50%; }
+        .pane > .landing.to-top { bottom: 50%; }
+        .pane > .landing.to-bottom { top: 50%; }
 
         /* A pane's tag, where its tab's label does not name it alone: its
            name and the mark it is taken by, in its corner, while the
@@ -455,6 +458,9 @@ struct PaneView {
     plugin: Option<plugins::Shown>,
     /// The sessions a board view says its tasks are bound to.
     bound: Option<RwSignal<Vec<SessionId>>>,
+    /// The edges of its tab's card it is at, where it is a part of a split
+    /// tab (`arrangement`): told the pane itself, as what it is drawn by.
+    place: RwSignal<Option<arrangement::Edges>>,
 }
 
 /// What the shell keeps beside the model.
@@ -463,6 +469,9 @@ struct Kept {
     /// Each tab group's strip, as made: where a view moved with the
     /// pointer would be a new tab.
     strip_elements: RefCell<Vec<(horizon_workspace::types::TabGroupId, El)>>,
+    /// The tabs' labels on the page, by their group and place in its
+    /// strip: where a view moving can go.
+    tab_labels: RefCell<Vec<(El, horizon_workspace::types::TabGroupId, usize)>>,
     /// The sessions of the model, whether a pane shows them or not:
     /// closing a pane lets go of its view and keeps its session.
     sessions: Held<TerminalPlugin>,
@@ -631,6 +640,7 @@ impl Shell {
         let (mut terminal, mut agent) = (None, None);
         let mut shown_plugin = None;
         let mut bound = None;
+        let place = owner.with(|| RwSignal::new(None::<arrangement::Edges>));
         let start = |session| {
             kept.starting
                 .borrow_mut()
@@ -749,6 +759,13 @@ impl Shell {
                 // workspace mode the cursor's is the accent, and every
                 // pane is veiled.
                 .class(styles::PANE)
+                .class_dyn(move || place.get().map(|_| styles::PART))
+                .class_dyn(move || place.get().filter(|at| at.top).map(|_| styles::EDGE_TOP))
+                .class_dyn(move || (place.get().filter(|at| at.right)).map(|_| styles::EDGE_RIGHT))
+                .class_dyn(move || {
+                    (place.get().filter(|at| at.bottom)).map(|_| styles::EDGE_BOTTOM)
+                })
+                .class_dyn(move || place.get().filter(|at| at.left).map(|_| styles::EDGE_LEFT))
                 .class_dyn(
                     move || match (shell.cursor.get() == Some(id), shell.mode.get()) {
                         (true, true) => Some(styles::CURSOR),
@@ -756,17 +773,25 @@ impl Shell {
                         (false, _) => None,
                     },
                 )
-                .class_dyn(move || {
-                    shell
-                        .is_drop(moving::Target::Pane(id))
-                        .then_some(styles::DROP)
-                })
+                .class_dyn(move || shell.drop_zone(id).is_some().then_some(styles::DROP))
                 .on("pointerdown", move |_| shell.pane_pressed(id))
                 .child(content)
                 .when(move || shell.mode.get(), || el("div").class(styles::VEIL))
+                // Where it would go: the whole of it, or the half on a side.
                 .when(
-                    move || shell.is_drop(moving::Target::Pane(id)),
-                    || el("div").class(styles::LANDING),
+                    move || shell.drop_zone(id).is_some(),
+                    move || {
+                        el("div").class(styles::LANDING).class_dyn(move || {
+                            use horizon_workspace::Side;
+                            match shell.drop_zone(id) {
+                                Some(moving::Zone::Edge(Side::Left)) => Some(styles::TO_LEFT),
+                                Some(moving::Zone::Edge(Side::Right)) => Some(styles::TO_RIGHT),
+                                Some(moving::Zone::Edge(Side::Up)) => Some(styles::TO_TOP),
+                                Some(moving::Zone::Edge(Side::Down)) => Some(styles::TO_BOTTOM),
+                                _ => None,
+                            }
+                        })
+                    },
                 )
                 // (Faded by what is over it, not by its own opacity: a pane
                 // made a stacking context and back is not hit as it was.)
@@ -783,6 +808,7 @@ impl Shell {
             agent,
             plugin: shown_plugin,
             bound,
+            place,
         }
     }
 
@@ -1250,6 +1276,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
             strip_elements: RefCell::default(),
+            tab_labels: RefCell::default(),
             sessions,
             agents,
             spawn_agent: opening.agents,

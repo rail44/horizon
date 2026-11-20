@@ -10,8 +10,8 @@ use std::rc::Rc;
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
-use horizon_ui::reactive_graph::owner::Owner;
-use horizon_ui::reactive_graph::traits::{Get, Update, With, WithUntracked};
+use horizon_ui::reactive_graph::owner::{Owner, on_cleanup};
+use horizon_ui::reactive_graph::traits::{Get, Set, Update, With, WithUntracked, WithValue};
 use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
 use horizon_workspace::types::{LayoutNode, NodeKey, TabGroupId, TabId, TabSummary};
 use horizon_workspace::{Cursor, PaneId, SplitAxis, Workspace};
@@ -219,12 +219,12 @@ pub(super) fn view(shell: Shell) -> El {
 }
 
 /// The edges of a tab's card a part of it is at.
-#[derive(Clone, Copy)]
-struct Edges {
-    top: bool,
-    right: bool,
-    bottom: bool,
-    left: bool,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Edges {
+    pub(super) top: bool,
+    pub(super) right: bool,
+    pub(super) bottom: bool,
+    pub(super) left: bool,
 }
 
 impl Edges {
@@ -255,7 +255,7 @@ impl Edges {
 }
 
 /// Builds the boxes of `shape`: `in_tab` the edges of a tab's card the
-/// shape is at, where it is in a tab.
+/// shape is at, where it is a part of a split tab.
 fn arrange(
     shape: &Shape,
     path: &[usize],
@@ -264,7 +264,15 @@ fn arrange(
     in_tab: Option<Edges>,
 ) -> El {
     let (axis, children) = match shape {
-        Shape::Pane(id) => return shell.kept().panes.borrow()[id].element,
+        Shape::Pane(id) => {
+            let (element, place) = {
+                let kept = shell.kept();
+                let panes = kept.panes.borrow();
+                (panes[id].element, panes[id].place)
+            };
+            place.set(in_tab);
+            return element;
+        }
         Shape::Group { id, shown } => {
             let alone = matches!(
                 shown.as_ref().map(|(_, shape)| &**shape),
@@ -277,7 +285,11 @@ fn arrange(
             let content = match shown {
                 // (A path counts a split's children: the group is passed
                 // through.)
-                Some((_, shape)) => arrange(shape, path, shell, strips, Some(Edges::ALL)),
+                // (A tab that is one pane is that pane's card.)
+                Some((_, shape)) => {
+                    let parts = parted.then_some(Edges::ALL);
+                    arrange(shape, path, shell, strips, parts)
+                }
                 // With no tab, the views a tab can show, to pick one from.
                 None => {
                     let search = picker::Search::new();
@@ -319,13 +331,8 @@ fn arrange(
             let at = [path, &[index]].concat();
             let weighed = at.clone();
             let edges = in_tab.map(|edges| edges.of_child(across, index, count));
-            let at_edge = |of: fn(Edges) -> bool, class| edges.filter(|e| of(*e)).map(|_| class);
             el("div")
                 .class(styles::CELL)
-                .class(at_edge(|e| e.top, styles::EDGE_TOP))
-                .class(at_edge(|e| e.right, styles::EDGE_RIGHT))
-                .class(at_edge(|e| e.bottom, styles::EDGE_BOTTOM))
-                .class(at_edge(|e| e.left, styles::EDGE_LEFT))
                 .style_dyn("flex-grow", move || {
                     shell
                         .model
@@ -386,8 +393,25 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
             |index| *index,
             move |index| {
                 let index = *index;
-                el("div")
+                let label = el("div");
+                // (Where a view moving can go, while it is on the page.)
+                shell
+                    .kept()
+                    .tab_labels
+                    .borrow_mut()
+                    .push((label, group, index));
+                on_cleanup(move || {
+                    if let Some(kept) = shell.kept.try_with_value(Rc::clone) {
+                        kept.tab_labels.borrow_mut().retain(|(of, ..)| *of != label);
+                    }
+                });
+                label
                     .class(styles::TAB_LABEL)
+                    .class_dyn(move || {
+                        shell
+                            .is_drop(super::moving::Target::Tab(group, index))
+                            .then_some(styles::DROP)
+                    })
                     .class_dyn(move || {
                         tab(index)
                             .is_some_and(|tab| tab.active)
