@@ -105,6 +105,13 @@ const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
 /// `session/new` block on. Never set in production.
 const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
 
+/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
+/// file's path, the mock provider's slow turns wait until that file is
+/// there once their first word is out
+/// (`ProviderRegistry::hold_mock_streams`), so a test can reattach while a
+/// turn is surely streaming. Never set in production.
+const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENTD_TEST_MOCK_STREAM_GATE";
+
 /// The file the variable `var` names, when it is set: a test's gate
 /// ([`TEST_RESUME_GATE_VAR`], [`TEST_DUCKDB_REBUILD_GATE_VAR`]). The
 /// variable is how a test that spawns this daemon reaches it; inside, the
@@ -151,8 +158,11 @@ async fn main() -> anyhow::Result<()> {
     // history replay) and `AgentdState` (the recall tools' context);
     // populated later, once, by `spawn_resume_task`'s propagator.
     let duckdb_cell = SharedDuckdbStore::pending();
-    let providers =
+    let mut providers =
         ProviderRegistry::builtin_with_config(agent_config.clone(), duckdb_cell.clone());
+    if let Some(gate) = test_gate(TEST_MOCK_STREAM_GATE_VAR) {
+        providers.hold_mock_streams(Arc::new(move || wait_for_gate(&gate)));
+    }
     let state = Arc::new(AgentdState::new(
         providers,
         agent_config.clone(),
