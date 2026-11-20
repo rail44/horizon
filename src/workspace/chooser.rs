@@ -9,7 +9,7 @@ use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_workspace::{PluginPane, SessionKind};
 
-use super::picker::{self, Row};
+use super::picker::{self, Row, Search};
 use super::{Modal, Placement, Shell, plugins, styles};
 use crate::extension::Extension;
 use std::sync::Arc;
@@ -51,7 +51,10 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
     choices
 }
 
-pub(super) fn view(shell: Shell, placement: Placement) -> El {
+/// The views a new pane can show, to pick one for `placement` from: in a
+/// sheet over the workspace, or as what a workspace with no tab shows,
+/// each searched by its own `search`.
+pub(super) fn view(shell: Shell, search: Search, placement: Placement) -> El {
     let rows = |query: &str| {
         (matching(query).into_iter())
             .map(|(title, ..)| Row {
@@ -63,7 +66,7 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             .collect()
     };
     let picked = move |index: usize| {
-        let mut choices = matching(&shell.query.get_untracked());
+        let mut choices = matching(&search.query.get_untracked());
         if index < choices.len() {
             let (_, choice) = choices.swap_remove(index);
             shell.modal.set(None);
@@ -95,5 +98,5 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             }
         }
     };
-    picker::view(shell, rows, picked)
+    picker::view(search, rows, picked)
 }

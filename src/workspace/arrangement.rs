@@ -16,7 +16,7 @@ use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
 use horizon_workspace::types::{LayoutNode, NodeKey, TabGroupId, TabId, TabSummary};
 use horizon_workspace::{Cursor, PaneId, SplitAxis, Workspace};
 
-use super::{Shell, activity, styles};
+use super::{Placement, Shell, activity, chooser, picker, styles};
 
 /// The tree without its weights: what the boxes are built from. A
 /// boundary dragged changes weights only, and builds nothing.
@@ -226,9 +226,17 @@ fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips, in_tab:
                 // (A path counts a split's children: the group is passed
                 // through.)
                 Some((_, shape)) => arrange(shape, path, shell, strips, true),
-                None => el("div")
-                    .class(styles::EMPTY)
-                    .text("No tabs. Press : for commands."),
+                // With no tab, the views a tab can show, to pick one from.
+                None => {
+                    let search = picker::Search::new();
+                    let choices = el("div").class(styles::CHOICES).child(chooser::view(
+                        shell,
+                        search,
+                        Placement::NewTab,
+                    ));
+                    shell.kept().choices.set(Some(choices));
+                    el("div").class(styles::EMPTY).child(choices)
+                }
             };
             return el("div")
                 .class(styles::GROUP)

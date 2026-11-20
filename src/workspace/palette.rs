@@ -48,7 +48,7 @@ pub(super) fn view(shell: Shell) -> El {
     // A command is run on the mode's cursor, and the mode ends with it,
     // unless what it did was to open another list.
     let picked = move |index: usize| {
-        let entries = matching(shell, &shell.query.get_untracked());
+        let entries = matching(shell, &shell.search.query.get_untracked());
         let Some(entry) = entries.get(index).filter(|entry| entry.enabled) else {
             return;
         };
@@ -58,5 +58,5 @@ pub(super) fn view(shell: Shell) -> El {
             shell.change(Workspace::exit_workspace_mode);
         }
     };
-    picker::view(shell, rows, picked)
+    picker::view(shell.search, rows, picked)
 }

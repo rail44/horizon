@@ -122,7 +122,7 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
         }
     };
     let picked = move |index: usize| {
-        let query = shell.query.get_untracked();
+        let query = shell.search.query.get_untracked();
         match stage.get_untracked() {
             None => {
                 let Some((provider, summary)) = matching_providers(&query).into_iter().nth(index)
@@ -153,8 +153,8 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
                     );
                 }
                 stage.set(Some(provider));
-                shell.query.set(String::new());
-                shell.chosen.set(0);
+                shell.search.query.set(String::new());
+                shell.search.chosen.set(0);
             }
             Some(provider) => {
                 let Some(model) = matching_models(provider, &query).into_iter().nth(index) else {
@@ -185,10 +185,10 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
         let stepped = stage.get_untracked().is_some();
         if stepped {
             stage.set(None);
-            shell.query.set(String::new());
-            shell.chosen.set(0);
+            shell.search.query.set(String::new());
+            shell.search.chosen.set(0);
         }
         stepped
     };
-    picker::view_in_steps(shell, rows, picked, back)
+    picker::view_in_steps(shell.search, rows, picked, back)
 }

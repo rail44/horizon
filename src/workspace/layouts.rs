@@ -116,11 +116,11 @@ pub(super) fn view(shell: Shell) -> El {
             .collect()
     };
     let picked = move |index: usize| {
-        let names = matching(&shell.query.get_untracked());
+        let names = matching(&shell.search.query.get_untracked());
         if let Some(name) = names.get(index) {
             shell.modal.set(None);
             shell.apply_layout(name);
         }
     };
-    picker::view(shell, rows, picked)
+    picker::view(shell.search, rows, picked)
 }
