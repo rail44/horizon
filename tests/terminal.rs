@@ -615,8 +615,18 @@ fn a_program_that_asks_the_colors_is_told_the_ones_it_is_drawn_in() {
     });
 }
 
+/// What a link is clicked with to be followed: Cmd on macOS, Ctrl
+/// elsewhere.
+fn link_key() -> keyboard_types::Modifiers {
+    if cfg!(target_os = "macos") {
+        keyboard_types::Modifiers::META
+    } else {
+        keyboard_types::Modifiers::CONTROL
+    }
+}
+
 #[test]
-fn a_link_clicked_with_the_platform_s_key_is_opened() {
+fn a_link_clicked_with_ctrl_or_cmd_is_opened() {
     use horizon_ui::blitz_traits::events::MouseEventButton;
 
     let opened = open();
@@ -626,17 +636,17 @@ fn a_link_clicked_with_the_platform_s_key_is_opened() {
         text.lines().any(|line| line == "a-link plain")
     });
     let row = opened.row_of("a-link plain");
-    let meta = keyboard_types::Modifiers::META;
+    let key = link_key();
 
     // On the link, with the key: opened, and nothing selected.
     let (x, y) = opened.cell(row, 2);
     pointer(&opened.app, x, y, Pointer::Move);
-    press_with(&opened.app, x, y, MouseEventButton::Main, meta);
+    press_with(&opened.app, x, y, MouseEventButton::Main, key);
     assert_eq!(*opened_urls.borrow(), ["https://example.com/x"]);
     // Beside the link, or without the key: not.
     let (x, y) = opened.cell(row, 9);
     pointer(&opened.app, x, y, Pointer::Move);
-    press_with(&opened.app, x, y, MouseEventButton::Main, meta);
+    press_with(&opened.app, x, y, MouseEventButton::Main, key);
     let (x, y) = opened.cell(row, 2);
     pointer(&opened.app, x, y, Pointer::Move);
     press_with(
@@ -646,6 +656,16 @@ fn a_link_clicked_with_the_platform_s_key_is_opened() {
         MouseEventButton::Main,
         Default::default(),
     );
+    // Nor with Super off macOS: the desktop keeps it for itself.
+    if !cfg!(target_os = "macos") {
+        press_with(
+            &opened.app,
+            x,
+            y,
+            MouseEventButton::Main,
+            keyboard_types::Modifiers::META,
+        );
+    }
     assert_eq!(opened_urls.borrow().len(), 1);
 }
 
@@ -666,13 +686,7 @@ fn a_link_of_any_scheme_is_handed_to_whoever_placed_the_view() {
     for line in ["a-file", "a-scheme"] {
         let (x, y) = opened.cell(opened.row_of(line), 2);
         pointer(&opened.app, x, y, Pointer::Move);
-        press_with(
-            &opened.app,
-            x,
-            y,
-            MouseEventButton::Main,
-            keyboard_types::Modifiers::META,
-        );
+        press_with(&opened.app, x, y, MouseEventButton::Main, link_key());
     }
     assert_eq!(
         *opened.opened_urls.borrow(),

@@ -162,7 +162,7 @@ struct State {
     clicked: Cell<Option<(std::time::Instant, TerminalSelectionPoint, u8)>>,
     /// The button a press reported to the program is for.
     reporting: Cell<Option<TerminalMouseButton>>,
-    /// What a link clicked with the platform's key held is followed with.
+    /// What a link clicked with Ctrl held (Cmd on macOS) is followed with.
     open_link: Option<OpenLink>,
     drags: Drags,
     /// Whether a button went down here and is still held, and whether what
@@ -213,7 +213,7 @@ pub struct TerminalView {
     /// The theme's colors, font and row height: the view follows it, and
     /// has the program that asks what the colors are answered with its.
     pub look: Signal<TerminalLook>,
-    /// Follows a link clicked with the platform's key held.
+    /// Follows a link clicked with Ctrl held (Cmd on macOS).
     pub open_link: Option<OpenLink>,
     /// Where the moves of a drag begun here are heard, wherever on the
     /// page the pointer goes, and where the button comes up
@@ -555,10 +555,10 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             };
             let point = cell_down(pointer.element.x, pointer.element.y);
             let button = button(pointer.button);
-            // A link clicked with the platform's key held is followed, and
+            // A link clicked with Ctrl held (Cmd on macOS) is followed, and
             // the press goes no further: not to the program, not into a
             // selection.
-            if button == TerminalMouseButton::Left && pointer.mods.meta() {
+            if button == TerminalMouseButton::Left && follows_link(&pointer.mods) {
                 let link = link_at(&pressed, pointer.element.x, pointer.element.y);
                 if let (Some(link), Some(open)) = (link, pressed.open_link.clone()) {
                     open(&link);
@@ -835,6 +835,18 @@ fn button(button: MouseEventButton) -> TerminalMouseButton {
         MouseEventButton::Auxiliary => TerminalMouseButton::Middle,
         MouseEventButton::Secondary => TerminalMouseButton::Right,
         _ => TerminalMouseButton::Left,
+    }
+}
+
+/// Whether a press with `modifiers` held follows the link under it: Cmd
+/// on macOS, Ctrl elsewhere, the split the built-in chords make
+/// (`src/workspace/keymap.rs`). Not Super off macOS: the desktop takes
+/// Super with the pointer for itself (GNOME moves the window with it).
+fn follows_link(modifiers: &keyboard_types::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.meta()
+    } else {
+        modifiers.ctrl()
     }
 }
 

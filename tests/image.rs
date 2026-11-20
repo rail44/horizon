@@ -324,7 +324,12 @@ fn a_link_to_an_image_clicked_in_a_terminal_with_the_platform_s_key_opens_it() {
         },
         button: MouseEventButton::Main,
         buttons,
-        mods: Modifiers::META,
+        // Ctrl, or Cmd on macOS: what a link is followed with.
+        mods: if cfg!(target_os = "macos") {
+            Modifiers::META
+        } else {
+            Modifiers::CONTROL
+        },
         details: Default::default(),
         element: Default::default(),
         active_pointers: Default::default(),
