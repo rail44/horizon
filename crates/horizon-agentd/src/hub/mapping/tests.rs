@@ -249,16 +249,55 @@ fn replayed_approvals_are_asked_after_the_bootstrap_only_while_pending() {
     assert!(asked.is_empty(), "nothing is asked while replaying");
     let pending = mapper.finish_replay();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].occurrence_id.0, "occ-2");
+    assert_eq!(pending[0].request.occurrence_id.0, "occ-2");
 
     let live = mapper.map(&AgentWireEvent::Event(approval("occ-3")));
-    std::assert_matches!(&live[..], [Outgoing::AskPermission(request)]
-        if request.occurrence_id.0 == "occ-3");
+    std::assert_matches!(&live[..], [Outgoing::AskPermission(ask)]
+        if ask.request.occurrence_id.0 == "occ-3" && ask.task.is_none());
     let settled = mapper.map(&AgentWireEvent::Event(Event::ToolCallFinished(
         ToolCallResult::cancelled(identity("call-1", "occ-3")),
     )));
     assert!(settled.iter().any(|outgoing| matches!(outgoing,
         Outgoing::ApprovalSettled(occurrence) if occurrence == "occ-3")));
+}
+
+/// A `task` child's approval, shown through the requester
+/// (`docs/agent-subagent-design.md` decision 4), is asked for with its
+/// child named -- after the bootstrap when it arrived during replay -- and
+/// withdrawn once settled.
+#[test]
+fn a_task_childs_approval_is_asked_naming_the_child_and_withdrawn_when_settled() {
+    let child = SessionId::new();
+    let Event::ApprovalRequested(request) = approval("occ-child") else {
+        unreachable!()
+    };
+    let mut replaying = Mapper::new(SessionId::new(), facts());
+    assert!(
+        replaying
+            .map(&AgentWireEvent::TaskApproval {
+                task_session_id: child,
+                request: request.clone(),
+            })
+            .is_empty(),
+        "nothing is asked while replaying"
+    );
+    let pending = replaying.finish_replay();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].task, Some(child));
+
+    let mut mapper = mapper();
+    let asked = mapper.map(&AgentWireEvent::TaskApproval {
+        task_session_id: child,
+        request,
+    });
+    std::assert_matches!(&asked[..], [Outgoing::AskPermission(ask)]
+        if ask.task == Some(child) && ask.request.occurrence_id.0 == "occ-child");
+    let settled = mapper.map(&AgentWireEvent::TaskApprovalSettled {
+        task_session_id: child,
+        occurrence_id: OccurrenceId("occ-child".into()),
+    });
+    std::assert_matches!(&settled[..], [Outgoing::ApprovalSettled(occurrence)]
+        if occurrence == "occ-child");
 }
 
 #[test]

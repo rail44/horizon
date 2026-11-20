@@ -250,3 +250,75 @@ fn duplicate_creation_preserves_the_existing_session_command_owner() {
     assert!(state.send_command(session, Command::ContinueTurn));
     assert_eq!(commands.try_recv().unwrap(), Command::ContinueTurn);
 }
+
+/// A `task` child's approval shown through its requester
+/// (`docs/agent-subagent-design.md` decision 4) is asked again of a new
+/// attachment while it is pending, and an answer reaches the child only
+/// while it is: settled, the record is gone and the answer is refused.
+#[test]
+fn a_childs_pending_approval_is_replayed_and_answered_to_the_child_only_while_pending() {
+    let state = test_state();
+    let requester = SessionId::new();
+    let child = SessionId::new();
+    let child_commands = state.install_test_session(child);
+    let live = LiveState::with_disabled_persistence();
+    let request = horizon_agent::contract::ApprovalRequest {
+        call_id: horizon_agent::contract::ToolCallId("call-1".into()),
+        occurrence_id: horizon_agent::contract::OccurrenceId("occ-1".into()),
+        reason: "read outside the workspace".into(),
+        kind: horizon_agent::contract::ApprovalKind::Standard,
+    };
+    send_session_event(
+        &state,
+        requester,
+        AgentWireEvent::TaskApproval {
+            task_session_id: child,
+            request: request.clone(),
+        },
+    );
+
+    let attachment = snapshot(&state, requester, &live);
+    assert!(attachment.metadata.contains(&AgentWireEvent::TaskApproval {
+        task_session_id: child,
+        request: request.clone(),
+    }));
+
+    let connection = super::super::connection::Connection::new(state.clone());
+    let approve = Command::ApproveToolCall {
+        identity: request.identity(),
+    };
+    assert!(
+        connection
+            .answer_task_approval(requester, "occ-1", approve.clone())
+            .is_ok()
+    );
+    assert_eq!(child_commands.try_recv().unwrap(), approve);
+    assert!(
+        connection
+            .answer_task_approval(SessionId::new(), "occ-1", approve.clone())
+            .is_err(),
+        "only the requester that showed it can answer it"
+    );
+
+    send_session_event(
+        &state,
+        requester,
+        AgentWireEvent::TaskApprovalSettled {
+            task_session_id: child,
+            occurrence_id: request.occurrence_id.clone(),
+        },
+    );
+    assert!(
+        connection
+            .answer_task_approval(requester, "occ-1", approve)
+            .is_err()
+    );
+    assert!(child_commands.try_recv().is_err());
+    let replayed = snapshot(&state, requester, &live);
+    assert!(
+        !replayed
+            .metadata
+            .iter()
+            .any(|event| matches!(event, AgentWireEvent::TaskApproval { .. }))
+    );
+}

@@ -580,12 +580,21 @@ fn a_failed_child_is_reported_as_a_failure_notification() {
     );
 }
 
-/// Decision 4 of `docs/agent-explore-design.md`: approvals are unreachable
-/// for a v1 child by construction, but if one ever surfaces the task fails
-/// at once rather than waiting forever on a human who is not watching that
-/// session.
+fn approval_request(occurrence: &str) -> crate::contract::ApprovalRequest {
+    crate::contract::ApprovalRequest {
+        call_id: ToolCallId(occurrence.to_string()),
+        occurrence_id: crate::contract::OccurrenceId(occurrence.to_string()),
+        reason: "read outside the workspace".to_string(),
+        kind: crate::contract::ApprovalKind::Standard,
+    }
+}
+
+/// A child's approval is shown through its requester
+/// (`docs/agent-subagent-design.md` decision 4); when the host cannot show
+/// it -- the scripted host here, like a requester nobody watches -- the
+/// task fails at once rather than waiting forever.
 #[test]
-fn an_approval_in_a_child_fails_it_immediately() {
+fn an_approval_nobody_can_answer_fails_the_child_immediately() {
     let (host, terminated) = ScriptedHost::new();
     let requester = Requester::new(Some(host.clone()));
 
@@ -593,12 +602,91 @@ fn an_approval_in_a_child_fails_it_immediately() {
     let (child_id, events) = host.child(0);
     events.send(user("look around")).unwrap();
     events
-        .send(Event::StateChanged(SessionState::WaitingForApproval))
+        .send(Event::ApprovalRequested(approval_request("a1")))
         .unwrap();
 
     let text = requester.await_notification();
     assert!(text.contains("approval"), "{text}");
     assert_eq!(*terminated.lock().unwrap(), vec![child_id]);
+}
+
+/// A host that can show a child's approval to a human: the child waits for
+/// the answer and carries on, and its resolution withdraws the request.
+struct ForwardingHost {
+    inner: Arc<ScriptedHost>,
+    forwarded: Mutex<Vec<(SessionId, String)>>,
+    settled: Mutex<Vec<(SessionId, String)>>,
+}
+
+impl ExplorationHost for ForwardingHost {
+    fn start(&self, prompt: String) -> Result<StartedExploration, String> {
+        self.inner.start(prompt)
+    }
+    fn send(&self, session_id: SessionId, prompt: String) -> Result<(), String> {
+        self.inner.send(session_id, prompt)
+    }
+    fn terminate(&self, session_id: SessionId) {
+        self.inner.terminate(session_id)
+    }
+    fn forward_approval(
+        &self,
+        child: SessionId,
+        request: crate::contract::ApprovalRequest,
+    ) -> bool {
+        self.forwarded
+            .lock()
+            .unwrap()
+            .push((child, request.occurrence_id.0));
+        true
+    }
+    fn settle_approval(&self, child: SessionId, occurrence: crate::contract::OccurrenceId) {
+        self.settled.lock().unwrap().push((child, occurrence.0));
+    }
+}
+
+#[test]
+fn a_childs_approval_is_shown_through_the_requester_and_the_child_carries_on() {
+    let (inner, terminated) = ScriptedHost::new();
+    let host = Arc::new(ForwardingHost {
+        inner: inner.clone(),
+        forwarded: Mutex::new(Vec::new()),
+        settled: Mutex::new(Vec::new()),
+    });
+    let requester = Requester::new(Some(host.clone()));
+
+    requester.launch("t1", "map the module", "look around");
+    let (child_id, events) = inner.child(0);
+    events.send(user("look around")).unwrap();
+    events
+        .send(Event::ApprovalRequested(approval_request("a1")))
+        .unwrap();
+    wait_until(
+        || !host.forwarded.lock().unwrap().is_empty(),
+        "the approval to be shown",
+    );
+    assert_eq!(
+        *host.forwarded.lock().unwrap(),
+        vec![(child_id, "a1".to_string())]
+    );
+    events
+        .send(Event::ApprovalResolved(crate::contract::ApprovalResolved {
+            call_id: ToolCallId("a1".to_string()),
+            occurrence_id: crate::contract::OccurrenceId("a1".to_string()),
+            decision: crate::contract::ApprovalDecisionPayload::Approve,
+        }))
+        .unwrap();
+    events.send(assistant("Found it outside.")).unwrap();
+    events
+        .send(Event::TurnEnded(TurnEndReason::Completed))
+        .unwrap();
+
+    let text = requester.await_notification();
+    assert!(text.contains("Found it outside."), "{text}");
+    assert_eq!(
+        *host.settled.lock().unwrap(),
+        vec![(child_id, "a1".to_string())]
+    );
+    assert!(terminated.lock().unwrap().is_empty());
 }
 
 /// `docs/agent-subagent-design.md` decision 6: a child that stops before
@@ -869,9 +957,14 @@ fn fold_emits_activity_changes_only() {
 
     let observed = Arc::new(Mutex::new(Vec::new()));
     let sink = observed.clone();
-    let outcome = fold_until_terminal(&events, &cancel, &mut |activity| {
-        sink.lock().unwrap().push(activity);
-    });
+    let outcome = fold_until_terminal(
+        &events,
+        &cancel,
+        &mut |activity| {
+            sink.lock().unwrap().push(activity);
+        },
+        &mut |_| false,
+    );
     std::assert_matches!(outcome.terminal, Terminal::Completed);
     assert_eq!(
         *observed.lock().unwrap(),
@@ -886,9 +979,14 @@ fn a_panicking_activity_observer_becomes_a_failed_outcome() {
     let (_cancel_tx, cancel) = crossbeam_channel::bounded::<()>(1);
     events_tx.send(user("prompt")).unwrap();
     events_tx.send(tool_request("fs_grep")).unwrap();
-    let outcome = watch_until_terminal(&events, &cancel, &mut |_| {
-        panic!("observer failed");
-    });
+    let outcome = watch_until_terminal(
+        &events,
+        &cancel,
+        &mut |_| {
+            panic!("observer failed");
+        },
+        &mut |_| false,
+    );
     assert!(!outcome.has_usable_report());
     let output = outcome.into_output(SessionId::new(), "watcher");
     assert!(output.failed());

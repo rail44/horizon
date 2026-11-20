@@ -169,6 +169,13 @@
         },
         "occurrence_id": {
           "type": "string"
+        },
+        "task_session_id": {
+          "description": "The `task` child this approval is for, when it is not the session's\nown: shown through the session, answered to the child\n(`docs/agent-subagent-design.md` decision 4).",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

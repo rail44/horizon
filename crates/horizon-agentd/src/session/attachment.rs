@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use horizon_agent::contract::{
-    Command, Event, SessionId, TaskProgress, TaskProgressState, ToolCallProgress,
+    ApprovalRequest, Command, Event, SessionId, TaskProgress, TaskProgressState, ToolCallProgress,
 };
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd, WorkspaceRootResolved};
 use horizon_agent::live::LiveState;
@@ -24,6 +24,11 @@ pub(super) struct SessionStream {
     subscriber: Option<Subscriber>,
     previews: BTreeMap<String, ToolCallProgress>,
     tasks: BTreeMap<Uuid, TaskProgress>,
+    /// Children's approvals shown through this session and not settled, by
+    /// occurrence id: asked again of a new attachment, and the record an
+    /// answer is checked against before it reaches the child
+    /// ([`SessionStream::task_approval`]).
+    task_approvals: BTreeMap<String, (SessionId, ApprovalRequest)>,
 }
 
 struct Subscriber {
@@ -51,6 +56,18 @@ impl SessionStream {
                     self.tasks.remove(&key);
                 }
             }
+            AgentWireEvent::TaskApproval {
+                task_session_id,
+                request,
+            } => {
+                self.task_approvals.insert(
+                    request.occurrence_id.0.clone(),
+                    (*task_session_id, request.clone()),
+                );
+            }
+            AgentWireEvent::TaskApprovalSettled { occurrence_id, .. } => {
+                self.task_approvals.remove(&occurrence_id.0);
+            }
             _ => {}
         }
         if let Some(subscriber) = &self.subscriber
@@ -63,6 +80,12 @@ impl SessionStream {
             subscriber.end.send_replace(Some(reason));
             self.subscriber = None;
         }
+    }
+
+    /// The child that raised the still-pending approval `occurrence`, if
+    /// this session showed one.
+    pub(crate) fn task_approval(&self, occurrence: &str) -> Option<SessionId> {
+        self.task_approvals.get(occurrence).map(|(child, _)| *child)
     }
 
     fn install(
@@ -180,6 +203,12 @@ pub(super) fn capture(
         let mut tasks: Vec<_> = stream.tasks.values().cloned().collect();
         tasks.sort_by_key(|task| (task.started_at_epoch_ms, task.task_session_id.as_uuid()));
         metadata.extend(tasks.into_iter().map(AgentWireEvent::TaskProgress));
+        metadata.extend(stream.task_approvals.values().cloned().map(
+            |(task_session_id, request)| AgentWireEvent::TaskApproval {
+                task_session_id,
+                request,
+            },
+        ));
         let (id, events, ended) = stream.install(LIVE_CAPACITY);
         (
             id,

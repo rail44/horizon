@@ -38,9 +38,17 @@ pub(super) enum Outgoing {
     SessionEvent(acp::SessionEventNotification),
     /// An approval the client must be asked for with
     /// `session/request_permission`.
-    AskPermission(ApprovalRequest),
+    AskPermission(Ask),
     /// The approval for this occurrence no longer waits on the client.
     ApprovalSettled(String),
+}
+
+/// An approval to ask the client for: this session's own, or one of its
+/// `task` children's (`task`), shown through it and answered to the child.
+#[derive(Clone, Debug)]
+pub(super) struct Ask {
+    pub(super) request: ApprovalRequest,
+    pub(super) task: Option<SessionId>,
 }
 
 impl Outgoing {
@@ -76,7 +84,7 @@ pub(super) struct Mapper {
     tool_ids: HashMap<String, String>,
     stop_reason: Option<v2::StopReason>,
     state: Option<StateKind>,
-    pending_approvals: Vec<ApprovalRequest>,
+    pending_approvals: Vec<Ask>,
     /// While set, approvals are only recorded; the bootstrap asks for the
     /// still-pending ones after it has streamed.
     replaying: bool,
@@ -194,7 +202,7 @@ impl Mapper {
 
     /// Ends the bootstrap: from here on approvals are asked as they arrive.
     /// Returns the approvals the replayed history left pending.
-    pub(super) fn finish_replay(&mut self) -> Vec<ApprovalRequest> {
+    pub(super) fn finish_replay(&mut self) -> Vec<Ask> {
         self.replaying = false;
         self.pending_approvals.clone()
     }
@@ -233,6 +241,16 @@ impl Mapper {
             AgentWireEvent::WorkspaceRootResolved(_) => {
                 self.absorb_metadata(event);
                 vec![self.session_info_update()]
+            }
+            AgentWireEvent::TaskApproval {
+                task_session_id,
+                request,
+            } => self.ask(Ask {
+                request: request.clone(),
+                task: Some(*task_session_id),
+            }),
+            AgentWireEvent::TaskApprovalSettled { occurrence_id, .. } => {
+                self.settle_approval(&occurrence_id.0)
             }
             AgentWireEvent::ReplayStarted
             | AgentWireEvent::ReplayComplete
@@ -371,14 +389,10 @@ impl Mapper {
                 out.extend(self.settle_approval(&occurrence));
                 out
             }
-            Event::ApprovalRequested(request) => {
-                self.pending_approvals.push(request.clone());
-                if self.replaying {
-                    Vec::new()
-                } else {
-                    vec![Outgoing::AskPermission(request.clone())]
-                }
-            }
+            Event::ApprovalRequested(request) => self.ask(Ask {
+                request: request.clone(),
+                task: None,
+            }),
             Event::ApprovalResolved(resolved) => self.settle_approval(&resolved.occurrence_id.0),
             Event::TurnEnded(reason) => {
                 self.close_stream();
@@ -454,10 +468,21 @@ impl Mapper {
         }
     }
 
+    /// Records `ask` as pending, and asks for it unless the bootstrap is
+    /// still replaying (then [`Self::finish_replay`] asks).
+    fn ask(&mut self, ask: Ask) -> Vec<Outgoing> {
+        self.pending_approvals.push(ask.clone());
+        if self.replaying {
+            Vec::new()
+        } else {
+            vec![Outgoing::AskPermission(ask)]
+        }
+    }
+
     fn settle_approval(&mut self, occurrence: &str) -> Vec<Outgoing> {
         let before = self.pending_approvals.len();
         self.pending_approvals
-            .retain(|request| request.occurrence_id.0 != occurrence);
+            .retain(|ask| ask.request.occurrence_id.0 != occurrence);
         if self.pending_approvals.len() == before {
             return Vec::new();
         }

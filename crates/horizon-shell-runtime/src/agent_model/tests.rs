@@ -73,6 +73,7 @@ fn permission(call_id: &str, occurrence: &str) -> Permission {
             call_id: call_id.into(),
             occurrence_id: occurrence.into(),
             kind: ApprovalKind::Standard,
+            task_session_id: None,
         },
     )
     .unwrap();

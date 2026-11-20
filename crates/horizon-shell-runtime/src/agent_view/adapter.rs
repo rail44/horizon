@@ -104,11 +104,7 @@ pub fn adapt(
                 .unwrap_or_default(),
             status: status(state, unreachable),
             units,
-            tasks: model
-                .tasks
-                .iter()
-                .map(|task| task_line(task, now_ms))
-                .collect(),
+            tasks: task_lines(model, &pending, now_ms),
             composer,
         },
         approvals,
@@ -140,6 +136,58 @@ fn status(state: Option<SessionState>, unreachable: bool) -> Status {
     }
 }
 
+/// The background tasks' lines, each with what it asks the human to
+/// approve. A child's approval rides its task's line; one whose task has no
+/// line any more gets a line of its own.
+fn task_lines(model: &AgentModel, pending: &[ToolCallIdentity], now_ms: u64) -> Vec<Task> {
+    let task_approvals: Vec<(&str, Approval)> = model
+        .frame
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            AgentFrameItem::Permission(permission) if pending.contains(&permission.identity) => {
+                let task = permission.task_session_id.as_deref()?;
+                Some((
+                    task,
+                    Approval {
+                        id: approval_id(&permission.identity),
+                        reason: permission.reason.clone(),
+                    },
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut lines: Vec<Task> = model
+        .tasks
+        .iter()
+        .map(|task| {
+            let id = task.task_session_id.as_uuid().to_string();
+            let mut line = task_line(task, now_ms);
+            line.approval = task_approvals
+                .iter()
+                .find(|(task, _)| *task == id)
+                .map(|(_, approval)| approval.clone());
+            line
+        })
+        .collect();
+    for (task, approval) in &task_approvals {
+        let shown = model
+            .tasks
+            .iter()
+            .any(|line| line.task_session_id.as_uuid().to_string() == *task);
+        if !shown {
+            lines.push(Task {
+                description: "task".to_string(),
+                elapsed: String::new(),
+                activity: "waiting for approval".to_string(),
+                approval: Some(approval.clone()),
+            });
+        }
+    }
+    lines
+}
+
 fn task_line(task: &TaskProgressNotification, now_ms: u64) -> Task {
     Task {
         description: task.description.clone(),
@@ -150,6 +198,7 @@ fn task_line(task: &TaskProgressNotification, now_ms: u64) -> Task {
             .activity
             .clone()
             .unwrap_or_else(|| "running".to_string()),
+        approval: None,
     }
 }
 
@@ -557,8 +606,8 @@ mod tests {
     use serde_json::json;
 
     use super::super::turns::test_support::{
-        approval_requested, assistant_delta, edit_result, reasoning_delta, tool_finished,
-        tool_requested, user_message,
+        approval_requested, assistant_delta, edit_result, reasoning_delta, task_approval_requested,
+        tool_finished, tool_requested, user_message,
     };
     use super::*;
     use crate::agent_model::{
@@ -1134,6 +1183,46 @@ mod tests {
         assert_eq!(settled.len(), 1);
     }
 
+    /// A `task` child's approval (`docs/agent-subagent-design.md` decision
+    /// 4) rides its task's line and the composer, and stays answerable after
+    /// the requester's own turn has ended: it waits on the child.
+    #[test]
+    fn a_task_childs_approval_rides_its_task_line_across_the_requesters_turns() {
+        let child = horizon_wire::SessionId::new();
+        let mut session = model(
+            SessionPhase::Idle,
+            vec![
+                user_message("look into it"),
+                turn_end(TurnEndReason::Completed),
+                task_approval_requested(&child.as_uuid().to_string(), "occ-child"),
+            ],
+        );
+        session.tasks.push(TaskProgressNotification {
+            session_id: horizon_wire::SessionId::new(),
+            task_session_id: child,
+            description: "map the module".to_string(),
+            state: horizon_acp::TaskProgressState::Running,
+            activity: Some("waiting for approval".to_string()),
+            started_at_epoch_ms: 0,
+        });
+        let adapted = adapt(&session, false, 0);
+        let task = &adapted.transcript.tasks[0];
+        let approval = task.approval.as_ref().expect("the task line carries it");
+        assert_eq!(approval.reason, "reads outside the workspace");
+        assert_eq!(
+            adapted.transcript.composer,
+            ComposerMode::Approval {
+                id: approval.id.clone()
+            }
+        );
+        assert_eq!(adapted.approvals[&approval.id].occurrence_id, "occ-child");
+
+        // A line of its own when its task has none.
+        session.tasks.clear();
+        let adapted = adapt(&session, false, 0);
+        assert!(adapted.transcript.tasks[0].approval.is_some());
+    }
+
     #[test]
     fn the_model_tasks_and_reachability_come_from_the_session() {
         let mut session = model(SessionPhase::Idle, vec![]);
@@ -1157,6 +1246,7 @@ mod tests {
                 description: "cargo build".to_string(),
                 elapsed: "1m 03s".to_string(),
                 activity: "compiling".to_string(),
+                approval: None,
             }]
         );
         assert_eq!(adapt(&AgentModel::default(), false, 0).transcript.model, "");

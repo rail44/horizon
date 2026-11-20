@@ -297,8 +297,26 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
             )
             .each(
                 move || state.tasks.get(),
-                chrome::task_line,
-                |task| el("div").class(styles::TASK).text(&chrome::task_line(task)),
+                // A line whose approval comes or goes is built again.
+                |task| {
+                    let approval = task.approval.as_ref().map(|approval| approval.id.as_str());
+                    format!(
+                        "{}\u{0}{}",
+                        chrome::task_line(task),
+                        approval.unwrap_or_default()
+                    )
+                },
+                move |task| {
+                    let line = el("div")
+                        .class(styles::TASK)
+                        .child(el("div").text(&chrome::task_line(task)));
+                    // A child's approval, shown here and answered to the
+                    // child (`docs/agent-subagent-design.md` decision 4).
+                    if let Some(approval) = &task.approval {
+                        line.child(approval_block(approval, state));
+                    }
+                    line
+                },
             ),
     );
 

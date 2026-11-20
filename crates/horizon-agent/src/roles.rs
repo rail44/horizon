@@ -183,10 +183,10 @@ pub const EXPLORE_ROLE_ID: &str = "explore";
 /// keeps it from writing. It runs with no turn budget
 /// ([`RoleDefinition::uncapped_turns`]). The allowlist does not
 /// keep approvals out of the session -- a read whose path escapes the
-/// workspace root is still routed to the approval gate -- so the session is
-/// additionally marked unattended (`ToolSessionState::is_unattended`),
-/// which turns a prompt no human is watching for into a refused tool
-/// result the session can carry on from. `task`
+/// workspace root is still routed to the approval gate -- and such a
+/// prompt is shown to the human through the requesting session
+/// (`ExplorationHost::forward_approval`,
+/// `docs/agent-subagent-design.md` decision 4). `task`
 /// itself is absent, which is what makes recursion structurally impossible
 /// rather than merely discouraged -- and, since 2026-07-27, is also what
 /// keeps the prompt's delegation-routing block out of an exploration's own
@@ -220,7 +220,7 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     include_repository_instructions: true,
     skill_ids: &[],
     standing: false,
-    unattended: true,
+    unattended: false,
 };
 
 const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: another agent asked \
@@ -243,7 +243,7 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
 /// field of its own (`docs/agent-explore-design.md` decision 8: the role id
 /// alone identifies them, so nothing additive had to be added to the
 /// session wire). It
-/// decides four things: no `task` host of its own, `unattended` tool state,
+/// decides three things: no `task` host of its own,
 /// absence from the client-visible session list, and termination rather
 /// than resumption at daemon startup.
 pub fn is_exploration(role_id: &RoleId) -> bool {
@@ -431,7 +431,7 @@ mod tests {
     /// Every advertised exploration tool but the shell must be
     /// auto-allowed: an in-workspace call then runs with no approval round
     /// trip at all (decision 4). Out-of-workspace reads are the exception the
-    /// unattended refusal covers -- see [`EXPLORE_ROLE`]'s doc comment. The
+    /// prompt the requester shows covers -- see [`EXPLORE_ROLE`]'s doc comment. The
     /// shell is kept from writing by its sandbox instead
     /// ([`RoleDefinition::read_only`]).
     #[test]

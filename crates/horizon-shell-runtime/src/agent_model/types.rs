@@ -97,6 +97,9 @@ pub struct Permission {
     /// The request's `title`, with its `description` appended when present.
     pub reason: String,
     pub decision: Option<PermissionDecision>,
+    /// The `task` child asking, when the approval is not the session's own
+    /// (`docs/agent-subagent-design.md` decision 4).
+    pub task_session_id: Option<String>,
 }
 
 /// `_horizon/tool_call_progress` `Progress`, removed by its `Closed`.

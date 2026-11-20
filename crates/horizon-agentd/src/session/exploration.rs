@@ -1,10 +1,13 @@
 //! `horizon-agent`'s `task` seam, implemented against this
 //! daemon's own session hosting.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use horizon_agent::contract::{Command, ProviderId, SessionId, TaskProgress};
+use horizon_agent::contract::{
+    ApprovalRequest, Command, OccurrenceId, ProviderId, SessionId, TaskProgress,
+};
 use horizon_agent::hosting::AgentWireEvent;
 
 use super::events::send_session_event;
@@ -35,6 +38,12 @@ pub(super) struct AgentdExplorationHost {
     /// a worktree has its exploration read that worktree and not the
     /// daemon's cwd.
     pub(super) workspace_root: Option<PathBuf>,
+    /// Whether the requesting session is one nobody watches: its children's
+    /// approvals then have nobody to be shown to.
+    pub(super) requester_unattended: bool,
+    /// Every child approval shown through the requester and not yet
+    /// settled, by child -- withdrawn when the child ends.
+    pub(super) forwarded: Mutex<HashMap<SessionId, Vec<OccurrenceId>>>,
 }
 
 impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
@@ -82,7 +91,45 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
         }
     }
 
+    fn forward_approval(&self, child: SessionId, request: ApprovalRequest) -> bool {
+        if self.requester_unattended {
+            return false;
+        }
+        lock_unpoisoned(&self.forwarded)
+            .entry(child)
+            .or_default()
+            .push(request.occurrence_id.clone());
+        send_session_event(
+            &self.state,
+            self.requester_id,
+            AgentWireEvent::TaskApproval {
+                task_session_id: child,
+                request,
+            },
+        );
+        true
+    }
+
+    fn settle_approval(&self, child: SessionId, occurrence: OccurrenceId) {
+        let known = lock_unpoisoned(&self.forwarded)
+            .get_mut(&child)
+            .and_then(|pending| {
+                let index = pending.iter().position(|held| *held == occurrence)?;
+                Some(pending.remove(index))
+            })
+            .is_some();
+        if known {
+            self.settle(child, occurrence);
+        }
+    }
+
     fn terminate(&self, session_id: SessionId) {
+        let pending = lock_unpoisoned(&self.forwarded)
+            .remove(&session_id)
+            .unwrap_or_default();
+        for occurrence in pending {
+            self.settle(session_id, occurrence);
+        }
         self.state.unsubscribe_from_session(session_id);
         self.state.send_command(session_id, Command::Shutdown);
     }
@@ -114,6 +161,19 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
     }
 }
 
+impl AgentdExplorationHost {
+    fn settle(&self, child: SessionId, occurrence_id: OccurrenceId) {
+        send_session_event(
+            &self.state,
+            self.requester_id,
+            AgentWireEvent::TaskApprovalSettled {
+                task_session_id: child,
+                occurrence_id,
+            },
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,16 +190,17 @@ mod tests {
     use std::time::Duration;
 
     /// A real explore-role session whose read leaves the workspace root.
-    /// Nobody is watching it, so the call must resolve as an error result
-    /// the model can read rather than an approval prompt: the turn carries
-    /// on and the session still delivers a report.
+    /// The read asks for an approval, which the child's requester shows to
+    /// its human (`docs/agent-subagent-design.md` decision 4); denied, the
+    /// read resolves as an error result the model can read, the turn
+    /// carries on and the session still delivers a report.
     ///
     /// End to end on the deterministic fallback provider (no API key, so no
     /// network): the `fs_read path:` line drives a genuine `fs_read`
     /// through the tool pipeline, and the rig turn loop folds whatever
     /// result comes back.
     #[test]
-    fn an_unattended_out_of_root_read_is_refused_and_the_session_still_reports() {
+    fn a_childs_out_of_root_read_asks_and_once_denied_the_session_still_reports() {
         let workspace = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "horizon-unattended-explore-{}",
             uuid::Uuid::new_v4()
@@ -159,6 +220,8 @@ mod tests {
             requester_id: SessionId::new(),
             provider_id: lock_unpoisoned(&state.providers).default_provider_id(),
             workspace_root: Some(workspace.clone()),
+            requester_unattended: false,
+            forwarded: Default::default(),
         };
         let started = horizon_agent::tools::ExplorationHost::start(
             &host,
@@ -173,6 +236,16 @@ mod tests {
                 continue;
             };
             let done = matches!(event, Event::TurnEnded(_));
+            // What the human answering through the requester sends back.
+            if let Event::ApprovalRequested(request) = &event {
+                assert!(state.send_command(
+                    started.session_id,
+                    Command::DenyToolCall {
+                        identity: request.identity(),
+                        reason: None,
+                    },
+                ));
+            }
             collected.push(event);
             if done {
                 break;
@@ -186,10 +259,10 @@ mod tests {
             "the session must have attempted the read: {collected:?}"
         );
         assert!(
-            !collected
+            collected
                 .iter()
                 .any(|event| matches!(event, Event::ApprovalRequested(_))),
-            "nobody could answer a prompt here: {collected:?}"
+            "the read must ask rather than be refused unseen: {collected:?}"
         );
         let refusal = collected
             .iter()
@@ -198,15 +271,7 @@ mod tests {
                 _ => None,
             })
             .expect("the read resolves with a result of its own");
-        assert!(refusal.is_error());
-        assert!(
-            refusal.output["message"]
-                .as_str()
-                .unwrap()
-                .contains(&workspace.display().to_string()),
-            "the refusal must name the root the session may read: {:?}",
-            refusal.output
-        );
+        assert!(refusal.is_error() || refusal.is_denied(), "{refusal:?}");
         assert!(
             collected
                 .iter()
@@ -296,6 +361,8 @@ mod tests {
                 requester_id,
                 provider_id: ProviderId("builtin.agent.mock".to_string()),
                 workspace_root: None,
+                requester_unattended: false,
+                forwarded: Default::default(),
             });
         let tool_state = horizon_agent::tools::ToolSessionBuilder::for_current_dir(
             AgentToolsConfig::default(),
@@ -488,6 +555,8 @@ mod tests {
             requester_id: SessionId::new(),
             provider_id: ProviderId("builtin.agent.mock".into()),
             workspace_root: None,
+            requester_unattended: false,
+            forwarded: Default::default(),
         };
         assert!(host.wait_stopped(parent, Duration::from_secs(2)));
         assert!(child_host.lock_was_free.load(Ordering::SeqCst));

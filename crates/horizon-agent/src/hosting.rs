@@ -65,6 +65,21 @@ pub enum AgentWireEvent {
     SessionSelection(ModelSelection),
     /// Close the preview identified by its streaming key.
     ToolCallProgressClosed(String),
+    /// One of this session's `task` children asks for an approval, shown to
+    /// the human through this session (`docs/agent-subagent-design.md`
+    /// decision 4). Ephemeral like [`Self::TaskProgress`]: the child's own
+    /// event log records the request; the daemon retains the ones still
+    /// pending and asks for them again during attachment bootstrap.
+    TaskApproval {
+        task_session_id: crate::contract::SessionId,
+        request: crate::contract::ApprovalRequest,
+    },
+    /// A [`Self::TaskApproval`] no longer needs an answer: the child
+    /// resolved it, or ended.
+    TaskApprovalSettled {
+        task_session_id: crate::contract::SessionId,
+        occurrence_id: crate::contract::OccurrenceId,
+    },
 }
 
 /// Why an attachment ended. Reattach to obtain a fresh, complete snapshot.

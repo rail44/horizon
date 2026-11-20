@@ -547,6 +547,7 @@ impl Permission {
             },
             reason,
             decision: None,
+            task_session_id: meta.task_session_id,
         })
     }
 }

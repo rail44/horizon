@@ -166,6 +166,24 @@ pub trait ExplorationHost: Send + Sync {
     /// follow-up. A no-op for a session that has already ended on its own.
     fn terminate(&self, session_id: SessionId);
 
+    /// Shows `request`, raised by `child`, to the human answering for the
+    /// requesting session (`docs/agent-subagent-design.md` decision 4); the
+    /// answer goes straight to the child. `false` when nobody can answer --
+    /// the default, and a requester that is itself unattended -- and the
+    /// child then fails as a task that asked for an approval it can never
+    /// receive.
+    fn forward_approval(
+        &self,
+        _child: SessionId,
+        _request: crate::contract::ApprovalRequest,
+    ) -> bool {
+        false
+    }
+
+    /// Withdraws a request [`Self::forward_approval`] showed: `child`
+    /// resolved it.
+    fn settle_approval(&self, _child: SessionId, _occurrence: crate::contract::OccurrenceId) {}
+
     /// Forwards one live progress observation about `child` to whoever is
     /// watching the requesting session (its attached client). Called by the
     /// child's watcher thread as the child acts; the daemon implementation
@@ -256,11 +274,22 @@ pub(crate) fn start(
         // for a follow-up, and the next fold starts at that follow-up's
         // user message. The child is stopped only when its session ends.
         loop {
-            let outcome = watch_until_terminal(&events, child_work.cancelled(), &mut |activity| {
-                if !child_work.is_cancelled() {
-                    emit(TaskProgressState::Running, activity)
-                }
-            });
+            let outcome = watch_until_terminal(
+                &events,
+                child_work.cancelled(),
+                &mut |activity| {
+                    if !child_work.is_cancelled() {
+                        emit(TaskProgressState::Running, activity)
+                    }
+                },
+                &mut |approval| match approval {
+                    ChildApproval::Requested(request) => host.forward_approval(child_id, *request),
+                    ChildApproval::Resolved(occurrence) => {
+                        host.settle_approval(child_id, occurrence);
+                        true
+                    }
+                },
+            );
             let open = !outcome.terminal.ends_session();
             if !open && !child_work.finish() {
                 return;
@@ -513,13 +542,9 @@ pub(super) enum Terminal {
     /// `TurnEnded` at all -- the turn ended some way this watcher never saw
     /// named.
     TurnEnded(Option<TurnEndReason>),
-    /// The child parked on an approval. A task session is marked unattended
-    /// (`ToolSessionState::is_unattended`), so a call that would need a
-    /// human resolves as a refused tool result and never becomes a prompt
-    /// on the child's event stream -- this arm is the safety net for a path
-    /// that bypasses that, and it fails the task immediately rather than
-    /// waiting forever for a human who is not watching this session
-    /// (`docs/agent-explore-design.md` decision 4).
+    /// The child asked for an approval nobody can answer: its requester
+    /// could not show it to a human (`ExplorationHost::forward_approval`).
+    /// The task fails at once rather than waiting forever.
     Approval,
     /// The session terminated without ending its turn.
     Terminated,
@@ -618,16 +643,24 @@ impl Outcome {
     }
 }
 
+/// An approval event in a child's stream, for the watcher to pass on.
+pub(super) enum ChildApproval {
+    Requested(Box<crate::contract::ApprovalRequest>),
+    Resolved(crate::contract::OccurrenceId),
+}
+
 /// Turns watcher failures into a terminal outcome so task callers can still
 /// retire their child and publish its result. Termination
-/// and notification policy remain with the caller.
+/// and notification policy remain with the caller. `on_approval` passes a
+/// child's approval on; `false` for a request means nobody can answer it.
 pub(super) fn watch_until_terminal(
     events: &Receiver<Event>,
     cancel: &Receiver<()>,
     on_activity: &mut dyn FnMut(Option<String>),
+    on_approval: &mut dyn FnMut(ChildApproval) -> bool,
 ) -> Outcome {
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        fold_until_terminal(events, cancel, on_activity)
+        fold_until_terminal(events, cancel, on_activity, on_approval)
     }))
     .unwrap_or_else(|payload| Outcome {
         terminal: Terminal::Panicked(panic_message(&*payload)),
@@ -648,6 +681,7 @@ fn fold_until_terminal(
     events: &Receiver<Event>,
     cancel: &Receiver<()>,
     on_activity: &mut dyn FnMut(Option<String>),
+    on_approval: &mut dyn FnMut(ChildApproval) -> bool,
 ) -> Outcome {
     let mut report = None;
     let mut error = None;
@@ -678,9 +712,17 @@ fn fold_until_terminal(
                         }
                         _ => {}
                     },
-                    Event::ApprovalRequested(_)
-                    | Event::StateChanged(SessionState::WaitingForApproval) => {
-                        break Terminal::Approval;
+                    // A child's approval is shown to the human through its
+                    // requester and the child waits for the answer; only
+                    // when nobody can answer does the task fail.
+                    Event::ApprovalRequested(request) => {
+                        activity = Some("waiting for approval".to_string());
+                        if !on_approval(ChildApproval::Requested(Box::new(request))) {
+                            break Terminal::Approval;
+                        }
+                    }
+                    Event::ApprovalResolved(resolved) => {
+                        on_approval(ChildApproval::Resolved(resolved.occurrence_id));
                     }
                     Event::TurnEnded(reason) if turn_started => {
                         break match reason {
@@ -756,10 +798,7 @@ fn fold_until_terminal(
                     // terminal event for this child watcher.
                     | Event::HistoryCleared(_)
                     // Operator-intervention audit events: audit-only, not
-                    // terminal (and unreachable in a v1 task child -- no
-                    // approval it raises ever reaches an operator; see the
-                    // note above).
-                    | Event::ApprovalResolved(_)
+                    // terminal.
                     | Event::ContinueTurnRequested(_)
                     | Event::ContinuationVerdict(_)
                     // Provider rate-limit pacing is not terminal.

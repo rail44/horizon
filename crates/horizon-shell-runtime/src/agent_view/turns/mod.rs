@@ -132,6 +132,20 @@ pub mod test_support {
             },
             reason: "writes a file".to_string(),
             decision: None,
+            task_session_id: None,
+        })
+    }
+
+    /// A pending approval one of the session's `task` children asks for.
+    pub fn task_approval_requested(task_session_id: &str, occurrence: &str) -> AgentFrameItem {
+        AgentFrameItem::Permission(Permission {
+            identity: ToolCallIdentity {
+                call_id: occurrence.to_string(),
+                occurrence_id: occurrence.to_string(),
+            },
+            reason: "reads outside the workspace".to_string(),
+            decision: None,
+            task_session_id: Some(task_session_id.to_string()),
         })
     }
 

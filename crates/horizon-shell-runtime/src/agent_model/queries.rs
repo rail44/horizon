@@ -129,7 +129,9 @@ pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
 }
 
 /// Permission requests still awaiting the shell's answer, oldest first,
-/// excluding any whose turn has since ended.
+/// excluding the session's own whose turn has since ended. A `task`
+/// child's approval waits on the child, not on this session's turn, so it
+/// stays answerable across them until it is settled.
 pub fn actionable_pending_approval_identities_in(
     items: &[AgentFrameItem],
 ) -> Vec<ToolCallIdentity> {
@@ -137,15 +139,14 @@ pub fn actionable_pending_approval_identities_in(
         .iter()
         .rposition(|item| matches!(item, AgentFrameItem::TurnEnded { .. }))
         .map_or(0, |index| index + 1);
-    pending_approval_identities_in(&items[start..])
-}
-
-/// Every unanswered permission request in `items`, oldest first.
-pub fn pending_approval_identities_in(items: &[AgentFrameItem]) -> Vec<ToolCallIdentity> {
     items
         .iter()
-        .filter_map(|item| match item {
-            AgentFrameItem::Permission(permission) if permission.decision.is_none() => {
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            AgentFrameItem::Permission(permission)
+                if permission.decision.is_none()
+                    && (index >= start || permission.task_session_id.is_some()) =>
+            {
                 Some(permission.identity.clone())
             }
             _ => None,

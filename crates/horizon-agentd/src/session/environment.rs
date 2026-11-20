@@ -149,6 +149,12 @@ impl SessionEnvironment<'_> {
                     requester_id: session_id,
                     provider_id: provider_id.clone(),
                     workspace_root: workspace_root.clone(),
+                    // A child's approval is shown through its requester, so
+                    // a requester nobody watches has nobody to show it to.
+                    requester_unattended: role_id
+                        .and_then(horizon_agent::roles::resolve)
+                        .is_some_and(|role| role.unattended),
+                    forwarded: Default::default(),
                 }))
             };
 

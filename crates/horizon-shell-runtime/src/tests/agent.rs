@@ -387,6 +387,7 @@ impl FakeAgentd {
                 call_id: identity.call_id.clone(),
                 occurrence_id: identity.occurrence_id.clone(),
                 kind: horizon_acp::ApprovalKind::Standard,
+                task_session_id: None,
             },
         )
         .unwrap();

@@ -148,5 +148,7 @@ reached.
    parameter of decision 1 arrives with the write mode, when there is a
    second value for it to take.
 2. Follow-up (decision 5).
-3. Approvals through the requester (decision 4).
+3. Approvals through the requester (decision 4). A child starting with
+   the requester's grants moves to stage 4: a read child drops every grant
+   that writes, so it is the write child the grants matter to.
 4. Write mode in its own worktree (decision 3).

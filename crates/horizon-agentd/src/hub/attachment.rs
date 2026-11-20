@@ -13,7 +13,7 @@ use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd};
 use tokio::sync::{mpsc, oneshot};
 
-use super::mapping::{self, Mapper, Outgoing, horizon_meta};
+use super::mapping::{self, Ask, Mapper, Outgoing, horizon_meta};
 use super::{Shared, call_error};
 use crate::session::{AttachmentLease, Bootstrap};
 
@@ -86,10 +86,10 @@ impl Sink {
 struct Asks(HashMap<String, oneshot::Sender<()>>);
 
 impl Asks {
-    fn ask(&mut self, sink: &Sink, request: ApprovalRequest) {
+    fn ask(&mut self, sink: &Sink, ask: Ask) {
         let (cancel, cancelled) = oneshot::channel();
-        self.0.insert(request.occurrence_id.0.clone(), cancel);
-        tokio::spawn(ask_permission(sink.clone(), request, cancelled));
+        self.0.insert(ask.request.occurrence_id.0.clone(), cancel);
+        tokio::spawn(ask_permission(sink.clone(), ask, cancelled));
     }
 
     fn settle(&mut self, occurrence: &str) {
@@ -102,6 +102,7 @@ impl Asks {
 fn permission_request(
     acp_id: v2::SessionId,
     request: &ApprovalRequest,
+    task: Option<SessionId>,
 ) -> v2::RequestPermissionRequest {
     let options = vec![
         v2::PermissionOption::new(
@@ -126,19 +127,21 @@ fn permission_request(
             call_id: request.call_id.0.clone(),
             occurrence_id: request.occurrence_id.0.clone(),
             kind: mapping::approval_kind(&request.kind),
+            task_session_id: task.map(|task| task.as_uuid().to_string()),
         }))
 }
 
 /// Asks the client and turns its choice into the command a client would
 /// have sent. Never returns an error: a failure here is this approval's
 /// alone.
-async fn ask_permission(sink: Sink, request: ApprovalRequest, cancelled: oneshot::Receiver<()>) {
+async fn ask_permission(sink: Sink, ask: Ask, cancelled: oneshot::Receiver<()>) {
     if !sink.is_current() {
         return;
     }
+    let Ask { request, task } = ask;
     let sent = sink
         .cx
-        .send_request(permission_request(sink.acp_id.clone(), &request));
+        .send_request(permission_request(sink.acp_id.clone(), &request, task));
     let request_id = sent.id().clone();
     let response = tokio::select! {
         response = sent.block_task() => response,
@@ -180,11 +183,21 @@ async fn ask_permission(sink: Sink, request: ApprovalRequest, cancelled: oneshot
         }
         _ => return,
     };
-    if let Err(error) = sink.shared.command(sink.session_id, command) {
-        eprintln!(
-            "horizon-agentd: dropping a permission answer: {}",
-            error.message
-        );
+    // A child's approval is answered to the child: it is attached to no
+    // connection of its own.
+    let sent = match task {
+        Some(_) => sink.shared.connection.answer_task_approval(
+            sink.session_id,
+            &request.occurrence_id.0,
+            command,
+        ),
+        None => sink
+            .shared
+            .command(sink.session_id, command)
+            .map_err(|error| error.message),
+    };
+    if let Err(message) = sent {
+        eprintln!("horizon-agentd: dropping a permission answer: {message}");
     }
 }
 

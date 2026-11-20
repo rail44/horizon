@@ -172,6 +172,8 @@ pub struct Task {
     pub description: String,
     pub elapsed: String,
     pub activity: String,
+    /// What the task asks the human to approve, shown under its line.
+    pub approval: Option<Approval>,
 }
 
 /// What Enter and Escape in an empty composer mean.

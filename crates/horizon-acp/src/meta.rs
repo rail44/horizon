@@ -120,6 +120,11 @@ pub struct ApprovalMeta {
     pub call_id: String,
     pub occurrence_id: String,
     pub kind: ApprovalKind,
+    /// The `task` child this approval is for, when it is not the session's
+    /// own: shown through the session, answered to the child
+    /// (`docs/agent-subagent-design.md` decision 4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_session_id: Option<String>,
 }
 
 /// Mirrors `contract::ApprovalKind` (crates/horizon-agent/src/contract.rs).
@@ -325,11 +330,12 @@ mod tests {
                 prior_result: prior_result(),
             },
         ];
-        for kind in kinds {
+        for (index, kind) in kinds.into_iter().enumerate() {
             round_trip(&ApprovalMeta {
                 call_id: "call-1".into(),
                 occurrence_id: "occ-1".into(),
                 kind,
+                task_session_id: (index % 2 == 1).then(|| "task-1".into()),
             });
         }
     }

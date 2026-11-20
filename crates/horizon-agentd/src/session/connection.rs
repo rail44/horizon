@@ -40,6 +40,27 @@ impl Connection {
         Ok(())
     }
 
+    /// Sends a client's answer to an approval `requester` showed for one of
+    /// its `task` children (`docs/agent-subagent-design.md` decision 4) to
+    /// that child -- only while the approval is still pending there, which
+    /// is also what ties the answer to a child of this requester.
+    pub(crate) fn answer_task_approval(
+        &self,
+        requester: SessionId,
+        occurrence: &str,
+        command: horizon_agent::contract::Command,
+    ) -> Result<(), String> {
+        let child = lock_unpoisoned(&self.state.agent_subscribers)
+            .get(&requester)
+            .and_then(|stream| stream.task_approval(occurrence))
+            .ok_or("the task's approval is no longer pending")?;
+        if self.state.send_command(child, command) {
+            Ok(())
+        } else {
+            Err("the task session has ended".to_string())
+        }
+    }
+
     /// Every configured provider with its default model and availability —
     /// the model picker's data. Reads the agent config (the same table the
     /// registry was built from), so it reflects the loaded `[[providers]]`
