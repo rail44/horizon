@@ -112,7 +112,7 @@ impl AgentProvider for Provider {
     }
 }
 
-/// Applies a role's `allowed_tool_ids`/`model`/`iteration_cap` overrides
+/// Applies a role's `allowed_tool_ids`/`model` overrides, its turn budget
 /// and its `standing` flag on top of the provider's own (process-wide) [`RigAgentConfig`], producing the config
 /// this one session actually runs with. `role: None` (the role-less case)
 /// returns `base` cloned unchanged -- byte-identical behavior to before
@@ -131,8 +131,8 @@ fn role_adjusted_config(
     if let Some(model) = role.model {
         config.model = model.to_string();
     }
-    if let Some(iteration_cap) = role.iteration_cap {
-        config.iteration_cap = iteration_cap;
+    if role.uncapped_turns {
+        config.iteration_cap = None;
     }
     config.standing = role.standing;
     config

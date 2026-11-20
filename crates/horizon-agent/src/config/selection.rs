@@ -77,14 +77,18 @@ mod tests {
         table.entries.clear();
         let mut config = RigAgentConfig {
             model: "old-model".into(),
-            iteration_cap: 7,
+            iteration_cap: Some(7),
             ..Default::default()
         };
         selection.apply(&mut config);
         assert_eq!(config.model, "chosen");
         assert_eq!(config.kind, ProviderKind::Anthropic);
         assert_eq!(config.api_key_env, "HORIZON_SELECTION_TEST_KEY");
-        assert_eq!(config.iteration_cap, 7, "role policy survives the switch");
+        assert_eq!(
+            config.iteration_cap,
+            Some(7),
+            "role policy survives the switch"
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub(super) struct Completion {
     pub(super) session_id: SessionId,
     pub(super) description: String,
     /// The child's full result value -- the same shape `task_output`
-    /// returns (`report`/`capped`/`is_error`/`message`).
+    /// returns (`report`/`is_error`/`message`).
     pub(super) output: TaskReport,
 }
 

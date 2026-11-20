@@ -152,10 +152,9 @@ impl SessionLoopState {
         (Prompt::Current, Some(text))
     }
 
-    /// Records each child that produced no usable report as an error item in
-    /// the requester's pane. A `task` child is never attached to a pane, so
-    /// the notification the model reads is otherwise the only trace of its
-    /// failure.
+    /// Records each child that did not finish as an error item in the
+    /// requester's pane. A `task` child is never attached to a pane, so the
+    /// notification the model reads is otherwise the only trace of it.
     pub(crate) fn report_task_failures(&self, failures: Vec<String>) {
         for message in failures {
             let _ = self.events_tx.send(Event::Error(Error { message }).into());
@@ -467,18 +466,8 @@ impl SessionLoopState {
     /// `Command::Cancel` uses, since those never get a second chance to
     /// land.
     ///
-    /// For an iteration-cap halt on a role that opts in
-    /// (`RoleDefinition::summarize_on_cap`, e.g. `EXPLORE_ROLE` -- see
-    /// `docs/agent-explore-design.md`'s 2026-07-27 addendum and
-    /// `docs/research/agent-context-reduction-prior-art-2026-07-26.md` §4's
-    /// OpenCode/Hermes precedent), [`Self::run_cap_summary_turn`] first folds
-    /// `arrived_result` into `rig_history` and runs one forced, tools-disabled
-    /// completion asking the model to summarize instead of stopping cold. If
-    /// that succeeds, the turn ends right there with the summary already
-    /// committed as the session's final message for this turn. Every other
-    /// case (doom loop, a role that doesn't opt in, or the wrap-up completion
-    /// itself failing) retains `arrived_result` for Continue. History already
-    /// owns the real result; adding it again on Continue is idempotent.
+    /// `arrived_result` is retained for Continue. History already owns the
+    /// real result; adding it again on Continue is idempotent.
     /// `Execution::halt` retains the action needed to resume. A new owner
     /// interaction consumes that action without changing the recorded result.
     ///
@@ -497,64 +486,14 @@ impl SessionLoopState {
     ) {
         self.cancel_outstanding_tool_calls().await;
 
-        let summarized = halt == GuardHalt::IterationCapExceeded
-            && self.role.is_some_and(|role| role.summarize_on_cap)
-            && self.run_cap_summary_turn(arrived_result, tool_id).await;
-
-        if !summarized {
-            self.execution
-                .halt(arrived_result.clone(), tool_id.to_string());
-        }
+        self.execution
+            .halt(arrived_result.clone(), tool_id.to_string());
 
         self.guard.reset();
         self.end_interaction(
             halt.turn_end_reason(),
             crate::contract::InputResult::Interrupted,
         );
-    }
-
-    /// Runs one forced, tools-disabled completion for an iteration-cap halt on
-    /// a role that opts into it (`RoleDefinition::summarize_on_cap`) — see
-    /// [`Self::halt_turn_loop`]'s doc comment for the surrounding decision.
-    ///
-    /// Folds `arrived_result` -- the real, already-executed result that tripped
-    /// the guard -- into `rig_history` first (exactly where an ordinary
-    /// tool-driven turn would put it), then runs one more completion with
-    /// every tool definition withheld (`RigAgentConfig::allowed_tool_ids`
-    /// overridden to an empty list, which `rig_tool_definitions` turns into
-    /// "advertise nothing"), so the model cannot keep exploring even if it
-    /// tries.
-    ///
-    /// Real results and partial responses remain in canonical history even if
-    /// the summary fails. Re-appending the halted result on Continue is idempotent.
-    async fn run_cap_summary_turn(
-        &mut self,
-        arrived_result: &ToolCallResult,
-        tool_id: &str,
-    ) -> bool {
-        if let Err(message) = self.rig_history.append_result(arrived_result, tool_id) {
-            let _ = self.events_tx.send(Event::Error(Error { message }).into());
-            return false;
-        }
-
-        let mut wrap_up_config = self.config.clone();
-        wrap_up_config.allowed_tool_ids = Some(Vec::new());
-
-        let _ = self
-            .events_tx
-            .send(Event::StateChanged(SessionState::Running).into());
-        let outcome = self
-            .run_cancellable_turn_with_config(
-                &wrap_up_config,
-                Prompt::input(ConversationInputKind::Continuation, CAP_SUMMARY_INSTRUCTION),
-                || deterministic_rig_response(CAP_SUMMARY_INSTRUCTION),
-            )
-            .await;
-
-        !matches!(
-            outcome.stop,
-            CompletionStop::Failed | CompletionStop::Cancelled
-        )
     }
 }
 
@@ -611,16 +550,6 @@ fn truncation_continuation_prompt_for(reason: Truncation, cap: u64) -> String {
         )
     }
 }
-
-/// The instruction injected as a synthetic user message ahead of a forced
-/// cap wrap-up completion — the Hermes/OpenCode shape
-/// (`docs/research/agent-context-reduction-prior-art-2026-07-26.md` §4):
-/// stop calling tools and report what was found instead of hard-erroring
-/// with the work discarded.
-const CAP_SUMMARY_INSTRUCTION: &str = "You have reached the turn limit for this task. Stop here \
-     and summarize, without calling any more tools: the relevant files you found (with paths and \
-     line numbers), your best partial answer to the question you were asked, and what remains \
-     unknown.";
 
 /// The reminder injected when a standing-role turn ends without a memory
 /// update or a no-update declaration (`docs/standing-agent-memory-design.md`

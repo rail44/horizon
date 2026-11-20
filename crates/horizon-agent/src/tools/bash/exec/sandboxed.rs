@@ -13,6 +13,20 @@ mod result;
 
 pub use result::exclude_git_metadata;
 
+/// What a sandboxed call may write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tools::bash) enum Writable {
+    /// The workspace root, and the session's grants.
+    Workspace,
+    /// The workspace root is an unapproved primary checkout: it stays
+    /// readable and every write beneath it is refused.
+    WorkspaceButNotThePrimaryCheckout,
+    /// Nothing: a read-only session's shell (`roles::RoleDefinition::
+    /// read_only`, `docs/agent-subagent-design.md` decision 7). No writable
+    /// root, no write grant, and so no scratch directory either.
+    Nothing,
+}
+
 // --- sandboxed execution (tier 1: docs/agent-approval-design.md) ----------
 //
 // A tier-1-auto-approved `bash` call runs through `horizon_sandbox::spawn`
@@ -76,7 +90,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
     network: Option<&SessionNetworkProxy>,
     loopback_connect: &[std::net::SocketAddr],
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
-    primary_checkout_writable: bool,
+    writable: Writable,
     config: &BashToolConfig,
 ) -> BashCompletion {
     let command = &*input.command;
@@ -99,7 +113,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
         network,
         loopback_connect,
         filesystem_grants,
-        primary_checkout_writable,
+        writable,
     );
     #[cfg(target_os = "macos")]
     let started_at = std::time::SystemTime::now();
@@ -151,7 +165,9 @@ pub(in crate::tools::bash) fn run_sandboxed(
         denied_domains,
         result::Protected {
             git_metadata: &git_metadata_paths(workspace_root),
-            unapproved_primary_checkout: (!primary_checkout_writable).then_some(workspace_root),
+            unapproved_primary_checkout: (writable == Writable::WorkspaceButNotThePrimaryCheckout)
+                .then_some(workspace_root),
+            read_only: writable == Writable::Nothing,
         },
         timeout,
         cwd_handle,

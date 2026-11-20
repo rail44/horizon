@@ -145,6 +145,11 @@ struct Inner {
     /// `horizon-agentd`'s `session::run_session` knows the session's role.
     /// `false` everywhere except that call site.
     unattended: bool,
+    /// Whether this session's shell may write nothing at all
+    /// (`roles::RoleDefinition::read_only`, `docs/agent-subagent-design.md`
+    /// decision 7): its sandbox gets no writable root and no write grant.
+    /// Threaded in through [`ToolSessionBuilder`] alongside `unattended`.
+    read_only: bool,
     /// This session's own network-proxy pair (`docs/agent-approval-
     /// design.md`'s "Staging" leg 4b -- `tools::network::
     /// SessionNetworkProxy`), if one was started for it. `None` means
@@ -271,6 +276,12 @@ impl ToolSessionState {
     /// nobody -- see [`Inner::unattended`]'s doc comment.
     pub(crate) fn is_unattended(&self) -> bool {
         self.inner.unattended
+    }
+
+    /// Whether this session's shell may write nothing at all -- see
+    /// [`Inner::read_only`]'s doc comment.
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.inner.read_only
     }
 
     /// This session's approved (or config-declared) macOS mach service

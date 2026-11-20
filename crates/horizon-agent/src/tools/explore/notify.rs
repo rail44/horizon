@@ -56,7 +56,7 @@ pub(super) fn notification_text(completions: &[Completion]) -> String {
 }
 
 impl crate::contract::tool_output::TaskReport {
-    /// A child that died or was capped mid-thought can leave a "partial
+    /// A child that died or stopped mid-thought can leave a "partial
     /// report" with no body -- the observed extreme being one whose entire
     /// text was `</mm:think>`. Shipping that as content reads like an
     /// answer, so the notification says what happened instead
@@ -67,38 +67,39 @@ impl crate::contract::tool_output::TaskReport {
 
     /// What happened, for a child that produced no usable report.
     fn cause(&self) -> String {
-        match (self.failed(), self.capped) {
-            (true, _)
-                if self
-                    .message
-                    .as_ref()
-                    .is_some_and(|message| !message.is_empty()) =>
-            {
-                format!("failed: {}", self.message.as_deref().unwrap_or_default())
-            }
-            (true, _) => "failed".to_string(),
-            (false, true) => "hit its turn limit".to_string(),
-            (false, false) => "ended its turn with nothing to say".to_string(),
+        match self.message.as_deref() {
+            Some(message) if !message.is_empty() => format!("failed: {message}"),
+            Some(_) => "failed".to_string(),
+            None => "ended its turn with nothing to say".to_string(),
         }
     }
 }
 
-/// One line per completion that produced no usable report, for the
-/// requester's pane. A `task` child runs in no pane of its own, so nothing
-/// else the user can see says it failed.
-pub(super) fn failure_lines(completions: &[Completion]) -> Vec<String> {
+/// One line per completion that did not finish, for the requester's pane:
+/// one that produced no usable report, and one that stopped before
+/// finishing with a partial report (`docs/agent-subagent-design.md`
+/// decision 6). A `task` child runs in no pane of its own, so nothing else
+/// the user can see says it did not finish.
+pub(super) fn unfinished_lines(completions: &[Completion]) -> Vec<String> {
     completions
         .iter()
         .filter_map(|completion| {
             let result = &completion.output;
-            (!result.usable()).then(|| {
+            let outcome = if !result.usable() {
+                format!("{} — no usable report", result.cause())
+            } else if result.failed() {
                 format!(
-                    "task \"{description}\" (session_id: {session_id}) {cause} — no usable report",
-                    description = completion.description,
-                    session_id = completion.session_id.as_uuid(),
-                    cause = result.cause(),
+                    "stopped before finishing ({}) — its report is partial",
+                    result.message.as_deref().unwrap_or_default()
                 )
-            })
+            } else {
+                return None;
+            };
+            Some(format!(
+                "task \"{description}\" (session_id: {session_id}) {outcome}",
+                description = completion.description,
+                session_id = completion.session_id.as_uuid(),
+            ))
         })
         .collect()
 }
@@ -109,15 +110,11 @@ fn entry(position: usize, completion: &Completion) -> String {
 
     let usable = result.usable();
     let status = if usable {
-        match (result.failed(), result.capped) {
-            (true, _) => format!(
-                "finished with an error ({}); partial report follows",
-                result.message.as_deref().unwrap_or_default()
-            ),
-            (false, true) => {
-                "completed, but hit its turn limit — the report is partial".to_string()
+        match result.message.as_deref() {
+            Some(message) => {
+                format!("stopped before finishing ({message}); partial report follows")
             }
-            (false, false) => "completed".to_string(),
+            None => "completed".to_string(),
         }
     } else {
         format!(

@@ -527,8 +527,10 @@ pub struct RigAgentConfig {
     /// kept as a field (rather than having `providers::rig::session` read
     /// the constant directly) so tests can still construct a
     /// `RigAgentConfig` with a small cap to exercise the guard without
-    /// looping to the real threshold.
-    pub iteration_cap: u32,
+    /// looping to the real threshold. `None` is no cap at all: a `task`
+    /// child's (`roles::RoleDefinition::uncapped_turns`,
+    /// `docs/agent-subagent-design.md` decision 2).
+    pub iteration_cap: Option<u32>,
     /// Doom-loop fingerprint window size, same section of the design doc
     /// and same fixed-not-configurable treatment as `iteration_cap` --
     /// always [`DEFAULT_DOOM_LOOP_WINDOW`].
@@ -603,7 +605,7 @@ impl Default for RigAgentConfig {
             api_key_env: OPENAI_API_KEY_VAR.to_string(),
             model: String::new(),
             base_url: None,
-            iteration_cap: DEFAULT_ITERATION_CAP,
+            iteration_cap: Some(DEFAULT_ITERATION_CAP),
             doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
@@ -901,7 +903,7 @@ mod tests {
         // No default_model pair: no model, so no provider call.
         assert_eq!(config.rig.model, "");
         assert!(!config.rig.model_in_play());
-        assert_eq!(config.rig.iteration_cap, DEFAULT_ITERATION_CAP);
+        assert_eq!(config.rig.iteration_cap, Some(DEFAULT_ITERATION_CAP));
         assert_eq!(config.rig.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
         assert_eq!(config.rig.base_url, None);
         assert_eq!(

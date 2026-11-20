@@ -2638,6 +2638,69 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 /// -- approving it was guaranteed to be thrown away on revalidation (three
 /// wasted operator approvals in one live session). The refusal now travels
 /// to the model as guidance naming `$TMPDIR` instead.
+/// A read-only session's shell (`docs/agent-subagent-design.md` decision
+/// 7) reads its workspace but writes nowhere -- the workspace included --
+/// and a refused write comes back as ungrantable, never as a grant offer.
+/// Runs the real sandbox, so the `sandboxed` nextest profile skips it with
+/// the other `tier1_sandboxed_bash` tests.
+#[cfg(target_os = "linux")]
+#[test]
+fn tier1_sandboxed_bash_in_a_read_only_session_reads_but_writes_nowhere() {
+    let root = temp_workspace("tier1-bash-read-only");
+    fs::write(root.join("notes.txt"), "kept\n").unwrap();
+    let tool_state = crate::tools::ToolSessionBuilder::new(root.clone())
+        .with_read_only(true)
+        .build();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("read-only-1".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "cat notes.txt; echo changed > notes.txt; echo new > new.txt" })
+            .into(),
+        occurrence_id: crate::contract::OccurrenceId("read-only-1".to_string()),
+    };
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    std::assert_matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
+    );
+    let result = expect_finished(
+        bash_results_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the sandboxed bash call should finish"),
+    );
+
+    assert!(
+        result.output["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("kept")),
+        "the read must succeed: {:?}",
+        result.output
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "kept\n"
+    );
+    assert!(!root.join("new.txt").exists());
+    assert!(result.output.get("denied_filesystem_paths").is_none());
+    let ungrantable = result.output["ungrantable_filesystem_paths"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the refused writes are reported: {:?}", result.output));
+    assert!(
+        ungrantable.iter().all(|entry| entry["guidance"]
+            .as_str()
+            .is_some_and(|guidance| guidance.contains("read-only"))),
+        "{ungrantable:?}"
+    );
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");

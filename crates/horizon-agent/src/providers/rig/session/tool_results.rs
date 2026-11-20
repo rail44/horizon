@@ -132,7 +132,7 @@ mod tests {
         };
         let mut state = SessionLoopState {
             execution: HashMap::from([(reused.clone(), descriptor(&reused))]).into(),
-            guard: super::super::TurnLoopGuard::new(20, 10),
+            guard: super::super::TurnLoopGuard::new(Some(20), 10),
             ..SessionLoopState::default()
         };
         assert!(state.cancel_outstanding_tool_calls().await);
@@ -203,7 +203,7 @@ mod tests {
                     (ToolCallId("sibling".into()), descriptor),
                 ])
                 .into(),
-                guard: super::super::TurnLoopGuard::new(20, 10),
+                guard: super::super::TurnLoopGuard::new(Some(20), 10),
                 ..SessionLoopState::default()
             };
             let mut result = ToolCallResult::new(

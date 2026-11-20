@@ -68,7 +68,7 @@ const MAX_CONSECUTIVE_TRUNCATION_CONTINUES: u32 = 3;
 
 #[derive(Debug)]
 pub(super) struct TurnLoopGuard {
-    iteration_cap: u32,
+    iteration_cap: Option<u32>,
     doom_loop_window: usize,
     consecutive_tool_turns: u32,
     consecutive_truncation_continues: u32,
@@ -76,7 +76,7 @@ pub(super) struct TurnLoopGuard {
 }
 
 impl TurnLoopGuard {
-    pub(super) fn new(iteration_cap: u32, doom_loop_window: usize) -> Self {
+    pub(super) fn new(iteration_cap: Option<u32>, doom_loop_window: usize) -> Self {
         Self {
             iteration_cap,
             doom_loop_window,
@@ -96,10 +96,12 @@ impl TurnLoopGuard {
 
     /// Records that a tool-driven turn is about to run. Returns
     /// `Some(GuardHalt::IterationCapExceeded)` once the cap is exceeded
-    /// (i.e. on the `iteration_cap + 1`-th consecutive call).
+    /// (i.e. on the `iteration_cap + 1`-th consecutive call); never when
+    /// there is no cap.
     pub(super) fn record_tool_turn(&mut self) -> Option<GuardHalt> {
         self.consecutive_tool_turns += 1;
-        (self.consecutive_tool_turns > self.iteration_cap)
+        self.iteration_cap
+            .is_some_and(|cap| self.consecutive_tool_turns > cap)
             .then_some(GuardHalt::IterationCapExceeded)
     }
 

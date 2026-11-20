@@ -47,10 +47,10 @@ pub(crate) fn register() {
             prompt_section: agent::THREAD_ROLE_PROMPT,
             allowed_tool_ids: Some(agent::THREAD_ROLE_TOOLS),
             model: None,
-            iteration_cap: None,
+            uncapped_turns: false,
+            read_only: false,
             include_repository_instructions: true,
             skill_ids: agent::THREAD_ROLE_SKILLS,
-            summarize_on_cap: false,
             standing: false,
             unattended: true,
         }]);

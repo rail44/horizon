@@ -40,8 +40,9 @@ pub struct RoleId(pub String);
 /// Deliberately *not* extensible beyond these fields -- see the module doc
 /// on keeping the mechanism minimal until a second, differently-shaped role
 /// exists to prove out what more it would need. [`EXPLORE_ROLE`] is that
-/// second role, and it needed exactly one field the `config` role didn't
-/// ([`Self::iteration_cap`]); everything else it varies was already here.
+/// second role; what it varies beyond the `config` role is its turn budget
+/// and its read-only sandbox ([`Self::uncapped_turns`],
+/// [`Self::read_only`]).
 pub struct RoleDefinition {
     /// Matches [`RoleId`]'s inner string exactly -- see [`resolve`].
     pub id: &'static str,
@@ -64,15 +65,18 @@ pub struct RoleDefinition {
     /// Overrides `config::RigAgentConfig::model` for sessions with this
     /// role. `None` means "use the provider's configured model unchanged".
     pub model: Option<&'static str>,
-    /// Overrides `config::RigAgentConfig::iteration_cap` -- the turn-loop
-    /// guard's consecutive-tool-turn budget -- for sessions with this role.
-    /// `None` means "use the built-in [`crate::config::DEFAULT_ITERATION_CAP`]
-    /// unchanged". Added for [`EXPLORE_ROLE`], which answers exactly one
-    /// question and therefore needs a much tighter budget than an ordinary
-    /// coding session (`docs/agent-explore-design.md` decision 7); it is
-    /// applied in `providers::rig::role_adjusted_config` alongside the two
-    /// overrides above.
-    pub iteration_cap: Option<u32>,
+    /// Whether sessions with this role run with no turn-loop budget at all
+    /// (`config::RigAgentConfig::iteration_cap` set to `None` by
+    /// `providers::rig::role_adjusted_config`). `false` keeps the built-in
+    /// [`crate::config::DEFAULT_ITERATION_CAP`]. Set for [`EXPLORE_ROLE`]:
+    /// a delegated child has no budget (`docs/agent-subagent-design.md`
+    /// decision 2) -- what stops it is what stops any session.
+    pub uncapped_turns: bool,
+    /// Whether `bash` in sessions with this role runs in a sandbox with no
+    /// writable root, so the operating system keeps it from writing
+    /// (`docs/agent-subagent-design.md` decision 7). Every write it attempts
+    /// is refused as ungrantable rather than offered as a grant.
+    pub read_only: bool,
     /// Whether repository `AGENTS.md`/`CLAUDE.md` instructions
     /// (`instructions::extra_sections`) are ingested for a session with
     /// this role. See [`CONFIG_ROLE`]'s doc comment for why the `config`
@@ -85,19 +89,6 @@ pub struct RoleDefinition {
     /// module doc's v2 update), so a repository skill can override an
     /// embedded one even for a role.
     pub skill_ids: &'static [&'static str],
-    /// Whether hitting the iteration cap runs one forced, tools-disabled
-    /// completion (an injected "stop and summarize" instruction) before the
-    /// turn loop halts, instead of halting straight away
-    /// (`providers::rig::session::halt_turn_loop`). `false` preserves the
-    /// original "stash the real result, wait for Continue" behavior.
-    /// Deliberately role-scoped rather than a config knob or a prompt-only
-    /// convention (`docs/research/agent-context-reduction-prior-
-    /// art-2026-07-26.md` §4's OpenCode/Hermes precedent: neither leaves it
-    /// to the model) -- set for [`EXPLORE_ROLE`], whose whole job is a
-    /// single delegated report, so a capped run should still return
-    /// whatever it found rather than a bare error
-    /// (`docs/agent-explore-design.md`'s 2026-07-27 addendum).
-    pub summarize_on_cap: bool,
     /// Whether this is a *standing* role -- a long-lived, context-carrying
     /// agent that maintains a memory document across turns
     /// (`docs/standing-agent-memory-design.md`). A standing role's session
@@ -108,8 +99,7 @@ pub struct RoleDefinition {
     /// in 8e057dd7) was the first standing role; today the board flow's roles
     /// (`horizon-agentd`'s `board_flow::roles`) set it, and coding sessions
     /// are not standing. Added for the keeper, which needed exactly this
-    /// one field the two prior roles didn't -- the third extension of this
-    /// struct after `iteration_cap` and `summarize_on_cap`.
+    /// one field the two prior roles didn't.
     pub standing: bool,
     /// Whether nobody watches a session with this role: no pane is attached
     /// to it, so a tool call that would ask for approval is refused instead
@@ -144,10 +134,10 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     prompt_section: CONFIG_ROLE_PROMPT_SECTION,
     allowed_tool_ids: Some(&["skill_read", "config_read", "config_write"]),
     model: None,
-    iteration_cap: None,
+    uncapped_turns: false,
+    read_only: false,
     include_repository_instructions: false,
     skill_ids: &["horizon-config"],
-    summarize_on_cap: false,
     standing: false,
     unattended: false,
 };
@@ -181,21 +171,17 @@ const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assist
 /// startup, and nothing the model ever sees.
 pub const EXPLORE_ROLE_ID: &str = "explore";
 
-/// The turn budget an exploration session runs with
-/// (`docs/agent-explore-design.md` decision 7): far tighter than
-/// [`crate::config::DEFAULT_ITERATION_CAP`], because an exploration answers
-/// exactly one question. Hitting it is not a failure of the mechanism --
-/// the tool returns whatever report exists and the requester asks something
-/// narrower.
-const EXPLORE_ITERATION_CAP: u32 = 25;
-
 /// A parallel exploration session (`docs/agent-explore-design.md`): spawned
 /// by another session's `task` call to answer one question about the shared
 /// workspace, and terminated as soon as it has.
 ///
-/// The allowlist is the whole restriction mechanism: read-only filesystem,
-/// history, and project-knowledge tools, every one of them
-/// `ToolPermission::AutoAllowRead`. That alone does not
+/// The read mode of `task` (`docs/agent-subagent-design.md`): read-only
+/// filesystem, history, and project-knowledge tools, all
+/// `ToolPermission::AutoAllowRead`, plus `bash` in a sandbox with no
+/// writable root ([`RoleDefinition::read_only`]), so it can read Git
+/// history and run other read-only commands while the operating system
+/// keeps it from writing. It runs with no turn budget
+/// ([`RoleDefinition::uncapped_turns`]). The allowlist does not
 /// keep approvals out of the session -- a read whose path escapes the
 /// workspace root is still routed to the approval gate -- so the session is
 /// additionally marked unattended (`ToolSessionState::is_unattended`),
@@ -224,12 +210,15 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
         "recall_read",
         "recall_sessions",
         "knowledge_read",
+        "bash",
+        "bash_output",
+        "bash_cancel",
     ]),
     model: None,
-    iteration_cap: Some(EXPLORE_ITERATION_CAP),
+    uncapped_turns: true,
+    read_only: true,
     include_repository_instructions: true,
     skill_ids: &[],
-    summarize_on_cap: true,
     standing: false,
     unattended: true,
 };
@@ -241,10 +230,12 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      requester need not repeat your reading.\n\
      \n\
      Your toolset is read-only: fs_read, fs_grep, fs_glob, recall_search, recall_read, \
-     recall_sessions, knowledge_read. You have no shell, cannot edit or create files, and cannot \
-     run tests or commands -- asking for those fails and wastes the turn budget. When the answer \
-     genuinely needs execution, say so in your final message and hand the step back to the \
-     requester instead of attempting it.";
+     recall_sessions, knowledge_read, and bash (with bash_output and bash_cancel for its \
+     background jobs). bash runs in a sandbox where nothing is writable -- not the workspace, \
+     not a temporary directory -- so use it for commands that only read, such as `git log`, \
+     `git show`, or `git blame`. You cannot edit or create files, and a command that writes, \
+     builds, or runs tests is refused. When the answer genuinely needs that, say so in your \
+     final message and hand the step back to the requester instead of attempting it.";
 
 /// Whether `role_id` names an exploration session -- [`EXPLORE_ROLE`], a
 /// `task` child. This is the one predicate `horizon-agentd` needs to tell
@@ -380,18 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn config_role_uses_the_session_default_model() {
-        assert_eq!(CONFIG_ROLE.model, None);
-        assert_eq!(CONFIG_ROLE.iteration_cap, None);
-    }
-
-    #[test]
-    fn config_role_does_not_summarize_on_cap() {
+    fn config_role_uses_the_session_default_model_and_budget() {
         let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
-        assert!(
-            !role.summarize_on_cap,
-            "only a role whose whole job is one delegated report opts into the forced wrap-up"
-        );
+        assert_eq!(role.model, None);
+        assert!(!role.uncapped_turns);
+        assert!(!role.read_only);
     }
 
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
@@ -414,6 +398,9 @@ mod tests {
                 "recall_read",
                 "recall_sessions",
                 "knowledge_read",
+                "bash",
+                "bash_output",
+                "bash_cancel",
             ]
         );
         // The prompt counts the same tools out in prose. It exists because a
@@ -428,7 +415,6 @@ mod tests {
         }
         for forbidden in [
             "task",
-            "bash",
             "fs_write",
             "fs_edit",
             "web_fetch",
@@ -442,15 +428,19 @@ mod tests {
         }
     }
 
-    /// Every advertised exploration tool must be auto-allowed: an
-    /// in-workspace call then runs with no approval round trip at all
-    /// (decision 4). Out-of-workspace reads are the exception the
-    /// unattended refusal covers -- see [`EXPLORE_ROLE`]'s doc comment.
+    /// Every advertised exploration tool but the shell must be
+    /// auto-allowed: an in-workspace call then runs with no approval round
+    /// trip at all (decision 4). Out-of-workspace reads are the exception the
+    /// unattended refusal covers -- see [`EXPLORE_ROLE`]'s doc comment. The
+    /// shell is kept from writing by its sandbox instead
+    /// ([`RoleDefinition::read_only`]).
     #[test]
-    fn every_explore_tool_is_auto_allowed() {
+    fn every_explore_tool_but_the_shell_is_auto_allowed() {
         for tool_id in EXPLORE_ROLE
             .allowed_tool_ids
             .expect("the explore role must restrict its tools")
+            .iter()
+            .filter(|tool_id| !tool_id.starts_with("bash"))
         {
             assert_eq!(
                 crate::tools::permission_for_tool(tool_id),
@@ -461,30 +451,16 @@ mod tests {
     }
 
     #[test]
-    fn explore_role_runs_with_a_tighter_turn_cap_and_repository_instructions() {
+    fn explore_role_runs_unbudgeted_read_only_and_with_repository_instructions() {
         let role =
             resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
-        assert_eq!(role.iteration_cap, Some(EXPLORE_ITERATION_CAP));
-        assert!(
-            role.iteration_cap
-                .is_some_and(|cap| cap < crate::config::DEFAULT_ITERATION_CAP),
-            "an exploration answers one question; its budget must be the tighter one"
-        );
+        assert!(role.uncapped_turns, "a delegated child has no budget");
+        assert!(role.read_only, "the read mode's shell must not write");
         assert!(
             role.include_repository_instructions,
             "an exploration reads the requester's own repository and wants its instructions"
         );
         assert_eq!(role.model, None, "v1 has no cheap-model override");
-    }
-
-    /// `docs/agent-explore-design.md`'s 2026-07-27 addendum: a capped
-    /// exploration must still return whatever it found instead of a bare
-    /// error, so the explore role opts into the forced wrap-up completion.
-    #[test]
-    fn explore_role_summarizes_on_cap() {
-        let role =
-            resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
-        assert!(role.summarize_on_cap);
     }
 
     #[test]
@@ -508,10 +484,10 @@ mod tests {
             prompt_section: "You are a test role.",
             allowed_tool_ids: Some(&["fs_read"]),
             model: None,
-            iteration_cap: None,
+            uncapped_turns: false,
+            read_only: false,
             include_repository_instructions: false,
             skill_ids: &[],
-            summarize_on_cap: false,
             standing: false,
             unattended: false,
         }]);
@@ -535,10 +511,10 @@ mod tests {
             prompt_section: "",
             allowed_tool_ids: None,
             model: None,
-            iteration_cap: None,
+            uncapped_turns: false,
+            read_only: false,
             include_repository_instructions: false,
             skill_ids: &[],
-            summarize_on_cap: false,
             standing: false,
             unattended: false,
         }]);
@@ -561,10 +537,10 @@ mod tests {
             prompt_section: "",
             allowed_tool_ids: Some(&[]),
             model: None,
-            iteration_cap: None,
+            uncapped_turns: false,
+            read_only: false,
             include_repository_instructions: false,
             skill_ids: &[],
-            summarize_on_cap: false,
             standing: false,
             unattended: false,
         };

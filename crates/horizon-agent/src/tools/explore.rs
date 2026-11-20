@@ -60,15 +60,13 @@
 //! for future write-capable children is one more event kind on the same
 //! seam rather than a new one.
 //!
-//! **Iteration-cap exhaustion is a partial success, not an error.** A role
-//! that opts in (`RoleDefinition::summarize_on_cap`, set for
-//! `EXPLORE_ROLE` -- `docs/research/agent-context-reduction-prior-
-//! art-2026-07-26.md` §4's OpenCode/Hermes precedent) gets one forced,
-//! tools-disabled completion before the rig turn loop halts on the cap
-//! (`providers::rig::session::halt_turn_loop`), so the child reports
-//! whatever it found instead of discarding the work behind a generic error.
-//! [`Outcome::into_output`] surfaces that as an ordinary (`is_error:
-//! false`) result carrying a `capped: true` marker, not a failure.
+//! **A child has no budget** (`docs/agent-subagent-design.md` decision 2):
+//! what stops it is what stops any session. A child that stops before
+//! finishing -- a guard, a provider failure, a lost session -- still
+//! returns whatever report it has, with `message` saying why it stopped
+//! ([`Outcome::into_output`]); the requester's notification calls the
+//! report partial and the requester's pane gets a line for it
+//! (decision 6).
 
 pub(super) mod children;
 mod notify;
@@ -327,8 +325,8 @@ pub(crate) fn cancel_session(session_id: SessionId) {
 pub(crate) struct TaskNotification {
     /// The single notification message the next provider round carries.
     pub(crate) text: String,
-    /// One line per child that produced no usable report, for the
-    /// requester's pane (`notify::failure_lines`).
+    /// One line per child that did not finish, for the requester's pane
+    /// (`notify::unfinished_lines`).
     pub(crate) failures: Vec<String>,
 }
 
@@ -354,7 +352,7 @@ pub(crate) fn take_notification(session_id: SessionId) -> Option<TaskNotificatio
     }
     Some(TaskNotification {
         text,
-        failures: notify::failure_lines(&completions),
+        failures: notify::unfinished_lines(&completions),
     })
 }
 
@@ -430,10 +428,7 @@ pub(super) enum Terminal {
     /// The child's turn ended normally -- the report is final.
     Completed,
     /// The turn ended some other way (failed, cancelled, or halted by a
-    /// guard). Whatever report exists is still returned. For
-    /// `HaltedByIterationCap` specifically, a report here means the rig turn
-    /// loop's forced wrap-up completion succeeded (`RoleDefinition::
-    /// summarize_on_cap`) -- see [`Outcome::failure_message`]. `None` when
+    /// guard). Whatever report exists is still returned. `None` when
     /// the stream reached `WaitingForUser` with no report and no preceding
     /// `TurnEnded` at all -- the turn ended some way this watcher never saw
     /// named.
@@ -473,16 +468,11 @@ pub(super) struct Outcome {
 
 impl Outcome {
     pub(super) fn into_output(self, session_id: SessionId, description: &str) -> TaskReport {
-        let capped = matches!(
-            self.terminal,
-            Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap))
-        ) && self.has_usable_report();
         let message = self.failure_message();
         TaskReport {
             session_id: session_id.as_uuid().to_string(),
             description: description.into(),
             report: self.report,
-            capped,
             message,
         }
     }
@@ -507,14 +497,6 @@ impl Outcome {
             Terminal::Completed => Some(detail(
                 "the task session ended its turn without producing a usable report",
             )),
-            Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap))
-                if self.has_usable_report() =>
-            {
-                None
-            }
-            Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap)) => {
-                Some(detail("the task session ran out of turns before finishing"))
-            }
             Terminal::TurnEnded(Some(TurnEndReason::HaltedByDoomLoop)) => {
                 Some(detail("the task session repeated itself and was stopped"))
             }
@@ -735,10 +717,6 @@ fn test_report(child: SessionId, description: &str, output: Value) -> TaskReport
             .get("report")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        capped: output
-            .get("capped")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
         message: output
             .get("message")
             .and_then(Value::as_str)

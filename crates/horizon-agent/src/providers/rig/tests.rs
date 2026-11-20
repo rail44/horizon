@@ -1497,7 +1497,7 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
 
 #[test]
 fn turn_loop_guard_iteration_cap_triggers_at_boundary() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
 
     for _ in 0..TEST_ITERATION_CAP {
         assert_eq!(guard.record_tool_turn(), None);
@@ -1509,9 +1509,20 @@ fn turn_loop_guard_iteration_cap_triggers_at_boundary() {
     );
 }
 
+/// A `task` child runs with no cap (`docs/agent-subagent-design.md`
+/// decision 2): the guard never halts it for its turn count.
+#[test]
+fn turn_loop_guard_without_a_cap_never_halts_on_turns() {
+    let mut guard = TurnLoopGuard::new(None, TEST_DOOM_LOOP_WINDOW);
+
+    for _ in 0..10_000 {
+        assert_eq!(guard.record_tool_turn(), None);
+    }
+}
+
 #[test]
 fn turn_loop_guard_iteration_cap_resets_on_reset() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
     for _ in 0..TEST_ITERATION_CAP {
         guard.record_tool_turn();
     }
@@ -1529,7 +1540,7 @@ fn turn_loop_guard_iteration_cap_resets_on_reset() {
 
 #[test]
 fn turn_loop_guard_fingerprint_triggers_at_the_window_boundary() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
     let fingerprint = 0xABCDu64;
 
     for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
@@ -1543,7 +1554,7 @@ fn turn_loop_guard_fingerprint_triggers_at_the_window_boundary() {
 
 #[test]
 fn turn_loop_guard_fingerprint_does_not_trigger_on_varying_fingerprints() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
 
     for fingerprint in 0..(TEST_DOOM_LOOP_WINDOW as u64 * 2) {
         assert_eq!(guard.record_fingerprint(fingerprint), None);
@@ -1552,7 +1563,7 @@ fn turn_loop_guard_fingerprint_does_not_trigger_on_varying_fingerprints() {
 
 #[test]
 fn turn_loop_guard_reset_clears_fingerprint_window() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
     let fingerprint = 42u64;
     for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
         guard.record_fingerprint(fingerprint);
@@ -1575,7 +1586,7 @@ fn turn_loop_guard_reset_clears_fingerprint_window() {
 /// `true` for the first three calls and `false` on the fourth.
 #[test]
 fn turn_loop_guard_truncation_continue_caps_at_three() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
 
     assert!(
         guard.record_truncation_continue(),
@@ -1593,7 +1604,7 @@ fn turn_loop_guard_truncation_continue_caps_at_three() {
 /// fresh interaction (`guard.reset()`) clears the streak.
 #[test]
 fn turn_loop_guard_truncation_counter_resets_on_reset() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
 
     guard.record_truncation_continue();
     guard.record_truncation_continue();
@@ -1613,7 +1624,7 @@ fn turn_loop_guard_truncation_counter_resets_on_reset() {
 /// breaks the streak — called when a turn completes without truncation.
 #[test]
 fn turn_loop_guard_reset_truncation_counter_breaks_the_streak() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
 
     guard.record_truncation_continue();
     guard.record_truncation_continue();
@@ -1689,7 +1700,7 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
         environment,
         extra_sections,
         events_tx: tx,
-        guard: TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW),
+        guard: TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW),
         ..SessionLoopState::default()
     };
 
@@ -1802,7 +1813,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         crate::contract::OccurrenceId(id_a.0.clone()),
         serde_json::json!({ "tab_count": 2 }),
     );
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
         guard.record_tool_turn();
     }
@@ -1954,8 +1965,8 @@ fn start_fallback_rig_session_with_config(
 
 /// Like [`start_fallback_rig_session_with_config`], but also resolves
 /// `role_id` through the real `Provider::start_session` -- the entry point
-/// `role_adjusted_config` runs on, so a role's overrides (iteration cap,
-/// `summarize_on_cap`) actually apply to the spawned session's turn loop.
+/// `role_adjusted_config` runs on, so a role's overrides (its turn budget
+/// among them) actually apply to the spawned session's turn loop.
 fn start_fallback_rig_session_with_role(
     config: RigAgentConfig,
     role_id: Option<RoleId>,
@@ -2161,92 +2172,6 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
-/// `docs/agent-explore-design.md`'s 2026-07-27 addendum, end to end through
-/// the real session loop: a role that opts in
-/// (`RoleDefinition::summarize_on_cap`, set for `EXPLORE_ROLE`) gets one
-/// forced, tools-disabled completion when it hits its iteration cap instead
-/// of halting cold -- the summary lands as an ordinary assistant message
-/// right before `TurnEnded(HaltedByIterationCap)`, and nothing is left
-/// stashed for `Command::ContinueTurn` to resume (the forced turn already
-/// settled the halt).
-#[test]
-fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
-    let (tx, rx) = start_fallback_rig_session_with_role(
-        RigAgentConfig {
-            api_key_present: false,
-            model: "unused-in-fallback-mode".to_string(),
-            ..Default::default()
-        },
-        Some(RoleId(crate::roles::EXPLORE_ROLE_ID.to_string())),
-    );
-    let cap = crate::roles::EXPLORE_ROLE
-        .iteration_cap
-        .expect("the explore role sets a tighter cap");
-
-    let _ = tx.send(Command::UserMessage {
-        text: "snapshot please".to_string(),
-    });
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            ..
-        })
-    );
-    let mut current_call = match recv(&rx) {
-        Event::ToolCallRequested(request) => request,
-        other => panic!("expected a tool call request, got {other:?}"),
-    };
-    let call_id = current_call.call_id.clone();
-
-    for i in 0..cap {
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call_id.clone(),
-            current_call.occurrence_id.clone(),
-            serde_json::json!({ "loop_again": true, "n": i }),
-        )));
-        assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-        current_call = match recv(&rx) {
-            Event::ToolCallRequested(request) if request.call_id == call_id => request,
-            event => panic!("expected next call: {event:?}"),
-        };
-    }
-
-    // The next tool-driven turn exceeds the cap. `summarize_on_cap` runs a
-    // forced completion (tools disabled) with the real, already-executed
-    // result folded in first -- the deterministic fallback responder never
-    // sees "snapshot"/"multi tool" in the injected instruction, so it falls
-    // through to its plain-text reply, which becomes the report.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_id.clone(),
-        current_call.occurrence_id.clone(),
-        serde_json::json!({ "loop_again": true, "n": "final" }),
-    )));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-
-            recv(&rx),
-            Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
-                if text.contains("turn limit"),
-        "the forced wrap-up's summary must be committed as an ordinary assistant message"
-    );
-    assert_eq!(
-        recv(&rx),
-        Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
-    );
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
-
-    // Nothing was stashed -- the forced summary already resolved the halt,
-    // so Continue has nothing to resume.
-    let _ = tx.send(Command::ContinueTurn);
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_millis(200))
-            .is_err(),
-        "a halt that already ran its forced summary must leave nothing for Continue to resume"
-    );
-}
-
 /// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
 /// replay-safety requirement: a session that ended halted must not
 /// auto-resume once restarted/replayed. The halted continuation consumed by
@@ -2333,7 +2258,7 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
 
 #[test]
 fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
     let empty_matches = serde_json::json!({ "matches": [] });
 
     // Three distinct greps that all found nothing: identical outputs, but
@@ -2351,7 +2276,7 @@ fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
 
 #[test]
 fn doom_loop_trips_on_identical_tool_args_output_fingerprints_at_the_window_boundary() {
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
     let args = serde_json::json!({ "pattern": "alpha" });
     let output = serde_json::json!({ "matches": [] });
 
@@ -2631,7 +2556,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     let (tx, rx) = start_fallback_rig_session_with_config(RigAgentConfig {
         api_key_present: false,
         model: "unused-in-fallback-mode".to_string(),
-        iteration_cap: 2,
+        iteration_cap: Some(2),
         doom_loop_window: 1000,
         ..Default::default()
     });
@@ -2970,15 +2895,18 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
             "fs_read",
             "fs_glob",
             "fs_grep",
+            "bash",
             "recall_search",
             "recall_read",
+            "bash_output",
+            "bash_cancel",
             "recall_sessions",
             "knowledge_read",
         ]
     );
     assert_eq!(
-        config.iteration_cap, 25,
-        "an exploration answers one question and runs under a tighter turn cap"
+        config.iteration_cap, None,
+        "a delegated child has no turn budget (docs/agent-subagent-design.md decision 2)"
     );
     assert_eq!(
         config.model, base.model,

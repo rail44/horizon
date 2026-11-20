@@ -197,6 +197,13 @@ impl SessionEnvironment<'_> {
                     .and_then(horizon_agent::roles::resolve)
                     .is_some_and(|role| role.unattended),
             )
+            // A read-only role's shell writes nowhere
+            // (`docs/agent-subagent-design.md` decision 7).
+            .with_read_only(
+                role_id
+                    .and_then(horizon_agent::roles::resolve)
+                    .is_some_and(|role| role.read_only),
+            )
             .with_filesystem_grants(filesystem_grants.clone())
             .with_loopback_connect(loopback_connect)
             .with_skills(if trusted {

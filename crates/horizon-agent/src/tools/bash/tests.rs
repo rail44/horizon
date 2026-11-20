@@ -263,7 +263,7 @@ fn a_sandboxed_call_reports_the_directory_it_moved_to() {
             None,
             &[],
             &[],
-            false,
+            super::exec::Writable::WorkspaceButNotThePrimaryCheckout,
             &config(),
         );
     let crate::tools::ToolCompletion::Finished(result) = completion else {

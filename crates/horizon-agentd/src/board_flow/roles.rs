@@ -23,15 +23,15 @@ pub(crate) fn register() {
         },
         allowed_tool_ids: None,
         model: None,
-        iteration_cap: None,
+        uncapped_turns: false,
+        read_only: false,
         include_repository_instructions: true,
         skill_ids: match skill {
             "board-organizer" => &["board-organizer"],
             "board-task" => &["board-task", "board-integration"],
             _ => &["board-reviewer"],
         },
-        summarize_on_cap: false,
-        standing,
+                standing,
         unattended: false,
     })
     .collect();

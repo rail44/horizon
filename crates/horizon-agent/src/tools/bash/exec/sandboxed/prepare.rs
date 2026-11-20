@@ -16,7 +16,7 @@ pub(super) fn prepare(
     network: Option<&SessionNetworkProxy>,
     loopback_connect: &[std::net::SocketAddr],
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
-    primary_checkout_writable: bool,
+    writable: super::Writable,
 ) -> PreparedCommand {
     // Same wrapper shape as the unsandboxed path (`wrapped_script`): merges
     // the command's own stdout+stderr, and reports the final `$PWD` on the
@@ -79,11 +79,17 @@ pub(super) fn prepare(
     // write root that excludes itself: reads stay allowed and every write
     // beneath it is a containment denial. No command text is classified, so
     // an unrecognized wrapper or alias cannot slip a write past the gate.
-    if !primary_checkout_writable {
+    if writable == super::Writable::WorkspaceButNotThePrimaryCheckout {
         writable_root_exclusions.push(workspace_root.to_path_buf());
     }
+    let writable_roots = if writable == super::Writable::Nothing {
+        writable_root_exclusions.clear();
+        Vec::new()
+    } else {
+        vec![workspace_root.to_path_buf()]
+    };
     let policy = horizon_sandbox::SandboxPolicy {
-        writable_roots: vec![workspace_root.to_path_buf()],
+        writable_roots,
         writable_root_exclusions,
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: network_policy,
@@ -98,6 +104,12 @@ pub(super) fn prepare(
         if !effective_grants.contains(grant) {
             effective_grants.push(grant.clone());
         }
+    }
+    // A read-only shell keeps only what lets it read: a project's configured
+    // trees and the harness's own grants are writable ones.
+    if writable == super::Writable::Nothing {
+        effective_grants
+            .retain(|grant| grant.access == horizon_sandbox::FilesystemGrantAccess::Read);
     }
 
     PreparedCommand {
@@ -244,6 +256,72 @@ fn unix_socket_connect_grants(
         }
     }
     grants
+}
+
+#[cfg(test)]
+mod writable_tests {
+    use std::path::{Path, PathBuf};
+
+    use horizon_sandbox::{FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope};
+
+    use super::super::Writable;
+    use super::prepare;
+
+    fn grant(path: &str, access: FilesystemGrantAccess) -> FilesystemGrant {
+        FilesystemGrant {
+            path: PathBuf::from(path),
+            access,
+            scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
+        }
+    }
+
+    /// A read-only shell's sandbox has no writable root and keeps no grant
+    /// that writes -- not even a project's configured trees
+    /// (`docs/agent-subagent-design.md` decision 7).
+    #[test]
+    fn nothing_writable_leaves_no_root_and_only_read_grants() {
+        let workspace = Path::new("/workspace");
+        let grants = [
+            grant("/cache", FilesystemGrantAccess::ReadWrite),
+            grant("/docs", FilesystemGrantAccess::Read),
+        ];
+        let prepared = prepare(
+            "true",
+            workspace,
+            workspace,
+            None,
+            &[],
+            &grants,
+            Writable::Nothing,
+        );
+        assert!(prepared.policy.writable_roots.is_empty());
+        assert!(prepared.policy.writable_root_exclusions.is_empty());
+        assert!(
+            prepared
+                .grants
+                .iter()
+                .all(|grant| grant.access == FilesystemGrantAccess::Read),
+            "{:?}",
+            prepared.grants
+        );
+        assert!(prepared.grants.contains(&grants[1]));
+
+        let writable = prepare(
+            "true",
+            workspace,
+            workspace,
+            None,
+            &[],
+            &grants,
+            Writable::Workspace,
+        );
+        assert_eq!(
+            writable.policy.writable_roots,
+            vec![workspace.to_path_buf()]
+        );
+        assert!(writable.grants.contains(&grants[0]));
+    }
 }
 
 #[cfg(test)]

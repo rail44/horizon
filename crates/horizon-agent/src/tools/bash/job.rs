@@ -86,7 +86,7 @@ pub(crate) struct SandboxedRun {
     filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     origin: SandboxedApprovalOrigin,
     git_metadata_roots: Option<Vec<PathBuf>>,
-    primary_checkout_writable: bool,
+    writable: super::exec::Writable,
 }
 
 impl SandboxedRun {
@@ -103,7 +103,13 @@ impl SandboxedRun {
             filesystem_grants: tools.effective_sandbox_grants(),
             origin,
             git_metadata_roots,
-            primary_checkout_writable: tools.primary_checkout_writable(),
+            writable: if tools.is_read_only() {
+                super::exec::Writable::Nothing
+            } else if tools.primary_checkout_writable() {
+                super::exec::Writable::Workspace
+            } else {
+                super::exec::Writable::WorkspaceButNotThePrimaryCheckout
+            },
         }
     }
 
@@ -135,7 +141,7 @@ fn run_sandboxed_job(
             sandbox.network.as_deref(),
             &sandbox.loopback_connect,
             &grants,
-            sandbox.primary_checkout_writable,
+            sandbox.writable,
             &job.config,
         ),
         Err(error) => {

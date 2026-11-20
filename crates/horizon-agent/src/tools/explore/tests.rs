@@ -589,11 +589,13 @@ fn an_approval_in_a_child_fails_it_immediately() {
     assert_eq!(*terminated.lock().unwrap(), vec![child_id]);
 }
 
-/// The 2026-07-27 addendum's partial success, unchanged by the
-/// asynchronous cutover: a capped child that produced a forced wrap-up
-/// summary is reported as completed-but-partial, not as a failure.
+/// `docs/agent-subagent-design.md` decision 6: a child that stops before
+/// finishing with a usable report -- here halted by the doom-loop guard --
+/// delivers that report as partial, fails `task_output` with why it
+/// stopped, and leaves a line in the requester's pane, since nothing else
+/// the user sees says it did not finish.
 #[test]
-fn a_capped_child_is_reported_as_a_partial_success() {
+fn a_child_that_stopped_early_delivers_a_partial_report_and_says_so_in_the_pane() {
     let (host, _terminated) = ScriptedHost::new();
     let requester = Requester::new(Some(host.clone()));
 
@@ -604,20 +606,37 @@ fn a_capped_child_is_reported_as_a_partial_success() {
         .send(assistant("Found a.rs:10; c.rs remains unchecked."))
         .unwrap();
     events
-        .send(Event::TurnEnded(TurnEndReason::HaltedByIterationCap))
+        .send(Event::TurnEnded(TurnEndReason::HaltedByDoomLoop))
         .unwrap();
 
-    let text = requester.await_notification();
-    assert!(text.contains("turn limit"), "{text}");
-    assert!(text.contains("Found a.rs:10"), "{text}");
+    let drain = requester.await_drain();
+    assert!(
+        drain.text.contains("stopped before finishing"),
+        "{}",
+        drain.text
+    );
+    assert!(
+        drain.text.contains("partial report follows"),
+        "{}",
+        drain.text
+    );
+    assert!(drain.text.contains("Found a.rs:10"), "{}", drain.text);
+    assert_eq!(
+        drain.failures,
+        vec![format!(
+            "task \"map the module\" (session_id: {}) stopped before finishing (the task \
+             session repeated itself and was stopped) — its report is partial",
+            child_id.as_uuid()
+        )]
+    );
 
     let fetched = requester.call(
         "o1",
         OUTPUT_TOOL_ID,
         json!({ "session_id": child_id.as_uuid().to_string() }),
     );
-    assert_eq!(fetched["capped"], json!(true));
-    assert!(fetched.get("is_error").is_none(), "{fetched}");
+    assert_eq!(fetched["is_error"], json!(true), "{fetched}");
+    assert!(fetched.get("capped").is_none(), "{fetched}");
 }
 
 /// A child that died with a "partial report" made of nothing but a stray
@@ -660,37 +679,6 @@ fn a_partial_report_that_is_only_a_reasoning_artifact_is_not_delivered_as_a_repo
         json!({ "session_id": child_id.as_uuid().to_string() }),
     );
     assert_eq!(fetched["report"], json!("</mm:think>"));
-    assert_eq!(fetched["is_error"], json!(true), "{fetched}");
-}
-
-/// The same test for the cap path: an empty wrap-up is not a partial
-/// success, it is a task that produced nothing.
-#[test]
-fn a_capped_child_with_an_empty_wrap_up_is_reported_as_producing_nothing() {
-    let (host, _terminated) = ScriptedHost::new();
-    let requester = Requester::new(Some(host.clone()));
-
-    requester.launch("t1", "map the module", "map it");
-    let (child_id, events) = host.child(0);
-    events.send(user("map it")).unwrap();
-    events.send(assistant("</think>\n\n")).unwrap();
-    events
-        .send(Event::TurnEnded(TurnEndReason::HaltedByIterationCap))
-        .unwrap();
-
-    let text = requester.await_notification();
-    assert!(text.contains("produced no usable report"), "{text}");
-    assert!(text.contains("ran out of turns"), "{text}");
-
-    let fetched = requester.call(
-        "o1",
-        OUTPUT_TOOL_ID,
-        json!({ "session_id": child_id.as_uuid().to_string() }),
-    );
-    assert!(
-        fetched.get("capped").is_none(),
-        "an empty wrap-up is not a partial success: {fetched}"
-    );
     assert_eq!(fetched["is_error"], json!(true), "{fetched}");
 }
 

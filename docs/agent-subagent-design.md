@@ -106,10 +106,12 @@ mechanism, with exploration as its read-only mode), then 「全て推奨通り�
    This replaces the `capped` marker.
 
 7. **The read mode has a read-only shell.** A read child gets `bash`,
-   sandboxed with no writable root beyond the sandbox's private
-   temporary directory, so it can run `git log`/`git show` and other
-   read-only commands while the operating system, not the prompt, keeps
-   it from writing.
+   sandboxed with no writable root, so it can run `git log`/`git show` and
+   other read-only commands while the operating system, not the prompt,
+   keeps it from writing. With no writable root the sandbox provisions no
+   scratch directory either, and grants that write (a project's
+   configured trees among them) are dropped for it. A refused write comes
+   back as ungrantable, never as a grant offer.
 
 8. **The model is inherited** from the requester, as now.
 
@@ -142,7 +144,9 @@ reached.
 ## Proposed order
 
 1. Read mode on the new shape: remove the cap, add the read-only shell,
-   report how a child ended and show it (decisions 1, 2, 6, 7).
+   report how a child ended and show it (decisions 2, 6, 7). The `access`
+   parameter of decision 1 arrives with the write mode, when there is a
+   second value for it to take.
 2. Follow-up (decision 5).
 3. Approvals through the requester (decision 4).
 4. Write mode in its own worktree (decision 3).

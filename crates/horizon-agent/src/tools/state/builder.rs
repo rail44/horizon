@@ -62,6 +62,7 @@ impl ToolSessionBuilder {
                 skills: SkillRegistry::default(),
                 config_path: None,
                 unattended: false,
+                read_only: false,
                 network: None,
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
@@ -118,6 +119,12 @@ impl ToolSessionBuilder {
     /// Record whether any client can answer an approval prompt.
     pub fn with_unattended(mut self, unattended: bool) -> Self {
         self.inner.unattended = unattended;
+        self
+    }
+
+    /// Record whether this session's shell may write nothing at all.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.inner.read_only = read_only;
         self
     }
 

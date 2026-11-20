@@ -66,11 +66,9 @@ pub(crate) struct TaskReport {
     /// What the child found, once it finished.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
-    /// Whether the report is shorter than what the child wrote.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub capped: bool,
-    /// A child may fail with a useful partial report. This is independent of
-    /// the cap and report, and is the authority for task-output failure.
+    /// Why the child stopped before finishing, when it did: the authority
+    /// for task-output failure. A child may stop with a useful partial
+    /// report, so this is independent of `report`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

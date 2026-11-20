@@ -5,7 +5,7 @@ mod sandboxed;
 mod stream;
 use plain::run_async;
 pub use sandboxed::exclude_git_metadata;
-pub(super) use sandboxed::run_sandboxed;
+pub(super) use sandboxed::{Writable, run_sandboxed};
 
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;

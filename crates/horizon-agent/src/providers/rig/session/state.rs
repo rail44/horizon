@@ -87,7 +87,7 @@ impl Default for SessionLoopState {
             task_wake,
             inbox: VecDeque::new(),
             execution: Default::default(),
-            guard: TurnLoopGuard::new(0, 0),
+            guard: TurnLoopGuard::new(Some(0), 0),
             memory: None,
             continuation: Default::default(),
             session_id: SessionId::new(),
