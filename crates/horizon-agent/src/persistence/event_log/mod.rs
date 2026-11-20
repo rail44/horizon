@@ -26,7 +26,7 @@ pub use crate::providers::rig::conversation::{
 pub use appender::{Appender, PendingEvents};
 pub use health::FailureSubscription;
 use turn::TurnTracker;
-pub use writer::{TEST_DUCKDB_REBUILD_GATE_VAR, wait_for_test_gate};
+pub use writer::BeforeRebuild;
 pub use writer::{WriterHandle, WriterInit};
 
 pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";

@@ -679,7 +679,7 @@ mod delivery_tests {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("agent.jsonl");
         let (writer, init, duckdb) =
-            WriterHandle::open_silently(&log, Some(dir.path().join("state.duckdb")));
+            WriterHandle::open_silently(&log, Some(dir.path().join("state.duckdb")), None);
         assert!(matches!(init.recv().unwrap(), WriterInit::Ready(_)));
         let store = duckdb.recv().unwrap().expect("projection opens");
         let state = crate::session::test_support::test_state();
@@ -1425,7 +1425,7 @@ mod projection_resume_tests {
     }
 
     fn boot(log: &Path, db: &Path) -> (WriterHandle, ReadReport, Option<DuckdbStoreHandle>) {
-        let (writer, init, duckdb) = WriterHandle::open_silently(log, Some(db.to_path_buf()));
+        let (writer, init, duckdb) = WriterHandle::open_silently(log, Some(db.to_path_buf()), None);
         let WriterInit::Ready(report) = init.recv().unwrap() else {
             panic!("writer startup failed");
         };
@@ -1705,16 +1705,12 @@ mod projection_resume_tests {
     #[test]
     fn full_mode_resume_commits_fixups_while_the_rebuild_is_still_running() {
         let dir = tempfile::tempdir().unwrap();
-        // The rebuild is held until the gate is made. nextest runs every
-        // test in its own process, so this cannot leak.
-        let gate = dir.path().join("rebuild-gate");
-        // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe {
-            std::env::set_var(
-                horizon_agent::persistence::event_log::TEST_DUCKDB_REBUILD_GATE_VAR,
-                &gate,
-            )
-        };
+        // The rebuild is held until it is let go.
+        let (let_go, held) = crossbeam_channel::bounded::<()>(1);
+        let before_rebuild: horizon_agent::persistence::event_log::BeforeRebuild =
+            Box::new(move || {
+                let _ = held.recv();
+            });
         let (log, db) = (
             dir.path().join("events.jsonl"),
             dir.path().join("state.duckdb"),
@@ -1733,7 +1729,8 @@ mod projection_resume_tests {
             )],
         );
 
-        let (writer, init, duckdb) = WriterHandle::open_silently(&log, Some(db.clone()));
+        let (writer, init, duckdb) =
+            WriterHandle::open_silently(&log, Some(db.clone()), Some(before_rebuild));
         let WriterInit::Ready(report) = init.recv().unwrap() else {
             panic!("writer startup failed");
         };
@@ -1751,7 +1748,7 @@ mod projection_resume_tests {
         );
         assert!(live_sessions(&state).contains(&mid_turn));
 
-        std::fs::write(&gate, "").unwrap();
+        let_go.send(()).unwrap();
         let store = duckdb.recv().unwrap().expect("rebuilt projection");
         let events: Vec<_> = store
             .session_records(mid_turn, u64::MAX >> 1)
