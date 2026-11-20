@@ -248,6 +248,11 @@ pub type SaveTheme = Rc<dyn Fn(&horizon_theme::seed::Seed) -> Result<PathBuf, St
 /// Keeps the model for the next run.
 pub type Save = Box<dyn FnMut(&Workspace)>;
 
+/// Reads the extensions, off the UI thread: the files the configuration
+/// names, then the shell's own (`extension::load_all`).
+pub type ReadExtensions =
+    Arc<dyn Fn(&[String], &[PathBuf]) -> Vec<Arc<crate::extension::Extension>> + Send + Sync>;
+
 /// Reads the configuration again.
 pub type Reload = Box<dyn Fn() -> Result<RawConfig, String>>;
 
@@ -287,6 +292,9 @@ pub struct Opening {
     /// The components of the extensions that come with the shell
     /// (`extension::own`), beside the ones the configuration names.
     pub extensions: Vec<PathBuf>,
+    /// Reads them, in place of `extension::load_all`: a test's, to hold
+    /// the reading until it lets it go.
+    pub read_extensions: Option<ReadExtensions>,
 }
 
 impl Default for Opening {
@@ -308,6 +316,7 @@ impl Default for Opening {
             save_theme: None,
             save: None,
             extensions: Vec::new(),
+            read_extensions: None,
         }
     }
 }
@@ -420,6 +429,8 @@ struct Kept {
     looked_for: RefCell<HashMap<SessionId, bool>>,
     /// The components of the extensions that come with the shell.
     own_extensions: Vec<PathBuf>,
+    /// What reads the extensions.
+    read_extensions: ReadExtensions,
     /// The extensions in use for now from files `horizon extension use`
     /// named, by their names: each in place of the one of its name until
     /// it is reset.
@@ -1187,6 +1198,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
             own_extensions: opening.extensions,
+            read_extensions: (opening.read_extensions)
+                .unwrap_or_else(|| Arc::new(crate::extension::load_all)),
             tried_extensions: RefCell::default(),
             extensions_read: Cell::new(false),
             watched: RefCell::default(),

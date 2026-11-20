@@ -8,6 +8,7 @@
 //! --target wasm32-wasip2`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use horizon::workspace::{Opening, Placement, Shell, Spawn, css, view};
@@ -786,6 +787,13 @@ fn a_pane_of_an_extension_waits_for_the_extensions_to_be_read() {
     std::fs::write(&file, "# One\n").unwrap();
     let extensions =
         horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
+    // The reading waits until it is let go, however soon it would end.
+    let (let_go, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Mutex::new(held);
+    let read_extensions: horizon::workspace::ReadExtensions = Arc::new(move |files, own| {
+        let _ = held.lock().unwrap().recv();
+        horizon::extension::load_all(files, own)
+    });
     let mut shell = None;
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
@@ -793,6 +801,7 @@ fn a_pane_of_an_extension_waits_for_the_extensions_to_be_read() {
             spawn,
             Opening {
                 extensions,
+                read_extensions: Some(read_extensions),
                 ..Opening::default()
             },
         );
@@ -833,6 +842,7 @@ fn a_pane_of_an_extension_waits_for_the_extensions_to_be_read() {
     );
 
     // Read: the pane is made on what it kept.
+    let_go.send(()).unwrap();
     opened.until("the extensions", || opened.shell.extensions_read());
     opened.until("the file", || opened.text().contains("One"));
     assert!(!opened.text().contains("Reading this view's plugin."));

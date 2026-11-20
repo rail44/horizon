@@ -17,7 +17,7 @@ use horizon_control::contract::{EnvelopeBody, ExtensionEntry, Extensions};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 
 use super::{Shell, plugins};
-use crate::extension::{Extension, load_all};
+use crate::extension::Extension;
 use crate::watch::{self, Changed};
 
 /// An extension whose component is watched.
@@ -45,13 +45,14 @@ impl Shell {
     ) {
         let kept = self.kept();
         let own = kept.own_extensions.clone();
+        let read = kept.read_extensions.clone();
         let mut tried: Vec<String> = (kept.tried_extensions.borrow().iter())
             .map(|(_, file)| file.to_string_lossy().into_owned())
             .collect();
         tried.extend(files);
         let files = tried;
         self.in_background(
-            move || load_all(&files, &own),
+            move || read(&files, &own),
             |shell, loaded| {
                 let mut names: Vec<&str> = (plugins::extensions().iter())
                     .map(|extension| extension.name)
