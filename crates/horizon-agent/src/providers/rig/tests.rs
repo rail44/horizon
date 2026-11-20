@@ -2732,10 +2732,10 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
     let all = crate::tools::definitions();
 
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(None, true, false);
 
-    // `memory_update` is deliberately excluded for a role-less session
-    // (no allow list = "all tools") — it is a standing-role-only tool.
+    // `memory_update` is deliberately excluded for a session that is not
+    // standing — it is a standing-role-only tool.
     let expected: Vec<_> = all.iter().filter(|d| d.id != "memory_update").collect();
     assert_eq!(definitions.len(), expected.len());
     for definition in &expected {
@@ -2747,15 +2747,36 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
     }
     assert!(
         !definitions.iter().any(|d| d.name == "memory_update"),
-        "memory_update must not be advertised without an explicit allow list"
+        "memory_update must not be advertised to a session that is not standing"
     );
+}
+
+#[test]
+fn a_standing_session_is_offered_memory_update_without_an_allow_list() {
+    let definitions = rig_tool_definitions(None, true, true);
+
+    assert!(
+        definitions.iter().any(|d| d.name == "memory_update"),
+        "a standing session's turn cannot end without memory_update, so it \
+         must be offered even when the role narrows no tools"
+    );
+}
+
+#[test]
+fn an_allow_list_naming_memory_update_does_not_offer_it_to_a_session_that_is_not_standing() {
+    let allowed = vec!["fs_read".to_string(), "memory_update".to_string()];
+
+    let definitions = rig_tool_definitions(Some(&allowed), true, false);
+
+    let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, vec!["fs_read"]);
 }
 
 #[test]
 fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
     let allowed = vec!["fs_read".to_string(), "fs_glob".to_string()];
 
-    let definitions = rig_tool_definitions(Some(&allowed), true);
+    let definitions = rig_tool_definitions(Some(&allowed), true, false);
 
     assert_eq!(definitions.len(), 2);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -2770,7 +2791,7 @@ fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
 fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
     let allowed: Vec<String> = Vec::new();
 
-    let definitions = rig_tool_definitions(Some(&allowed), true);
+    let definitions = rig_tool_definitions(Some(&allowed), true, false);
 
     assert!(definitions.is_empty());
 }
@@ -2787,7 +2808,7 @@ fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var(crate::config::EXA_API_KEY_VAR) };
 
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(None, true, false);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2807,7 +2828,7 @@ fn web_search_is_advertised_when_exa_api_key_is_set() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
 
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(None, true, false);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2919,7 +2940,7 @@ fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
         .allowed_tool_ids
         .expect("config role must set an allow list");
     assert_eq!(allowed, vec!["skill_read", "config_read", "config_write"]);
-    let definitions = rig_tool_definitions(Some(&allowed), true);
+    let definitions = rig_tool_definitions(Some(&allowed), true, false);
     assert_eq!(definitions.len(), 3);
 }
 
@@ -2939,7 +2960,7 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
     let allowed = config
         .allowed_tool_ids
         .expect("the explore role must set an allow list");
-    let advertised = rig_tool_definitions(Some(&allowed), true)
+    let advertised = rig_tool_definitions(Some(&allowed), true, false)
         .into_iter()
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
@@ -3345,7 +3366,7 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
 #[test]
 fn task_output_is_advertised_only_alongside_task() {
     let names = |allowed: Option<&[String]>| {
-        rig_tool_definitions(allowed, true)
+        rig_tool_definitions(allowed, true, false)
             .into_iter()
             .map(|definition| definition.name)
             .collect::<Vec<_>>()
@@ -3384,7 +3405,7 @@ fn task_output_is_advertised_only_alongside_task() {
 fn knowledge_tools_are_advertised_for_a_trusted_session() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(None, true, false);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
         names.contains("knowledge_read"),
@@ -3400,7 +3421,7 @@ fn knowledge_tools_are_advertised_for_a_trusted_session() {
 fn knowledge_tools_are_not_advertised_for_an_untrusted_session() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let definitions = rig_tool_definitions(None, false);
+    let definitions = rig_tool_definitions(None, false, false);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
         !names.contains("knowledge_read"),

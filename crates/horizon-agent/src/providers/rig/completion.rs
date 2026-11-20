@@ -465,6 +465,7 @@ async fn run_provider_stream(
         .tools(rig_tool_definitions(
             config.allowed_tool_ids.as_deref(),
             config.trusted_project,
+            config.standing,
         ))
         .preamble(system_prompt(environment, extra_sections))
         .max_tokens(config.max_output_tokens)
@@ -778,6 +779,7 @@ fn multi_tool_call_message(count: usize) -> Message {
 pub(super) fn rig_tool_definitions(
     allowed_tool_ids: Option<&[String]>,
     trusted_project: bool,
+    standing: bool,
 ) -> Vec<ToolDefinition> {
     let allows = |id: &str| match allowed_tool_ids {
         Some(allowed) => allowed.iter().any(|allowed| allowed == id),
@@ -795,12 +797,13 @@ pub(super) fn rig_tool_definitions(
                 && (exa_configured || definition.id != "web_search")
                 && (trusted_project || !is_knowledge_tool(&definition.id))
                 && (trusted_project || !crate::tools::external_requires_trust(&definition.id))
-                // `memory_update` is a standing-role-only tool: a role-less
-                // session (`allowed_tool_ids == None`, i.e. "all tools") must
-                // never see it, and non-standing roles don't list it in their
-                // allowlist so `allows` already excludes them. This filter
-                // closes the `None` gap.
-                && (allowed_tool_ids.is_some() || definition.id != "memory_update")
+                // `memory_update` edits the memory document only a standing
+                // role keeps, and a standing role's turn cannot end without
+                // it, so whether it is offered follows `standing` -- not
+                // whether the role narrows its tools: a standing role that
+                // lists none (the board organizer) needs it as much as one
+                // that does.
+                && (standing || definition.id != "memory_update")
         })
         .map(rig_tool_definition_from_horizon)
         .collect()
@@ -813,7 +816,7 @@ pub(crate) fn offered_tool_ids(
     allowed_tool_ids: Option<&[String]>,
     trusted_project: bool,
 ) -> Vec<String> {
-    rig_tool_definitions(allowed_tool_ids, trusted_project)
+    rig_tool_definitions(allowed_tool_ids, trusted_project, false)
         .into_iter()
         .map(|definition| definition.name.to_string())
         .collect()
