@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use horizon::workspace::{Modal, Opening, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_ui::testing::{Pointer, click_at, pointer};
@@ -19,6 +19,8 @@ mod support;
 struct Opened {
     app: App,
     shell: Shell,
+    /// The element the shell's view returned: what the tests look under.
+    root: NodeId,
 }
 
 fn open() -> Opened {
@@ -26,29 +28,18 @@ fn open() -> Opened {
 }
 
 fn open_with(opening: Opening) -> Opened {
-    let mut shell = None;
+    let (mut shell, mut top) = (None, None);
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(spawn, opening);
-        shell = Some(built);
+        (shell, top) = (Some(built), Some(root.0));
         root
     });
     app.resolve();
     Opened {
         app,
         shell: shell.unwrap(),
-    }
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
+        root: top.unwrap(),
     }
 }
 
@@ -82,11 +73,7 @@ impl Opened {
 
     /// The elements of a class, in document order.
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        horizon_ui::testing::find(&self.app, self.root, class)
     }
 
     /// A node's box: x, y, width, height.
@@ -1304,7 +1291,7 @@ fn a_shell_with_nothing_happening_has_nothing_to_draw() {
     // drawn, and their coming in is something to draw: waited for here,
     // or it may come while nothing is to happen.
     opened.until("the extensions read", || opened.shell.extensions_read());
-    let Opened { app, shell } = opened;
+    let Opened { app, shell, .. } = opened;
     // As the window's own wiring does: the waker is handed over once.
     let handed = std::cell::Cell::new(false);
     app.on_poll(move |waker| {

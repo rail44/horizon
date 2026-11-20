@@ -191,7 +191,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         &directory.join("agentd.sock"),
         &directory.join("control.sock"),
     );
-    let mut shell = None;
+    let (mut shell, mut top) = (None, None);
     let app = App::new(1200, 800, "Test", workspace::css(), || {
         let spawn: workspace::Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let opening = Opening {
@@ -201,10 +201,10 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
             ..Opening::default()
         };
         let (root, built) = workspace::view(spawn, opening);
-        shell = Some(built);
+        (shell, top) = (Some(built), Some(root.0));
         root
     });
-    let shell = shell.unwrap();
+    let (shell, root) = (shell.unwrap(), top.unwrap());
     let text = || {
         let document = app.document();
         let document = document.borrow();
@@ -312,20 +312,15 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     commit("switch model");
     enter();
     std::assert_matches!(shell.modal(), Some(Modal::Models(_)));
+    // The names of the picker's rows: in the sheet over the workspace.
     let rows = || {
+        let sheet = horizon_ui::testing::find_one(&app, root, "sheet");
+        let names = horizon_ui::testing::find(&app, sheet, "name");
         let document = app.document();
         let document = document.borrow();
-        let mut names = Vec::new();
-        let mut pending = vec![document.root_element().id];
-        while let Some(id) = pending.pop() {
-            let node = document.get_node(id).unwrap();
-            let class = node.attr(horizon_ui::blitz_dom::local_name!("class"));
-            if class.is_some_and(|classes| horizon_ui::testing::has_class(classes, "name")) {
-                names.push(node.text_content());
-            }
-            pending.extend(node.children.iter().rev().copied());
-        }
-        names
+        (names.into_iter())
+            .map(|name| document.get_node(name).unwrap().text_content())
+            .collect::<Vec<_>>()
     };
     until("the providers", &|| rows() == ["mock"]);
     enter();

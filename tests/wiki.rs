@@ -13,7 +13,7 @@ use horizon::workspace::{Opening, Shell, Spawn, css, view};
 use horizon_control::contract::{EnvelopeBody, Invoke};
 use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_ui::testing::{click_at, select};
@@ -114,18 +114,6 @@ fn open_at(name: &str, width: u32) -> Opened {
     opened
 }
 
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
-}
-
 impl Opened {
     /// `horizon new wiki <arguments>`, from the project.
     fn new_wiki(&self, arguments: &[&str]) -> EnvelopeBody {
@@ -178,12 +166,13 @@ impl Opened {
         horizon_ui::testing::text(&self.app)
     }
 
+    /// The elements of a class in the cursor's pane, the wiki's, in
+    /// document order.
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        let pane = (self.model(Workspace::cursor_pane_id))
+            .and_then(|pane| self.shell.pane_element(pane))
+            .expect("the cursor's pane, drawn");
+        horizon_ui::testing::find(&self.app, pane, class)
     }
 
     fn text_of(&self, node: NodeId) -> String {
@@ -258,11 +247,7 @@ impl Opened {
     /// The dialog's `Close`. (A tab's button to close it has the class
     /// too.)
     fn close_of_the_dialog(&self) -> NodeId {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, self.all("dialog")[0], "close", &mut found);
-        found[0]
+        horizon_ui::testing::find(&self.app, self.all("dialog")[0], "close")[0]
     }
 
     /// The threads on the page `sandbox`, as the log on disk has them.

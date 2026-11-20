@@ -9,7 +9,7 @@ use horizon_components::{
     AlertDialog, ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, Range, Select, Slider,
 };
 use horizon_theme_css::{Theme, themed};
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
@@ -46,24 +46,12 @@ fn open_with(build: impl FnOnce(&Drags) -> El) -> App {
     app
 }
 
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
-}
-
+/// The elements of a class on the page, in document order. (The whole
+/// page: what a test puts on it is the component it checks, and an
+/// element of its own with no sheet's class.)
 fn all(app: &App, class: &str) -> Vec<NodeId> {
-    let document = app.document();
-    let document = document.borrow();
-    let mut found = Vec::new();
-    collect(&document, document.root_element().id, class, &mut found);
-    found
+    let top = app.document().borrow().root_element().id;
+    horizon_ui::testing::find(app, top, class)
 }
 
 /// A node's box: x, y, width, height.

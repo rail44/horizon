@@ -96,6 +96,38 @@ pub fn has_class(classes: &str, class: &str) -> bool {
     })
 }
 
+/// The elements at or under `within` that have the class a sheet wrote as
+/// `class` (as [`has_class`] matches it), in document order.
+///
+/// A test looks under the element of the view it checks -- the one the
+/// view returned, a pane's, a sheet's -- and not over the whole page: a
+/// class's name is its sheet's own, and any other view on the page may
+/// write the same name.
+pub fn find(app: &App, within: blitz_dom::NodeId, class: &str) -> Vec<blitz_dom::NodeId> {
+    let document = app.document();
+    let document = document.borrow();
+    let mut found = Vec::new();
+    let mut pending = vec![within];
+    while let Some(id) = pending.pop() {
+        let node = document.get_node(id).expect("a node of the page");
+        let classes = node.attr(blitz_dom::local_name!("class"));
+        if classes.is_some_and(|classes| has_class(classes, class)) {
+            found.push(id);
+        }
+        pending.extend(node.children.iter().rev().copied());
+    }
+    found
+}
+
+/// The one element at or under `within` with the class `class`, as
+/// [`find`] looks for it.
+pub fn find_one(app: &App, within: blitz_dom::NodeId, class: &str) -> blitz_dom::NodeId {
+    match find(app, within, class)[..] {
+        [one] => one,
+        ref found => panic!("{} elements of the class {class}, not one", found.len()),
+    }
+}
+
 /// The words on the page: the text of everything in the body.
 pub fn text(app: &App) -> String {
     let document = app.document();

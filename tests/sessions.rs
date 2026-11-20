@@ -14,7 +14,7 @@ use horizon_control::contract::{EnvelopeBody, Invoke};
 use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::types::{AgentStatus, Doing, ProgramState, ProgramStatus};
@@ -26,18 +26,8 @@ mod support;
 struct Opened {
     app: App,
     shell: Shell,
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
+    /// The element the shell's view returned: what the tests look under.
+    root: NodeId,
 }
 
 /// A shell with the extensions it comes with.
@@ -48,7 +38,7 @@ fn open() -> Opened {
 fn open_with(opening: Opening) -> Opened {
     let extensions =
         horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
-    let mut shell = None;
+    let (mut shell, mut top) = (None, None);
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(
@@ -58,13 +48,14 @@ fn open_with(opening: Opening) -> Opened {
                 ..opening
             },
         );
-        shell = Some(built);
+        (shell, top) = (Some(built), Some(root.0));
         root
     });
     app.resolve();
     let opened = Opened {
         app,
         shell: shell.unwrap(),
+        root: top.unwrap(),
     };
     opened.until("the extensions", || opened.shell.extensions_read());
     opened
@@ -75,22 +66,12 @@ impl Opened {
         self.shell.model.with_untracked(read)
     }
 
-    /// The text of each element of a class, in document order.
+    /// The text of each element of a class within the list, in document
+    /// order.
     fn texts(&self, class: &str) -> Vec<String> {
+        let found = self.nodes(class);
         let document = self.app.document();
         let document = document.borrow();
-        // (Within the list: the shell has classes of the same names.)
-        let mut lists = Vec::new();
-        collect(
-            &document,
-            document.root_element().id,
-            "sessions",
-            &mut lists,
-        );
-        let mut found = Vec::new();
-        for list in lists {
-            collect(&document, list, class, &mut found);
-        }
         (found.into_iter())
             .map(|node| document.get_node(node).unwrap().text_content())
             .collect()
@@ -187,20 +168,10 @@ impl Opened {
 
     /// The elements of a class within the list, in document order.
     fn nodes(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut lists = Vec::new();
-        collect(
-            &document,
-            document.root_element().id,
-            "sessions",
-            &mut lists,
-        );
-        let mut found = Vec::new();
-        for list in lists {
-            collect(&document, list, class, &mut found);
-        }
-        found
+        let lists = horizon_ui::testing::find(&self.app, self.root, "sessions");
+        (lists.into_iter())
+            .flat_map(|list| horizon_ui::testing::find(&self.app, list, class))
+            .collect()
     }
 
     /// The middle of an element of the page.
@@ -252,10 +223,9 @@ impl Opened {
     /// What the alert dialog asks before a session is ended, wherever it
     /// is: over the workspace, or over the list.
     fn asked(&self) -> Option<String> {
+        let found = horizon_ui::testing::find(&self.app, self.root, "alert");
         let document = self.app.document();
         let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, "alert", &mut found);
         (found.first()).map(|alert| document.get_node(*alert).unwrap().text_content())
     }
 
@@ -269,13 +239,11 @@ impl Opened {
     /// did take effect.
     fn answer(&self, label: &str) {
         let button = {
+            let alerts = horizon_ui::testing::find(&self.app, self.root, "alert");
+            let alert = *alerts.first().expect("an alert dialog");
+            let buttons = horizon_ui::testing::find(&self.app, alert, "button");
             let document = self.app.document();
             let document = document.borrow();
-            let mut alerts = Vec::new();
-            collect(&document, document.root_element().id, "alert", &mut alerts);
-            let alert = *alerts.first().expect("an alert dialog");
-            let mut buttons = Vec::new();
-            collect(&document, alert, "button", &mut buttons);
             (buttons.into_iter())
                 // (Its text is the key that does the same, and its label.)
                 .find(|button| {

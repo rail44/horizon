@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use horizon::workspace::{Opening, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::{NodeId, local_name};
 use horizon_ui::blitz_traits::events::{
     BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, KeyState, MouseEventButton,
     MouseEventButtons, PointerCoords, UiEvent,
@@ -42,18 +42,8 @@ struct Opened {
     shell: Shell,
     /// The web pages handed to the desktop.
     to_the_desktop: Rc<RefCell<Vec<String>>>,
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
+    /// The element the shell's view returned: what the tests look under.
+    root: NodeId,
 }
 
 /// A shell with the extensions it comes with, and its terminal.
@@ -66,7 +56,7 @@ fn open() -> Opened {
     );
     let to_the_desktop = Rc::new(RefCell::new(Vec::new()));
     let handed = to_the_desktop.clone();
-    let mut shell = None;
+    let (mut shell, mut top) = (None, None);
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(
@@ -79,7 +69,7 @@ fn open() -> Opened {
                 ..Opening::default()
             },
         );
-        shell = Some(built);
+        (shell, top) = (Some(built), Some(root.0));
         root
     });
     app.resolve();
@@ -87,6 +77,7 @@ fn open() -> Opened {
         app,
         shell: shell.unwrap(),
         to_the_desktop,
+        root: top.unwrap(),
     };
     opened.until("the extensions", || opened.shell.extensions_read());
 
@@ -110,11 +101,7 @@ impl Opened {
     }
 
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        horizon_ui::testing::find(&self.app, self.root, class)
     }
 
     /// The box of `node` on the page: x, y, width, height.
@@ -208,7 +195,9 @@ impl Opened {
 
     /// The images over the workspace.
     fn images(&self) -> Vec<NodeId> {
-        self.all("image")
+        (self.all("sheet").into_iter())
+            .flat_map(|sheet| horizon_ui::testing::find(&self.app, sheet, "image"))
+            .collect()
     }
 
     fn src(&self, image: NodeId) -> String {
