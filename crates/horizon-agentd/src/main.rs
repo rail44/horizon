@@ -71,7 +71,7 @@ mod session;
 mod wiki_flow;
 mod worktree;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use horizon_agent::config::AgentConfig;
@@ -97,6 +97,30 @@ const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
 /// `session/resume` don't) instead of relying on incidental timing. Never
 /// set in production.
 const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
+
+/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
+/// file's path, the full DuckDB rebuild waits until that file is there
+/// (the writer's `before_rebuild`, see [`open_persistence`]), so a test can
+/// prove the rebuild never sits on the readiness path `session/list` and
+/// `session/new` block on. Never set in production.
+const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
+
+/// The file the variable `var` names, when it is set: a test's gate
+/// ([`TEST_RESUME_GATE_VAR`], [`TEST_DUCKDB_REBUILD_GATE_VAR`]). The
+/// variable is how a test that spawns this daemon reaches it; inside, the
+/// gate is an argument.
+fn test_gate(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .filter(|gate| !gate.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Waits until `gate` is there.
+fn wait_for_gate(gate: &Path) {
+    while !gate.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -190,7 +214,9 @@ fn spawn_resume_task(
     duckdb_cell: SharedDuckdbStore,
 ) {
     tokio::task::spawn_blocking(move || {
-        horizon_agent::persistence::event_log::wait_for_test_gate(TEST_RESUME_GATE_VAR);
+        if let Some(gate) = test_gate(TEST_RESUME_GATE_VAR) {
+            wait_for_gate(&gate);
+        }
         let PersistenceStartup {
             writer,
             records,
@@ -312,9 +338,14 @@ fn read_whole_log(state: &AgentdState, agent_config: &AgentConfig) -> anyhow::Re
 /// is indistinguishable from -- and handled the same as -- an explicit
 /// `None`.
 fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
+    let before_rebuild = test_gate(TEST_DUCKDB_REBUILD_GATE_VAR).map(|gate| {
+        Box::new(move || wait_for_gate(&gate))
+            as horizon_agent::persistence::event_log::BeforeRebuild
+    });
     let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(
         &agent_config.persistence.event_log_path,
         agent_config.persistence.duckdb_path.clone(),
+        before_rebuild,
     );
     match init_rx.recv() {
         Ok(WriterInit::Ready(report)) => {

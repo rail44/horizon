@@ -1221,7 +1221,7 @@ fn live_projection_reflects_writer_thread_appends_through_the_shared_handle() {
     let session_id = SessionId::new();
 
     let (writer, init_rx, duckdb_rx) =
-        WriterHandle::open_silently(&event_log_path, Some(duckdb_path.clone()));
+        WriterHandle::open_silently(&event_log_path, Some(duckdb_path.clone()), None);
     match init_rx.recv().expect("writer init outcome") {
         WriterInit::Ready(_) => {}
         WriterInit::Failed(error) => panic!("unexpected startup failure: {error}"),

@@ -870,7 +870,8 @@ noticeably before `session_list`/`session_new` answered.
   used, so none of reload's failure paths are silent.
 - **Testing.** `crates/horizon-agentd/tests/e2e.rs` gained: a rebuild-delay
   test-only hook (`HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS`, the DuckDB
-  analogue of the existing resume-delay hook) proving `hello`/`session_list`
+  analogue of the existing resume-delay hook; both delays became gates on
+  2026-11-20, see the note below) proving `hello`/`session_list`
   answer promptly while a slow rebuild is still running; a skip-path test
   (second spawn against an *unchanged*, already-terminated-session log
   never re-runs the rebuild — observed via the rebuild-or-skip stderr
@@ -934,7 +935,12 @@ behavior the addendum above describes is unchanged: the rebuild (or skip,
 via the same freshness check) still runs after `WriterInit::Ready` is sent,
 still doesn't block `hello`/`session_list`/`session_new`, and the same
 stderr lines and `HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS` test hook
-still exist (now read by the writer module instead of `main.rs`). What's
+still exist (now read by the writer module instead of `main.rs`). (Since
+2026-11-20 neither delay hook exists: `HORIZON_AGENTD_TEST_RESUME_GATE`
+and `HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE` name a file the resume or
+the rebuild waits for until a test makes it. Both are read by
+`horizon-agentd`'s `main.rs` alone; the writer takes the rebuild's hold
+as an argument, `WriterHandle::open_silently`'s `before_rebuild`.) What's
 new: the writer thread now *keeps* the `Store` it opened, instead of
 dropping it right after the rebuild, so every event appended for the rest
 of the process's life is projected live too -- this is also the basis for

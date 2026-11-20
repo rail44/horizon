@@ -2,7 +2,6 @@ use std::{
     io::{BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     thread,
-    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -13,6 +12,10 @@ use crate::persistence::projection::duckdb::{ApplyRecordsReport, DuckdbStoreHand
 use super::{
     LogCursor, ReadReport, Record, cursor_line_matches, health::WriterHealth, read, read_from,
 };
+
+/// Called on the rebuild's thread before a full DuckDB rebuild starts
+/// ([`WriterHandle::open_silently`]).
+pub type BeforeRebuild = Box<dyn FnOnce() + Send>;
 
 /// A single append-only JSONL event log file must have **at most one**
 /// `WriterHandle` alive per process. Each handle owns its own background
@@ -164,15 +167,20 @@ impl WriterHandle {
     /// passes `None` and gets the exact pre-recall behavior (JSONL only,
     /// DuckDB never touched here) plus an immediately-`None` second
     /// receiver.
+    ///
+    /// `before_rebuild`, when `Some`, is called on the rebuild's thread
+    /// before a full rebuild starts: a test holds the rebuild there for as
+    /// long as it needs it not to have ended.
     pub fn open_silently(
         path: impl AsRef<Path>,
         duckdb_path: Option<PathBuf>,
+        before_rebuild: Option<BeforeRebuild>,
     ) -> (
         Self,
         Receiver<WriterInit>,
         Receiver<Option<DuckdbStoreHandle>>,
     ) {
-        Self::open_inner(path, |path| read(path), false, duckdb_path)
+        Self::open_inner(path, |path| read(path), false, duckdb_path, before_rebuild)
     }
 
     /// Same mechanism as [`Self::open`], but lets a caller substitute the
@@ -186,7 +194,7 @@ impl WriterHandle {
         path: impl AsRef<Path>,
         reader: impl FnOnce(&Path) -> Result<ReadReport> + Send + 'static,
     ) -> (Self, Receiver<WriterInit>) {
-        let (handle, init_rx, _duckdb_rx) = Self::open_inner(path, reader, true, None);
+        let (handle, init_rx, _duckdb_rx) = Self::open_inner(path, reader, true, None, None);
         (handle, init_rx)
     }
 
@@ -195,6 +203,7 @@ impl WriterHandle {
         reader: impl FnOnce(&Path) -> Result<ReadReport> + Send + 'static,
         log_skipped_summary: bool,
         duckdb_path: Option<PathBuf>,
+        before_rebuild: Option<BeforeRebuild>,
     ) -> (
         Self,
         Receiver<WriterInit>,
@@ -260,6 +269,9 @@ impl WriterHandle {
                         (Some(store), Some(seed)) => {
                             let (outcome_tx, outcome_rx) = crossbeam_channel::bounded(1);
                             thread::spawn(move || {
+                                if let Some(hold) = before_rebuild {
+                                    hold();
+                                }
                                 let _ = outcome_tx.send(rebuild_duckdb_projection(store, seed));
                             });
                             Some(PendingRebuild {
@@ -642,8 +654,6 @@ struct RebuiltStore {
 /// function's caller in [`WriterHandle::open_inner`]) rather than letting
 /// anyone open the file again.
 fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<RebuiltStore> {
-    wait_for_test_gate(TEST_DUCKDB_REBUILD_GATE_VAR);
-
     match store.replace_from_event_log(report) {
         Ok(report) => {
             log_skipped_record_summary(&report);
@@ -685,28 +695,6 @@ fn log_skipped_record_summary(report: &ApplyRecordsReport) {
          projection; first failure: {cause}",
         report.skipped
     );
-}
-
-/// Test-only hook, as `horizon-agentd::main`'s own resume gate: when set
-/// to a file's path, this thread's full DuckDB rebuild (which runs on its
-/// own thread after [`WriterInit::Ready`] has been sent -- see
-/// [`WriterHandle::open_inner`]) waits until that file is there, so a test
-/// can prove the rebuild never sits on the readiness path
-/// `session_list`/`session_new` block on, nor in front of a flush, for as
-/// long as it holds the rebuild. Never set outside tests.
-pub const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
-
-/// Test-only: when the variable `var` names a file, waits until that file
-/// is there -- a test holds what follows until it makes the file. Returns
-/// at once when the variable is not set.
-pub fn wait_for_test_gate(var: &str) {
-    let Some(gate) = std::env::var_os(var).filter(|gate| !gate.is_empty()) else {
-        return;
-    };
-    let gate = std::path::PathBuf::from(gate);
-    while !gate.exists() {
-        thread::sleep(Duration::from_millis(10));
-    }
 }
 
 /// Encode and flush the complete JSONL record before updating derived state.
@@ -950,6 +938,7 @@ mod tests {
     use super::*;
     use crate::contract::SessionId;
     use crate::contract::{Event, SessionState};
+    use std::time::Duration;
 
     pub(super) fn record_at(session_id: SessionId, sequence: u64) -> Record {
         Record {
@@ -1303,7 +1292,8 @@ mod tests {
     }
 
     pub(super) fn boot(log: &Path, db: &Path) -> Boot {
-        let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(log, Some(db.to_path_buf()));
+        let (writer, init_rx, duckdb_rx) =
+            WriterHandle::open_silently(log, Some(db.to_path_buf()), None);
         let report = match init_rx.recv().expect("writer init outcome") {
             WriterInit::Ready(report) => report,
             WriterInit::Failed(error) => panic!("writer startup failed: {error:#}"),
@@ -1724,11 +1714,11 @@ mod tests {
     /// once everything appended meanwhile is in it.
     fn assert_rebuild_does_not_hold_the_writer(seed_records: u64) {
         let dir = tempfile::tempdir().unwrap();
-        // The rebuild is held until the gate is made. nextest runs every
-        // test in its own process, so this cannot leak.
-        let gate = dir.path().join("rebuild-gate");
-        // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(TEST_DUCKDB_REBUILD_GATE_VAR, &gate) };
+        // The rebuild is held until it is let go.
+        let (let_go, held) = crossbeam_channel::bounded::<()>(1);
+        let before_rebuild: BeforeRebuild = Box::new(move || {
+            let _ = held.recv();
+        });
         let (log, db) = (
             dir.path().join("events.jsonl"),
             dir.path().join("state.duckdb"),
@@ -1739,7 +1729,8 @@ mod tests {
             .collect();
         write_log(&log, &seed);
 
-        let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(&log, Some(db.clone()));
+        let (writer, init_rx, duckdb_rx) =
+            WriterHandle::open_silently(&log, Some(db.clone()), Some(before_rebuild));
         let report = match init_rx.recv().unwrap() {
             WriterInit::Ready(report) => report,
             WriterInit::Failed(error) => panic!("writer startup failed: {error:#}"),
@@ -1757,7 +1748,7 @@ mod tests {
             "the flush must return while the rebuild is still running"
         );
 
-        std::fs::write(&gate, "").unwrap();
+        let_go.send(()).unwrap();
         let store = duckdb_rx.recv().unwrap().expect("rebuilt store");
         let mut expected: Vec<String> = (0..seed_records).map(|seq| format!("seed{seq}")).collect();
         expected.extend(["window0".to_string(), "window1".to_string()]);
@@ -1776,8 +1767,6 @@ mod tests {
                 event_id: last.event_id,
             })
         );
-        // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(TEST_DUCKDB_REBUILD_GATE_VAR) };
         shut_down(Boot {
             writer,
             report,
