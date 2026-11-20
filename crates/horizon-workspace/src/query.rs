@@ -391,6 +391,11 @@ impl Workspace {
         Some(self.root.group(group)?.tabs.get(index)?.active)
     }
 
+    /// The tab group `pane` is in, the innermost where there are more.
+    pub fn group_of(&self, pane: PaneId) -> Option<TabGroupId> {
+        self.root.tabs_around(pane).last().map(|(group, _)| *group)
+    }
+
     /// The tab `pane` is in, the innermost where there are more.
     pub fn tab_of(&self, pane: PaneId) -> Option<TabId> {
         self.root.tabs_around(pane).last().map(|(_, tab)| *tab)

@@ -328,8 +328,8 @@ interface workspace {
     /// as the plugin holds this: while the focus is in the view, every
     /// pane but the one the view is in is veiled as in the mode, and the
     /// pane that shows the session the cursor was moved to is the
-    /// cursor's -- or its tab's label, where that tab is not shown. The
-    /// keys stay the view's.
+    /// cursor's, its tab shown -- or, where that tab is of the group the
+    /// view is in, the tab's label. The keys stay the view's.
     resource cursor {
         /// `view` is the plugin's node the cursor is moved from: a view
         /// of its in a pane, or over the workspace.

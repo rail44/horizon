@@ -54,13 +54,14 @@ mod styles {
                 padding: var(--u8) var(--u8) var(--u4); font-size: var(--meta-size);
                 line-height: var(--meta-line); color: var(--text-muted); }
         .row { display: flex; align-items: flex-start; box-sizing: border-box;
-               padding: var(--u8) var(--u12) var(--u8) 0; border-radius: var(--radius);
+               padding: var(--u8) var(--u12) var(--u8) 0;
+               border: var(--line) solid transparent; border-radius: var(--radius);
                cursor: pointer; }
         .row:hover { background: var(--band); }
         .actions { flex: none; margin-left: var(--u8); opacity: 0; }
         .row:hover .actions, .row.selected .actions { opacity: 1; }
-        /* The cursor, as workspace mode's: a tint. */
-        .row.selected { background: var(--selection); }
+        /* The cursor: a line, in the accent while the list has the keys. */
+        .row.selected { border-color: var(--border); }
         .state { flex: none; font-size: var(--micro-size); line-height: var(--micro-line); }
         .state.warning { color: var(--chip-warning-text); }
         .state.accent { color: var(--chip-accent-text); }
@@ -95,6 +96,7 @@ mod styles {
         .hint:hover { background: var(--hover); }
         .key { font-weight: 600; color: var(--text); }
     }
+    .sessions:focus .row.selected { border-color: var(--accent); }
     .over { width: 720px; height: 480px; display: flex; }
     .over > .sessions { flex: 1; }
     "}

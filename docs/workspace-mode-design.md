@@ -242,12 +242,16 @@ manifest's `uses`; `src/workspace/lent_cursor.rs`, board #95). The list
 of sessions does: its cursor -- the chosen row, a tint as the mode's is
 -- is the workspace's too. While the focus is in such a view, every pane
 but the one it is in is veiled as in the mode, and the pane that shows
-the session it points at is the cursor's; where that pane's tab is not
-shown, the tab's label is. A session no pane shows puts the cursor on no
-pane. Nothing else changes: no tab is shown, no pane gets the focus, and
-Enter in the view goes to the session as it did. An extension hears of
-no focus going and coming, so the shell looks where the focus is after
-each layout; the mode itself, entered, takes the place of it.
+the session it points at is the cursor's, its tab shown -- but a tab of
+the group the view itself is in, which would take the view away: there
+the tab's label is the cursor's. A session no pane shows puts the cursor
+on no pane. No pane gets the focus, and Enter in the view goes to the
+session as it did; the view's pane, put back in the boxes made again for
+a tab shown, is given the keys again. An extension hears of no focus
+going and coming, so the shell looks where the focus is after each
+layout; the mode itself, entered, takes the place of it. The list of
+sessions marks its own cursor, the chosen row, by a line: in the accent
+while it has the keys.
 
 ## What an empty workspace shows (2026-11-20)
 
