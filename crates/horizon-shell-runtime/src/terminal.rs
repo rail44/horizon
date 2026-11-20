@@ -38,8 +38,7 @@ use uuid::Uuid;
 
 use super::common::{
     ConnTask, Connected, EstablishError, OP_TIMEOUT, RuntimeControl, SILENCE_MISMATCH_THRESHOLD,
-    StreamEnd, connect_hub, establish_for_drain, establish_timeout, wait_until_refusing,
-    with_deadline,
+    StreamEnd, Timeouts, connect_hub, establish_for_drain, wait_until_refusing, with_deadline,
 };
 use super::connection::connect_or_spawn_terminald_retrying;
 use super::routing::{RouteKey, TerminalRoutes};
@@ -233,7 +232,7 @@ async fn recover_stale_terminald(
     *mismatch_recovery_attempted = true;
     eprintln!("{message}; draining and restarting horizon-terminald");
     let drained = tokio::select! {
-        drained = drain_stale_terminald(socket_path) => drained,
+        drained = drain_stale_terminald(socket_path, control.timeouts()) => drained,
         _ = control.cancelled() => {
             routes.connection_failed("terminald runtime stopped".to_string());
             return ControlFlow::Break(());
@@ -303,7 +302,7 @@ where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
 {
     let established = tokio::select! {
-        result = establish(stream) => result,
+        result = establish(stream, control.timeouts().establish) => result,
         _ = control.cancelled() => return StreamEnd::Cancelled,
     };
     let (hub, conn_task) = match established {
@@ -330,7 +329,7 @@ where
                 let Some(op) = op else {
                     break StreamEnd::Dropped;
                 };
-                handle_op(op, &live);
+                handle_op(op, &live, control.timeouts().establish);
             }
         }
     };
@@ -363,7 +362,7 @@ type EstablishedParts = (TerminalHubClient<WireCodec>, ConnTask);
 /// logged, adoption condition 2) rather than escalating here: one poisoned
 /// frame must not kill every running shell, which is precisely the outcome
 /// this whole split exists to prevent.
-async fn establish<S>(stream: S) -> Result<EstablishedParts, EstablishError>
+async fn establish<S>(stream: S, timeout: Duration) -> Result<EstablishedParts, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
 {
@@ -372,7 +371,7 @@ where
         conn_task,
         deadline,
         timeout,
-    } = connect_hub::<_, TerminalHubClient<WireCodec>>(stream, DAEMON).await?;
+    } = connect_hub::<_, TerminalHubClient<WireCodec>>(stream, DAEMON, timeout).await?;
 
     let client_hello = terminal_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     let hello = match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
@@ -434,7 +433,7 @@ where
 /// independent and a slow one — a PTY spawn — must not stall command
 /// forwarding for other sessions), holding clones of the hub client and
 /// routes.
-fn handle_op(op: Op, live: &Live) {
+fn handle_op(op: Op, live: &Live, establish: Duration) {
     match op {
         Op::CreateTerminal {
             route,
@@ -498,7 +497,7 @@ fn handle_op(op: Op, live: &Live) {
                 // The daemon exits inside this call, so the reply usually
                 // never arrives; completion is observed by the caller as
                 // the socket refusing connections (`wait_for_drain`).
-                let _ = tokio::time::timeout(establish_timeout(), hub.drain()).await;
+                let _ = tokio::time::timeout(establish, hub.drain()).await;
             });
         }
     }
@@ -559,21 +558,21 @@ async fn run_terminal_attachment(
 /// and `drain` are the version-stable hub surface, so the drain travels as
 /// an ordinary rtc call on a fresh connection — no `hello` first, since the
 /// whole point is that `hello` already failed.
-async fn drain_stale_terminald(socket_path: &Path) -> Result<(), String> {
+async fn drain_stale_terminald(socket_path: &Path, timeouts: Timeouts) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,
         Err(_) => return Ok(()),
     };
-    match establish_for_drain::<TerminalHubClient<WireCodec>>(stream).await {
+    match establish_for_drain::<TerminalHubClient<WireCodec>>(stream, timeouts.establish).await {
         Ok((hub, conn_task)) => {
-            let _ = tokio::time::timeout(establish_timeout(), hub.drain()).await;
+            let _ = tokio::time::timeout(timeouts.establish, hub.drain()).await;
             conn_task.abort();
         }
         Err(error) => {
             eprintln!("drain connection to the incompatible terminald failed: {error}");
         }
     }
-    if wait_until_refusing(socket_path).await {
+    if wait_until_refusing(socket_path, timeouts.drain_exit).await {
         Ok(())
     } else {
         Err(

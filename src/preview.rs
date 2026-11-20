@@ -28,7 +28,7 @@ use horizon_ui::{El, each_layout, el, relayout};
 use crate::background::Background;
 use crate::extension::Extension;
 use crate::plugin::{Command, Mounted, Plugin as PanePlugin};
-use crate::plugin_host::Asks;
+use crate::plugin_host::{Asks, Limits};
 #[cfg(doc)]
 use crate::plugin_host::{CALL_LIMIT, MEMORY_LIMIT};
 use crate::wake::Wake;
@@ -107,7 +107,7 @@ fn stage() -> (El, RwSignal<Option<String>>) {
 
 /// The view of the extension read for `target`, made on what the target
 /// gives for it, or what was said in place of it.
-fn shown(built: Result<Built, String>, target: &Target, wake: Wake) -> El {
+fn shown(built: Result<Built, String>, target: &Target, limits: Limits, wake: Wake) -> El {
     let (root, failed) = stage();
     let mounted = built.and_then(|extension| {
         let name = extension.name;
@@ -118,7 +118,7 @@ fn shown(built: Result<Built, String>, target: &Target, wake: Wake) -> El {
         };
         let state = extension.created_from(&mut given)?;
         given.done().map_err(|error| format!("`{name}`: {error}"))?;
-        let running = extension.instantiate(Asks::default(), wake, failed)?;
+        let running = extension.instantiate_within(Asks::default(), limits, wake, failed)?;
         let node = running.mount(state.as_deref())?;
         running.follow();
         Ok(node)
@@ -131,11 +131,13 @@ fn shown(built: Result<Built, String>, target: &Target, wake: Wake) -> El {
 }
 
 /// A preview pane, empty until it is given a target. `background` is
-/// where the file is compiled, and `wake` what a change of the file wakes.
+/// where the file is compiled, `limits` how far the extension may go
+/// before it is ended, and `wake` what a change of the file wakes.
 pub fn view(
     // What to show: the pane follows it.
     target: Signal<Option<Target>>,
     background: Background,
+    limits: Limits,
     wake: Wake,
 ) -> (El, Preview) {
     let state = Preview {
@@ -203,6 +205,7 @@ pub fn view(
                 let shown = shown(
                     built.unwrap_or_else(|| Err("nothing was read".to_string())),
                     target,
+                    limits,
                     shown_wake.clone(),
                 );
                 arrived.set(Some(shown));
@@ -287,7 +290,12 @@ impl PanePlugin for PreviewPlugin {
         target: Option<Target>,
         _: horizon_ui::Callback<std::convert::Infallible>,
     ) -> Mounted<Option<Target>, PreviewCommand> {
-        let (view, preview) = view(Signal::stored(target.clone()), self.background, self.wake);
+        let (view, preview) = view(
+            Signal::stored(target.clone()),
+            self.background,
+            Limits::default(),
+            self.wake,
+        );
         Mounted {
             view,
             run: horizon_ui::Callback::new(move |PreviewCommand::Reload| preview.reload()),

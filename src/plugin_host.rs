@@ -165,6 +165,24 @@ pub struct ModalAsks {
     pub close: Rc<dyn Fn(NodeId)>,
 }
 
+/// How far a plugin may go before it is ended: how much memory it may
+/// take, and how long one poll of its future may go on.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub memory: usize,
+    pub call: Duration,
+}
+
+impl Default for Limits {
+    /// [`MEMORY_LIMIT`] and [`CALL_LIMIT`].
+    fn default() -> Self {
+        Self {
+            memory: MEMORY_LIMIT,
+            call: CALL_LIMIT,
+        }
+    }
+}
+
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
 #[derive(Clone, Default)]
@@ -801,7 +819,7 @@ struct Watchdog {
 }
 
 impl Watchdog {
-    fn over(engine: Engine) -> Self {
+    fn over(engine: Engine, limit: Duration) -> Self {
         let (polls, told) = mpsc::channel::<bool>();
         std::thread::spawn(move || {
             // Until the plugin is let go of, and the sender with it.
@@ -809,7 +827,7 @@ impl Watchdog {
                 if !began {
                     continue;
                 }
-                match told.recv_timeout(CALL_LIMIT) {
+                match told.recv_timeout(limit) {
                     Ok(_) => {}
                     Err(RecvTimeoutError::Timeout) => engine.increment_epoch(),
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -1249,6 +1267,7 @@ pub fn instantiate(
     compiled: &Compiled,
     wasi: WasiCtx,
     asks: Asks,
+    limits: Limits,
     wake: Wake,
     failed: RwSignal<Option<String>>,
 ) -> wasmtime::Result<Rc<Loaded>> {
@@ -1260,7 +1279,7 @@ pub fn instantiate(
             wasi,
             table: ResourceTable::new(),
             left: left.clone(),
-            limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
+            limits: StoreLimitsBuilder::new().memory_size(limits.memory).build(),
             owned: HashSet::new(),
             theme: asks.theme.as_ref().map(|theme| (theme.now)()),
             sessions: asks.sessions.as_ref().map(|sessions| sessions.feed.clone()),
@@ -1274,7 +1293,7 @@ pub fn instantiate(
     let polled = began.clone();
     store.set_epoch_deadline(1);
     store.epoch_deadline_callback(move |_| match *polled.lock().unwrap() {
-        Some(began) if began.elapsed() >= CALL_LIMIT => {
+        Some(began) if began.elapsed() >= limits.call => {
             Err(wasmtime::Error::msg("the plugin took too long"))
         }
         _ => Ok(UpdateDeadline::Continue(1)),
@@ -1306,7 +1325,7 @@ pub fn instantiate(
         jobs,
         left,
         asks,
-        watchdog: Watchdog::over(compiled.engine.clone()),
+        watchdog: Watchdog::over(compiled.engine.clone(), limits.call),
         woken: Arc::new(Woken {
             asked: AtomicBool::new(false),
             page: wake,
