@@ -52,14 +52,14 @@ pub enum Side {
 }
 
 impl Side {
-    fn axis(self) -> SplitAxis {
+    pub(crate) fn axis(self) -> SplitAxis {
         match self {
             Self::Left | Self::Right => SplitAxis::Horizontal,
             Self::Up | Self::Down => SplitAxis::Vertical,
         }
     }
 
-    fn before(self) -> bool {
+    pub(crate) fn before(self) -> bool {
         matches!(self, Self::Left | Self::Up)
     }
 }

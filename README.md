@@ -73,10 +73,12 @@ manual smoke checks:
   group -- with its neighbor in that direction. `move to tab` (`m` in the
   mode) moves the pane the cursor is on to a new tab of its tab group, or
   into any other tab, beside its active pane, chosen from a list. With the
-  pointer, a
-  view is dragged by its tab's label, or by the tag with its name that shows
-  in the pane's top right corner while the pointer is over it: dropped on
-  another view the two swap, dropped on a tab strip it is a new tab there.
+  pointer, a view is dragged by its tab's label, or by the tag with its name
+  that shows in the pane's top right corner while the pointer is over it:
+  dropped on the middle of another view the two swap, on its edge it goes
+  beside it, on another tab's label into that tab (a tab's label shows its
+  tab as the view comes over it), on the rest of a tab strip it is a new
+  tab there.
 - In workspace mode, `<` `>` narrow and widen the part of a split the cursor
   is on, `-` `+` make it shorter and taller, and `=` makes the split's parts
   even; a boundary dragged with the pointer does the same.

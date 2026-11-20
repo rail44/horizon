@@ -129,9 +129,14 @@ moved into a new tab.
 
 With the pointer (`src/workspace/moving.rs`), a view is taken by its
 tab's label, which takes the tab's active pane, or by its tag (below).
-Dropped on another view, the two swap; dropped on a group's strip, it is a new tab
-of that group -- the same operations the keys and Move to Tab… carry
-out. While it moves, the view or strip it would go to is marked and its
+Dropped on the middle of another view, the two swap; on an edge of it
+(a quarter of its width or height in from a side), it goes beside it on
+that side, in whatever tab it is; on another tab's label, into that tab,
+beside its active pane, as Move to Tab… puts it; on the rest of a group's
+strip -- its own tab's label too -- it is a new tab of that group. A
+tab's label the pointer comes over while a view moves shows that tab at
+once, so that its views are there to drop on (there is no timer to wait
+on the label with). While it moves, the view or strip it would go to is marked and its
 title goes beside the pointer. A press that does not go a few pixels is
 no move, so a click on a tab's label is still the click.
 

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::mode::{Cursor, Direction};
 use super::nav::{layout_rects, nearest_in_direction};
+use super::operations::Side;
 use super::types::{LayoutNode, NodeKey, PaneId, SplitAxis, Tab, TabGroupId, TabId, Workspace};
 
 impl LayoutNode {
@@ -265,6 +266,34 @@ impl Workspace {
         true
     }
 
+    /// Moves the pane `pane` beside the pane `target`, on its `side`,
+    /// wherever `target` is -- in a tab not its own, too -- with focus.
+    /// `false`, a no-op, when either is unknown or they are one.
+    pub fn move_pane_beside(&mut self, pane: PaneId, target: PaneId, side: Side) -> bool {
+        if pane == target
+            || !self.root.contains(NodeKey::Pane(pane))
+            || !self.root.contains(NodeKey::Pane(target))
+        {
+            return false;
+        }
+        let Some(mut rest) = self.root.without_pane(pane) else {
+            return false;
+        };
+        rest.flatten();
+        if !rest.split_beside(
+            NodeKey::Pane(target),
+            LayoutNode::Pane(pane),
+            side.axis(),
+            side.before(),
+        ) {
+            return false;
+        }
+        rest.flatten();
+        self.root = rest;
+        self.note_focus(pane);
+        true
+    }
+
     /// Where the pane the cursor is on can be moved to with
     /// [`Self::move_cursor_pane_to_tab`]: every tab on screen but its own,
     /// in the order of their groups, outermost first, and of their strips.
@@ -414,6 +443,30 @@ mod tests {
         assert!(workspace.root.is_canonical());
         // Into the tab it is in already: nothing.
         assert!(!workspace.move_pane_to_tab(left, tabs[1]));
+    }
+
+    #[test]
+    fn a_pane_moves_beside_another_on_a_side_into_its_tab() {
+        let (mut workspace, left, right, group, first, _) = row();
+        // `right` above `first`, in the group's first tab.
+        assert!(workspace.move_pane_beside(right, first, Side::Up));
+        assert_eq!(
+            order(&workspace),
+            [NodeKey::Pane(left), NodeKey::Group(group)]
+        );
+        let tab = &workspace.root.group(group).unwrap().tabs[0];
+        let LayoutNode::Split { axis, children } = &tab.root else {
+            panic!("a split in the tab");
+        };
+        assert_eq!(*axis, SplitAxis::Vertical);
+        let panes: Vec<NodeKey> = children
+            .iter()
+            .map(|child| child.node.first_key())
+            .collect();
+        assert_eq!(panes, [NodeKey::Pane(right), NodeKey::Pane(first)]);
+        assert!(workspace.is_active_pane(right));
+        assert!(workspace.root.is_canonical());
+        assert!(!workspace.move_pane_beside(right, right, Side::Left));
     }
 
     #[test]

@@ -359,6 +359,56 @@ fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
 }
 
 #[test]
+fn a_view_dragged_onto_a_tabs_label_or_a_views_edge_goes_there() {
+    use horizon_ui::testing::{Pointer, pointer};
+    let opened = open();
+    let settle = || {
+        for _ in 0..2 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    let first = opened.panes()[0];
+    opened.chord();
+    opened.character("t");
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    let second = opened.panes()[0];
+    // The second tab's label, its pane taken by it, onto the first's: the
+    // first tab is shown on the way, and the pane goes into it, beside
+    // its active pane.
+    let labels = opened.all("tab-label");
+    let (from, to) = (opened.middle(labels[1]), opened.middle(labels[0]));
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    settle();
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+    assert_eq!(opened.all("drop"), vec![labels[0]]);
+    pointer(&opened.app, to.0, to.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.model(Workspace::tab_count), 1);
+    assert_eq!(opened.panes(), vec![first, second]);
+
+    // The second pane by its tag onto the first's lower edge: below it.
+    let panes = opened.all("pane");
+    let tag = opened.middle(opened.all("tag")[1]);
+    let (x, y, width, height) = opened.bounds(panes[0]);
+    let edge = (x + width / 2., y + height * 0.9);
+    pointer(&opened.app, tag.0, tag.1, Pointer::Move);
+    settle();
+    pointer(&opened.app, tag.0, tag.1, Pointer::Down);
+    pointer(&opened.app, edge.0, edge.1, Pointer::Drag);
+    settle();
+    assert_eq!(opened.all("to-bottom").len(), 1);
+    pointer(&opened.app, edge.0, edge.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.panes(), vec![first, second]);
+    let (above, below) = (opened.bounds(panes[0]), opened.bounds(panes[1]));
+    assert!(above.1 + above.3 <= below.1, "{above:?} {below:?}");
+    assert_eq!(above.0, below.0);
+}
+
+#[test]
 fn tabs_open_cycle_and_are_picked_from_the_strip() {
     let opened = open();
     let first = opened.all("pane");
