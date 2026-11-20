@@ -31,6 +31,14 @@ migration design](ui-foundation-migration-design.md), [the research
 record](research/ui-foundation-candidates-2026-11-11.md)). What that left
 open: macOS, where the new shell has not been run.
 
+Subagents become one delegation tool with a read and a write mode: `task`
+gains `access`, exploration is its read mode, a child has no budget,
+reports how it ended, can be sent a follow-up, routes its approvals to the
+human through the requester, and a write child works in its own worktree
+(owner decisions 2026-11-20). Design and staging in
+[the subagent design](agent-subagent-design.md); measurements and prior
+art in [the research record](research/agent-subagent-prior-art-2026-11-20.md).
+
 The containment perimeter moves from "spawned isolated" to the sandbox
 itself: one session kind, `bash` always sandboxed with the gitdir excluded
 from the writable root, host execution only as the no-sandbox fallback,

@@ -524,3 +524,11 @@ above.
   notification in the event log, and its placement before the
   `#[serde(other)] Unknown` catch-all is what required
   `SESSION_PROTOCOL_VERSION` 13 → 14.
+
+
+## Superseded in part (2026-11-20)
+
+The 25-request cap (decision 7) and the removal of follow-up turns (the
+2026-07-27 addendum) are superseded by `docs/agent-subagent-design.md`:
+exploration becomes the read mode of one delegation tool, with no budget
+and with follow-up.

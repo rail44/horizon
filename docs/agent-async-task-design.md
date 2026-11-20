@@ -197,3 +197,11 @@ granularity is unchanged — hence the 2026-07-28 wording amendment to
 (decompose into parallel launches; keep delegating follow-up questions
 while implementing), to be measured on the next dogfood run. The next
 structural lever is compaction (design in progress).
+
+
+## Superseded in part (2026-11-20)
+
+Decision 5's per-child iteration cap and decision 7's read-only-only scope
+are superseded by `docs/agent-subagent-design.md`: no child budget, and
+write-capable children in their own worktrees, with approvals routed to
+the human through the requester.
