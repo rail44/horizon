@@ -738,14 +738,21 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
 /// not speak ACP) escalates after `SILENCE_MISMATCH_THRESHOLD` silences to
 /// the one recovery attempt, which dials a fresh ACP connection. The peer
 /// cannot answer that either, so the runtime reports the manual fix.
+/// The runtime's waits on a daemon, made short: the tests below are about
+/// what it does once they run out, not about how long they are.
+fn short_timeouts() -> crate::Timeouts {
+    crate::Timeouts {
+        establish: Duration::from_millis(300),
+        drain_exit: Duration::from_millis(300),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_silent_daemon_is_reported_as_needing_a_manual_stop() {
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300") };
     let (socket_path, control_socket) = stub_socket_paths("probe");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start_within(&socket_path, &control_socket, short_timeouts());
     let mut agent = start_mock_session(&handle, SessionId::new());
 
     let mut held = Vec::new();
@@ -780,12 +787,10 @@ async fn a_silent_daemon_is_reported_as_needing_a_manual_stop() {
 /// hint instead of draining again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping() {
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300") };
     let (socket_path, control_socket) = stub_socket_paths("fatal");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start_within(&socket_path, &control_socket, short_timeouts());
     let mut agent = start_mock_session(&handle, SessionId::new());
 
     let mut held = Vec::new();

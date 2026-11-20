@@ -15,6 +15,7 @@ use std::task::Waker;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
+use horizon::plugin_host::Limits;
 use horizon::preview::{Preview, Target, view};
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
@@ -57,7 +58,7 @@ struct Opened {
 /// `arguments`, on a page that has the theme and the pane's own rules and
 /// none of the view's.
 fn open_at(path: &Path, arguments: &[&str]) -> Opened {
-    open_with(path, arguments, false)
+    open_with(path, arguments, false, Limits::default())
 }
 
 /// Told when what was done off the UI thread has come back.
@@ -71,14 +72,19 @@ impl std::task::Wake for Arrived {
 
 /// [`open_at`]; with `read_first`, the component is compiled and back
 /// before the page is first laid out, as when it was compiled before.
-fn open_with(path: &Path, arguments: &[&str], read_first: bool) -> Opened {
+fn open_with(path: &Path, arguments: &[&str], read_first: bool, limits: Limits) -> Opened {
     let arrived = Arc::new(Arrived(AtomicBool::new(false)));
     let told = Wake::default();
     told.set(Waker::from(arrived.clone()));
     let mut made = None;
     let app = App::new(600, 500, "Test", horizon_theme_css::CSS, || {
         let target = RwSignal::new(None);
-        let (root, preview) = view(target.into(), Background::new(told), Wake::default());
+        let (root, preview) = view(
+            target.into(),
+            Background::new(told),
+            limits,
+            Wake::default(),
+        );
         made = Some((root, preview, target));
         themed(Theme::built_in, root)
     });
@@ -206,7 +212,7 @@ impl Opened {
 fn the_keys_reach_an_extension_read_before_the_pane_is_first_drawn() {
     // Compiled before (the cache has it), the extension is placed in the
     // frame the pane is given the keys in: the keys still go on to it.
-    let opened = open_with(&fixture(), &["rows"], true);
+    let opened = open_with(&fixture(), &["rows"], true, Limits::default());
     opened.until("the rows", || opened.titles().len() == 3);
     opened.character("j");
     assert_eq!(opened.selected(), Some(1));
@@ -357,13 +363,18 @@ fn an_extension_s_file_replaced_is_read_and_shown_again() {
 
 #[test]
 fn a_call_into_an_extension_that_does_not_come_back_is_ended() {
+    // A limit of the test's own: what is checked is that the call is ended
+    // at it, not how long the host's own is.
+    let limits = Limits {
+        call: Duration::from_millis(300),
+        ..Limits::default()
+    };
     let started = Instant::now();
-    let opened = open("stuck");
+    let opened = open_with(&fixture(), &["stuck"], false, limits);
     let said = opened.all("failed");
     assert_eq!(said.len(), 1, "{}", opened.text());
-    // (The limit is five seconds.)
-    assert!(started.elapsed() >= Duration::from_secs(4));
-    assert!(started.elapsed() < Duration::from_secs(60));
+    // Ended at the limit, not before it.
+    assert!(started.elapsed() >= limits.call);
 }
 
 #[test]
@@ -390,6 +401,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
         preview: view(
             RwSignal::new(None).into(),
             Background::default(),
+            Limits::default(),
             Wake::default(),
         )
         .1,

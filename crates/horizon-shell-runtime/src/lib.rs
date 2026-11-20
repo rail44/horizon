@@ -55,6 +55,7 @@ use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
 
 use common::RuntimeControl;
+pub use common::Timeouts;
 use request::{RequestError, request};
 
 pub use notify::{NotifyCoalescer, NotifyDecision};
@@ -224,7 +225,21 @@ impl AgentdHandle {
         Receiver<HostToolRequest>,
         Receiver<(SessionId, WorkspaceRootUpdate)>,
     ) {
-        let (handle, host_tools, workspace_roots, ops) = Self::parts();
+        Self::start_within(socket_path, control_socket, Timeouts::default())
+    }
+
+    /// [`Self::start`], waiting on the daemon for `timeouts` in place of
+    /// the runtime's own: a test's shorter ones.
+    pub fn start_within(
+        socket_path: &Path,
+        control_socket: &Path,
+        timeouts: Timeouts,
+    ) -> (
+        Self,
+        Receiver<HostToolRequest>,
+        Receiver<(SessionId, WorkspaceRootUpdate)>,
+    ) {
+        let (handle, host_tools, workspace_roots, ops) = Self::parts(timeouts);
         agent::spawn(
             socket_path.to_path_buf(),
             control_socket.to_path_buf(),
@@ -236,7 +251,9 @@ impl AgentdHandle {
     }
 
     #[expect(clippy::type_complexity)]
-    fn parts() -> (
+    fn parts(
+        timeouts: Timeouts,
+    ) -> (
         Self,
         Receiver<HostToolRequest>,
         Receiver<(SessionId, WorkspaceRootUpdate)>,
@@ -246,7 +263,7 @@ impl AgentdHandle {
         let (host_tool_tx, host_tool_rx) = unbounded();
         let (workspace_root_tx, workspace_root_rx) = unbounded();
         let routes = Arc::new(AgentRoutes::new(host_tool_tx, workspace_root_tx));
-        let control = Arc::new(RuntimeControl::new());
+        let control = Arc::new(RuntimeControl::new(timeouts));
         let lifetime = Arc::new(RuntimeLifetime {
             control: control.clone(),
         });
@@ -274,7 +291,7 @@ impl AgentdHandle {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     {
-        let (handle, host_tools, workspace_roots, ops) = Self::parts();
+        let (handle, host_tools, workspace_roots, ops) = Self::parts(Timeouts::default());
         agent::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
         (handle, host_tools, workspace_roots)
     }
@@ -511,7 +528,7 @@ impl TerminaldHandle {
     fn parts() -> (Self, tokio::sync::mpsc::UnboundedReceiver<terminal::Op>) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
         let routes = Arc::new(TerminalRoutes::new());
-        let control = Arc::new(RuntimeControl::new());
+        let control = Arc::new(RuntimeControl::new(Timeouts::default()));
         let lifetime = Arc::new(RuntimeLifetime {
             control: control.clone(),
         });

@@ -471,12 +471,12 @@ their wiring:
   variable only crosses a process.** A limit a test shortens, or a step
   it holds until it lets it go, is passed in where the code is built or
   opened (`Opening::read_extensions`, `WriterHandle::open_silently`'s
-  `before_rebuild`), not set with `std::env::set_var` in the test's
+  `before_rebuild`, `AgentdHandle::start_within`'s `Timeouts`, the
+  preview's `Limits`), not set with `std::env::set_var` in the test's
   process. Only a process the test spawns (a daemon) is reached through
   its environment, and its own binary turns the variable into the
   argument (`HORIZON_AGENTD_TEST_*_GATE` in `horizon-agentd`'s
-  `main.rs`). Owner decision 2026-11-20. (`HORIZON_TEST_ESTABLISH_TIMEOUT_MS`
-  in `horizon-shell-runtime` predates it and is still read in-process.)
+  `main.rs`). Owner decision 2026-11-20.
 - **Design decisions are recorded under `docs/`** (e.g.
   `agent-pane-design.md`, `agent-provider-contract.md`,
   `agent-duckdb-state-design.md`). Add or update a doc when making a

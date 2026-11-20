@@ -31,8 +31,8 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::attachment::{AgentCommand, Inbound, acp_session_id};
 use super::common::{
-    EstablishError, OP_TIMEOUT, RuntimeControl, SILENCE_MISMATCH_THRESHOLD, StreamEnd,
-    establish_timeout, wait_until_refusing,
+    EstablishError, OP_TIMEOUT, RuntimeControl, SILENCE_MISMATCH_THRESHOLD, StreamEnd, Timeouts,
+    wait_until_refusing,
 };
 use super::connection::connect_or_spawn_agentd_retrying;
 use super::routing::{AgentRoutes, EXT_VERSION_MISMATCH, RouteKey, parse_session_id};
@@ -267,7 +267,7 @@ async fn recover_generation_mismatch(
     *mismatch_recovery_attempted = true;
     eprintln!("{message}; draining and restarting the daemon");
     let drained = tokio::select! {
-        drained = drain_stale_agentd(socket_path) => drained,
+        drained = drain_stale_agentd(socket_path, control.timeouts()) => drained,
         _ = control.cancelled() => {
             routes.connection_failed("agentd runtime stopped".to_string());
             return ControlFlow::Break(());
@@ -422,11 +422,12 @@ where
     let transport = ByteStreams::new(write_half.compat_write(), read_half.compat());
     let main_control = control.clone();
     let main_routes = routes.clone();
+    let establish = control.timeouts().establish;
     routes.clear_version_mismatch();
     let result = client(&routes)
         .connect_with(transport, async move |connection: V2ConnectionTo<Agent>| {
             let initialized = tokio::select! {
-                result = initialize(&connection) => result,
+                result = initialize(&connection, establish) => result,
                 _ = main_control.cancelled() => return Ok(StreamEnd::Cancelled),
             };
             if let Err(error) = initialized {
@@ -442,7 +443,7 @@ where
                         );
                     }
                     message = main_routes.version_mismatch() => {
-                        drain_on(&connection).await;
+                        drain_on(&connection, establish).await;
                         main_routes.connection_reset(message.clone());
                         break StreamEnd::VersionRejected { message };
                     }
@@ -450,7 +451,7 @@ where
                         let Some(op) = op else {
                             break StreamEnd::Dropped;
                         };
-                        handle_op(op, &connection, &main_routes);
+                        handle_op(op, &connection, &main_routes, establish);
                     }
                 }
             };
@@ -483,8 +484,10 @@ fn initialize_request() -> v2::InitializeRequest {
 
 /// Sends `initialize` within the establish deadline and checks the
 /// daemon's extension version.
-async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishError> {
-    let timeout = establish_timeout();
+async fn initialize(
+    connection: &V2ConnectionTo<Agent>,
+    timeout: Duration,
+) -> Result<(), EstablishError> {
     let response = match tokio::time::timeout(
         timeout,
         connection.send_request(initialize_request()).block_task(),
@@ -519,7 +522,7 @@ async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishE
         // The daemon accepts `initialize` across versions so that it can be
         // drained on this same connection.
         Some(Ok(meta)) => {
-            drain_on(connection).await;
+            drain_on(connection, timeout).await;
             return Err(EstablishError::Rejected(format!(
                 "{EXT_VERSION_MISMATCH}: agentd {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
                 meta.binary_id, meta.ext_version
@@ -541,9 +544,9 @@ async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishE
 }
 
 /// Sends `_horizon/drain` and waits, bounded, for the daemon to act on it.
-async fn drain_on(connection: &V2ConnectionTo<Agent>) {
+async fn drain_on(connection: &V2ConnectionTo<Agent>, timeout: Duration) {
     let _ = tokio::time::timeout(
-        establish_timeout(),
+        timeout,
         connection.send_request(DrainRequest {}).block_task(),
     )
     .await;
@@ -580,7 +583,12 @@ fn resume_cwd() -> PathBuf {
 
 /// Dispatches one op. Each request is awaited on its own task, so a slow
 /// one does not stall the others.
-fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoutes>) {
+fn handle_op(
+    op: Op,
+    connection: &V2ConnectionTo<Agent>,
+    routes: &Arc<AgentRoutes>,
+    establish: Duration,
+) {
     match op {
         Op::NewAgent {
             route,
@@ -730,7 +738,7 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                 // The daemon exits inside this call, so the reply usually
                 // never arrives; the caller observes the socket refusing
                 // connections instead.
-                let _ = tokio::time::timeout(establish_timeout(), request.block_task()).await;
+                let _ = tokio::time::timeout(establish, request.block_task()).await;
             });
         }
         Op::ReloadProviderConfig => {
@@ -804,7 +812,7 @@ async fn list_sessions(
 
 /// Gracefully stops a running agentd this build could not initialize with:
 /// a fresh connection, `initialize`, then `_horizon/drain`.
-async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
+async fn drain_stale_agentd(socket_path: &Path, timeouts: Timeouts) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,
         Err(_) => return Ok(()),
@@ -812,7 +820,7 @@ async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
     let (read_half, write_half) = stream.into_split();
     let transport = ByteStreams::new(write_half.compat_write(), read_half.compat());
     let drained = tokio::time::timeout(
-        establish_timeout() * 2,
+        timeouts.establish * 2,
         Client.v2().name("horizon-drain").connect_with(
             transport,
             async |connection: V2ConnectionTo<Agent>| {
@@ -824,7 +832,7 @@ async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
                     return Ok(Err(format!("initialize for the drain failed: {error}")));
                 }
                 let _ = tokio::time::timeout(
-                    establish_timeout(),
+                    timeouts.establish,
                     connection.send_request(DrainRequest {}).block_task(),
                 )
                 .await;
@@ -838,7 +846,7 @@ async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
         Ok(Err(error)) => eprintln!("drain connection to the incompatible agentd failed: {error}"),
         Ok(Ok(Ok(()))) | Err(_) => {}
     }
-    if wait_until_refusing(socket_path).await {
+    if wait_until_refusing(socket_path, timeouts.drain_exit).await {
         Ok(())
     } else {
         Err(

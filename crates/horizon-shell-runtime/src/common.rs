@@ -36,16 +36,23 @@ use tokio::task::JoinHandle;
 /// `ChMux(Timeout)`.
 const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Test-only override for [`ESTABLISH_TIMEOUT`]
-/// (`HORIZON_TEST_ESTABLISH_TIMEOUT_MS`): the silence-escalation tests
-/// would otherwise take `SILENCE_MISMATCH_THRESHOLD × 5 s` of real wall
-/// clock per stale daemon. Never set in production.
-pub(super) fn establish_timeout() -> Duration {
-    std::env::var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(ESTABLISH_TIMEOUT)
+/// How long a runtime waits on its daemon: to answer while a connection
+/// is established ([`ESTABLISH_TIMEOUT`]), and to go away once drained
+/// ([`DRAIN_EXIT_TIMEOUT`]). A test passes shorter ones
+/// (`AgentdHandle::start_within`).
+#[derive(Clone, Copy, Debug)]
+pub struct Timeouts {
+    pub establish: Duration,
+    pub drain_exit: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            establish: ESTABLISH_TIMEOUT,
+            drain_exit: DRAIN_EXIT_TIMEOUT,
+        }
+    }
 }
 
 /// How many *consecutive* silent establish timeouts equal "a stale daemon
@@ -87,6 +94,7 @@ const DRAIN_POLL: Duration = Duration::from_millis(50);
 /// surfaced through reachability (the per-pane `RuntimeReachability`, plus
 /// the pane dropping its window when the channels close).
 pub(super) struct RuntimeControl {
+    timeouts: Timeouts,
     cancelled: AtomicBool,
     established: AtomicBool,
     notify: Notify,
@@ -94,13 +102,18 @@ pub(super) struct RuntimeControl {
 }
 
 impl RuntimeControl {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(timeouts: Timeouts) -> Self {
         Self {
+            timeouts,
             cancelled: AtomicBool::new(false),
             established: AtomicBool::new(false),
             notify: Notify::new(),
             stopped: (Mutex::new(false), Condvar::new()),
         }
+    }
+
+    pub(super) fn timeouts(&self) -> Timeouts {
+        self.timeouts
     }
 
     pub(super) fn cancel(&self) {
@@ -271,12 +284,12 @@ pub(super) struct Connected<C> {
 pub(super) async fn connect_hub<S, C>(
     stream: S,
     daemon: &str,
+    timeout: Duration,
 ) -> Result<Connected<C>, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
     C: RemoteSend + rtc::Client,
 {
-    let timeout = establish_timeout();
     let deadline = tokio::time::Instant::now() + timeout;
     let (read_half, write_half) = tokio::io::split(stream);
 
@@ -336,11 +349,12 @@ where
 /// daemon clients; whether to drain remains each client's decision.
 pub(super) async fn establish_for_drain<C>(
     stream: tokio::net::UnixStream,
+    establish: Duration,
 ) -> Result<(C, ConnTask), String>
 where
     C: RemoteSend + std::fmt::Debug,
 {
-    let deadline = tokio::time::Instant::now() + establish_timeout();
+    let deadline = tokio::time::Instant::now() + establish;
     let (read_half, write_half) = stream.into_split();
     let connect =
         remoc::Connect::io::<_, _, (), C, WireCodec>(remoc::Cfg::default(), read_half, write_half);
@@ -378,8 +392,11 @@ pub(super) async fn with_deadline<T>(
 /// gone -- its drain exit leaves the socket file behind, so file
 /// existence proves nothing); false if it still accepts when
 /// [`DRAIN_EXIT_TIMEOUT`] runs out.
-pub(super) async fn wait_until_refusing(socket_path: &std::path::Path) -> bool {
-    let deadline = tokio::time::Instant::now() + DRAIN_EXIT_TIMEOUT;
+pub(super) async fn wait_until_refusing(
+    socket_path: &std::path::Path,
+    drain_exit: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + drain_exit;
     loop {
         if tokio::net::UnixStream::connect(socket_path).await.is_err() {
             return true;

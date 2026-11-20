@@ -30,7 +30,9 @@ use wasmtime::component::{Accessor, ResourceAny, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::plugin::Given;
-use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate, offered};
+use crate::plugin_host::{
+    Asks, Compiled, Limits, Loaded, Plugin, State, compile, instantiate, offered,
+};
 use crate::wake::Wake;
 
 /// The custom section of a component that holds its manifest, as JSON.
@@ -460,6 +462,18 @@ impl Extension {
         wake: Wake,
         failed: RwSignal<Option<String>>,
     ) -> Result<Running, String> {
+        self.instantiate_within(asks, Limits::default(), wake, failed)
+    }
+
+    /// [`Self::instantiate`], ended past `limits` in place of the host's
+    /// own.
+    pub fn instantiate_within(
+        self: &Arc<Self>,
+        asks: Asks,
+        limits: Limits,
+        wake: Wake,
+        failed: RwSignal<Option<String>>,
+    ) -> Result<Running, String> {
         let mut wasi = WasiCtxBuilder::new();
         let mut in_data = false;
         let named = (self.read.iter().map(|named| (named, FsPerms::ReadOnly)))
@@ -480,7 +494,7 @@ impl Extension {
         if let Some(home) = data_home().filter(|_| in_data) {
             wasi.env("HORIZON_DATA_HOME", home.to_string_lossy());
         }
-        let loaded = instantiate(&self.compiled, wasi.build(), asks, wake, failed)
+        let loaded = instantiate(&self.compiled, wasi.build(), asks, limits, wake, failed)
             .map_err(|error| format!("{error:#}"))?;
         Ok(Running {
             extension: self.clone(),
