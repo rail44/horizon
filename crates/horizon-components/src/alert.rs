@@ -30,11 +30,8 @@ mod styles {
         .description { color: var(--text-muted); }
         .answers { display: flex; justify-content: flex-end; gap: var(--u8);
                    margin-top: var(--u8); }
-        .answer { display: flex; align-items: center; gap: var(--u4);
-                  border-radius: var(--radius); }
+        .answer { display: flex; border-radius: var(--radius); }
         .answer.at { outline: var(--line-strong) solid var(--focus); outline-offset: 1px; }
-        .key { font-size: var(--micro-size); line-height: var(--micro-line);
-               color: var(--text-muted); padding-right: var(--u4); }
     }
 "}
 }
@@ -80,21 +77,22 @@ impl Component for AlertDialog<'_> {
         } = self;
         let at = RwSignal::new(At::Cancel);
         let typed = action_key.map(str::to_string);
-        let answer = |label: &str, key: &str, which: At, kind: ButtonKind, press: Callback<()>| {
-            el("span")
-                .class(styles::ANSWER)
-                .class_dyn(move || (at.get() == which).then_some(styles::AT))
-                .child(
-                    Button {
-                        label,
-                        kind,
-                        on_press: Some(press),
-                        ..Default::default()
-                    }
-                    .view(),
-                )
-                .child(el("span").class(styles::KEY).text(key))
-        };
+        let answer =
+            |label: &str, key: Option<&str>, which: At, kind: ButtonKind, press: Callback<()>| {
+                el("span")
+                    .class(styles::ANSWER)
+                    .class_dyn(move || (at.get() == which).then_some(styles::AT))
+                    .child(
+                        Button {
+                            label,
+                            key,
+                            kind,
+                            on_press: Some(press),
+                            ..Default::default()
+                        }
+                        .view(),
+                    )
+            };
         let kind = match danger {
             true => ButtonKind::Danger,
             false => ButtonKind::Primary,
@@ -141,18 +139,12 @@ impl Component for AlertDialog<'_> {
                     .class(styles::ANSWERS)
                     .child(answer(
                         cancel,
-                        "Esc",
+                        Some("Esc"),
                         At::Cancel,
                         ButtonKind::Plain,
                         on_cancel,
                     ))
-                    .child(answer(
-                        action,
-                        action_key.unwrap_or_default(),
-                        At::Action,
-                        kind,
-                        on_action,
-                    )),
+                    .child(answer(action, action_key, At::Action, kind, on_action)),
             )
             .focus()
     }

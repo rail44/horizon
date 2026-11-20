@@ -277,7 +277,14 @@ impl Opened {
             let mut buttons = Vec::new();
             collect(&document, alert, "button", &mut buttons);
             (buttons.into_iter())
-                .find(|button| document.get_node(*button).unwrap().text_content() == label)
+                // (Its text is the key that does the same, and its label.)
+                .find(|button| {
+                    document
+                        .get_node(*button)
+                        .unwrap()
+                        .text_content()
+                        .ends_with(label)
+                })
                 .unwrap_or_else(|| panic!("no button {label:?}"))
         };
         let (x, y) = self.middle(button);

@@ -69,6 +69,24 @@ fn buttons() -> El {
                 ],
             ),
             (
+                "with the key that does the same",
+                vec![
+                    Button {
+                        label: "Keep",
+                        key: Some("Esc"),
+                        ..Default::default()
+                    }
+                    .view(),
+                    Button {
+                        label: "Terminate",
+                        key: Some("y"),
+                        kind: ButtonKind::Danger,
+                        ..Default::default()
+                    }
+                    .view(),
+                ],
+            ),
+            (
                 "small, in a line of text",
                 vec![
                     Button {

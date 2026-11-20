@@ -26,6 +26,8 @@ mod styles {
         .button.primary:hover { background: var(--accent); opacity: 0.9; }
         .button.danger { background: var(--danger); color: var(--on-accent); }
         .button.danger:hover { background: var(--danger); opacity: 0.9; }
+        .button.keyed { display: inline-flex; align-items: baseline; }
+        .key { margin-right: var(--u8); font-size: var(--micro-size); opacity: 0.7; }
     "}
 }
 
@@ -63,6 +65,9 @@ pub enum Press {
 #[derive(Default)]
 pub struct Button<'a> {
     pub label: &'a str,
+    /// The key that does the same, shown in the button before its label,
+    /// as a band of keys says a key and then what it does.
+    pub key: Option<&'a str>,
     pub kind: ButtonKind,
     pub size: ButtonSize,
     pub press: Press,
@@ -81,9 +86,16 @@ impl Component for Button<'_> {
             ButtonSize::Regular => None,
             ButtonSize::Small => Some(styles::SMALL),
         };
+        let keyed = self.key.is_some().then_some(styles::KEYED);
         let button = el("button")
             .class((styles::BUTTON, kind, size))
-            .text(self.label);
+            .class(keyed);
+        let button = match self.key {
+            None => button.text(self.label),
+            Some(key) => button
+                .child(el("span").class(styles::KEY).text(key))
+                .child(el("span").text(self.label)),
+        };
         let Some(on_press) = self.on_press else {
             return button;
         };
