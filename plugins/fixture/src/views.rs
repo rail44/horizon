@@ -6,13 +6,18 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::{El, dispatched, each_layout, el, relayout, stop_propagation};
 use keyboard_types::Key;
 
-pub const NAMES: [&str; 4] = ["rows", "selection", "over", "stuck"];
+pub const NAMES: [&str; 5] = ["rows", "selection", "over", "stuck", "sessions"];
 
 pub fn view(name: &str) -> Option<El> {
     match name {
         "rows" => Some(rows()),
         "selection" => Some(selection()),
         "over" => Some(over()),
+        // The sessions, which the manifest does not say it uses.
+        "sessions" => {
+            let sessions = horizon_ui::guest::bindings::horizon::ui::sessions::all();
+            Some(el("div").text(&format!("{} sessions", sessions.len())))
+        }
         // Never comes back: what the host's limit on a call is for.
         "stuck" => {
             let mut turns = 0u64;

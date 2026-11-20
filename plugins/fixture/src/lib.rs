@@ -7,7 +7,7 @@
 
 mod views;
 
-#[horizon_ui::plugin(name = "fixture", title = "Fixture")]
+#[horizon_ui::plugin(name = "fixture", title = "Fixture", uses = ["modal"])]
 mod fixture {
     #[command(
         title = "Show Over, Alone",

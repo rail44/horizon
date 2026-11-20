@@ -28,7 +28,11 @@ Horizon built from the branch.
    What does not cross: a paint widget, `takes_text`, `on_paste`, the
    clipboard, `windowed`. The events that cross are keys, pointer events
    and `input`, and a view reads what is selected of its own text
-   (`crates/horizon-ui/wit/plugin.wit`).
+   (`crates/horizon-ui/wit/plugin.wit`). What it uses of the theme, the
+   sessions, what is done to a session, or a view over the workspace is
+   named in the attribute's `uses = [..]` (an interface, or one function
+   or resource of one, as `"session-control.show"`); a call to anything
+   else of those traps (`docs/extension-boundary-design.md`).
 3. Add the crate to `scripts/extensions.sh`, and, if Horizon is to come
    with it, to `OWN` in `src/extension.rs`.
 

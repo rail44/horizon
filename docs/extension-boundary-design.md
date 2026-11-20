@@ -402,14 +402,23 @@ The decisions and who made them are on board #76. What they come to:
   debug assertion in Stylo's rule tree. A sheet cannot reach the
   network: the shell resolves only `data:` URLs.
 
-- **Which of the host's interfaces an extension uses is read from its
-  component, not said by it.** A component imports the functions its
-  code calls and no others (the Markdown extension names eleven of
-  `document`'s), so that it uses `theme` is its importing it, which the
-  host reads when it loads it. What takes saying what of is said, in the
-  manifest's `access` (`#[horizon_ui::plugin(.., access(read = ["/"]))]`):
-  the directories lent to it. Nothing gates either yet: an extension has
-  what it says and uses.
+- **What an extension uses of the host's beyond the document is said in
+  its manifest, and it has nothing else of those** (board #95). The
+  manifest's `uses` names an interface, all of it, or one function or
+  resource of one: `#[horizon_ui::plugin(.., uses = ["sessions",
+  "session-control.show", "modal"])]`. The host refuses a name it has not
+  when it loads the extension, and a call to what is not named traps
+  with `<interface>.<item> is not in this plugin's uses`, whoever shows
+  the extension (`Uses` in `src/plugin_host.rs`). Held to it are the
+  theme, the sessions, what is done to a session, and a view over the
+  workspace; the document, its events, the pane, the desktop and the
+  files it is lent every extension has. One function at a time lets an
+  extension go to a session without ending one, say. What is lent still
+  depends on who shows it too: a preview pane lends none of these. The
+  directories lent are said in the manifest's `access`
+  (`access(read = ["/"])`). The component's imports are only held to
+  what the host offers (`offered`): a component imports what its code
+  calls, and that alone is not a statement of what it is let do.
 - **The theme settings are the second extension** (`plugins/theme-settings`),
   and the first whose panes keep nothing: an extension without a
   `struct State` exports no `state`, and its `mount` takes nothing. It

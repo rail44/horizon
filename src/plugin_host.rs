@@ -230,6 +230,59 @@ enum Asked {
     CloseModal(NodeId),
 }
 
+/// What of the host's beyond the document a plugin may use, as its
+/// manifest's `uses` names it: an interface, all of it (`sessions`), or one
+/// function or resource of one (`session-control.terminate`,
+/// `workspace.cursor`). The rest of the host's -- the document, its
+/// events, the pane, the desktop, the files it is lent -- every plugin
+/// uses.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Uses(Vec<String>);
+
+/// The interfaces held to `uses`, and what is in each.
+const USED: &[(&str, &[&str])] = &[
+    ("theme", &["current", "path", "apply", "save"]),
+    ("sessions", &["all", "watch"]),
+    (
+        "session-control",
+        &[
+            "show",
+            "terminate",
+            "terminate-with-derived",
+            "open-terminal",
+        ],
+    ),
+    ("modal", &["modal"]),
+];
+
+impl Uses {
+    /// The names a manifest says, each one of the host's.
+    pub fn new(names: Vec<String>) -> Result<Self, String> {
+        for name in &names {
+            let (interface, item) = match name.split_once('.') {
+                Some((interface, item)) => (interface, Some(item)),
+                None => (name.as_str(), None),
+            };
+            let known = (USED.iter())
+                .find(|(of, _)| *of == interface)
+                .is_some_and(|(_, items)| item.is_none_or(|item| items.contains(&item)));
+            if !known {
+                return Err(format!("`uses` names {name:?}, which the host has not"));
+            }
+        }
+        Ok(Self(names))
+    }
+
+    /// Whether `item` of `interface` is used: the interface is named, or
+    /// it is.
+    fn allows(&self, interface: &str, item: &str) -> bool {
+        (self.0.iter()).any(|name| match name.split_once('.') {
+            Some((of, named)) => of == interface && named == item,
+            None => name == interface,
+        })
+    }
+}
+
 /// The most memory a plugin may take.
 pub const MEMORY_LIMIT: usize = 512 << 20;
 /// The longest one poll of a plugin's future may take: a call into it, or
@@ -269,6 +322,8 @@ pub struct State {
     sessions: Option<Arc<SessionsFeed>>,
     /// Whether whoever shows it lets it put a view over the workspace.
     modal: bool,
+    /// What of the above its manifest says it uses.
+    uses: Uses,
 }
 
 /// What a plugin leaves for this shell to do once the poll it was left in
@@ -313,6 +368,16 @@ impl State {
             return Err(wasmtime::Error::msg(BUSY));
         }
         self.own(node)
+    }
+
+    /// `item` of `interface`, if the plugin's manifest says it uses it.
+    fn may(&self, interface: &str, item: &str) -> wasmtime::Result<()> {
+        match self.uses.allows(interface, item) {
+            true => Ok(()),
+            false => Err(wasmtime::Error::msg(format!(
+                "{interface}.{item} is not in this plugin's uses"
+            ))),
+        }
     }
 
     fn made(&mut self, make: impl FnOnce() -> NodeId) -> wasmtime::Result<u64> {
@@ -561,17 +626,20 @@ fn seed_of(carried: self::horizon::ui::theme::Seed) -> wasmtime::Result<Seed> {
 
 impl self::horizon::ui::theme::Host for State {
     fn current(&mut self) -> wasmtime::Result<self::horizon::ui::theme::Seed> {
+        self.may("theme", "current")?;
         let (seed, _) = (self.theme.as_ref())
             .ok_or_else(|| wasmtime::Error::msg("the theme is not given to this plugin"))?;
         Ok(carried(seed))
     }
 
     fn path(&mut self) -> wasmtime::Result<Option<String>> {
+        self.may("theme", "path")?;
         let path = (self.theme.as_ref()).and_then(|(_, path)| path.as_ref());
         Ok(path.map(|path| path.to_string_lossy().into_owned()))
     }
 
     fn apply(&mut self, seed: self::horizon::ui::theme::Seed) -> wasmtime::Result<()> {
+        self.may("theme", "apply")?;
         let seed = seed_of(seed)?;
         (self.left.lock().unwrap().asked).push(Asked::ApplyTheme(seed));
         Ok(())
@@ -585,9 +653,12 @@ impl<T: Send> self::horizon::ui::theme::HostWithStore<T> for HasSelf<State> {
     ) -> wasmtime::Result<Result<String, String>> {
         let seed = seed_of(seed)?;
         let (answer, answered) = tokio::sync::oneshot::channel();
-        accessor.with(|mut access| {
-            (access.get().left.lock().unwrap().asked).push(Asked::SaveTheme(seed, answer));
-        });
+        accessor.with(|mut access| -> wasmtime::Result<()> {
+            let state = access.get();
+            state.may("theme", "save")?;
+            (state.left.lock().unwrap().asked).push(Asked::SaveTheme(seed, answer));
+            Ok(())
+        })?;
         // (Whoever shows the plugin answers once the poll this was asked
         // in is over.)
         Ok(answered
@@ -602,7 +673,8 @@ impl State {
             .ok_or_else(|| wasmtime::Error::msg("the sessions are not given to this plugin"))
     }
 
-    fn ask_of_session(&mut self, ask: SessionAsk) -> wasmtime::Result<()> {
+    fn ask_of_session(&mut self, item: &str, ask: SessionAsk) -> wasmtime::Result<()> {
+        self.may("session-control", item)?;
         self.sessions()?;
         (self.left.lock().unwrap().asked).push(Asked::Session(ask));
         Ok(())
@@ -611,12 +683,14 @@ impl State {
 
 impl self::horizon::ui::sessions::Host for State {
     fn all(&mut self) -> wasmtime::Result<Vec<Session>> {
+        self.may("sessions", "all")?;
         Ok(self.sessions()?.all())
     }
 }
 
 impl self::horizon::ui::sessions::HostWatch for State {
     fn new(&mut self) -> wasmtime::Result<Resource<SessionsWatching>> {
+        self.may("sessions", "watch")?;
         let changes = self.sessions()?.changes.subscribe();
         Ok(self.table.push(SessionsWatching(changes))?)
     }
@@ -650,19 +724,22 @@ impl<T: Send> self::horizon::ui::sessions::HostWatchWithStore<T> for HasSelf<Sta
 
 impl self::horizon::ui::session_control::Host for State {
     fn show(&mut self, id: String) -> wasmtime::Result<()> {
-        self.ask_of_session(SessionAsk::Show(id))
+        self.ask_of_session("show", SessionAsk::Show(id))
     }
 
     fn terminate(&mut self, id: String) -> wasmtime::Result<()> {
-        self.ask_of_session(SessionAsk::Terminate(id))
+        self.ask_of_session("terminate", SessionAsk::Terminate(id))
     }
 
     fn terminate_with_derived(&mut self, id: String) -> wasmtime::Result<()> {
-        self.ask_of_session(SessionAsk::TerminateWithDerived(id))
+        self.ask_of_session(
+            "terminate-with-derived",
+            SessionAsk::TerminateWithDerived(id),
+        )
     }
 
     fn open_terminal(&mut self, id: String) -> wasmtime::Result<()> {
-        self.ask_of_session(SessionAsk::OpenTerminal(id))
+        self.ask_of_session("open-terminal", SessionAsk::OpenTerminal(id))
     }
 }
 
@@ -670,6 +747,7 @@ impl self::horizon::ui::modal::Host for State {}
 
 impl self::horizon::ui::modal::HostModal for State {
     fn new(&mut self, node: u64) -> wasmtime::Result<Resource<ModalShown>> {
+        self.may("modal", "modal")?;
         if !self.modal {
             return Err(wasmtime::Error::msg(
                 "a view over the workspace is not given to this plugin",
@@ -1266,6 +1344,7 @@ pub fn offered(compiled: &Compiled) -> Result<(), String> {
 pub fn instantiate(
     compiled: &Compiled,
     wasi: WasiCtx,
+    uses: Uses,
     asks: Asks,
     limits: Limits,
     wake: Wake,
@@ -1284,6 +1363,7 @@ pub fn instantiate(
             theme: asks.theme.as_ref().map(|theme| (theme.now)()),
             sessions: asks.sessions.as_ref().map(|sessions| sessions.feed.clone()),
             modal: asks.modal.is_some(),
+            uses,
         },
     );
     store.limiter(|state| &mut state.limits);
@@ -1354,6 +1434,25 @@ pub fn instantiate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uses_names_an_interface_whole_or_one_thing_of_it() {
+        let uses = Uses::new(vec![
+            "sessions".to_string(),
+            "session-control.show".to_string(),
+        ])
+        .unwrap();
+        assert!(uses.allows("sessions", "all"));
+        assert!(uses.allows("sessions", "watch"));
+        assert!(uses.allows("session-control", "show"));
+        assert!(!uses.allows("session-control", "terminate"));
+        assert!(!uses.allows("theme", "current"));
+        assert!(!Uses::default().allows("modal", "modal"));
+        // What the host has not is refused, an interface or a thing of one.
+        for name in ["clipboard", "sessions.end", "session-control.show.now"] {
+            assert!(Uses::new(vec![name.to_string()]).is_err(), "{name}");
+        }
+    }
 
     #[test]
     fn a_feed_tells_those_who_wait_only_of_what_changed() {

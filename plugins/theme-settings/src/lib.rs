@@ -7,7 +7,7 @@
 
 mod view;
 
-#[horizon_ui::plugin(name = "theme-settings", title = "Theme Settings")]
+#[horizon_ui::plugin(name = "theme-settings", title = "Theme Settings", uses = ["theme"])]
 mod theme_settings {
     pub mod pane {
         pub fn mount() -> u64 {
