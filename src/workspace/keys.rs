@@ -96,6 +96,7 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
             "+" => resize(SplitAxis::Vertical, RESIZE_STEP),
             "=" => shell.change(|model| _ = model.equalize_cursor()),
             "t" => shell.execute(CommandId::NewTab),
+            "m" => shell.execute(CommandId::MoveToTab),
             "s" => shell.execute(CommandId::SplitRight),
             "a" if kept.spawn_agent.is_some() => {
                 shell.create(SessionKind::Agent, None, Placement::NewTab);

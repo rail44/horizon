@@ -70,8 +70,10 @@ manual smoke checks:
   when another pane remains.
 - In workspace mode, `H` `J` `K` `L` (Shift and a direction, or Shift and an
   arrow) swap the pane the cursor is on -- or, on a tab strip, the whole tab
-  group -- with its neighbor in that direction. `move to new tab` moves the
-  pane the cursor is on into a new tab of its tab group. With the pointer, a
+  group -- with its neighbor in that direction. `move to tab` (`m` in the
+  mode) moves the pane the cursor is on to a new tab of its tab group, or
+  into any other tab, beside its active pane, chosen from a list. With the
+  pointer, a
   view is dragged by its tab's label, or by the tag with its name that shows
   in the pane's top right corner while the pointer is over it: dropped on
   another view the two swap, dropped on a tab strip it is a new tab there.
