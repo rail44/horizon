@@ -175,6 +175,8 @@ portable-pty = "0.9.0"
 anyrender_vello_cpu = "0.18"
 # The wiki a test of the wiki's extension is shown over.
 horizon-wiki = { path = "crates/horizon-wiki" }
+# An image larger than the window, written for the image viewer's test.
+png = "0.18"
 # A component written as text, for what the host says of one it cannot
 # take (`src/plugin_host.rs`).
 wat = "1"

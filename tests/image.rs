@@ -192,6 +192,18 @@ fn painted(opened: &Opened) -> impl Fn(usize, usize) -> [u8; 3] {
     }
 }
 
+/// A PNG `width` by `height`, all of it red.
+fn red(width: u32, height: u32) -> Vec<u8> {
+    let mut written = Vec::new();
+    let mut encoder = png::Encoder::new(&mut written, width, height);
+    encoder.set_color(png::ColorType::Rgb);
+    let mut writer = encoder.write_header().unwrap();
+    let pixels = [255, 0, 0].repeat((width * height) as usize);
+    writer.write_image_data(&pixels).unwrap();
+    writer.finish().unwrap();
+    written
+}
+
 /// A directory of the test's own with `files` written in it.
 fn directory(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
     let directory = std::env::temp_dir().join(format!("hz-image-{name}-{}", std::process::id()));
@@ -234,13 +246,14 @@ fn a_link_to_an_image_is_opened_over_the_workspace_and_escape_takes_it_away() {
 
 #[test]
 fn an_image_larger_than_the_window_is_made_smaller_to_fit_its_shape_kept() {
-    let large = br#"<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="2000">
-        <rect width="3000" height="2000" fill="red"/></svg>"#;
-    let directory = directory("large", &[("large.svg", large)]);
+    let directory = directory("large", &[("large.png", &red(1800, 1200))]);
     let opened = open();
-    opened.follow(&format!("file://{}", directory.join("large.svg").display()));
+    opened.follow(&format!("file://{}", directory.join("large.png").display()));
     opened.until("the image", || opened.images().len() == 1);
     let image = opened.images()[0];
+    // (A PNG: an SVG, with the rest of the tests running beside it, has
+    // taken longer than the wait to be decoded. blitz-dom loads every
+    // font on the machine before the first SVG a process decodes.)
     opened.until("the image read", || opened.bounds(image).2 > 0.);
     // Within the window, which is 1200 by 800, and as large as it is let
     // be there.

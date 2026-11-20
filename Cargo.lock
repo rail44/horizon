@@ -2984,6 +2984,7 @@ dependencies = [
  "nucleo",
  "parley",
  "peniko",
+ "png",
  "portable-pty",
  "pulldown-cmark",
  "serde",
