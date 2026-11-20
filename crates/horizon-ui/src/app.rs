@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use any_spawner::Executor;
@@ -12,6 +13,7 @@ use reactive_graph::owner::Owner;
 
 use crate::dispatch::Dispatch;
 use crate::el::{El, el};
+use crate::files::Files;
 use crate::frame::{frame_of, run_effects};
 use crate::input_method::ime_cursor_area;
 use crate::shared::{Shared, enter, with_document};
@@ -52,6 +54,8 @@ impl App {
         owner.set();
         let mut document = BaseDocument::new(DocumentConfig {
             viewport: Some(Viewport::new(width, height, 1.0, ColorScheme::Light)),
+            // What an `<img>` names is read from this machine's files.
+            net_provider: Some(Arc::new(Files)),
             ..DocumentConfig::default()
         });
         // The page fills the window and has no margin of its own; a view's

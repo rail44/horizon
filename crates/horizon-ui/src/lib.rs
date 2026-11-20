@@ -27,6 +27,8 @@ mod dispatch;
 #[cfg(not(target_family = "wasm"))]
 mod el;
 #[cfg(not(target_family = "wasm"))]
+mod files;
+#[cfg(not(target_family = "wasm"))]
 mod frame;
 #[cfg(target_family = "wasm")]
 pub mod guest;

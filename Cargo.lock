@@ -3331,6 +3331,7 @@ dependencies = [
  "blitz-dom",
  "blitz-traits",
  "horizon-ui-macros",
+ "image",
  "keyboard-types",
  "reactive_graph",
  "wit-bindgen 0.63.0",
