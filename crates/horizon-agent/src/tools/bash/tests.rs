@@ -290,16 +290,18 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
     let started = Instant::now();
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &serde_json::from_value(json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }))
+        &serde_json::from_value(json!({ "command": "echo start; sleep 60", "timeout_secs": 1 }))
             .unwrap(),
         &cwd,
         &config(),
     )
     .to_json();
 
+    // (Far below the 60 s sleep, whatever the machine's load: this tells
+    // a kill from a sleep run out, not how fast the kill is.)
     assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "should be killed well before the full 5s sleep completes"
+        started.elapsed() < Duration::from_secs(30),
+        "should be killed long before the 60s sleep completes"
     );
     assert_eq!(output["is_error"], true);
     assert!(

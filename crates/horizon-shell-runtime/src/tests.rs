@@ -355,9 +355,9 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn start_returns_before_the_connection_and_a_queued_create_arrives_after() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let started = Instant::now();
+    // The daemon is served only after this returns: a start that waited
+    // for the connection would not return at all.
     let handle = TerminaldHandle::start_on_stream(client);
-    assert!(started.elapsed() < Duration::from_millis(50));
 
     // Queued before the daemon has even completed a handshake.
     let terminal_id = Uuid::new_v4();

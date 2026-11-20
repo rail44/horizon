@@ -368,18 +368,38 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
             let server = tokio::spawn(async move {
                 serve_transport(&listener, false, partial_response(kind), transport).await
             });
-            let (tx, rx) = crossbeam_channel::unbounded();
+            let (tx, rx) = crossbeam_channel::unbounded::<ProviderEvent>();
             let token = CancellationToken::new();
             let cancel_token = token.clone();
-            let cancellation = tokio::spawn(async move {
+            // Cancelled once the partial response has come in, its tool call
+            // with it: what was seen on the way is kept for the counts below.
+            let watched = rx.clone();
+            let cancellation = tokio::task::spawn_blocking(move || {
+                let mut seen = Vec::new();
                 if cancel {
-                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    let until = std::time::Instant::now() + Duration::from_secs(10);
+                    while let Ok(event) = watched
+                        .recv_timeout(until.saturating_duration_since(std::time::Instant::now()))
+                    {
+                        let requested =
+                            matches!(event.as_event(), Some(Event::ToolCallRequested(_)));
+                        seen.push(event);
+                        if requested {
+                            break;
+                        }
+                    }
                     cancel_token.cancel();
                 }
+                seen
             });
+            // (Cancelled, the stall is never long enough to end it.)
             let deadline = ProviderDeadlines {
                 establish: Duration::from_secs(3),
-                idle: Duration::from_millis(250),
+                idle: if cancel {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::from_millis(250)
+                },
             };
             let environment = SessionEnvironment::for_workspace_root(None);
             let attempt = match completion_client(&config).unwrap() {
@@ -413,7 +433,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
                 }
             };
             server.abort();
-            cancellation.await.unwrap();
+            let seen = cancellation.await.unwrap();
             let (_, completion) = match attempt {
                 Attempt::Complete(value) if cancel => value,
                 Attempt::Failed {
@@ -436,7 +456,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
                 [ToolCallId("call-1".into())],
                 "{kind:?}"
             );
-            let events: Vec<_> = rx.try_iter().collect();
+            let events: Vec<_> = seen.into_iter().chain(rx.try_iter()).collect();
             assert_eq!(
                 events
                     .iter()

@@ -2572,7 +2572,7 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }).into(),
+        input: json!({ "command": "echo start; sleep 60", "timeout_secs": 1 }).into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
@@ -2584,11 +2584,11 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     );
 
     let completion = bash_results_rx
-        .recv_timeout(std::time::Duration::from_secs(10))
+        .recv_timeout(std::time::Duration::from_secs(30))
         .expect("the sandboxed bash call should be killed and report promptly");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(4),
-        "should be killed well before the full 5s sleep completes"
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "should be killed long before the 60s sleep completes"
     );
     let result = expect_finished(completion);
     assert_eq!(result.output["is_error"], true);

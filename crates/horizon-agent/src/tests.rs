@@ -909,19 +909,23 @@ fn mock_agent_accepts_tool_call_result_command() {
         serde_json::json!({ "ok": true }),
     )));
 
-    let saw_ack = std::iter::from_fn(|| rx.recv_timeout(std::time::Duration::from_millis(50)).ok())
-        .take(5)
-        .any(|provider_event| {
-            matches!(
-                provider_event.clone().into_event().expect("conversation event"),
-                agent::Event::MessageCommitted(agent::Message {
-                    role: agent::MessageRole::Assistant,
-                    text,
-                }) if text.contains("Tool result received")
-            )
-        });
-
-    assert!(saw_ack);
+    // The acknowledgement itself is waited for; the deadline only tells
+    // "never" apart.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let provider_event = rx.recv_timeout(left).expect("the tool result acknowledged");
+        let acknowledged = matches!(
+            provider_event.into_event().expect("conversation event"),
+            agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::Assistant,
+                text,
+            }) if text.contains("Tool result received")
+        );
+        if acknowledged {
+            break;
+        }
+    }
 }
 
 #[test]

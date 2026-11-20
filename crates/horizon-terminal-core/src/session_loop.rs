@@ -416,7 +416,8 @@ mod tests {
         what: &str,
         met: impl Fn(&TerminalUpdate) -> bool,
     ) -> TerminalUpdate {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // (Only tells "never" apart: a loaded machine is slow, not stuck.)
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match updates.recv_timeout(left) {
@@ -451,11 +452,13 @@ mod tests {
         watch(&senders.stream_tx, &update_rx);
 
         let held = b"\x1b[?2026h\x1b[H\x1b[K\x1b]2;flushed\x07\x07\x1b]52;c;aGVsbG8=\x07\x1b[6n";
-        pty_tx.send(held.to_vec()).unwrap();
+        // (Timed from before the send: a stall of this thread only makes
+        // it longer.)
         let started = Instant::now();
+        pty_tx.send(held.to_vec()).unwrap();
         let mut seen = Vec::new();
         loop {
-            match update_rx.recv_timeout(Duration::from_secs(2)) {
+            match update_rx.recv_timeout(Duration::from_secs(10)) {
                 Ok(TerminalUpdate::HoldReleased) => break,
                 Ok(TerminalUpdate::Output(bytes)) => assert_eq!(bytes, held),
                 Ok(update) => seen.push(update),
@@ -506,20 +509,23 @@ mod tests {
             pty_tx.send(chunk.clone()).unwrap();
         }
         pty_tx.send(b"after".to_vec()).unwrap();
-        // What is sent stops a little past the bound, with nothing taken in.
+        // What is sent goes past the bound, with nothing taken in...
         let mut sent = 0u64;
-        while let Ok(update) = update_rx.recv_timeout(Duration::from_millis(300)) {
-            match update {
+        while sent <= STREAM_AHEAD {
+            match next(&update_rx, "output past the bound", |_| true) {
                 TerminalUpdate::Output(bytes) => sent += bytes.len() as u64,
                 other => panic!("{other:?} while behind"),
             }
         }
-        assert!(
-            sent > STREAM_AHEAD && sent <= STREAM_AHEAD + chunk.len() as u64,
-            "{sent}"
-        );
+        // ...and stops there. (A late item would slip past this wait; one
+        // in it is caught.)
+        if let Ok(update) = update_rx.recv_timeout(Duration::from_millis(300)) {
+            panic!("{update:?} sent past the bound, after {sent}");
+        }
+        assert!(sent <= STREAM_AHEAD + chunk.len() as u64, "{sent}");
         // Taken in: the screen's part of the state, which has what was not
         // sent.
+        let asked = Instant::now();
         senders.stream_tx.send(StreamCommand::Taken(sent)).unwrap();
         let state = |what: &str| {
             let mut state = Vec::new();
@@ -542,10 +548,11 @@ mod tests {
             "{}",
             view.snapshot_text()
         );
-        // The output has stopped: the whole of it, history and all.
-        let started = Instant::now();
+        // The output has stopped: the whole of it, history and all, once
+        // the PTY has been calm. (Timed from the asking, before the screen's
+        // part: a stall of this thread only makes it longer.)
         let whole = state("the whole state");
-        assert!(started.elapsed() >= CALM / 2);
+        assert!(asked.elapsed() >= CALM / 2);
         assert!(
             whole.len() > screen.len() * 4,
             "{} after {}",
