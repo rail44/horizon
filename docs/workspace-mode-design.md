@@ -234,6 +234,21 @@ it false again, so the bypass stops applying and ordinary raw-field
 gating resumes immediately — matching "non-empty behavior changes not
 at all."
 
+## The cursor moved from an extension's view (2026-11-21)
+
+An extension's view may move the mode's cursor while the keys stay the
+view's (`horizon:ui/workspace`'s `cursor`, `workspace.cursor` in the
+manifest's `uses`; `src/workspace/lent_cursor.rs`, board #95). The list
+of sessions does: its cursor -- the chosen row, a tint as the mode's is
+-- is the workspace's too. While the focus is in such a view, every pane
+but the one it is in is veiled as in the mode, and the pane that shows
+the session it points at is the cursor's; where that pane's tab is not
+shown, the tab's label is. A session no pane shows puts the cursor on no
+pane. Nothing else changes: no tab is shown, no pane gets the focus, and
+Enter in the view goes to the session as it did. An extension hears of
+no focus going and coming, so the shell looks where the focus is after
+each layout; the mode itself, entered, takes the place of it.
+
 ## What an empty workspace shows (2026-11-20)
 
 An empty workspace shows the view chooser in its card, as the sheet over

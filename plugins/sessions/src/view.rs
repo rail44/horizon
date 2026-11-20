@@ -20,17 +20,19 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_components::{AlertDialog, Chip, MenuButton, MenuItem, MenuLabel, Tone};
+use horizon_components::{AlertDialog, MenuButton, MenuItem, MenuLabel};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
-use horizon_ui::guest::{Close, modal, watch_sessions};
+use horizon_ui::guest::{self, Close, modal, watch_sessions};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::on_cleanup;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With};
-use horizon_ui::{Callback, Component, El, each_layout, el, prevent_default, stop_propagation};
+use horizon_ui::{
+    Callback, Class, Component, El, each_layout, el, prevent_default, stop_propagation,
+};
 use keyboard_types::{Key, NamedKey};
 
 use crate::list::{self, Group, Row};
@@ -46,22 +48,24 @@ mod styles {
         .search > * { flex: 1; min-width: 0; border: none; outline: none; padding: 0;
                       background: none; color: var(--text); font-family: var(--font-family);
                       font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
-        .rows { flex: 1; min-height: 0; overflow-y: scroll; }
+        .rows { flex: 1; min-height: 0; overflow-y: scroll; padding: var(--u4); }
         .none { padding: var(--u24) var(--u12); text-align: center; color: var(--text-muted); }
         .band { display: flex; align-items: center; gap: var(--u8);
-                padding: var(--u4) var(--u12); font-size: var(--meta-size);
-                line-height: var(--meta-line); color: var(--text-muted);
-                background: var(--band); }
+                padding: var(--u8) var(--u8) var(--u4); font-size: var(--meta-size);
+                line-height: var(--meta-line); color: var(--text-muted); }
         .row { display: flex; align-items: flex-start; box-sizing: border-box;
-               padding: var(--u8) var(--u12) var(--u8) 0; cursor: pointer;
-               border: 1px solid transparent; }
+               padding: var(--u8) var(--u12) var(--u8) 0; border-radius: var(--radius);
+               cursor: pointer; }
         .row:hover { background: var(--band); }
         .actions { flex: none; margin-left: var(--u8); opacity: 0; }
         .row:hover .actions, .row.selected .actions { opacity: 1; }
+        /* The cursor, as workspace mode's: a tint. */
         .row.selected { background: var(--selection); }
-        .bar { flex: none; align-self: stretch; width: 2px;
-               margin: calc(var(--u8) * -1) 0; }
-        .row.selected .bar { background: var(--accent); }
+        .state { flex: none; font-size: var(--micro-size); line-height: var(--micro-line); }
+        .state.warning { color: var(--chip-warning-text); }
+        .state.accent { color: var(--chip-accent-text); }
+        .state.info { color: var(--chip-info-text); }
+        .state.danger { color: var(--chip-danger-text); }
         .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         .headline { display: flex; align-items: baseline; gap: var(--u8); }
         .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
@@ -76,8 +80,7 @@ mod styles {
                 font-size: var(--micro-size); line-height: var(--micro-line);
                 color: var(--text-muted); }
         .foot { flex: none; display: flex; flex-wrap: wrap; align-items: center;
-                gap: 0 var(--u4); padding: var(--u4) var(--u8);
-                border-top: var(--line) solid var(--border); font-size: var(--micro-size);
+                gap: 0 var(--u4); padding: var(--u4) var(--u8); font-size: var(--micro-size);
                 line-height: var(--micro-line); color: var(--text-muted); }
         .asking { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                   display: flex; justify-content: center; align-items: center;
@@ -92,7 +95,6 @@ mod styles {
         .hint:hover { background: var(--hover); }
         .key { font-weight: 600; color: var(--text); }
     }
-    .sessions:focus .row.selected { border-color: var(--accent); }
     .over { width: 720px; height: 480px; display: flex; }
     .over > .sessions { flex: 1; }
     "}
@@ -304,16 +306,17 @@ impl State {
     }
 }
 
-fn tone(session: &Session) -> Tone {
+/// The color a session's state is said in.
+fn tone(session: &Session) -> Class {
     match session
         .activity
         .as_ref()
         .and_then(|activity| activity.attention)
     {
-        Some(Attention::Failed) => Tone::Danger,
-        Some(Attention::Unseen) => Tone::Accent,
-        Some(_) => Tone::Warning,
-        None => Tone::Info,
+        Some(Attention::Failed) => styles::DANGER,
+        Some(Attention::Unseen) => styles::ACCENT,
+        Some(_) => styles::WARNING,
+        None => styles::INFO,
     }
 }
 
@@ -403,11 +406,8 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
                 .into_iter()
                 .collect()
             },
-            |(word, tone)| (*word, *tone as u8),
-            |(word, tone)| Chip {
-                tone: *tone,
-                text: word,
-            },
+            |(word, _)| *word,
+            |(word, tone)| el("span").class((styles::STATE, *tone)).text(word),
         )
         .child(el("span").class(styles::TIME).text_dyn(move || {
             let now = state.now.get();
@@ -420,7 +420,6 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
     let element = el("div")
         .class(styles::ROW)
         .class_dyn(move || is_chosen().then_some(styles::SELECTED))
-        .child(el("span").class(styles::BAR))
         .child(
             el("div")
                 .class(styles::LABEL)
@@ -634,6 +633,10 @@ fn list(shown: Shown) -> El {
     });
 
     let root = el("div").class(styles::SESSIONS).attr("tabindex", "0");
+    // Where the chosen session is, the workspace shows as workspace mode
+    // does, while the focus is in the list.
+    let cursor = guest::workspace_cursor(root);
+    Effect::new(move |_| cursor.move_to(state.chosen.get().as_deref()));
     let field = move || {
         let input = el("input")
             .attr("type", "text")
