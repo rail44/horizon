@@ -183,7 +183,11 @@ fn a_split_puts_a_second_terminal_beside_the_first_and_the_keys_go_to_it() {
         .collect();
     assert_eq!(boxes.len(), 2);
     let (left, right) = (boxes[0], boxes[1]);
-    assert!(left.0 + left.2 <= right.0, "{left:?} {right:?}");
+    // Side by side, the boundary's line between them.
+    assert!(
+        (right.0 - (left.0 + left.2) - 1.).abs() < 0.5,
+        "{left:?} {right:?}"
+    );
     assert!((left.2 - right.2).abs() < 1., "{left:?} {right:?}");
     assert_eq!(left.1, right.1);
 
@@ -500,9 +504,9 @@ fn a_boundary_dragged_changes_the_panes_shares_and_builds_nothing() {
     let after = opened.bounds(panes[0]);
     // (Two panes in a tab's card, a line between them.)
     let card = opened.bounds(opened.all("shown-tab")[0]);
-    // (Each over the card's border at its edge, the line between them.)
+    // (Each inside the card's border, the boundary's line between them.)
     assert!(
-        (before.2 - (card.2 - 5.) / 2.).abs() < 1.,
+        (before.2 - (card.2 - 3.) / 2.).abs() < 1.,
         "{before:?} {card:?}"
     );
     // Its right edge where the boundary was let go of.
@@ -1329,6 +1333,58 @@ fn block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale() {
                 "pane {pane} at scale {scale}: box {x0}..{x1} x {y0}..{y1}"
             );
         }
+    }
+}
+
+#[test]
+fn the_panes_of_a_split_in_a_tab_have_one_line_between_them_the_focused_ones() {
+    use anyrender::ImageRenderer as _;
+    use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+
+    for scale in [1.0f32, 1.5] {
+        let opened = open();
+        let (width, height) = (1200u32, 800u32);
+        (opened.app.document().borrow_mut()).set_viewport(Viewport::new(
+            width,
+            height,
+            scale,
+            ColorScheme::Light,
+        ));
+        opened.app.resolve();
+        // Split: the new pane, on the right, has the focus.
+        opened.chord();
+        opened.character("s");
+        opened.app.resolve();
+        let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+        let mut pixels = Vec::new();
+        let document = opened.app.document();
+        renderer.render_to_vec(
+            |scene| {
+                let mut document = document.borrow_mut();
+                blitz_paint::paint_scene(scene, &mut document, scale as f64, width, height, 0, 0)
+            },
+            &mut pixels,
+        );
+        let at = |x: i64, y: i64| {
+            let pixel = (y as usize * width as usize + x as usize) * 4;
+            [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+        };
+        let (x, y, wide, tall) = opened.bounds(opened.all("divider")[0]);
+        let row = ((y + tall / 2.) * scale) as i64;
+        let (from, to) = ((x * scale) as i64 - 2, ((x + wide) * scale) as i64 + 2);
+        let background = at(from, row);
+        let line: Vec<_> = (from..to)
+            .map(|column| at(column, row))
+            .filter(|pixel| *pixel != background)
+            .collect();
+        // The focused pane's right side, over the card's.
+        let (x, _, wide, _) = opened.bounds(opened.all("shown-tab")[0]);
+        let right = ((x + wide) * scale).round() as i64;
+        let accent = (right - 3..right + 1)
+            .map(|column| at(column, row))
+            .find(|pixel| *pixel != background)
+            .expect("the card's right side");
+        assert_eq!(line, vec![accent], "the boundary at {scale}");
     }
 }
 
