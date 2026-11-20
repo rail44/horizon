@@ -129,6 +129,8 @@ blitz-paint = { workspace = true }
 blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
 ignore = "0.4"
+# Whether a `file://` link names a file on this machine (`src/workspace/links.rs`).
+gethostname = "1"
 # A file's media type from its name (`src/media_type.rs`).
 mime_guess = { version = "2", default-features = false }
 nucleo = "0.5"

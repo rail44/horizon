@@ -32,7 +32,7 @@ use termwiz::input::{KeyCode, Modifiers};
 
 use horizon_components::Drags;
 use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
-use horizon_shell_runtime::terminal_links::{is_openable_url, url_from_lines};
+use horizon_shell_runtime::terminal_links::url_from_lines;
 use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
 use horizon_ui::reactive_graph::effect::Effect;
@@ -117,8 +117,9 @@ fn rgb(color: TerminalColor, look: &TerminalLook) -> [u8; 3] {
     }
 }
 
-/// Hands a URL to the desktop.
-pub type OpenUrl = Rc<dyn Fn(&str)>;
+/// Follows a link: whatever the URI is, whoever placed the view says
+/// what is done with it.
+pub type OpenLink = Rc<dyn Fn(&str)>;
 
 /// What the view and its widget share.
 struct State {
@@ -161,8 +162,8 @@ struct State {
     clicked: Cell<Option<(std::time::Instant, TerminalSelectionPoint, u8)>>,
     /// The button a press reported to the program is for.
     reporting: Cell<Option<TerminalMouseButton>>,
-    /// What a link clicked with the platform's key held is opened with.
-    open_url: Option<OpenUrl>,
+    /// What a link clicked with the platform's key held is followed with.
+    open_link: Option<OpenLink>,
     drags: Drags,
     /// Whether a button went down here and is still held, and whether what
     /// it drags is a selection (or, otherwise, a report to the program).
@@ -175,7 +176,7 @@ impl State {
         let TerminalView {
             session,
             look,
-            open_url,
+            open_link,
             drags,
         } = given;
         Self {
@@ -195,7 +196,7 @@ impl State {
             wheel: Cell::new(0.),
             clicked: Cell::new(None),
             reporting: Cell::new(None),
-            open_url,
+            open_link,
             drags,
             dragging: Cell::new(None),
         }
@@ -212,8 +213,8 @@ pub struct TerminalView {
     /// The theme's colors, font and row height: the view follows it, and
     /// has the program that asks what the colors are answered with its.
     pub look: Signal<TerminalLook>,
-    /// Opens a link clicked with the platform's key held.
-    pub open_url: Option<OpenUrl>,
+    /// Follows a link clicked with the platform's key held.
+    pub open_link: Option<OpenLink>,
     /// Where the moves of a drag begun here are heard, wherever on the
     /// page the pointer goes, and where the button comes up
     /// (`Drags::wire`, at the root of whatever the view is placed in).
@@ -554,14 +555,12 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             };
             let point = cell_down(pointer.element.x, pointer.element.y);
             let button = button(pointer.button);
-            // A link clicked with the platform's key held is opened, and
+            // A link clicked with the platform's key held is followed, and
             // the press goes no further: not to the program, not into a
             // selection.
             if button == TerminalMouseButton::Left && pointer.mods.meta() {
                 let link = link_at(&pressed, pointer.element.x, pointer.element.y);
-                let open = pressed.open_url.clone();
-                if let (Some(link), Some(open)) = (link.filter(|link| is_openable_url(link)), open)
-                {
+                if let (Some(link), Some(open)) = (link, pressed.open_link.clone()) {
                     open(&link);
                     return;
                 }

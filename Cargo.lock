@@ -2967,6 +2967,7 @@ dependencies = [
  "blitz-shell",
  "crossbeam-channel",
  "futures",
+ "gethostname",
  "horizon-acp",
  "horizon-agent",
  "horizon-board",

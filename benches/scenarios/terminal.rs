@@ -61,7 +61,7 @@ fn open(cells: usize) -> Opened {
         let (root, state) = build(TerminalView {
             session: session.into(),
             look: Theme::built_in().terminal().into(),
-            open_url: None,
+            open_link: None,
             drags: Default::default(),
         });
         terminal = Some(state);

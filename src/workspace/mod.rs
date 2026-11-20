@@ -62,6 +62,7 @@ pub(crate) mod held;
 mod keymap;
 mod keys;
 mod layouts;
+mod links;
 mod models;
 mod moving;
 mod over;
@@ -633,7 +634,7 @@ impl Shell {
                     let (mounted, view) = TerminalPlugin {
                         session,
                         look: Signal::derive(move || shell.theme.with(Theme::terminal)),
-                        open_url: Some(kept.open_url.clone()),
+                        open_link: Some(Rc::new(move |link: &str| shell.follow_link(link))),
                         drags: kept.drags.clone(),
                     }
                     .mount_keeping();

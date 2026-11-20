@@ -14,6 +14,7 @@ use horizon_workspace::{CloseCursorOutcome, Side, Workspace};
 use super::{Modal, Placement, Shell, plugins};
 use crate::extension::{Extension, Running};
 use crate::plugin_host::Asks;
+use crate::wake::Wake;
 
 /// Says that an extension's own command was not carried out, or stopped.
 fn command_failed(command: &str, error: &str) {
@@ -140,6 +141,20 @@ impl Shell {
     /// The instance is kept for as long as it has a view over the
     /// workspace ([`Shell::let_go_of_commanded`]).
     fn run_extension_command(&self, extension: &Arc<Extension>, command: &'static str) {
+        let extension = extension.clone();
+        self.run_for_extension(command, move |asks, wake, failed| {
+            extension.run_command(command, asks, wake, failed)
+        });
+    }
+
+    /// Runs what `start` starts in an instance made for it, as an
+    /// extension's command (`command` names it when it fails): the
+    /// instance is kept for as long as it has a view over the workspace.
+    pub(super) fn run_for_extension(
+        &self,
+        command: &'static str,
+        start: impl FnOnce(Asks, Wake, RwSignal<Option<String>>) -> Result<Running, String>,
+    ) {
         let kept = self.kept();
         let id = kept.commanded_count.get() + 1;
         kept.commanded_count.set(id);
@@ -152,7 +167,7 @@ impl Shell {
         };
         let owner = Owner::new();
         let failed = owner.with(|| RwSignal::new(None::<String>));
-        match extension.run_command(command, asks, kept.wake.clone(), failed) {
+        match start(asks, kept.wake.clone(), failed) {
             Ok(running) => {
                 let running = Rc::new(running);
                 owner.with(|| running.follow());

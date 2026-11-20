@@ -14,9 +14,11 @@ pub fn url_from_lines(
 }
 
 /// The open-with-the-OS allow-list for terminal hyperlinks. Only http(s):
-/// is opened: OSC 8 lets the *remote* side name arbitrary URIs
+/// is handed to the OS: OSC 8 lets the *remote* side name arbitrary URIs
 /// (`file://`, custom app schemes), and the terminal must not become a
-/// remote code-execution primitive by proxy.
+/// remote code-execution primitive by proxy. A `file://` link is opened
+/// in the shell itself instead, by an extension that only shows it
+/// (`src/workspace/links.rs`).
 pub fn is_openable_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")

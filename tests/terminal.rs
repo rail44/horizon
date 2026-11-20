@@ -53,7 +53,7 @@ fn open_at(style: &str) -> Opened {
         let (root, state) = build(TerminalView {
             session: given,
             look: look.into(),
-            open_url: Some(Rc::new(move |url| log.borrow_mut().push(url.to_string()))),
+            open_link: Some(Rc::new(move |url| log.borrow_mut().push(url.to_string()))),
             drags: drags.clone(),
         });
         terminal = Some(state);

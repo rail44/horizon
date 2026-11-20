@@ -9,7 +9,7 @@ use horizon_theme_css::TerminalLook;
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, request_paste};
 
-use super::{OpenUrl, Session, Terminal, TerminalView, build};
+use super::{OpenLink, Session, Terminal, TerminalView, build};
 use crate::plugin::{Command, Mounted, Plugin, Running, SessionPlugin};
 use crate::terminald::Terminald;
 
@@ -17,7 +17,7 @@ pub struct TerminalPlugin {
     /// The session the pane shows, which the shell keeps.
     pub session: Rc<Session>,
     pub look: Signal<TerminalLook>,
-    pub open_url: Option<OpenUrl>,
+    pub open_link: Option<OpenLink>,
     /// Where a drag that leaves the pane is heard.
     pub drags: Drags,
 }
@@ -36,7 +36,7 @@ impl TerminalPlugin {
         let (view, terminal) = build(TerminalView {
             session: self.session,
             look: self.look,
-            open_url: self.open_url,
+            open_link: self.open_link,
             drags: self.drags,
         });
         let run = Callback::new(move |command| match command {
