@@ -6,8 +6,8 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::{Callback, Component, El, el};
 
 use super::{
-    Button, ButtonKind, ButtonSize, Chip, Field, Icon, MenuButton, MenuItem, MenuLabel, Prompt,
-    Tone,
+    AlertDialog, Button, ButtonKind, ButtonSize, Chip, Field, Icon, MenuButton, MenuItem,
+    MenuLabel, Prompt, Tone,
 };
 
 mod styles {
@@ -128,6 +128,29 @@ fn menus() -> El {
                 vec![el("div").class(styles::HOLDS_OPEN).child(menu(true))],
             ),
         ],
+    )
+}
+
+/// An alert dialog, as it asks before a session is ended.
+fn alerts() -> El {
+    entry(
+        "alert dialog",
+        vec![(
+            "before what cannot be taken back; the keys on the button that keeps things",
+            vec![
+                AlertDialog {
+                    title: "Terminate “build”?",
+                    description: "It ends what runs in it.",
+                    action: "Terminate",
+                    action_key: Some("y"),
+                    cancel: "Keep",
+                    danger: true,
+                    on_action: Callback::new(|_| {}),
+                    on_cancel: Callback::new(|_| {}),
+                }
+                .view(),
+            ],
+        )],
     )
 }
 
@@ -268,6 +291,7 @@ pub fn gallery() -> El {
         ))
         .child(buttons())
         .child(menus())
+        .child(alerts())
         .child(fields());
     gallery.child(markdown());
     gallery

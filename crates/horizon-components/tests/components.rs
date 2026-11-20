@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use horizon_components::{
-    ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, Range, Select, Slider,
+    AlertDialog, ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, Range, Select, Slider,
 };
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
@@ -373,6 +373,55 @@ fn a_menu_button_opens_upward_where_below_would_pass_what_it_is_in() {
         items_y + items_height <= trigger_y + 0.5,
         "{items_y} {items_height} {trigger_y}"
     );
+}
+
+#[test]
+fn an_alert_dialog_is_answered_by_its_buttons_and_its_keys() {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (done, kept) = (heard.clone(), heard.clone());
+    let behind = Rc::new(RefCell::new(0));
+    let keys_behind = behind.clone();
+    let app = open_with(|_| {
+        // What is behind it hears none of its keys.
+        el("div")
+            .on("keydown", move |_| *keys_behind.borrow_mut() += 1)
+            .child(
+                AlertDialog {
+                    title: "Terminate “build”?",
+                    description: "It ends what runs in it.",
+                    action: "Terminate",
+                    action_key: Some("y"),
+                    cancel: "Keep",
+                    danger: true,
+                    on_action: Callback::new(move |_| done.borrow_mut().push("action")),
+                    on_cancel: Callback::new(move |_| kept.borrow_mut().push("cancel")),
+                }
+                .view(),
+            )
+    });
+    let answers = all(&app, "answer");
+    assert_eq!(answers.len(), 2);
+    // It opens on the button that keeps things as they are.
+    assert_eq!(all(&app, "at"), vec![answers[0]]);
+    named(&app, NamedKey::Enter);
+    // Tab goes to the action, and back.
+    named(&app, NamedKey::Tab);
+    assert_eq!(all(&app, "at"), vec![answers[1]]);
+    named(&app, NamedKey::Enter);
+    named(&app, NamedKey::Tab);
+    assert_eq!(all(&app, "at"), vec![answers[0]]);
+    // Escape keeps; the action's key does it; another key does nothing.
+    named(&app, NamedKey::Escape);
+    key(&app, Key::Character("y".into()), Modifiers::default());
+    key(&app, Key::Character("j".into()), Modifiers::default());
+    // The buttons are pressed by the pointer too.
+    click(&app, all(&app, "button")[1], 0.5, 0.5);
+    click(&app, all(&app, "button")[0], 0.5, 0.5);
+    assert_eq!(
+        *heard.borrow(),
+        ["cancel", "action", "cancel", "action", "action", "cancel"]
+    );
+    assert_eq!(*behind.borrow(), 0);
 }
 
 #[test]

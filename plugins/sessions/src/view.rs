@@ -1,10 +1,15 @@
 //! The list's view: a project's sessions under its name, each a line of
 //! its title, what it is, its state and since when, and a line under it
-//! for its words where it has some; a band of the keys under them. What the list does
-//! ([`Act`]) is done by its key, by a press on it in the band, or, for
-//! what is done to a session, from the menu on the session's row (its
-//! `⋯`, or a right-click on the row); a click on a row goes to its
-//! session. `/` asks for the field a search is typed into.
+//! for its words where it has some; a band of the keys under them. What
+//! the list does ([`Act`]) is done by its key, by a press on it in the
+//! band, or, for what is done to a session, from the menu on the
+//! session's row (its `⋯`, or a right-click on the row); a click on a row
+//! goes to its session. `/` asks for the field a search is typed into.
+//!
+//! Before a session is ended the list asks, in an alert dialog where it
+//! is seen and answered with the pointer or the keys alike: over the
+//! whole workspace from a pane, which is narrow, and over the list itself
+//! in the sheet, which is over the workspace already.
 //!
 //! The list is shown in a pane ([`pane`]), where it stays, and in a sheet
 //! over the workspace ([`over`]), which going to a session leaves. The
@@ -15,24 +20,25 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_components::{Chip, MenuButton, MenuItem, MenuLabel, Tone};
+use horizon_components::{AlertDialog, Chip, MenuButton, MenuItem, MenuLabel, Tone};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
-use horizon_ui::guest::{Close, watch_sessions};
+use horizon_ui::guest::{Close, modal, watch_sessions};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
+use horizon_ui::reactive_graph::owner::on_cleanup;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With};
-use horizon_ui::{Callback, El, each_layout, el, prevent_default, stop_propagation};
+use horizon_ui::{Callback, Component, El, each_layout, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
 use crate::list::{self, Group, Row};
 
 mod styles {
     horizon_ui::css_module! {"
-    .sessions { display: flex; flex-direction: column; height: 100%; min-width: 0;
-                outline: none; background: var(--background); color: var(--text);
+    .sessions { position: relative; display: flex; flex-direction: column; height: 100%;
+                min-width: 0; outline: none; background: var(--background); color: var(--text);
                 font-family: var(--font-family); font-size: var(--body-size);
                 line-height: var(--body-line);
         .search { flex: none; height: 32px; display: flex; align-items: center;
@@ -73,7 +79,14 @@ mod styles {
                 gap: 0 var(--u4); padding: var(--u4) var(--u8);
                 border-top: var(--line) solid var(--border); font-size: var(--micro-size);
                 line-height: var(--micro-line); color: var(--text-muted); }
-        .foot.asked { color: var(--danger); }
+        .asking { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
+                  display: flex; justify-content: center; align-items: center;
+                  padding: var(--u24); }
+        .dim { position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+               background: var(--background); opacity: 0.7; }
+        .dialog { position: relative; border: var(--line) solid var(--border);
+                  border-radius: var(--radius-large); overflow: hidden;
+                  box-shadow: var(--shadow-modal); }
         .hint { display: flex; align-items: center; gap: var(--u4); padding: 0 var(--u4);
                 border-radius: var(--radius); cursor: pointer; }
         .hint:hover { background: var(--hover); }
@@ -176,6 +189,9 @@ struct Shown {
     /// What the band says after the list's own keys: a key that is not
     /// the list's, and what it does.
     left_with: Option<(&'static str, &'static str)>,
+    /// Whether the list asks over the whole workspace before it ends a
+    /// session; where it does not, it asks over itself.
+    asks_over_the_workspace: bool,
     /// Whether Escape takes a search back. Where it does not, Escape is
     /// passed on.
     escape_takes_a_search_back: bool,
@@ -189,6 +205,7 @@ struct Shown {
 pub fn pane() -> El {
     list(Shown {
         left_with: None,
+        asks_over_the_workspace: true,
         escape_takes_a_search_back: true,
         gone: Rc::new(|| {}),
     })
@@ -199,6 +216,7 @@ pub fn pane() -> El {
 pub fn over(close: Close) -> El {
     let list = list(Shown {
         left_with: Some(("Esc", "Close")),
+        asks_over_the_workspace: false,
         escape_takes_a_search_back: false,
         gone: Rc::new(move || close.close()),
     });
@@ -212,6 +230,36 @@ struct Asked {
     title: String,
     /// How many sessions derived from it end with it, where they do.
     derived: Option<usize>,
+}
+
+impl Asked {
+    /// The dialog that asks it: `answered` hears whether the session is
+    /// to end, once it is answered.
+    fn dialog(&self, answered: impl Fn(bool) + Clone + 'static) -> El {
+        let title = match self.derived {
+            Some(derived) => format!(
+                "Terminate “{}” and the {derived} derived from it?",
+                self.title
+            ),
+            None => format!("Terminate “{}”?", self.title),
+        };
+        let description = match self.derived {
+            Some(_) => "It ends what runs in them.",
+            None => "It ends what runs in it.",
+        };
+        let ended = answered.clone();
+        AlertDialog {
+            title: &title,
+            description,
+            action: "Terminate",
+            action_key: Some("y"),
+            cancel: "Keep",
+            danger: true,
+            on_action: Callback::new(move |_| ended(true)),
+            on_cancel: Callback::new(move |_| answered(false)),
+        }
+        .view()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -605,34 +653,67 @@ fn list(shown: Shown) -> El {
     };
     let by_band = run.clone();
     let left = shown.gone.clone();
-    let foot = move || match state.asked.get() {
-        Some(asked) => {
-            let question = match asked.derived {
-                Some(derived) => format!(
-                    "Terminate “{}” and the {derived} derived from it? It ends what runs in them.",
-                    asked.title
-                ),
-                None => format!("Terminate “{}”? It ends what runs in it.", asked.title),
-            };
-            el("div")
-                .class((styles::FOOT, styles::ASKED))
-                .child(el("span").text(&question))
-                .child(hint(("y", "Terminate"), move || answer(true)))
-                .child(hint(("Esc", "Keep"), move || answer(false)))
-        }
-        None => {
+    let foot = el("div")
+        .class(styles::FOOT)
+        .children(BAND.into_iter().map(|act| {
+            let run = by_band.clone();
+            hint((act.key(), act.short()), move || run(act))
+        }))
+        .children((shown.left_with.into_iter()).map(move |said| {
             let left = left.clone();
-            el("div")
-                .class(styles::FOOT)
-                .children(BAND.into_iter().map(|act| {
-                    let run = by_band.clone();
-                    hint((act.key(), act.short()), move || run(act))
-                }))
-                .children((shown.left_with.into_iter()).map(move |said| {
-                    let left = left.clone();
-                    hint(said, move || left())
-                }))
-        }
+            hint(said, move || left())
+        }));
+
+    // Asked whether to end a session: over the whole workspace, or over
+    // the list. The keys come back to the list once it is answered.
+    let over_the_workspace = shown.asks_over_the_workspace;
+    if over_the_workspace {
+        let opened: Rc<RefCell<Option<Asked>>> = Rc::default();
+        Effect::new(move |_| {
+            let Some(asked) = state.asked.get() else {
+                *opened.borrow_mut() = None;
+                return;
+            };
+            if opened.borrow().as_ref() == Some(&asked) {
+                return;
+            }
+            *opened.borrow_mut() = Some(asked.clone());
+            modal(move |close| {
+                // (Taken away without an answer -- a press outside it --
+                // it is as if it were kept.)
+                let left = asked.clone();
+                on_cleanup(move || {
+                    if state.asked.get_untracked().as_ref() == Some(&left) {
+                        state.asked.set(None);
+                    }
+                });
+                asked.dialog(move |end| {
+                    answer(end);
+                    close.close();
+                })
+            });
+        });
+    }
+    let asking_over_the_list = move || {
+        (state.asked.get().into_iter())
+            .filter(|_| !over_the_workspace)
+            .collect::<Vec<_>>()
+    };
+    let over_the_list = move |asked: &Asked| {
+        let dialog = asked.dialog(move |end| {
+            answer(end);
+            root.focus();
+        });
+        el("div")
+            .class(styles::ASKING)
+            // (On the click, not as the button goes down: gone by then, it
+            // would leave the click to the row under it.)
+            .child(el("div").class(styles::DIM).on("click", move |_| {
+                answer(false);
+                root.focus();
+                stop_propagation();
+            }))
+            .child(el("div").class(styles::DIALOG).child(dialog))
     };
 
     let root = root
@@ -641,11 +722,8 @@ fn list(shown: Shown) -> El {
             field,
         )
         .child(list)
-        .each(
-            move || vec![state.asked.get()],
-            Clone::clone,
-            move |_| foot(),
-        );
+        .child(foot)
+        .each(asking_over_the_list, Clone::clone, over_the_list);
 
     root.on("keydown", move |event| {
         let DomEventData::KeyDown(key) = &event.data else {
@@ -659,13 +737,6 @@ fn list(shown: Shown) -> El {
             Key::Character(character) => character.as_str(),
             _ => "",
         };
-        // Asked whether to end a session, the keys answer.
-        if state.asked.get_untracked().is_some() {
-            answer(character == "y");
-            prevent_default();
-            stop_propagation();
-            return;
-        }
         // In the search's field, the keys are what is searched for.
         if state.searching.get_untracked() {
             match &key.key {

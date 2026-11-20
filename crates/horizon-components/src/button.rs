@@ -24,6 +24,8 @@ mod styles {
         .button.small { padding: 0 var(--u8); line-height: calc(var(--u4) * 5); }
         .button.primary { background: var(--accent); color: var(--on-accent); }
         .button.primary:hover { background: var(--accent); opacity: 0.9; }
+        .button.danger { background: var(--danger); color: var(--on-accent); }
+        .button.danger:hover { background: var(--danger); opacity: 0.9; }
     "}
 }
 
@@ -34,6 +36,8 @@ pub enum ButtonKind {
     Plain,
     /// The one thing to do next.
     Primary,
+    /// The one thing to do next, which ends or takes away something.
+    Danger,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,6 +75,7 @@ impl Component for Button<'_> {
         let kind = match self.kind {
             ButtonKind::Plain => None,
             ButtonKind::Primary => Some(styles::PRIMARY),
+            ButtonKind::Danger => Some(styles::DANGER),
         };
         let size = match self.size {
             ButtonSize::Regular => None,

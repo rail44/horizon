@@ -249,6 +249,45 @@ impl Opened {
         }
     }
 
+    /// What the alert dialog asks before a session is ended, wherever it
+    /// is: over the workspace, or over the list.
+    fn asked(&self) -> Option<String> {
+        let document = self.app.document();
+        let document = document.borrow();
+        let mut found = Vec::new();
+        collect(&document, document.root_element().id, "alert", &mut found);
+        (found.first()).map(|alert| document.get_node(*alert).unwrap().text_content())
+    }
+
+    /// Whether the alert dialog is over the list rather than over the
+    /// workspace.
+    fn asked_over_the_list(&self) -> bool {
+        !self.nodes("alert").is_empty()
+    }
+
+    /// Presses the alert dialog's button saying `label`, and lets what it
+    /// did take effect.
+    fn answer(&self, label: &str) {
+        let button = {
+            let document = self.app.document();
+            let document = document.borrow();
+            let mut alerts = Vec::new();
+            collect(&document, document.root_element().id, "alert", &mut alerts);
+            let alert = *alerts.first().expect("an alert dialog");
+            let mut buttons = Vec::new();
+            collect(&document, alert, "button", &mut buttons);
+            (buttons.into_iter())
+                .find(|button| document.get_node(*button).unwrap().text_content() == label)
+                .unwrap_or_else(|| panic!("no button {label:?}"))
+        };
+        let (x, y) = self.middle(button);
+        horizon_ui::testing::click_at(&self.app, x, y);
+        for _ in 0..2 {
+            self.app.run_effects();
+            self.app.resolve();
+        }
+    }
+
     /// The titles of the rows, in the order they are drawn.
     fn titles(&self) -> Vec<String> {
         self.texts("title")
@@ -480,28 +519,35 @@ fn the_chosen_session_is_ended_once_the_list_is_told_so() {
     opened.list();
     opened.until("the rows", || opened.titles().len() == 5);
     let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
-    let foot = || opened.texts("foot").join(" ");
+    let asked = || opened.asked().unwrap_or_default();
 
-    // With what was derived from it: asked, and kept on any other key.
+    // With what was derived from it: asked in a dialog over the whole
+    // workspace -- the pane is narrow -- and kept on Escape. The band
+    // asks nothing.
     assert_eq!(opened.chosen().as_deref(), Some("build"));
     opened.character("X");
+    opened.until("the question", || opened.asked().is_some());
     assert!(
-        foot().contains("Terminate “build” and the 1 derived from it?"),
+        asked()
+            .starts_with("Terminate “build” and the 1 derived from it?It ends what runs in them."),
         "{}",
-        foot()
+        asked()
     );
+    assert!(!opened.asked_over_the_list());
+    assert!(opened.texts("foot").join(" ").contains("Go to"));
     opened.key(Key::Named(NamedKey::Escape));
-    assert!(foot().contains("Go to"), "{}", foot());
+    opened.until("the question gone", || opened.asked().is_none());
     assert!(has(made.waiting) && has(made.derived));
 
-    // One session: asked, and ended on `y`. The choice goes to what took
-    // its place.
+    // One session: asked, and ended on `y`; the keys are the list's again
+    // once it is answered. The choice goes to what took its place.
     opened.character("j");
     opened.character("x");
+    opened.until("the question", || opened.asked().is_some());
     assert!(
-        foot().contains("Terminate “tests”? It ends what runs in it."),
+        asked().starts_with("Terminate “tests”?It ends what runs in it."),
         "{}",
-        foot()
+        asked()
     );
     opened.character("y");
     opened.until("the session ended", || !has(made.derived));
@@ -512,12 +558,14 @@ fn the_chosen_session_is_ended_once_the_list_is_told_so() {
     assert!(has(made.waiting));
 
     // With nothing derived from it, `X` ends the one.
+    opened.until("the question gone", || opened.asked().is_none());
     opened.character("k");
     opened.character("X");
+    opened.until("the question", || opened.asked().is_some());
     assert!(
-        foot().contains("Terminate “build”? It ends what runs in it."),
+        asked().starts_with("Terminate “build”?It ends what runs in it."),
         "{}",
-        foot()
+        asked()
     );
     opened.character("y");
     opened.until("the session ended", || !has(made.waiting));
@@ -570,7 +618,7 @@ fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
     opened.list();
     opened.until("the rows", || opened.titles().len() == 5);
     let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
-    let foot = || opened.texts("foot").join(" ");
+    let asked = || opened.asked().unwrap_or_default();
 
     // A right-click on a row chooses it and opens its menu: what can be
     // done to it, each with its key. "With derived" is offered where some
@@ -585,19 +633,21 @@ fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
     assert_eq!(opened.chosen().as_deref(), Some("build"));
     assert_eq!(opened.texts("item").len(), 4);
 
-    // An item does what its key does: asked, and kept from the band.
+    // An item does what its key does: asked, and kept with the dialog's
+    // button.
     opened.press("item", "Terminate with derived", false);
     assert!(opened.texts("item").is_empty());
+    opened.until("the question", || opened.asked().is_some());
     assert!(
-        foot().contains("Terminate “build” and the 1 derived from it?"),
+        asked().starts_with("Terminate “build” and the 1 derived from it?"),
         "{}",
-        foot()
+        asked()
     );
-    opened.press("hint", "EscKeep", false);
-    assert!(foot().contains("Go to"), "{}", foot());
+    opened.answer("Keep");
+    opened.until("the question gone", || opened.asked().is_none());
     assert!(has(made.waiting) && has(made.derived));
 
-    // A row's `⋯` opens the same menu; ended from the band.
+    // A row's `⋯` opens the same menu; ended with the dialog's button.
     opened.press("title", "tests", true);
     opened.key(Key::Named(NamedKey::Escape));
     assert!(opened.texts("item").is_empty());
@@ -608,7 +658,8 @@ fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
     opened.app.resolve();
     assert_eq!(opened.texts("item").len(), 3);
     opened.press("item", "Terminate", false);
-    opened.press("hint", "yTerminate", false);
+    opened.until("the question", || opened.asked().is_some());
+    opened.answer("Terminate");
     opened.until("the session ended", || !has(made.derived));
     opened.until("the rows", || opened.titles().len() == 4);
 
@@ -634,15 +685,15 @@ fn a_session_is_ended_with_the_pointer_as_a_window_has_it() {
     opened.list();
     opened.until("the rows", || opened.titles().len() == 5);
     let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
-    let foot = || opened.texts("foot").join(" ");
 
     // (The page drawn between a button going down and coming up, the menu
     // is still there for the click, and the row under it hears none.)
     opened.press_over_frames("title", "tests", true);
     assert_eq!(opened.texts("item").len(), 3);
     opened.press_over_frames("item", "Terminate", false);
-    assert!(foot().contains("Terminate “tests”?"), "{}", foot());
-    opened.press_over_frames("hint", "yTerminate", false);
+    opened.until("the question", || opened.asked().is_some());
+    assert!(opened.asked().unwrap().starts_with("Terminate “tests”?"));
+    opened.answer("Terminate");
     opened.until("the session ended", || !has(made.derived));
 }
 
@@ -675,11 +726,15 @@ fn the_session_manager_is_the_list_over_the_workspace() {
     );
     let foot = opened.texts("foot").join(" ");
     assert!(foot.ends_with("EscClose"), "{foot}");
+    // Asked over the list itself, which is over the workspace already.
     opened.character("j");
     opened.character("x");
+    opened.until("the question", || opened.asked().is_some());
+    assert!(opened.asked_over_the_list());
     opened.character("y");
     opened.until("the session ended", || !has(made.derived));
     assert!(opened.managed());
+    opened.until("the question gone", || opened.asked().is_none());
     opened.until("the rows", || opened.titles().len() == 4);
 
     // Gone to, a session no pane shows is in a pane beside the active
@@ -714,9 +769,20 @@ fn the_session_manager_is_the_list_over_the_workspace() {
     manage();
     assert_eq!(opened.titles().len(), 4);
     assert!(opened.texts("search").is_empty());
-    // Escape with a question asked answers the question.
+    // Escape with a question asked answers the question, and the sheet
+    // stays; so does a press beside the dialog.
     opened.character("x");
+    opened.until("the question", || opened.asked().is_some());
     opened.key(Key::Named(NamedKey::Escape));
+    assert!(opened.managed());
+    opened.until("the question gone", || opened.asked().is_none());
+    opened.character("x");
+    opened.until("the question", || opened.asked().is_some());
+    let (x, y) = opened.middle(opened.nodes("asking")[0]);
+    horizon_ui::testing::click_at(&opened.app, x, y - 120.);
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.until("the question gone", || opened.asked().is_none());
     assert!(opened.managed());
     opened.key(Key::Named(NamedKey::Escape));
     left();
@@ -857,6 +923,7 @@ fn paint_the_list() {
     opened.until("the rows", || opened.titles().len() == 5);
     if std::env::var_os("HORIZON_SESSIONS_ASK").is_some() {
         opened.character("X");
+        opened.until("the question", || opened.asked().is_some());
     }
     menu_if_asked(&opened);
     let (width, height) = (1200u32, 800u32);
@@ -884,6 +951,7 @@ fn menu_if_asked(opened: &Opened) {
         opened.until("the menu", || !opened.texts("item").is_empty());
         if let Ok(item) = std::env::var("HORIZON_SESSIONS_ITEM") {
             opened.press_over_frames("item", &item, false);
+            opened.until("the question", || opened.asked().is_some());
         }
     }
 }
