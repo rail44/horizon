@@ -44,6 +44,10 @@ pub(crate) trait Provider: Send + Sync {
     fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String>;
 }
 
+/// Called on a mock session's thread once a slow turn's first word is out
+/// ([`ProviderRegistry::hold_mock_streams`]).
+pub type MockStreamHold = Arc<dyn Fn() + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
     providers: HashMap<ProviderId, Arc<dyn Provider>>,
@@ -148,6 +152,14 @@ impl ProviderRegistry {
         // provider fail loudly the way an unknown provider id already
         // does, rather than starting a role-less session on nothing.
         registry
+    }
+
+    /// Has the mock provider's slow turns wait on `hold` once their first
+    /// word is out: a test reattaches while a turn is surely streaming.
+    pub fn hold_mock_streams(&mut self, hold: MockStreamHold) {
+        self.insert(Arc::new(crate::providers::mock::MockProvider::holding(
+            hold,
+        )));
     }
 
     pub(crate) fn insert(&mut self, provider: Arc<dyn Provider>) {

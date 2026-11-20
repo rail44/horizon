@@ -51,6 +51,11 @@ const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
 /// Test-only; never set outside this file.
 const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
 
+/// The env var `horizon-agentd`'s `main` reads to have the mock provider's
+/// slow turns wait, once their first word is out, until a file is there.
+/// Test-only; never set outside this file.
+const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENTD_TEST_MOCK_STREAM_GATE";
+
 /// How long an answer that must come may take: only tells "never" apart.
 const NEVER: Duration = Duration::from_secs(30);
 
@@ -115,6 +120,7 @@ fn agentd_spawn(paths: AgentdPaths) -> AgentdSpawn {
     AgentdSpawn::new(resolve_agentd_binary(), paths)
         .env_remove(TEST_RESUME_GATE_VAR)
         .env_remove(TEST_DUCKDB_REBUILD_GATE_VAR)
+        .env_remove(TEST_MOCK_STREAM_GATE_VAR)
 }
 
 /// Spawns `horizon-agentd` at fresh throwaway paths -- what almost every
@@ -2474,17 +2480,32 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
             Some(v2::SessionUpdate::AgentMessageChunk(_))
         )
     }
-    let agentd = spawn_agentd();
+    // The turn is held once its first word is out: every attachment below
+    // but the last is made while it is surely streaming, and the last one
+    // takes in the rest live once it is let go.
+    let gate = gate_path("mock-stream");
+    let agentd = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+        .env(TEST_MOCK_STREAM_GATE_VAR, &gate)
+        .spawn();
     let mut client = connect(&agentd.socket_path).await;
     let session = SessionId::new();
     open_session(&client, session_new(session)).await;
-    prompt(&client, session, &format!("slow {}", "word ".repeat(100))).await;
+    prompt(&client, session, "slow word word word").await;
     collect_until(&mut client, is_chunk).await;
     for _ in 0..4 {
         let history = resume(&mut client, session).await.unwrap();
         assert!(history.iter().any(is_chunk));
+        assert!(
+            history
+                .iter()
+                .rev()
+                .find(|inbound| is_state(inbound))
+                .is_none_or(|inbound| idle_stop_reason(inbound).is_none()),
+            "the turn ended while it was held"
+        );
     }
     let mut messages = resume(&mut client, session).await.unwrap();
+    open_gate(&gate);
     let settled = |messages: &[Inbound]| {
         messages
             .iter()
@@ -2508,6 +2529,7 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
         replay.iter().map(wire).collect::<Vec<_>>(),
         "streaming attach must preserve the entire ordered sequence"
     );
+    let _ = std::fs::remove_file(&gate);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

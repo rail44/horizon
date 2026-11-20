@@ -7,11 +7,20 @@ use crate::registry::{Provider, SessionHandle};
 use crate::roles::RoleId;
 use crate::tools::{cancelled_tool_call_result, tool_result_message};
 
-pub(crate) struct MockProvider;
+pub(crate) struct MockProvider {
+    /// Called by a slow turn once its first word is out
+    /// ([`crate::registry::MockStreamHold`]).
+    hold: Option<crate::registry::MockStreamHold>,
+}
 
 impl MockProvider {
     pub(crate) fn new() -> Self {
-        Self
+        Self { hold: None }
+    }
+
+    /// A mock whose slow turns wait on `hold` after their first word.
+    pub(crate) fn holding(hold: crate::registry::MockStreamHold) -> Self {
+        Self { hold: Some(hold) }
     }
 }
 
@@ -32,6 +41,7 @@ impl Provider for MockProvider {
         let (commands_tx, commands_rx) = unbounded();
         let (events_tx, events_rx) = unbounded::<ProviderEvent>();
         let provider_id = request.provider_id.clone();
+        let hold = self.hold.clone();
 
         thread::spawn(move || {
             let _ = events_tx.send(Event::StateChanged(SessionState::Created).into());
@@ -78,6 +88,7 @@ impl Provider for MockProvider {
                             &events_tx,
                             text,
                             &mut pending_tool_call,
+                            hold.as_ref(),
                         )
                         .is_break()
                         {
@@ -255,6 +266,7 @@ fn respond_to_user_message(
     events_tx: &Sender<ProviderEvent>,
     text: String,
     pending_tool_call: &mut Option<ToolCallIdentity>,
+    hold: Option<&crate::registry::MockStreamHold>,
 ) -> ControlFlow<()> {
     let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
     let _ = events_tx.send(
@@ -462,7 +474,7 @@ fn respond_to_user_message(
             })
             .into(),
         );
-        match run_cancellable_mock_turn(commands_rx, events_tx, &text) {
+        match run_cancellable_mock_turn(commands_rx, events_tx, &text, hold) {
             MockTurnOutcome::Completed => {
                 let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
             }
@@ -532,6 +544,7 @@ fn run_cancellable_mock_turn(
     commands_rx: &Receiver<Command>,
     events_tx: &Sender<ProviderEvent>,
     text: &str,
+    hold: Option<&crate::registry::MockStreamHold>,
 ) -> MockTurnOutcome {
     let full_response = format!("Mock response: {text}");
     let mut streamed = String::new();
@@ -587,6 +600,13 @@ fn run_cancellable_mock_turn(
             })
             .into(),
         );
+        // Streaming, a word out and more to come: a test holds it here.
+        // (Held, the turn hears no command.)
+        if streamed.len() == word.len()
+            && let Some(hold) = hold
+        {
+            hold();
+        }
     }
 
     let _ = events_tx.send(Event::ProviderRequestFinished.into());
