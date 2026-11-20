@@ -267,3 +267,42 @@ fn nested_fields_and_cross_field_rules_are_checked_before_dispatch() {
         );
     }
 }
+
+#[test]
+fn an_fs_edit_path_given_once_beside_edits_fills_in_for_edits_that_name_none() {
+    let input = ToolInput::parse(
+        "fs_edit",
+        &json!({"path": "/w/a.rs", "edits": [
+            {"old_string": "a", "new_string": "b"},
+            {"path": "/w/b.rs", "old_string": "c", "new_string": "d"},
+        ]}),
+    )
+    .unwrap();
+
+    assert_eq!(input.write_paths(), vec!["/w/a.rs", "/w/b.rs"]);
+}
+
+#[test]
+fn an_fs_edit_whose_edit_names_no_file_anywhere_is_refused_by_its_index() {
+    let error = ToolInput::parse(
+        "fs_edit",
+        &json!({"edits": [
+            {"path": "/w/a.rs", "old_string": "a", "new_string": "b"},
+            {"old_string": "c", "new_string": "d"},
+        ]}),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("edits[1] names no file"), "{error}");
+}
+
+#[test]
+fn fs_grep_and_fs_glob_take_path_for_base_path() {
+    for (id, input) in [
+        ("fs_grep", json!({"path": "/w", "pattern": "x"})),
+        ("fs_glob", json!({"path": "/w", "pattern": "*.rs"})),
+    ] {
+        let input = ToolInput::parse(id, &input).unwrap();
+        assert_eq!(input.read_path(), Some("/w"), "{id}");
+    }
+}

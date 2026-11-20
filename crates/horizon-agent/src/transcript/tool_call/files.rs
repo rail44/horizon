@@ -61,11 +61,13 @@ pub struct EditEntry<'a> {
     pub new_string: &'a str,
 }
 
-/// Reads an `fs_edit` call's `edits` list in input order. An entry with no
-/// `path` is skipped (there is nothing to display it against); a missing or
-/// non-array `edits` yields an empty list, so a malformed call renders as an
-/// empty batch rather than panicking.
+/// Reads an `fs_edit` call's `edits` list in input order. An entry's file is
+/// its own `path`, else the top-level `path` (`tools::input::EditFilesArgs`);
+/// an entry with neither is skipped (there is nothing to display it
+/// against); a missing or non-array `edits` yields an empty list, so a
+/// malformed call renders as an empty batch rather than panicking.
 pub fn edit_entries(input: &Value) -> Vec<EditEntry<'_>> {
+    let shared_path = str_field(input, "path");
     input
         .get("edits")
         .and_then(Value::as_array)
@@ -74,7 +76,7 @@ pub fn edit_entries(input: &Value) -> Vec<EditEntry<'_>> {
                 .iter()
                 .filter_map(|edit| {
                     Some(EditEntry {
-                        path: str_field(edit, "path")?,
+                        path: str_field(edit, "path").or(shared_path)?,
                         old_string: str_field(edit, "old_string").unwrap_or_default(),
                         new_string: str_field(edit, "new_string").unwrap_or_default(),
                     })

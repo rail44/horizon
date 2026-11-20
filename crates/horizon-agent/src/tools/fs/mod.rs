@@ -86,7 +86,11 @@ pub(crate) fn out_of_root_refusal(
 fn read_path_arg<'a>(tool_id: &str, input: &'a Value) -> Option<&'a str> {
     match tool_id {
         "fs_read" => input.get("path").and_then(Value::as_str),
-        "fs_glob" | "fs_grep" => input.get("base_path").and_then(Value::as_str),
+        // `path` is the alias `tools::input::Grep`/`Glob` accept.
+        "fs_glob" | "fs_grep" => input
+            .get("base_path")
+            .or_else(|| input.get("path"))
+            .and_then(Value::as_str),
         _ => None,
     }
 }

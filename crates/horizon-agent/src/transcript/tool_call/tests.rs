@@ -209,3 +209,17 @@ fn truncate_chars_truncates_long_ascii() {
     assert_eq!(head.chars().count(), 120);
     assert_eq!(head, "z".repeat(120));
 }
+
+/// An `fs_edit` that names its file once beside `edits` shows each edit
+/// against that file, as the tool applies it.
+#[test]
+fn edit_entries_take_the_shared_path_for_an_edit_that_names_none() {
+    let input = json!({"path": "/w/a.rs", "edits": [
+        {"old_string": "a", "new_string": "b"},
+        {"path": "/w/b.rs", "old_string": "c", "new_string": "d"},
+    ]});
+
+    let paths: Vec<&str> = edit_entries(&input).iter().map(|edit| edit.path).collect();
+
+    assert_eq!(paths, vec!["/w/a.rs", "/w/b.rs"]);
+}
