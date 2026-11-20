@@ -13,7 +13,7 @@ use horizon::board::{BoardList, Sessions, Source};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::GetUntracked;
@@ -28,6 +28,8 @@ struct Opened {
     /// its tasks are bound to.
     activity: RwSignal<HashMap<SessionId, BoardSessionActivity>>,
     bound: RwSignal<Vec<SessionId>>,
+    /// The element the view returned: what the tests look under.
+    root: NodeId,
     asked: Rc<RefCell<Vec<Asked>>>,
 }
 
@@ -69,7 +71,7 @@ fn open(items: Vec<Item>) -> Opened {
         .into_iter()
         .map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
-    let mut list = None;
+    let (mut list, mut top) = (None, None);
     let mut told = None;
     let css = horizon_theme_css::CSS;
     let app = App::new(600, 500, "Test", css, || {
@@ -84,6 +86,7 @@ fn open(items: Vec<Item>) -> Opened {
             log.borrow_mut().push(asked)
         });
         list = Some(state);
+        top = Some(root.0);
         themed(Theme::built_in, root.focus())
     });
     let (activity, bound) = told.unwrap();
@@ -93,22 +96,11 @@ fn open(items: Vec<Item>) -> Opened {
         activity,
         bound,
         asked,
+        root: top.unwrap(),
     };
     // The store is read off the UI thread.
     opened.until("the tasks", || !opened.list.tasks().is_empty());
     opened
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
 }
 
 impl Opened {
@@ -126,11 +118,7 @@ impl Opened {
     }
 
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        horizon_ui::testing::find(&self.app, self.root, class)
     }
 
     fn text_of(&self, node: NodeId) -> String {
@@ -317,9 +305,6 @@ fn a_task_bound_to_a_session_says_what_the_session_is_doing() {
     assert_eq!(opened.all("danger").len(), 1);
     // The chip is before the row's own status, in the same row.
     let row = opened.all("row")[3];
-    let document = opened.app.document();
-    let document = document.borrow();
-    let mut inside = Vec::new();
-    collect(&document, row, "activity", &mut inside);
+    let inside = horizon_ui::testing::find(&opened.app, row, "activity");
     assert_eq!(inside.len(), 1);
 }

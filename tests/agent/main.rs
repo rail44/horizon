@@ -6,7 +6,7 @@ use std::rc::Rc;
 use horizon::agent::{Agent, Asked, view};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, BlitzWheelEvent, KeyState, PointerCoords,
     UiEvent,
@@ -24,12 +24,14 @@ struct Opened {
     /// What the view is given to show.
     shown: sample::Given,
     asked: Rc<RefCell<Vec<Asked>>>,
+    /// The element the view returned: what the tests look under.
+    root: NodeId,
 }
 
 fn open(session: &Session) -> Opened {
     let asked = Rc::new(RefCell::new(Vec::new()));
     let log = asked.clone();
-    let mut agent = None;
+    let (mut agent, mut top) = (None, None);
     // (Made on the page: a signal is its page's.)
     let mut given = None;
     // The theme with no config file, at its 13 px: the measurements below
@@ -39,7 +41,7 @@ fn open(session: &Session) -> Opened {
         given = Some(shown);
         let (root, state) = view(shown.into(), move |asked| log.borrow_mut().push(asked));
         state.field.focus();
-        agent = Some(state);
+        (agent, top) = (Some(state), Some(root.0));
         themed(Theme::built_in, root)
     });
     let opened = Opened {
@@ -47,24 +49,10 @@ fn open(session: &Session) -> Opened {
         agent: agent.unwrap(),
         shown: given.unwrap(),
         asked,
+        root: top.unwrap(),
     };
     opened.show(session);
     opened
-}
-
-fn has_class(document: &BaseDocument, id: NodeId, class: &str) -> bool {
-    (document.get_node(id))
-        .and_then(|node| node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class))
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    if has_class(document, id, class) {
-        found.push(id);
-    }
-    for child in &document.get_node(id).expect("a node").children {
-        collect(document, *child, class, found);
-    }
 }
 
 impl Opened {
@@ -75,11 +63,7 @@ impl Opened {
     }
 
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        horizon_ui::testing::find(&self.app, self.root, class)
     }
 
     fn text(&self) -> String {

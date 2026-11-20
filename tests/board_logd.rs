@@ -16,7 +16,7 @@ use horizon::board::{BoardList, Source};
 use horizon_board::{Position, Store};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::testing::click_at;
 use keyboard_types::{Key, Modifiers, NamedKey};
@@ -42,29 +42,9 @@ impl Drop for Scratch {
     }
 }
 
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
-}
-
-fn all(app: &App, class: &str) -> Vec<NodeId> {
-    let document = app.document();
-    let document = document.borrow();
-    let mut found = Vec::new();
-    collect(&document, document.root_element().id, class, &mut found);
-    found
-}
-
-/// The titles of the rows on the page, in order.
-fn titles(app: &App) -> Vec<String> {
-    let rows = all(app, "title");
+/// The titles of the rows of the list under `root`, in order.
+fn titles(app: &App, root: NodeId) -> Vec<String> {
+    let rows = horizon_ui::testing::find(app, root, "title");
     let document = app.document();
     let document = document.borrow();
     (rows.into_iter())
@@ -81,8 +61,8 @@ fn until(app: &App, what: &str, met: impl Fn() -> bool) {
         }
         assert!(
             started.elapsed() < Duration::from_secs(20),
-            "no {what} in {:?}",
-            titles(app)
+            "no {what} in {}",
+            horizon_ui::testing::text(app)
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -142,7 +122,7 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
         .status();
     assert!(made.is_ok_and(|status| status.success()), "git init");
 
-    let mut list: Option<BoardList> = None;
+    let (mut list, mut top): (Option<BoardList>, _) = (None, None);
     let css = horizon_theme_css::CSS;
     let app = App::new(600, 500, "Test", css, || {
         let source = Source::Root(project.clone());
@@ -152,16 +132,16 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
             horizon::board::Sessions::untold(),
             |_| {},
         );
-        list = Some(state);
+        (list, top) = (Some(state), Some(root.0));
         themed(Theme::built_in, root.focus())
     });
-    let list = list.unwrap();
+    let (list, root) = (list.unwrap(), top.unwrap());
     app.resolve();
 
     // A title typed into the field and Enter: the task is in the store,
     // and so in the list.
     let (x, y) = {
-        let field = all(&app, "add")[0];
+        let field = horizon_ui::testing::find(&app, root, "add")[0];
         let document = app.document();
         let document = document.borrow();
         let bounds = document.get_client_bounding_rect(field).expect("a box");
@@ -177,7 +157,9 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
     )));
     app.resolve();
     press(&app, Key::Named(NamedKey::Enter));
-    until(&app, "the task added", || titles(&app) == ["first task"]);
+    until(&app, "the task added", || {
+        titles(&app, root) == ["first task"]
+    });
 
     // A task written by something else reaches the list by the log.
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -187,14 +169,14 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
     let elsewhere = Store::from_dir(&project).unwrap();
     (runtime.block_on(elsewhere.add("second task", "", None, Position::Bottom))).unwrap();
     until(&app, "the task written elsewhere", || {
-        titles(&app) == ["first task", "second task"]
+        titles(&app, root) == ["first task", "second task"]
     });
 
     // Moved up among its siblings, it is written where it went.
     list.execute(ListCommand::SelectNext);
     list.execute(ListCommand::MoveUp);
     until(&app, "the task moved", || {
-        titles(&app) == ["second task", "first task"]
+        titles(&app, root) == ["second task", "first task"]
     });
     let stored = elsewhere.list(None, true).unwrap().items;
     let order: Vec<&str> = (horizon_board::tree_order(&stored, false).into_iter())

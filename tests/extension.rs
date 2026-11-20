@@ -16,7 +16,7 @@ use horizon_control::contract::{EnvelopeBody, Invoke, Query};
 use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_ui::testing::click_at;
@@ -104,29 +104,18 @@ struct Opened {
     shell: Shell,
 }
 
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
-}
-
 impl Opened {
     fn model<R>(&self, read: impl FnOnce(&Workspace) -> R) -> R {
         self.shell.model.with_untracked(read)
     }
 
+    /// The elements of a class in the cursor's pane, the extension's, in
+    /// document order.
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        let pane = (self.model(Workspace::cursor_pane_id))
+            .and_then(|pane| self.shell.pane_element(pane))
+            .expect("the cursor's pane, drawn");
+        horizon_ui::testing::find(&self.app, pane, class)
     }
 
     fn middle(&self, node: NodeId) -> (f32, f32) {

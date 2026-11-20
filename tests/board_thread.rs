@@ -11,7 +11,7 @@ use horizon::board::{BoardThread, Source};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
@@ -25,6 +25,8 @@ struct Opened {
     /// The task the view is given: it follows it.
     shown: RwSignal<u64>,
     asked: Rc<RefCell<Vec<Asked>>>,
+    /// The element the view returned: what the tests look under.
+    root: NodeId,
 }
 
 impl Opened {
@@ -85,7 +87,7 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
         .into_iter()
         .map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
-    let mut thread = None;
+    let (mut thread, mut top) = (None, None);
     // (Made on the page: a signal is its page's.)
     let mut given = None;
     let app = App::new(width, 600, "Test", horizon_theme_css::CSS, || {
@@ -99,6 +101,7 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
             move |asked| log.borrow_mut().push(asked),
         );
         thread = Some(state);
+        top = Some(root.0);
         themed(Theme::built_in, root.focus())
     });
     let opened = Opened {
@@ -106,24 +109,13 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
         thread: thread.unwrap(),
         shown: given.unwrap(),
         asked,
+        root: top.unwrap(),
     };
     // The store is read off the UI thread.
     opened.until("the page", || {
         !opened.all("title").is_empty() || !opened.all("missing").is_empty()
     });
     opened
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
 }
 
 impl Opened {
@@ -141,11 +133,7 @@ impl Opened {
     }
 
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        horizon_ui::testing::find(&self.app, self.root, class)
     }
 
     fn text_of(&self, node: NodeId) -> String {

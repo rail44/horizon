@@ -19,7 +19,7 @@ use horizon::preview::{Preview, Target, view};
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
-use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::Set;
@@ -49,6 +49,8 @@ mod support;
 struct Opened {
     app: App,
     preview: Preview,
+    /// The element of the view the test checks: what it looks under.
+    root: NodeId,
 }
 
 /// A preview pane on the extension whose component is at `path`, made on
@@ -92,7 +94,11 @@ fn open_with(path: &Path, arguments: &[&str], read_first: bool) -> Opened {
         directory: PathBuf::new(),
         path: path.to_path_buf(),
     }));
-    let opened = Opened { app, preview };
+    let opened = Opened {
+        app,
+        preview,
+        root: root.0,
+    };
     // The component is compiled off this thread.
     opened.app.run_effects();
     if read_first {
@@ -113,18 +119,6 @@ fn open_with(path: &Path, arguments: &[&str], read_first: bool) -> Opened {
 /// The fixture's view `name`.
 fn open(name: &str) -> Opened {
     open_at(&fixture(), &[name])
-}
-
-fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
-    let node = document.get_node(id).expect("a node");
-    let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
-    if named {
-        found.push(id);
-    }
-    for child in &node.children {
-        collect(document, *child, class, found);
-    }
 }
 
 impl Opened {
@@ -151,11 +145,7 @@ impl Opened {
     }
 
     fn all(&self, class: &str) -> Vec<NodeId> {
-        let document = self.app.document();
-        let document = document.borrow();
-        let mut found = Vec::new();
-        collect(&document, document.root_element().id, class, &mut found);
-        found
+        horizon_ui::testing::find(&self.app, self.root, class)
     }
 
     fn text_of(&self, node: NodeId) -> String {
@@ -167,12 +157,11 @@ impl Opened {
     /// The titles of the rows the preview shows (a shell around it has
     /// titles of its own).
     fn titles(&self) -> Vec<String> {
+        let found: Vec<NodeId> = (self.all("preview").into_iter())
+            .flat_map(|preview| horizon_ui::testing::find(&self.app, preview, "title"))
+            .collect();
         let document = self.app.document();
         let document = document.borrow();
-        let mut found = Vec::new();
-        for preview in self.all("preview") {
-            collect(&document, preview, "title", &mut found);
-        }
         (found.into_iter())
             .map(|title| document.get_node(title).unwrap().text_content())
             .collect()
@@ -386,11 +375,11 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     use horizon_ui::reactive_graph::traits::WithUntracked;
     use horizon_workspace::Workspace;
 
-    let mut shell: Option<Shell> = None;
+    let (mut shell, mut top): (Option<Shell>, _) = (None, None);
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = shell_view(spawn, Opening::default());
-        shell = Some(built);
+        (shell, top) = (Some(built), Some(root.0));
         root
     });
     app.resolve();
@@ -404,6 +393,8 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
             Wake::default(),
         )
         .1,
+        // (The shell's: the previews are in its panes.)
+        root: top.unwrap(),
     };
     // (`horizon new preview <extension.wasm> [<argument>...] [--active]`,
     // as it reaches the shell.)
