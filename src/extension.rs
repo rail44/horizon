@@ -800,7 +800,7 @@ fn function(
 
 /// The components of the extensions that come with the shell, by their
 /// files' names and the packages they are built from.
-const OWN: [(&str, &str); 4] = [
+const OWN: [(&str, &str); 5] = [
     ("horizon_markdown_plugin.wasm", "horizon-markdown-plugin"),
     (
         "horizon_theme_settings_plugin.wasm",
@@ -808,6 +808,7 @@ const OWN: [(&str, &str); 4] = [
     ),
     ("horizon_wiki_plugin.wasm", "horizon-wiki-plugin"),
     ("horizon_sessions_plugin.wasm", "horizon-sessions-plugin"),
+    ("horizon_image_plugin.wasm", "horizon-image-plugin"),
 ];
 
 /// The files of the extensions that come with the shell: each beside the

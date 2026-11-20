@@ -1,0 +1,18 @@
+[package]
+name = "horizon-image-plugin"
+description = "The image viewer, an extension: a wasm component the shell opens an image's file with."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built for `wasm32-wasip2` (`scripts/gate.sh`); for any other
+# target the crate is empty.
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+horizon-ui = { path = "../../crates/horizon-ui" }
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
+
+[lints]
+workspace = true

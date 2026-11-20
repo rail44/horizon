@@ -29,6 +29,7 @@ members = [
     "plugins/theme-settings",
     "plugins/wiki",
     "plugins/sessions",
+    "plugins/image",
     "plugins/gallery",
     "plugins/fixture",
 ]

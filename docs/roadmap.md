@@ -258,7 +258,10 @@ lands:
   persisted on the model's pane (`Pane::document`) so a restart restores
   it. Viewing the project wiki (`docs/project-wiki-design.md`, on its own
   branch) is meant to derive from it; wiki-only features are not built
-  yet. Image and git diff are not started.
+  yet. Image implemented 2026-11-20 (`plugins/image`,
+  `docs/image-viewer-design.md`): a `file://` link to an image clicked in
+  a terminal opens it over the workspace, through the extensions' own
+  `horizon:ui/opener`. Git diff is not started.
 - **ACP as the shell↔agentd line — implemented 2026-09-27** (stages A–D
   on the integration branch, main merge pending; stage E, external
   agents, pending a config consultation) (`docs/acp-agentd-design.md`,

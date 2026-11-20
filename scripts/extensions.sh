@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs a cargo command over the extensions in this repository
 # (`plugins/*`), for the target they are built for: wasm components,
-# which `cargo build --workspace` does not build. Three Horizon comes
+# which `cargo build --workspace` does not build. Five Horizon comes
 # with; the components' gallery is one to look at in a preview pane, and
 # the fixture is what tests drive the host with.
 #
@@ -24,6 +24,7 @@ exec cargo "$command" \
   -p horizon-theme-settings-plugin \
   -p horizon-wiki-plugin \
   -p horizon-sessions-plugin \
+  -p horizon-image-plugin \
   -p horizon-gallery-plugin \
   -p horizon-fixture-plugin \
   --target wasm32-wasip2 "$@"
