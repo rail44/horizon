@@ -74,58 +74,92 @@ mod session_feed;
 pub(crate) mod styles {
     horizon_ui::css_module! {"
     .workspace { position: relative; display: flex; flex-direction: column; height: 100%;
+                 box-sizing: border-box; padding: var(--u8);
                  outline: none; background: var(--background); color: var(--text);
                  font-family: var(--font-family); font-size: var(--body-size);
                  line-height: var(--body-line);
         &.resizing { user-select: none; }
         &.moving { user-select: none; cursor: grabbing; }
-        .tabs { flex: none; display: flex; gap: var(--u4); padding: var(--u4) var(--u28) var(--u4) var(--u8);
-                background: var(--tab-track); border-top: var(--line) solid var(--border);
-                border-bottom: var(--line) solid var(--border); }
+
+        /* A tab group: its strip above, with no frame of its own, and the
+           tab it shows in a card under it. The tabs share the strip's
+           width; those not shown are their words, a faint line between
+           two of them, and the one shown is outlined. */
+        .tabs { flex: none; display: flex; padding: 0 0 var(--u4); }
         .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 var(--u4) 0 var(--u8);
-                     border-radius: var(--radius-large); line-height: var(--u24); color: var(--tab-text);
-                     cursor: pointer; }
-        .tab-label.active { background: var(--background); color: var(--text); }
-        .tab-label .title { flex: 1; min-width: 0; text-align: center; overflow: hidden;
-                            white-space: nowrap; text-overflow: ellipsis; }
+                     border: var(--line) solid transparent; border-radius: var(--radius);
+                     font-size: var(--meta-size); line-height: calc(var(--u4) * 5);
+                     color: var(--text-muted); cursor: pointer; }
+        .tab-label:not(.active) + .tab-label:not(.active) {
+            border-left-color: var(--surface-chrome); border-radius: 0; }
+        .tab-label.active { border-color: var(--border); color: var(--text); }
+        .tab-label .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+                            text-overflow: ellipsis; }
         .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: var(--radius);
                             opacity: 0; }
         .tab-label:hover .close { opacity: 1; }
         .tab-label .close:hover { background: var(--surface-selected); }
+        .tabs.cursor .tab-label.active { background: var(--selection); border-color: var(--accent); }
+        .tabs.drop { border-radius: var(--radius); background: var(--surface-selected); }
         .tab { flex: 1; min-height: 0; display: flex; }
         .group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-        .shown-tab { flex: 1; min-width: 0; min-height: 0; display: flex; }
-        .tabs.cursor { border-color: var(--accent); }
+        .shown-tab { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden;
+                     box-sizing: border-box; padding: var(--u2);
+                     border: var(--line) solid var(--border); border-radius: var(--radius-large);
+                     background: var(--background); }
+
+        /* Cards apart by a gap; the panes of a split in a tab by a line, in
+           a boundary as wide to take as a gap is. */
         .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
         .split.down { flex-direction: column; }
         .cell { flex-shrink: 1; flex-basis: 0; min-width: 0; min-height: 0; display: flex; }
-        .divider { flex: none; background: var(--surface-chrome); }
-        .split.across > .divider { width: 5px; cursor: col-resize; }
-        .split.down > .divider { height: 5px; cursor: row-resize; }
+        .divider { flex: none; }
+        .split.across > .divider { width: var(--u8); cursor: col-resize; }
+        .split.down > .divider { height: var(--u8); cursor: row-resize; }
+        .split.in-tab > .divider { background: var(--border); }
+        .split.in-tab.across > .divider { width: 1px; border-left: var(--u2) solid var(--background);
+                                          border-right: var(--u2) solid var(--background); }
+        .split.in-tab.down > .divider { height: 1px; border-top: var(--u2) solid var(--background);
+                                        border-bottom: var(--u2) solid var(--background); }
+
+        /* A pane: a card of its own in no group, and in a group's card a
+           pane with no frame but where the focus is, in the accent. A card
+           keeps what it holds a little in from its rounded corners. In
+           workspace mode every pane is veiled, the cursor's in the accent. */
         .pane { position: relative; flex: 1; min-width: 0; min-height: 0;
                 box-sizing: border-box; display: flex; flex-direction: column;
-                overflow: hidden; border: var(--line-strong) solid var(--background);
-                background: var(--background); }
-        .pane.focused { border-color: var(--border); }
-        .pane.cursor { border-color: var(--accent); }
+                overflow: hidden; padding: var(--u2); border: var(--line) solid var(--border);
+                border-radius: var(--radius-large); background: var(--background); }
+        .shown-tab .pane { padding: 0; border-color: transparent; border-radius: 0; }
+        .pane.focused { border-color: var(--accent); }
         .pane > * { flex: 1; min-height: 0; }
         .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                         background: var(--background); opacity: 0.5; pointer-events: none; }
+        .pane.cursor > .veil { background: var(--accent); opacity: 0.15; }
         .pane.drop { border-color: var(--accent); }
-        .pane.lifted { opacity: 0.5; }
+        .pane > .lifted { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
+                          background: var(--background); opacity: 0.5; pointer-events: none; }
         .pane > .landing { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
                            background: var(--accent); opacity: 0.12; pointer-events: none; }
-        .pane > .grip { position: absolute; left: 0; right: 0; top: 0; z-index: 60;
-                        display: flex; justify-content: flex-end; pointer-events: none; }
-        .grip > .handle { display: flex; align-items: center; gap: var(--u4);
-                          max-width: 50%; margin: var(--u4); padding: 0 var(--u8) 0 var(--u4);
-                          border: var(--line) solid var(--border); border-radius: var(--radius);
-                          background: var(--surface-raised); box-shadow: var(--shadow-popup);
-                          font-size: var(--meta-size); line-height: var(--meta-line);
-                          color: var(--text); white-space: nowrap; overflow: hidden;
-                          pointer-events: none; opacity: 0; cursor: grab; }
-        .grip.shown > .handle { pointer-events: auto; opacity: 1; }
-        .tabs.drop { border-color: var(--accent); background: var(--surface-selected); }
+
+        /* A pane's tag, where its tab's label does not name it alone: its
+           name and the mark it is taken by, in its corner, while the
+           pointer is over the pane or in workspace mode. */
+        .pane > .tag { position: absolute; top: var(--u4); right: var(--u4); z-index: 56;
+                       flex: none; display: none; align-items: center; gap: var(--u4);
+                       max-width: 50%; padding: 0 var(--u8) 0 var(--u4);
+                       border: var(--line) solid var(--surface-chrome); border-radius: var(--radius);
+                       background: var(--band); font-size: var(--micro-size);
+                       line-height: var(--micro-line); color: var(--text-muted);
+                       white-space: nowrap; overflow: hidden; cursor: grab; opacity: 0; }
+        .pane > .tag.titled { display: flex; }
+        /* (It takes a press while it does not show too: the pointer is over
+           the pane, and it shows, wherever it can be pressed.) */
+        .pane:hover > .tag, .pane > .tag.in-mode { opacity: 1; }
+        .pane:hover > .tag.away, .pane > .tag.away { opacity: 0; pointer-events: none; }
+        .tag > .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .tag:hover { color: var(--text); }
+
         .carried { position: absolute; z-index: 200; padding: var(--u4) var(--u8);
                    border: var(--line) solid var(--border); border-radius: var(--radius);
                    background: var(--surface-raised); box-shadow: var(--shadow-popup);
@@ -134,18 +168,24 @@ pub(crate) mod styles {
         .carried.hidden { display: none; }
         .empty { flex: 1; display: flex; align-items: center; justify-content: center;
                  color: var(--text-muted); outline: none; }
+
+        /* What is over the workspace: a sheet framed as the cards are, what
+           is behind it dimmed. */
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
                  display: flex; justify-content: center; align-items: flex-start;
                  padding-top: 97px; }
-        .sheet { display: flex; overflow: hidden; background: var(--background);
-                 border: var(--line) solid var(--border); border-radius: 8px;
-                 box-shadow: var(--shadow-modal); }
+        .scrim > .dim-behind { position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+                               background: var(--text); opacity: 0.12; pointer-events: none; }
+        .sheet { position: relative; display: flex; overflow: hidden; background: var(--background);
+                 border: var(--line) solid var(--border); border-radius: var(--radius-large); }
         .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column; }
         .search { flex: none; position: relative; display: flex; align-items: center;
-                  height: 32px; padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
+                  height: var(--u32); padding: 0 var(--u12);
+                  border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
-        .items { flex: 1; min-height: 0; overflow-y: auto; }
-        .item { display: flex; padding: 7px var(--u12); cursor: pointer; }
+        .items { flex: 1; min-height: 0; overflow-y: auto; padding: var(--u4); }
+        .item { display: flex; padding: var(--u4) var(--u8); border-radius: var(--radius);
+                cursor: pointer; }
         .item.command { flex-direction: column; }
         .item .name { line-height: calc(var(--u4) * 5); }
         .item .about { font-size: var(--meta-size); line-height: var(--meta-line);
@@ -484,8 +524,6 @@ pub struct Shell {
     resizing: RwSignal<Option<arrangement::Resize>>,
     /// The view being moved with the pointer.
     moving: RwSignal<Option<moving::Moving>>,
-    /// The pane whose top edge the pointer is near: its grip shows.
-    near_top: RwSignal<Option<PaneId>>,
     /// Changed to have the panes arranged again though the tab's shape is
     /// the same: a pane's view was let go of, to be made again.
     rearranged: RwSignal<u32>,
@@ -691,12 +729,9 @@ impl Shell {
                     },
                 )
                 .class_dyn(move || {
-                    (
-                        shell
-                            .is_drop(moving::Target::Pane(id))
-                            .then_some(styles::DROP),
-                        shell.is_moving(id).then_some(styles::LIFTED),
-                    )
+                    shell
+                        .is_drop(moving::Target::Pane(id))
+                        .then_some(styles::DROP)
                 })
                 .on("pointerdown", move |_| shell.pane_pressed(id))
                 .child(content)
@@ -705,7 +740,13 @@ impl Shell {
                     move || shell.is_drop(moving::Target::Pane(id)),
                     || el("div").class(styles::LANDING),
                 )
-                .child(moving::grip(shell, id))
+                // (Faded by what is over it, not by its own opacity: a pane
+                // made a stacking context and back is not hit as it was.)
+                .when(
+                    move || shell.is_moving(id),
+                    || el("div").class(styles::LIFTED),
+                )
+                .child(moving::tag(shell, id))
         });
         PaneView {
             element,
@@ -1173,7 +1214,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         chosen: RwSignal::new(0),
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),
-        near_top: RwSignal::new(None),
         rearranged: RwSignal::new(0),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),

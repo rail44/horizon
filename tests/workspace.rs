@@ -292,7 +292,7 @@ fn shift_and_a_direction_swap_panes_and_a_pane_moves_to_a_new_tab() {
 }
 
 #[test]
-fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
+fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();
     opened.chord();
@@ -307,19 +307,15 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     };
     let hidden = || opened.all("hidden").len();
 
-    // Each pane has a grip, which shows while the pointer is near the
-    // pane's top edge -- not in the middle of it.
-    let handles = opened.all("handle");
-    assert_eq!(handles.len(), 2);
+    // A pane of a split tab has a tag -- its tab's label names the other
+    // pane, or both -- which shows while the pointer is over the pane.
+    let tags = opened.all("tag");
+    assert_eq!(tags.len(), 2);
     let elements = opened.all("pane");
-    let from = opened.middle(handles[0]);
+    let from = opened.middle(tags[0]);
     let to = opened.middle(elements[1]);
-    pointer(&opened.app, to.0, to.1, Pointer::Move);
-    settle();
-    assert!(opened.all("shown").is_empty());
     pointer(&opened.app, from.0, from.1, Pointer::Move);
     settle();
-    assert_eq!(opened.all("shown").len(), 1);
     // Taken and moved over the other pane, that pane is marked and the
     // view's title goes beside the pointer.
     pointer(&opened.app, from.0, from.1, Pointer::Down);
@@ -328,7 +324,8 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     pointer(&opened.app, to.0, to.1, Pointer::Drag);
     settle();
     assert_eq!(opened.all("drop"), vec![elements[1]]);
-    assert_eq!(opened.all("lifted"), vec![elements[0]]);
+    // (The view taken is faded by what is laid over it.)
+    assert_eq!(opened.all("lifted").len(), 1);
     assert_eq!(hidden(), 0);
     // Dropped there, the two swap places.
     pointer(&opened.app, to.0, to.1, Pointer::Up);
@@ -338,21 +335,21 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     assert_eq!(hidden(), 1);
 
     // A press that does not go far is no move.
-    let handle = opened.middle(opened.all("handle")[0]);
-    pointer(&opened.app, handle.0, handle.1, Pointer::Move);
+    let tag = opened.middle(opened.all("tag")[0]);
+    pointer(&opened.app, tag.0, tag.1, Pointer::Move);
     settle();
-    pointer(&opened.app, handle.0, handle.1, Pointer::Down);
-    pointer(&opened.app, handle.0 + 1., handle.1, Pointer::Drag);
-    pointer(&opened.app, handle.0 + 1., handle.1, Pointer::Up);
+    pointer(&opened.app, tag.0, tag.1, Pointer::Down);
+    pointer(&opened.app, tag.0 + 1., tag.1, Pointer::Drag);
+    pointer(&opened.app, tag.0 + 1., tag.1, Pointer::Up);
     settle();
     assert_eq!(opened.panes(), vec![panes[1], panes[0]]);
 
     // Dropped on the group's strip, the view is a new tab of the group.
     let tabs = opened.model(Workspace::tab_count);
     let strip = opened.middle(opened.all("tabs")[0]);
-    pointer(&opened.app, handle.0, handle.1, Pointer::Move);
+    pointer(&opened.app, tag.0, tag.1, Pointer::Move);
     settle();
-    pointer(&opened.app, handle.0, handle.1, Pointer::Down);
+    pointer(&opened.app, tag.0, tag.1, Pointer::Down);
     pointer(&opened.app, strip.0, strip.1, Pointer::Drag);
     settle();
     assert_eq!(opened.all("drop"), opened.all("tabs"));
@@ -361,12 +358,8 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
     assert_eq!(opened.panes(), vec![panes[1]]);
 
-    // A pane that is all of its tab shows no grip: its tab's label takes
-    // it.
-    let top = opened.middle(opened.all("handle")[0]);
-    pointer(&opened.app, top.0, top.1, Pointer::Move);
-    settle();
-    assert!(opened.all("shown").is_empty());
+    // A pane that is all of its tab has no tag: its tab's label takes it.
+    assert!(opened.all("titled").is_empty());
 }
 
 #[test]
@@ -459,8 +452,15 @@ fn a_boundary_dragged_changes_the_panes_shares_and_builds_nothing() {
     pointer(&opened.app, 400., y + 60., Pointer::Up);
     opened.app.resolve();
     let after = opened.bounds(panes[0]);
-    assert!((before.2 - 597.5).abs() < 1., "{before:?}");
-    assert!((after.2 - 400.).abs() < 4., "{after:?}");
+    // (Two panes in a tab's card, a line between them.)
+    let card = opened.bounds(opened.all("shown-tab")[0]);
+    // (Within the card's border and the little it keeps in from it.)
+    assert!(
+        (before.2 - (card.2 - 2. - 4. - 5.) / 2.).abs() < 1.,
+        "{before:?} {card:?}"
+    );
+    // Its right edge where the boundary was let go of.
+    assert!((after.0 + after.2 - 400.).abs() < 4., "{after:?}");
     assert_eq!(opened.all("pane"), panes);
     // Released: a further move does nothing.
     pointer(&opened.app, 700., y, Pointer::Move);
@@ -1013,6 +1013,56 @@ fn what_a_program_says_of_its_state_is_on_its_tab() {
     opened.run(r"printf '\033]7501;state=clear\033\\'");
     opened.until("cleared", || program().is_none());
     assert!(!tab(0).starts_with('✳'), "{}", tab(0));
+}
+
+/// The page painted, as the color at a point of it.
+fn painted_at(opened: &Opened) -> impl Fn(f32, f32) -> [u8; 3] {
+    use anyrender::ImageRenderer as _;
+
+    let (width, height) = (1200usize, 800usize);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width as u32, height as u32);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(
+                scene,
+                &mut document.borrow_mut(),
+                1.0,
+                width as u32,
+                height as u32,
+                0,
+                0,
+            )
+        },
+        &mut pixels,
+    );
+    move |x: f32, y: f32| {
+        let at = (y as usize * width + x as usize) * 4;
+        [pixels[at], pixels[at + 1], pixels[at + 2]]
+    }
+}
+
+#[test]
+fn the_modes_cursor_tints_the_pane_it_is_on_as_it_moves() {
+    let opened = open();
+    opened.chord();
+    opened.character("s");
+    let elements = opened.all("pane");
+    assert_eq!(elements.len(), 2);
+    let (left, right) = (opened.middle(elements[0]), opened.middle(elements[1]));
+
+    // In the mode, the cursor on the pane with the focus, the right one: it
+    // is tinted, the other veiled alone.
+    opened.chord();
+    let at = painted_at(&opened);
+    let (veiled, tinted) = (at(left.0, left.1), at(right.0, right.1));
+    assert_ne!(veiled, tinted);
+    // Moved, the tint goes with it.
+    opened.character("h");
+    let at = painted_at(&opened);
+    assert_eq!(at(left.0, left.1), tinted);
+    assert_eq!(at(right.0, right.1), veiled);
 }
 
 /// How many pixels of the page inside a node's box are not `background`.

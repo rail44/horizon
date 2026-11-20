@@ -122,12 +122,8 @@ moved into a new tab.
   -- shown, with the focus. A pane alone in its tab already stays.
 
 With the pointer (`src/workspace/moving.rs`), a view is taken by its
-tab's label, which takes the tab's active pane, or by the grip in its
-pane's top right corner, with its title. The grip shows only while the
-pointer is near the pane's top edge, and not on a pane that is all of
-its tab, whose label takes it already; in the corner it is clear of a
-terminal's text, which begins at the left. Dropped on
-another view, the two swap; dropped on a group's strip, it is a new tab
+tab's label, which takes the tab's active pane, or by its tag (below).
+Dropped on another view, the two swap; dropped on a group's strip, it is a new tab
 of that group -- the same operations the keys and Move to New Tab carry
 out. While it moves, the view or strip it would go to is marked and its
 title goes beside the pointer. A press that does not go a few pixels is
@@ -147,8 +143,35 @@ The arrangement (`src/workspace/arrangement.rs`) draws the whole tree: a
 tab group is its strip above its shown tab, so a pane beside a group
 runs the window's full height. The boxes are built again whenever the
 tree's shape changes; the panes and the strips are kept and moved into
-the new boxes, a strip let go of once its group is gone. A strip is
-marked while the cursor is on it.
+the new boxes, a strip let go of once its group is gone.
+
+What is drawn is chosen so that what holds what reads from the drawing
+(board #95, each point chosen by the owner from pictures of it):
+
+- A tab group's shown tab, and a pane in no group, are each a card: a
+  border and rounded corners, no shadow, on a ground of the cards' own
+  color. Cards are apart by a gap; the panes of a split in a tab are
+  apart by a line, so a split in a tab reads apart from one between
+  cards (`in-tab`).
+- A group's strip is above its card, with no frame of its own. The tabs
+  share its width; those not shown are their words, a faint line between
+  two of them, and the shown one is outlined.
+- A pane's tab label names it where the pane is all of its tab. Any
+  other pane -- one of a split tab, one in no group -- has a tag in its
+  top right corner, clear of a terminal's text, which begins at the
+  left: its name and the grip it is taken by. The tag shows while the
+  pointer is over the pane or in workspace mode, so the pane with the
+  focus does not repeat its tab's label.
+- The pane with the focus has its border in the accent. In workspace
+  mode every pane is veiled and the cursor's is tinted with the accent;
+  on a strip, its shown tab is.
+- A sheet over the workspace (the palette, a chooser, a dialog) is framed
+  as the cards are, what is behind it dimmed.
+
+What a tag shows by -- whether it names its pane, workspace mode, a view
+moving -- is a class on the tag itself. A class an element around it
+gains does not reach its style in every case: a tag left with the style
+it had while a view moved, after the move, was not hit by the pointer.
 
 ## Layouts
 

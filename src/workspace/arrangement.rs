@@ -203,7 +203,7 @@ pub(super) fn view(shell: Shell) -> El {
         if let Some(outer) = outer {
             outer.remove();
         }
-        let top = arrange(&shape, &[], shell, &strips);
+        let top = arrange(&shape, &[], shell, &strips, false);
         strips.keep_only(&shape);
         root.child(top);
         let kept = shell.kept();
@@ -218,14 +218,14 @@ pub(super) fn view(shell: Shell) -> El {
     root
 }
 
-fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips) -> El {
+fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips, in_tab: bool) -> El {
     let (axis, children) = match shape {
         Shape::Pane(id) => return shell.kept().panes.borrow()[id].element,
         Shape::Group { id, shown } => {
             let content = match shown {
                 // (A path counts a split's children: the group is passed
                 // through.)
-                Some((_, shape)) => arrange(shape, path, shell, strips),
+                Some((_, shape)) => arrange(shape, path, shell, strips, true),
                 None => el("div")
                     .class(styles::EMPTY)
                     .text("No tabs. Press : for commands."),
@@ -238,10 +238,13 @@ fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips) -> El {
         Shape::Split { axis, children } => (*axis, children),
     };
     let across = axis == SplitAxis::Horizontal;
-    let split = el("div").class((
-        styles::SPLIT,
-        if across { styles::ACROSS } else { styles::DOWN },
-    ));
+    // (A split in a tab is told apart from one between cards.)
+    let split = el("div")
+        .class((
+            styles::SPLIT,
+            if across { styles::ACROSS } else { styles::DOWN },
+        ))
+        .class(in_tab.then_some(styles::IN_TAB));
     let cells: Vec<El> = (children.iter().enumerate())
         .map(|(index, child)| {
             let at = [path, &[index]].concat();
@@ -254,7 +257,7 @@ fn arrange(shape: &Shape, path: &[usize], shell: Shell, strips: &Strips) -> El {
                         .with(|model| weight(model, &weighed))
                         .to_string()
                 })
-                .child(arrange(child, &at, shell, strips))
+                .child(arrange(child, &at, shell, strips, in_tab))
         })
         .collect();
     let resize = Resize {

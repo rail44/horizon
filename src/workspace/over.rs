@@ -39,6 +39,7 @@ pub(super) fn view(shell: Shell, inside: impl Component) -> El {
     el("div")
         .class(styles::SCRIM)
         .on("pointerdown", move |_| close())
+        .child(el("div").class(styles::DIM_BEHIND))
         .child(sheet)
 }
 

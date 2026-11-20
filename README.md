@@ -70,10 +70,9 @@ manual smoke checks:
   arrow) swap the pane the cursor is on -- or, on a tab strip, the whole tab
   group -- with its neighbor in that direction. `move to new tab` moves the
   pane the cursor is on into a new tab of its tab group. With the pointer, a
-  view is dragged by its tab's label, or by the grip with its title that shows
-  in the pane's top right corner as the pointer nears the pane's top edge:
-  dropped on another view the two swap, dropped on a tab strip it is a new
-  tab there.
+  view is dragged by its tab's label, or by the tag with its name that shows
+  in the pane's top right corner while the pointer is over it: dropped on
+  another view the two swap, dropped on a tab strip it is a new tab there.
 - `apply layout`: puts the workspace in one of the layouts `config.toml`
   names (`[layouts.<name>]`, see `config.example.toml`): the list of
   sessions kept on the left of everything else, for one. `startup_layout`
