@@ -167,7 +167,7 @@ pub fn view(
         });
         asked.is_some() && asked != read
     };
-    // What was last put in the pane, until the layout after it.
+    // What was last put in the pane.
     let arrived = Rc::new(Cell::new(None::<El>));
     let placed = arrived.clone();
     let root = el("div")
@@ -217,9 +217,12 @@ pub fn view(
         path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
     });
     each_layout(move |page| {
-        // A pane given the keys before its plugin was read has them on
-        // itself: they go on to what the plugin shows.
-        if let Some(shown) = placed.take()
+        // The pane given the keys has them on itself: they go on to what
+        // the plugin shows, whenever the pane was given them. (Not only
+        // in the layout after the plugin is placed: the pane given the
+        // keys in the frame its plugin is placed in has them only once
+        // that frame is painted, after the layout.)
+        if let Some(shown) = placed.get()
             && page.has_focus(root)
         {
             shown.focus_within();

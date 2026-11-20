@@ -9,6 +9,9 @@
 //! run (`scripts/gate.sh`): `scripts/extensions.sh build`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Waker;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
@@ -52,10 +55,28 @@ struct Opened {
 /// `arguments`, on a page that has the theme and the pane's own rules and
 /// none of the view's.
 fn open_at(path: &Path, arguments: &[&str]) -> Opened {
+    open_with(path, arguments, false)
+}
+
+/// Told when what was done off the UI thread has come back.
+struct Arrived(AtomicBool);
+
+impl std::task::Wake for Arrived {
+    fn wake(self: Arc<Self>) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// [`open_at`]; with `read_first`, the component is compiled and back
+/// before the page is first laid out, as when it was compiled before.
+fn open_with(path: &Path, arguments: &[&str], read_first: bool) -> Opened {
+    let arrived = Arc::new(Arrived(AtomicBool::new(false)));
+    let told = Wake::default();
+    told.set(Waker::from(arrived.clone()));
     let mut made = None;
     let app = App::new(600, 500, "Test", horizon_theme_css::CSS, || {
         let target = RwSignal::new(None);
-        let (root, preview) = view(target.into(), Background::default(), Wake::default());
+        let (root, preview) = view(target.into(), Background::new(told), Wake::default());
         made = Some((root, preview, target));
         themed(Theme::built_in, root)
     });
@@ -74,6 +95,16 @@ fn open_at(path: &Path, arguments: &[&str]) -> Opened {
     let opened = Opened { app, preview };
     // The component is compiled off this thread.
     opened.app.run_effects();
+    if read_first {
+        let started = Instant::now();
+        while !arrived.0.load(Ordering::Acquire) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the component never came back"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     opened.until("the extension", || !opened.all("shown").is_empty());
     opened.app.resolve();
     opened
@@ -180,6 +211,16 @@ impl Opened {
         }));
         self.app.resolve();
     }
+}
+
+#[test]
+fn the_keys_reach_an_extension_read_before_the_pane_is_first_drawn() {
+    // Compiled before (the cache has it), the extension is placed in the
+    // frame the pane is given the keys in: the keys still go on to it.
+    let opened = open_with(&fixture(), &["rows"], true);
+    opened.until("the rows", || opened.titles().len() == 3);
+    opened.character("j");
+    assert_eq!(opened.selected(), Some(1));
 }
 
 #[test]
