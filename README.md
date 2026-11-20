@@ -70,7 +70,8 @@ manual smoke checks:
   arrow) swap the pane the cursor is on -- or, on a tab strip, the whole tab
   group -- with its neighbor in that direction. `move to new tab` moves the
   pane the cursor is on into a new tab of its tab group. With the pointer, a
-  view is dragged by the grip at the top of its pane (or by its tab's label):
+  view is dragged by its tab's label, or by the grip with its title that shows
+  in the pane's top right corner as the pointer nears the pane's top edge:
   dropped on another view the two swap, dropped on a tab strip it is a new
   tab there.
 - `apply layout`: puts the workspace in one of the layouts `config.toml`

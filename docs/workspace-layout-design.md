@@ -121,9 +121,12 @@ moved into a new tab.
   group it is in -- a pane in no group goes to the group a new tab would
   -- shown, with the focus. A pane alone in its tab already stays.
 
-With the pointer (`src/workspace/moving.rs`), a view is taken by the grip
-at the top of its pane, which shows while the pointer is over the pane,
-or by its tab's label, which takes the tab's active pane. Dropped on
+With the pointer (`src/workspace/moving.rs`), a view is taken by its
+tab's label, which takes the tab's active pane, or by the grip in its
+pane's top right corner, with its title. The grip shows only while the
+pointer is near the pane's top edge, and not on a pane that is all of
+its tab, whose label takes it already; in the corner it is clear of a
+terminal's text, which begins at the left. Dropped on
 another view, the two swap; dropped on a group's strip, it is a new tab
 of that group -- the same operations the keys and Move to New Tab carry
 out. While it moves, the view or strip it would go to is marked and its

@@ -1,6 +1,8 @@
 //! A view moved with the pointer (`docs/workspace-layout-design.md`,
-//! board #94): taken by the grip at the top of its pane, which shows while
-//! the pointer is over the pane, or by its tab's label; dropped on another
+//! board #94): taken by its tab's label, or, where the label stands for
+//! more than the pane, by the grip with its title in the pane's top right
+//! corner, which shows while the pointer is near the pane's top edge;
+//! dropped on another
 //! view, the two swap places; dropped on a tab group's strip, it is a new
 //! tab of that group. What is under the pointer is marked while it moves,
 //! and the view's title goes along beside the pointer.
@@ -20,6 +22,10 @@ use super::{Shell, styles};
 /// How far the pointer goes from where it was pressed before a press is
 /// a move, in pixels.
 const FAR_ENOUGH: f32 = 4.0;
+
+/// How near a pane's top edge the pointer is for its grip to show, in
+/// pixels.
+const NEAR_THE_TOP: f64 = 16.0;
 
 /// Where a view moved would go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +74,14 @@ impl Shell {
             .with(|moving| moving.is_some_and(|moving| moving.going && moving.pane == pane))
     }
 
+    /// Whether `pane`'s grip shows: the pointer near its top edge, its
+    /// tab's label not standing for it alone, and nothing moving.
+    pub(super) fn grip_shows(&self, pane: PaneId) -> bool {
+        self.near_top.get() == Some(pane)
+            && !self.moving_any()
+            && !self.model.with(|model| model.pane_is_its_tab(pane))
+    }
+
     /// Whether a view is moving: the page's text is not selected meanwhile.
     pub(super) fn moving_any(&self) -> bool {
         self.moving
@@ -92,24 +106,30 @@ impl Shell {
     }
 }
 
-/// The grip at the top of `pane`'s pane: shown while the pointer is over
-/// the pane, it takes the view to move it.
+/// The grip in the top right corner of `pane`'s pane, with the view's
+/// title: shown while the pointer is near its top edge, it takes the view
+/// to move it. (In the corner, it is clear of a terminal's text, which
+/// begins at the left.)
 pub(super) fn grip(shell: Shell, pane: PaneId) -> El {
-    el("div").class(styles::GRIP).child(
-        el("div")
-            .class(styles::HANDLE)
-            .attr("title", "Drag to move this view")
-            .child(Icon::DotsSix)
-            .on("pointerdown", move |event| {
-                if let DomEventData::PointerDown(pointer) = &event.data {
-                    shell.begin_moving(pane, pointer.page_x(), pointer.page_y());
-                }
-                // (Not a press in the pane: its view keeps the focus as it
-                // was, and nothing is selected.)
-                prevent_default();
-                stop_propagation();
-            }),
-    )
+    let handle = el("div")
+        .class(styles::HANDLE)
+        .attr("title", "Drag to move this view")
+        .child(Icon::DotsSixVertical)
+        .child(el("span").text_dyn(move || {
+            (shell.model.with(|model| model.pane_label(pane))).unwrap_or_default()
+        }));
+    el("div")
+        .class(styles::GRIP)
+        .class_dyn(move || shell.grip_shows(pane).then_some(styles::SHOWN))
+        .child(handle.on("pointerdown", move |event| {
+            if let DomEventData::PointerDown(pointer) = &event.data {
+                shell.begin_moving(pane, pointer.page_x(), pointer.page_y());
+            }
+            // (Not a press in the pane: its view keeps the focus as it
+            // was, and nothing is selected.)
+            prevent_default();
+            stop_propagation();
+        }))
 }
 
 /// The pointer moved over the workspace: a view being moved goes on, and
@@ -118,10 +138,33 @@ pub(super) fn moved(shell: Shell, event: &DomEvent) {
     let DomEventData::PointerMove(pointer) = &event.data else {
         return;
     };
+    let (x, y) = (pointer.page_x(), pointer.page_y());
+    // Which pane's top edge the pointer is near, if one's.
+    dispatched(move |page| {
+        let path = page.under(x, y);
+        let near = match shell.target_in(&path) {
+            Some(Target::Pane(pane)) => {
+                let element = shell
+                    .kept()
+                    .panes
+                    .borrow()
+                    .get(&pane)
+                    .map(|view| view.element);
+                let top = element
+                    .and_then(|element| page.bounds(element))
+                    .map(|at| at.y);
+                top.filter(|top| f64::from(y) - top <= NEAR_THE_TOP)
+                    .map(|_| pane)
+            }
+            _ => None,
+        };
+        if shell.near_top.get_untracked() != near {
+            shell.near_top.set(near);
+        }
+    });
     let Some(mut moving) = shell.moving.get_untracked() else {
         return;
     };
-    let (x, y) = (pointer.page_x(), pointer.page_y());
     moving.at = (x, y);
     let (dx, dy) = (x - moving.from.0, y - moving.from.1);
     moving.going |= dx * dx + dy * dy >= FAR_ENOUGH * FAR_ENOUGH;

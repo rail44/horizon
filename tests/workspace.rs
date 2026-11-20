@@ -307,14 +307,21 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     };
     let hidden = || opened.all("hidden").len();
 
-    // Each pane has a grip; taken and moved over the other pane, that pane
-    // is marked and the view's title goes beside the pointer.
+    // Each pane has a grip, which shows while the pointer is near the
+    // pane's top edge -- not in the middle of it.
     let handles = opened.all("handle");
     assert_eq!(handles.len(), 2);
     let elements = opened.all("pane");
     let from = opened.middle(handles[0]);
     let to = opened.middle(elements[1]);
+    pointer(&opened.app, to.0, to.1, Pointer::Move);
+    settle();
+    assert!(opened.all("shown").is_empty());
     pointer(&opened.app, from.0, from.1, Pointer::Move);
+    settle();
+    assert_eq!(opened.all("shown").len(), 1);
+    // Taken and moved over the other pane, that pane is marked and the
+    // view's title goes beside the pointer.
     pointer(&opened.app, from.0, from.1, Pointer::Down);
     settle();
     assert_eq!(hidden(), 1, "the title waits for a move");
@@ -332,6 +339,8 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
 
     // A press that does not go far is no move.
     let handle = opened.middle(opened.all("handle")[0]);
+    pointer(&opened.app, handle.0, handle.1, Pointer::Move);
+    settle();
     pointer(&opened.app, handle.0, handle.1, Pointer::Down);
     pointer(&opened.app, handle.0 + 1., handle.1, Pointer::Drag);
     pointer(&opened.app, handle.0 + 1., handle.1, Pointer::Up);
@@ -341,6 +350,8 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     // Dropped on the group's strip, the view is a new tab of the group.
     let tabs = opened.model(Workspace::tab_count);
     let strip = opened.middle(opened.all("tabs")[0]);
+    pointer(&opened.app, handle.0, handle.1, Pointer::Move);
+    settle();
     pointer(&opened.app, handle.0, handle.1, Pointer::Down);
     pointer(&opened.app, strip.0, strip.1, Pointer::Drag);
     settle();
@@ -349,6 +360,13 @@ fn a_view_dragged_by_its_grip_swaps_with_another_or_is_a_new_tab() {
     settle();
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
     assert_eq!(opened.panes(), vec![panes[1]]);
+
+    // A pane that is all of its tab shows no grip: its tab's label takes
+    // it.
+    let top = opened.middle(opened.all("handle")[0]);
+    pointer(&opened.app, top.0, top.1, Pointer::Move);
+    settle();
+    assert!(opened.all("shown").is_empty());
 }
 
 #[test]
@@ -1547,9 +1565,14 @@ fn paint_a_view_moving() {
     let elements = opened.all("pane");
     let handle = opened.middle(opened.all("handle")[0]);
     let to = opened.middle(elements[1]);
-    pointer(&opened.app, handle.0, handle.1, Pointer::Move);
-    pointer(&opened.app, handle.0, handle.1, Pointer::Down);
-    if std::env::var_os("HORIZON_MOVING_HOVER").is_none() {
+    if std::env::var_os("HORIZON_MOVING_HOVER").is_some() {
+        // The pointer near the top edge of the right pane.
+        let (x, y, width, _) = opened.bounds(elements[1]);
+        pointer(&opened.app, x + width - 60., y + 6., Pointer::Move);
+    } else {
+        pointer(&opened.app, handle.0, handle.1, Pointer::Move);
+        opened.app.resolve();
+        pointer(&opened.app, handle.0, handle.1, Pointer::Down);
         pointer(&opened.app, to.0, to.1, Pointer::Drag);
     }
     for _ in 0..3 {

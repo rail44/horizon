@@ -116,14 +116,15 @@ pub(crate) mod styles {
         .pane > .landing { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
                            background: var(--accent); opacity: 0.12; pointer-events: none; }
         .pane > .grip { position: absolute; left: 0; right: 0; top: 0; z-index: 60;
-                        display: flex; justify-content: center; pointer-events: none; }
-        .grip > .handle { display: flex; padding: 0 var(--u8); pointer-events: auto;
-                          border-radius: 0 0 var(--radius) var(--radius);
-                          background: var(--surface-raised); color: var(--text-muted);
-                          opacity: 0; cursor: grab; }
-        .pane:hover > .grip > .handle { opacity: 1; }
-        &.moving .pane:hover > .grip > .handle { opacity: 0; }
-        .grip > .handle:hover { color: var(--text); }
+                        display: flex; justify-content: flex-end; pointer-events: none; }
+        .grip > .handle { display: flex; align-items: center; gap: var(--u4);
+                          max-width: 50%; margin: var(--u4); padding: 0 var(--u8) 0 var(--u4);
+                          border: var(--line) solid var(--border); border-radius: var(--radius);
+                          background: var(--surface-raised); box-shadow: var(--shadow-popup);
+                          font-size: var(--meta-size); line-height: var(--meta-line);
+                          color: var(--text); white-space: nowrap; overflow: hidden;
+                          pointer-events: none; opacity: 0; cursor: grab; }
+        .grip.shown > .handle { pointer-events: auto; opacity: 1; }
         .tabs.drop { border-color: var(--accent); background: var(--surface-selected); }
         .carried { position: absolute; z-index: 200; padding: var(--u4) var(--u8);
                    border: var(--line) solid var(--border); border-radius: var(--radius);
@@ -472,6 +473,8 @@ pub struct Shell {
     resizing: RwSignal<Option<arrangement::Resize>>,
     /// The view being moved with the pointer.
     moving: RwSignal<Option<moving::Moving>>,
+    /// The pane whose top edge the pointer is near: its grip shows.
+    near_top: RwSignal<Option<PaneId>>,
     /// Changed to have the panes arranged again though the tab's shape is
     /// the same: a pane's view was let go of, to be made again.
     rearranged: RwSignal<u32>,
@@ -1159,6 +1162,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         chosen: RwSignal::new(0),
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),
+        near_top: RwSignal::new(None),
         rearranged: RwSignal::new(0),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),

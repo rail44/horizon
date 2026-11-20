@@ -20,8 +20,8 @@ mod styles {
 pub enum Icon {
     /// Three dots in a row: what more there is to do.
     DotsThree,
-    /// Two rows of three dots: a grip, to take something and move it.
-    DotsSix,
+    /// Two columns of three dots: a grip, to take something and move it.
+    DotsSixVertical,
 }
 
 impl Icon {
@@ -29,7 +29,7 @@ impl Icon {
     fn file(self) -> &'static str {
         match self {
             Self::DotsThree => include_str!("../icons/phosphor/dots-three.svg"),
-            Self::DotsSix => include_str!("../icons/phosphor/dots-six.svg"),
+            Self::DotsSixVertical => include_str!("../icons/phosphor/dots-six-vertical.svg"),
         }
     }
 
@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn an_icon_s_file_has_the_one_path_it_draws() {
-        for icon in [Icon::DotsThree, Icon::DotsSix] {
+        for icon in [Icon::DotsThree, Icon::DotsSixVertical] {
             let path = icon.path();
             assert!(path.starts_with('M') && path.ends_with('Z'), "{path}");
             assert_eq!(icon.file().matches("<path").count(), 1);
