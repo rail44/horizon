@@ -62,6 +62,7 @@ pub(crate) mod held;
 mod keymap;
 mod keys;
 mod layouts;
+mod lent_cursor;
 mod links;
 mod models;
 mod move_to;
@@ -105,6 +106,7 @@ pub(crate) mod styles {
         .tabs.cursor .tab-label.active { background: var(--selection); border-color: var(--accent); }
         .tabs.drop { border-radius: var(--radius); background: var(--surface-selected); }
         .tab-label.drop { background: var(--surface-selected); }
+        .tab-label.cursor { background: var(--selection); }
         .tab { flex: 1; min-height: 0; display: flex; }
         .group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
         .shown-tab { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden;
@@ -574,6 +576,10 @@ pub struct Shell {
     /// What is typed into the list over the workspace, and which of its
     /// rows is chosen.
     search: picker::Search,
+    /// The extensions' views that hold workspace mode's cursor, and the
+    /// cursor of the one with the focus, shown (`lent_cursor`).
+    held: RwSignal<Vec<lent_cursor::Held>>,
+    lent: RwSignal<Option<lent_cursor::Lent>>,
     /// The boundary being dragged.
     resizing: RwSignal<Option<arrangement::Resize>>,
     /// The view being moved with the pointer.
@@ -782,17 +788,20 @@ impl Shell {
                     (place.get().filter(|at| at.bottom)).map(|_| styles::EDGE_BOTTOM)
                 })
                 .class_dyn(move || place.get().filter(|at| at.left).map(|_| styles::EDGE_LEFT))
-                .class_dyn(
-                    move || match (shell.cursor.get() == Some(id), shell.mode.get()) {
+                .class_dyn(move || {
+                    if shell.lent_cursor_on(id) {
+                        return Some(styles::CURSOR);
+                    }
+                    match (shell.cursor.get() == Some(id), shell.mode.get()) {
                         (true, true) => Some(styles::CURSOR),
                         (true, false) => Some(styles::FOCUSED),
                         (false, _) => None,
-                    },
-                )
+                    }
+                })
                 .class_dyn(move || shell.drop_zone(id).is_some().then_some(styles::DROP))
                 .on("pointerdown", move |_| shell.pane_pressed(id))
                 .child(content)
-                .when(move || shell.mode.get(), || el("div").class(styles::VEIL))
+                .when(move || shell.veiled(id), || el("div").class(styles::VEIL))
                 // Where it would go: the whole of it, or the half on a side.
                 .when(
                     move || shell.drop_zone(id).is_some(),
@@ -1286,6 +1295,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         cursor: Memo::new(move |_| model.with(Workspace::cursor_pane_id)),
         modal: RwSignal::new(None),
         search: picker::Search::new(),
+        held: RwSignal::new(Vec::new()),
+        lent: RwSignal::new(None),
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),
         rearranged: RwSignal::new(0),
@@ -1418,6 +1429,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             },
         );
     over::follow_extensions(shell);
+    shell.follow_lent_cursor();
     shell.focus_active();
     shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());

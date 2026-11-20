@@ -322,6 +322,25 @@ interface modal {
     }
 }
 
+/// The workspace, as a plugin's view goes about it.
+interface workspace {
+    /// Workspace mode's cursor, moved from a plugin's view, for as long
+    /// as the plugin holds this: while the focus is in the view, every
+    /// pane but the one the view is in is veiled as in the mode, and the
+    /// pane that shows the session the cursor was moved to is the
+    /// cursor's -- or its tab's label, where that tab is not shown. The
+    /// keys stay the view's.
+    resource cursor {
+        /// `view` is the plugin's node the cursor is moved from: a view
+        /// of its in a pane, or over the workspace.
+        constructor(view: u64);
+
+        /// Moves the cursor to the session `session`; none, or a session
+        /// no pane shows, puts it on no pane.
+        move-to: func(session: option<string>);
+    }
+}
+
 /// What a plugin that opens files exports: the shell hands it a file of
 /// one of the media types its manifest says it opens (`opens`), as when
 /// a link to one is followed.
@@ -342,6 +361,7 @@ world imports {
     import sessions;
     import session-control;
     import modal;
+    import workspace;
 }
 
 /// The shared exports with the imports: what the SDK's bindings are made

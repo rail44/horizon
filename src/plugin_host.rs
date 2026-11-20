@@ -68,6 +68,7 @@ wasmtime::component::bindgen!({
         "horizon:ui/files.watch": Watching,
         "horizon:ui/sessions.watch": SessionsWatching,
         "horizon:ui/modal.modal": ModalShown,
+        "horizon:ui/workspace.cursor": CursorHeld,
     },
 });
 
@@ -183,6 +184,23 @@ impl Default for Limits {
     }
 }
 
+/// Workspace mode's cursor a plugin holds, moved from its view `node`.
+pub struct CursorHeld {
+    node: NodeId,
+}
+
+/// What the host does with workspace mode's cursor for a plugin, by the
+/// view the cursor is moved from.
+#[derive(Clone)]
+pub struct CursorAsks {
+    /// The view holds a cursor.
+    pub hold: Rc<dyn Fn(NodeId)>,
+    /// Its cursor is moved to a session, or to none.
+    pub move_to: Rc<dyn Fn(NodeId, Option<String>)>,
+    /// It is let go of.
+    pub release: Rc<dyn Fn(NodeId)>,
+}
+
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
 #[derive(Clone, Default)]
@@ -197,6 +215,8 @@ pub struct Asks {
     pub sessions: Option<SessionAsks>,
     /// A view of the plugin's over the workspace.
     pub modal: Option<ModalAsks>,
+    /// Workspace mode's cursor, moved from a view of the plugin's.
+    pub cursor: Option<CursorAsks>,
 }
 
 /// What the host does with the shell's theme for a plugin.
@@ -228,6 +248,9 @@ enum Asked {
     Session(SessionAsk),
     OpenModal(NodeId, ModalClosed),
     CloseModal(NodeId),
+    HoldCursor(NodeId),
+    MoveCursor(NodeId, Option<String>),
+    ReleaseCursor(NodeId),
 }
 
 /// What of the host's beyond the document a plugin may use, as its
@@ -253,6 +276,7 @@ const USED: &[(&str, &[&str])] = &[
         ],
     ),
     ("modal", &["modal"]),
+    ("workspace", &["cursor"]),
 ];
 
 impl Uses {
@@ -322,6 +346,8 @@ pub struct State {
     sessions: Option<Arc<SessionsFeed>>,
     /// Whether whoever shows it lets it put a view over the workspace.
     modal: bool,
+    /// Whether whoever shows it lets it move workspace mode's cursor.
+    cursor: bool,
     /// What of the above its manifest says it uses.
     uses: Uses,
 }
@@ -743,6 +769,38 @@ impl self::horizon::ui::session_control::Host for State {
     }
 }
 
+impl self::horizon::ui::workspace::Host for State {}
+
+impl self::horizon::ui::workspace::HostCursor for State {
+    fn new(&mut self, view: u64) -> wasmtime::Result<Resource<CursorHeld>> {
+        self.may("workspace", "cursor")?;
+        if !self.cursor {
+            return Err(wasmtime::Error::msg(
+                "workspace mode's cursor is not given to this plugin",
+            ));
+        }
+        let node = self.own(view)?;
+        (self.left.lock().unwrap().asked).push(Asked::HoldCursor(node));
+        Ok(self.table.push(CursorHeld { node })?)
+    }
+
+    fn move_to(
+        &mut self,
+        cursor: Resource<CursorHeld>,
+        session: Option<String>,
+    ) -> wasmtime::Result<()> {
+        let node = self.table.get(&cursor)?.node;
+        (self.left.lock().unwrap().asked).push(Asked::MoveCursor(node, session));
+        Ok(())
+    }
+
+    fn drop(&mut self, cursor: Resource<CursorHeld>) -> wasmtime::Result<()> {
+        let held = self.table.delete(cursor)?;
+        (self.left.lock().unwrap().asked).push(Asked::ReleaseCursor(held.node));
+        Ok(())
+    }
+}
+
 impl self::horizon::ui::modal::Host for State {}
 
 impl self::horizon::ui::modal::HostModal for State {
@@ -1121,6 +1179,21 @@ impl Loaded {
                         (modal.close)(node);
                     }
                 }
+                Asked::HoldCursor(node) => {
+                    if let Some(cursor) = &self.asks.cursor {
+                        (cursor.hold)(node);
+                    }
+                }
+                Asked::MoveCursor(node, session) => {
+                    if let Some(cursor) = &self.asks.cursor {
+                        (cursor.move_to)(node, session);
+                    }
+                }
+                Asked::ReleaseCursor(node) => {
+                    if let Some(cursor) = &self.asks.cursor {
+                        (cursor.release)(node);
+                    }
+                }
             }
         }
         // A handler holds the plugin loosely: the nodes may outlast it.
@@ -1363,6 +1436,7 @@ pub fn instantiate(
             theme: asks.theme.as_ref().map(|theme| (theme.now)()),
             sessions: asks.sessions.as_ref().map(|sessions| sessions.feed.clone()),
             modal: asks.modal.is_some(),
+            cursor: asks.cursor.is_some(),
             uses,
         },
     );

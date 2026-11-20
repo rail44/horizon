@@ -418,6 +418,12 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
                             .is_some_and(|tab| tab.active)
                             .then_some(styles::ACTIVE)
                     })
+                    // (A view's cursor, on a pane of this tab, not shown.)
+                    .class_dyn(move || {
+                        shell
+                            .lent_cursor_on_tab(group, index)
+                            .then_some(styles::CURSOR)
+                    })
                     // (The group with the focus, or the cursor in the mode.)
                     .class_dyn(move || {
                         (shell.model.with(Workspace::cursor_group) == Some(group))
