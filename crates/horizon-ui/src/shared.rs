@@ -78,11 +78,15 @@ pub(crate) struct Shared {
     /// taken back out by: the effects of a graph that is not this
     /// thread's own.
     pub(crate) effects: RefCell<Vec<EffectsWork>>,
+    /// The display's scale the document's styles were last computed at
+    /// (`display_scale.rs`).
+    pub(crate) styled_at: Cell<f32>,
 }
 
 impl Shared {
     pub(crate) fn new(document: BaseDocument) -> Self {
         Self {
+            styled_at: Cell::new(document.viewport().scale()),
             document: Rc::new(RefCell::new(document)),
             handlers: RefCell::default(),
             captures: RefCell::default(),

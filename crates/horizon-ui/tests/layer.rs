@@ -164,7 +164,7 @@ fn the_input_methods_area_follows_what_is_typed() {
 }
 
 #[test]
-fn thin_borders_survive_a_fractional_display_scale() {
+fn boxes_and_thin_borders_land_on_the_display_pixels_at_a_fractional_scale() {
     use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
 
     const BORDERED: &str = "
@@ -172,29 +172,55 @@ fn thin_borders_survive_a_fractional_display_scale() {
         .column { display: flex; flex-direction: column; gap: 4px; padding: 16px; }
         .row { padding: 4px 8px; border: 1px solid #d0d0d0; }
     ";
-    let mut rows = Vec::new();
-    let app = App::new(1800, 1350, "Test", BORDERED, || {
-        let mut column = el("div").class("column");
-        for row in 0..12 {
-            let element = el("div").class("row").text(&format!("row {row}"));
-            rows.push(element);
-            column = column.child(element);
-        }
-        column
-    });
-    // 150 %, as a desktop set to it reports.
-    (app.document().borrow_mut()).set_viewport(Viewport::new(1800, 1350, 1.5, ColorScheme::Light));
-    app.resolve();
+    // As a desktop set to 125 %, 150 % and 175 % reports.
+    for scale in [1.25f32, 1.5, 1.75] {
+        let mut rows = Vec::new();
+        let app = App::new(1800, 1350, "Test", BORDERED, || {
+            let mut column = el("div").class("column");
+            for row in 0..12 {
+                let element = el("div").class("row").text(&format!("row {row}"));
+                rows.push(element);
+                column = column.child(element);
+            }
+            column
+        });
+        // Laid out once at the scale it is made at, and then at the
+        // display's.
+        app.resolve();
+        (app.document().borrow_mut()).set_viewport(Viewport::new(
+            1800,
+            1350,
+            scale,
+            ColorScheme::Light,
+        ));
+        app.resolve();
 
-    let document = app.document();
-    let document = document.borrow();
-    for (index, row) in rows.iter().enumerate() {
-        let border = document.get_node(row.0).unwrap().final_layout().border;
-        let sides = [border.top, border.right, border.bottom, border.left];
-        assert!(
-            sides.iter().all(|side| *side > 0.),
-            "row {index} has a side without a border: {sides:?}"
-        );
+        let document = app.document();
+        let document = document.borrow();
+        // A length in display pixels, which is to be a whole number.
+        let pixels = |length: f32| length * scale;
+        let whole = |pixels: f32| (pixels - pixels.round()).abs() < 1e-3;
+        for (index, row) in rows.iter().enumerate() {
+            let node = document.get_node(row.0).unwrap();
+            let layout = node.final_layout();
+            let border = layout.border;
+            let sides = [border.top, border.right, border.bottom, border.left].map(pixels);
+            assert!(
+                sides.iter().all(|side| (side - 1.).abs() < 1e-3),
+                "row {index} at {scale}: its sides are not one display pixel each: {sides:?}"
+            );
+            let corner = node.absolute_position(0., 0.);
+            let edges = [
+                pixels(corner.x),
+                pixels(corner.y),
+                pixels(corner.x + layout.size.width),
+                pixels(corner.y + layout.size.height),
+            ];
+            assert!(
+                edges.iter().all(|edge| whole(*edge)),
+                "row {index} at {scale}: its edges are between display pixels: {edges:?}"
+            );
+        }
     }
 }
 

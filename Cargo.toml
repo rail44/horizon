@@ -71,6 +71,10 @@ blitz-dom = "=0.3.0-beta.4"
 blitz-traits = "=0.3.0-beta.4"
 blitz-paint = { version = "=0.3.0-beta.4", features = ["custom-widget"] }
 blitz-shell = "=0.3.0-beta.4"
+# The layout engine blitz-dom lays out with, at the revision the Blitz
+# revision below takes: `horizon-ui` rounds its layout again with it
+# (`crates/horizon-ui/src/display_scale.rs`), so moving Blitz moves this too.
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "c25605620351786eb6a742b74ea4d289f59ebd84", default-features = false, features = ["std", "content_size"] }
 reactive_graph = { version = "0.2", features = ["effects"] }
 any_spawner = { version = "0.3", features = ["futures-executor"] }
 
@@ -80,7 +84,10 @@ any_spawner = { version = "0.3", features = ["futures-executor"] }
 # What Horizon needs of the window beyond blitz-shell is done around it,
 # in `src/application.rs`, which also holds a copy of blitz-shell's
 # `View::redraw` at this revision: moving the revision means comparing
-# that copy with the new one's.
+# that copy with the new one's, and moving `taffy` above to the revision
+# the new one takes. Once upstream's own rounding to the display's
+# pixels is in (DioxusLabs/blitz#902), `crates/horizon-ui/src/display_scale.rs`
+# rounds no more.
 [patch.crates-io]
 blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }

@@ -18,12 +18,12 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod app;
-#[cfg(not(target_family = "wasm"))]
-mod borders;
 mod class;
 mod component;
 #[cfg(not(target_family = "wasm"))]
 mod dispatch;
+#[cfg(not(target_family = "wasm"))]
+mod display_scale;
 #[cfg(not(target_family = "wasm"))]
 mod el;
 #[cfg(not(target_family = "wasm"))]
