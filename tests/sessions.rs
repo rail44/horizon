@@ -391,6 +391,65 @@ fn make(opened: &Opened, places: &Places) -> Made {
 }
 
 #[test]
+fn where_the_chosen_session_is_the_workspace_shows_as_workspace_mode_does() {
+    let opened = open();
+    let places = Places::made("cursor");
+    let made = make(&opened, &places);
+    opened.list();
+    opened.until("the rows", || opened.titles().len() == 5);
+    // The list moved beside the first terminal, in its tab, as a person
+    // moves it: both on the page, the keys the list's.
+    let list = opened.model(|model| model.cursor_pane_id().unwrap());
+    let terminal = opened.model(|model| model.pane_location_for_session(made.first).unwrap());
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("'".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened.character("m");
+    opened.key(Key::Named(NamedKey::ArrowDown));
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.key(Key::Named(NamedKey::Escape));
+    assert_eq!(
+        opened.model(|model| model.tab_of(list)),
+        opened.model(|model| model.tab_of(terminal))
+    );
+    let element = |pane| opened.shell.pane_element(pane).expect("the pane is drawn");
+    let marked = |pane, class: &str| {
+        horizon_ui::testing::find(&opened.app, element(pane), class)
+            .first()
+            .is_some_and(|first| *first == element(pane))
+    };
+    let veiled = |pane| !horizon_ui::testing::find(&opened.app, element(pane), "veil").is_empty();
+    let settle = || {
+        for _ in 0..3 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    // With the focus in the list, on a session no pane shows: every pane
+    // but the list's is veiled, and the cursor is on none.
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("build"));
+    assert!(veiled(terminal) && !veiled(list));
+    assert!(!marked(terminal, "cursor"));
+    // On the terminal's session: its pane is the cursor's. The focus and
+    // the keys stay the list's.
+    for _ in 0..3 {
+        opened.key(Key::Named(NamedKey::ArrowDown));
+    }
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("shell"));
+    assert!(marked(terminal, "cursor"));
+    assert!(!veiled(list));
+}
+
+#[test]
 fn the_sessions_are_listed_by_project_with_what_waits_first() {
     let opened = open();
     let places = Places::made("listed");
