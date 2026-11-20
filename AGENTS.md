@@ -145,6 +145,20 @@ points:
 The second is what the `sandboxed` profile's skipped tests rely on: nothing
 else runs them.
 
+Between those points, while working, test what the change touches with
+nextest's filters rather than running the whole gate: `cargo nextest run
+--workspace -E 'package(<crate>)'` for the crates changed (`rdeps(...)`
+adds the crates that use them). clippy over the whole workspace stays
+cheap and catches what no longer compiles in the crates that use the
+changed ones. Some links are outside the dependency graph,
+so a filter by crate does not see them: the extensions (`plugins/*`) are
+tested by the root package's tests that load them (`tests/extension.rs`,
+`tests/wiki.rs`, ...), and the daemons (`horizon-agentd`,
+`horizon-terminald`, `horizon-logd`) by the root package's tests that
+spawn them (`tests/agentd.rs`, `tests/terminald.rs`, `tests/board_logd.rs`).
+A change to `Cargo.lock`, `.cargo/` or `.config/nextest.toml` reaches
+everything.
+
 For refactoring discovery, see [the audit tool](scripts/refactor-audit/README.md)
 and [the review guide](docs/refactoring-review.md). They cover reproducible
 whole-repository or scoped scans and interpretation of the results. The audit
