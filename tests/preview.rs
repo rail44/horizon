@@ -307,6 +307,13 @@ fn what_cannot_be_shown_is_said_in_the_pane() {
     assert_eq!(said.len(), 1);
     assert!(opened.text_of(said[0]).contains("no-such-view"));
 
+    // What of the host's its manifest does not say it uses, whoever shows
+    // it.
+    let opened = open("sessions");
+    opened.until("what it was refused", || !opened.all("failed").is_empty());
+    let said = opened.text_of(opened.all("failed")[0]);
+    assert!(said.contains("sessions.all is not in this plugin's uses"), "{said}");
+
     // A file that is not an extension.
     let broken = std::env::temp_dir().join(format!("hzb-broken-{}.wasm", std::process::id()));
     std::fs::write(&broken, b"not a component").unwrap();

@@ -11,7 +11,11 @@
 mod list;
 mod view;
 
-#[horizon_ui::plugin(name = "sessions", title = "Sessions")]
+#[horizon_ui::plugin(
+    name = "sessions",
+    title = "Sessions",
+    uses = ["sessions", "session-control", "modal"]
+)]
 mod sessions {
     pub mod pane {
         pub fn mount() -> u64 {

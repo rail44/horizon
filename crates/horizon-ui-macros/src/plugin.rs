@@ -36,9 +36,12 @@
 //! `access(..)` holds what the plugin is let have that takes saying what
 //! of: the directories it may read (`read = [..]`), and those it may
 //! write in too (`write = [..]`), one of which may begin with `{data}`,
-//! Horizon's own data (`{data}/wiki`). Which of the host's interfaces it
-//! uses is not said here: the component imports what its code calls, and
-//! the host reads that.
+//! Horizon's own data (`{data}/wiki`).
+//!
+//! `uses = [..]` names what of the host's beyond the document it uses --
+//! an interface (`"sessions"`), or one function or resource of one
+//! (`"session-control.show"`, `"modal.modal"`); the host gives it nothing
+//! else of those, and refuses a name it has not.
 //!
 //! ```ignore
 //! #[horizon_ui::plugin(name = "notes", title = "Notes", access(read = ["/"]))]
@@ -82,6 +85,10 @@ struct About {
     title: Option<String>,
     read: Vec<String>,
     write: Vec<String>,
+    /// What of the host's beyond the document it uses (`uses = [..]`):
+    /// an interface, or one function or resource of one
+    /// (`interface.item`). The host checks the names.
+    uses: Vec<String>,
 }
 
 /// A command, as its attribute says it.
@@ -552,6 +559,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
         "plugin": { "name": name, "title": title },
         "commands": commands.described(),
         "access": { "read": about.read, "write": about.write },
+        "uses": about.uses,
     });
     if let Some(opener) = &opener {
         manifest["opens"] = serde_json::json!(opener.types);
@@ -659,8 +667,10 @@ pub(crate) fn plugin(arguments: TokenStream, input: TokenStream) -> TokenStream 
                     Err(meta.error("`read` or `write`"))
                 }
             })?;
+        } else if meta.path.is_ident("uses") {
+            about.uses = strings(&meta.value()?.parse::<ExprArray>()?)?;
         } else {
-            return Err(meta.error("`name`, `title` or `access(..)`"));
+            return Err(meta.error("`name`, `title`, `access(..)` or `uses = [..]`"));
         }
         Ok(())
     });

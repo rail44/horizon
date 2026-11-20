@@ -5,7 +5,7 @@
 
 mod view;
 
-#[horizon_ui::plugin(name = "image", title = "Image")]
+#[horizon_ui::plugin(name = "image", title = "Image", uses = ["modal"])]
 mod image {
     use horizon_ui::guest::File;
 

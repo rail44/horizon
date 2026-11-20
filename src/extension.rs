@@ -30,7 +30,9 @@ use wasmtime::component::{Accessor, ResourceAny, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::plugin::Given;
-use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate, offered};
+use crate::plugin_host::{
+    Asks, Compiled, Loaded, Plugin, State, Uses, compile, instantiate, offered,
+};
 use crate::wake::Wake;
 
 /// The custom section of a component that holds its manifest, as JSON.
@@ -62,6 +64,10 @@ struct Manifest {
     opens: Vec<String>,
     #[serde(default)]
     access: Access,
+    /// What of the host's beyond the document it uses
+    /// (`crate::plugin_host::Uses`).
+    #[serde(default)]
+    uses: Vec<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -173,6 +179,9 @@ pub struct Extension {
     /// and to write in too.
     read: Vec<String>,
     write: Vec<String>,
+    /// What of the host's beyond the document it says it uses: the rest
+    /// is not given to it, whoever shows it.
+    uses: Uses,
     /// What a pane keeps of it: the type `state` gives. None when its
     /// panes keep nothing (it exports no `state`, and its `mount` takes
     /// nothing).
@@ -448,6 +457,7 @@ impl Extension {
             compiled,
             read: manifest.access.read,
             write: manifest.access.write,
+            uses: Uses::new(manifest.uses)?,
             state,
         })
     }
@@ -480,8 +490,15 @@ impl Extension {
         if let Some(home) = data_home().filter(|_| in_data) {
             wasi.env("HORIZON_DATA_HOME", home.to_string_lossy());
         }
-        let loaded = instantiate(&self.compiled, wasi.build(), asks, wake, failed)
-            .map_err(|error| format!("{error:#}"))?;
+        let loaded = instantiate(
+            &self.compiled,
+            wasi.build(),
+            self.uses.clone(),
+            asks,
+            wake,
+            failed,
+        )
+        .map_err(|error| format!("{error:#}"))?;
         Ok(Running {
             extension: self.clone(),
             loaded,
