@@ -164,6 +164,7 @@ impl Shell {
             theme: Some(self.theme_asks()),
             sessions: Some(self.session_asks()),
             modal: Some(self.modal_asks(Some(id))),
+            cursor: Some(self.cursor_asks()),
         };
         let owner = Owner::new();
         let failed = owner.with(|| RwSignal::new(None::<String>));

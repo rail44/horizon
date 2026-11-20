@@ -621,6 +621,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                     "horizon:ui/sessions": ::horizon_ui::guest::bindings::horizon::ui::sessions,
                     "horizon:ui/session-control": ::horizon_ui::guest::bindings::horizon::ui::session_control,
                     "horizon:ui/modal": ::horizon_ui::guest::bindings::horizon::ui::modal,
+                    "horizon:ui/workspace": ::horizon_ui::guest::bindings::horizon::ui::workspace,
                 },
                 additional_derives: [#(#derives),*],
             });

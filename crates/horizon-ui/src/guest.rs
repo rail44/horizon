@@ -819,6 +819,24 @@ impl Close {
     }
 }
 
+/// Workspace mode's cursor, moved from a view of the plugin's
+/// (`horizon:ui/workspace`): shown while the focus is in that view, for as
+/// long as this is held.
+pub struct WorkspaceCursor(bindings::horizon::ui::workspace::Cursor);
+
+impl WorkspaceCursor {
+    /// Moves the cursor to the session `session` (`horizon:ui/sessions`'
+    /// id); none, or one no pane shows, puts it on no pane.
+    pub fn move_to(&self, session: Option<&str>) {
+        self.0.move_to(session);
+    }
+}
+
+/// Holds workspace mode's cursor, moved from `view`.
+pub fn workspace_cursor(view: El) -> WorkspaceCursor {
+    WorkspaceCursor(bindings::horizon::ui::workspace::Cursor::new(id(view)))
+}
+
 /// Puts the view `view` makes over the workspace, in a sheet in the middle
 /// of it and with the keys (`horizon:ui/modal`), until it is left -- a
 /// press outside the sheet, Escape the view did not stop, something else

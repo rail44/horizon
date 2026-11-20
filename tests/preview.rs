@@ -312,7 +312,10 @@ fn what_cannot_be_shown_is_said_in_the_pane() {
     let opened = open("sessions");
     opened.until("what it was refused", || !opened.all("failed").is_empty());
     let said = opened.text_of(opened.all("failed")[0]);
-    assert!(said.contains("sessions.all is not in this plugin's uses"), "{said}");
+    assert!(
+        said.contains("sessions.all is not in this plugin's uses"),
+        "{said}"
+    );
 
     // A file that is not an extension.
     let broken = std::env::temp_dir().join(format!("hzb-broken-{}.wasm", std::process::id()));
