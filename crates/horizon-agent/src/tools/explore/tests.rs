@@ -41,6 +41,8 @@ impl HostTools for NoHostTools {
 struct ScriptedHost {
     children: Mutex<Vec<(SessionId, Sender<Event>)>>,
     started: Mutex<Vec<String>>,
+    /// Every follow-up sent, with the child it went to.
+    sent: Mutex<Vec<(SessionId, String)>>,
     terminated: Arc<Mutex<Vec<SessionId>>>,
     /// Every `forward_progress` observation, in arrival order.
     progress: Arc<Mutex<Vec<TaskProgress>>>,
@@ -53,6 +55,7 @@ impl ScriptedHost {
         let host = Arc::new(Self {
             children: Mutex::new(Vec::new()),
             started: Mutex::new(Vec::new()),
+            sent: Mutex::new(Vec::new()),
             terminated: terminated.clone(),
             progress: Arc::new(Mutex::new(Vec::new())),
             start_error: None,
@@ -64,6 +67,7 @@ impl ScriptedHost {
         Arc::new(Self {
             children: Mutex::new(Vec::new()),
             started: Mutex::new(Vec::new()),
+            sent: Mutex::new(Vec::new()),
             terminated: Arc::new(Mutex::new(Vec::new())),
             progress: Arc::new(Mutex::new(Vec::new())),
             start_error: Some(message.to_string()),
@@ -97,6 +101,11 @@ impl ExplorationHost for ScriptedHost {
         let (tx, events) = crossbeam_channel::unbounded();
         self.children.lock().unwrap().push((session_id, tx));
         Ok(StartedExploration { session_id, events })
+    }
+
+    fn send(&self, session_id: SessionId, prompt: String) -> Result<(), String> {
+        self.sent.lock().unwrap().push((session_id, prompt));
+        Ok(())
     }
 
     fn terminate(&self, session_id: SessionId) {
@@ -478,7 +487,7 @@ fn cancelling_the_requesters_turn_leaves_children_running_and_results_queued() {
     let requester = Requester::new(Some(host.clone()));
 
     requester.launch("t1", "map the emit sites", "where are they?");
-    let (child_id, events) = host.child(0);
+    let (_, events) = host.child(0);
 
     // What a cancelled turn produces: a synthetic result for every call the
     // provider still had outstanding, then the turn's own end.
@@ -500,7 +509,10 @@ fn cancelling_the_requesters_turn_leaves_children_running_and_results_queued() {
         text.contains("Emitted at session.rs:1747."),
         "an undelivered completion survives cancellation and delivers on the next turn: {text}"
     );
-    assert_eq!(*terminated.lock().unwrap(), vec![child_id]);
+    assert!(
+        terminated.lock().unwrap().is_empty(),
+        "a child that only finished a turn stays open for a follow-up"
+    );
 }
 
 /// Decision 4's other half: the requesting session going away terminates
@@ -884,4 +896,144 @@ fn a_panicking_activity_observer_becomes_a_failed_outcome() {
         output.message.as_deref().unwrap(),
         "the task waiter panicked: observer failed"
     );
+}
+
+// --- follow-up (docs/agent-subagent-design.md decision 5) -----------------
+
+/// A child that finished a turn stays open: `task` with its session id
+/// sends the prompt to the same child, `task_output` reads it as running
+/// until that turn ends, and the answer arrives as another notification
+/// under the follow-up's label.
+#[test]
+fn a_follow_up_is_sent_to_the_same_child_and_answered_as_a_new_notification() {
+    let (host, terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+
+    requester.launch("t1", "map the module", "where is it?");
+    let (child_id, events) = host.child(0);
+    complete_child(&events, "where is it?", "In a.rs.");
+    assert!(requester.await_notification().contains("In a.rs."));
+
+    let sent = requester.call(
+        "t2",
+        TOOL_ID,
+        json!({
+            "description": "its callers",
+            "prompt": "who calls it?",
+            "session_id": child_id.as_uuid().to_string(),
+        }),
+    );
+    assert_eq!(sent["status"], json!("started"), "{sent}");
+    assert_eq!(sent["session_id"], json!(child_id.as_uuid().to_string()));
+    assert_eq!(
+        *host.sent.lock().unwrap(),
+        vec![(child_id, "who calls it?".to_string())]
+    );
+    let fetched = requester.call(
+        "o1",
+        OUTPUT_TOOL_ID,
+        json!({ "session_id": child_id.as_uuid().to_string() }),
+    );
+    assert_eq!(fetched["status"], json!("running"), "{fetched}");
+
+    complete_child(&events, "who calls it?", "b.rs calls it.");
+    let text = requester.await_notification();
+    assert!(text.contains("its callers"), "{text}");
+    assert!(text.contains("b.rs calls it."), "{text}");
+    assert!(
+        !text.contains("In a.rs."),
+        "only the new turn's report: {text}"
+    );
+    assert!(terminated.lock().unwrap().is_empty());
+}
+
+/// A follow-up sent while the child is still on its first turn is queued
+/// by the child's session; each turn then reports on its own.
+#[test]
+fn a_follow_up_to_a_running_child_is_answered_after_its_current_turn() {
+    let (host, _terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+
+    requester.launch("t1", "map the module", "where is it?");
+    let (child_id, events) = host.child(0);
+    requester.call(
+        "t2",
+        TOOL_ID,
+        json!({
+            "description": "its callers",
+            "prompt": "who calls it?",
+            "session_id": child_id.as_uuid().to_string(),
+        }),
+    );
+
+    complete_child(&events, "where is it?", "In a.rs.");
+    wait_until(
+        || super::children::pending_count(requester.session_id) == 1,
+        "the first turn's report",
+    );
+    let fetched = requester.call(
+        "o1",
+        OUTPUT_TOOL_ID,
+        json!({ "session_id": child_id.as_uuid().to_string() }),
+    );
+    assert_eq!(
+        fetched["status"],
+        json!("running"),
+        "the follow-up is still owed: {fetched}"
+    );
+
+    complete_child(&events, "who calls it?", "b.rs calls it.");
+    wait_until(
+        || super::children::pending_count(requester.session_id) == 2,
+        "the follow-up's report",
+    );
+    let text = requester.await_notification();
+    assert!(text.contains("In a.rs."), "{text}");
+    assert!(text.contains("b.rs calls it."), "{text}");
+}
+
+/// A follow-up needs a child this session launched whose session is still
+/// there: an unknown id and an ended child are both refused without
+/// sending anything.
+#[test]
+fn a_follow_up_to_an_unknown_or_ended_child_is_refused() {
+    let (host, _terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+
+    let unknown = requester.call(
+        "t1",
+        TOOL_ID,
+        json!({
+            "description": "anything",
+            "prompt": "more?",
+            "session_id": SessionId::new().as_uuid().to_string(),
+        }),
+    );
+    assert_eq!(unknown["is_error"], json!(true), "{unknown}");
+
+    requester.launch("t2", "map the module", "where is it?");
+    let (child_id, events) = host.child(0);
+    events.send(user("where is it?")).unwrap();
+    events
+        .send(Event::StateChanged(SessionState::Terminated))
+        .unwrap();
+    requester.await_notification();
+
+    let ended = requester.call(
+        "t3",
+        TOOL_ID,
+        json!({
+            "description": "its callers",
+            "prompt": "who calls it?",
+            "session_id": child_id.as_uuid().to_string(),
+        }),
+    );
+    assert_eq!(ended["is_error"], json!(true), "{ended}");
+    assert!(
+        ended["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("has ended")),
+        "{ended}"
+    );
+    assert!(host.sent.lock().unwrap().is_empty());
 }

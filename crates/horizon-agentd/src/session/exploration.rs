@@ -69,6 +69,19 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
         })
     }
 
+    fn send(&self, session_id: SessionId, prompt: String) -> Result<(), String> {
+        // The child's session loop queues a message that arrives mid-turn and
+        // takes it once that turn ends, so a follow-up never interrupts.
+        if self
+            .state
+            .send_command(session_id, Command::UserMessage { text: prompt })
+        {
+            Ok(())
+        } else {
+            Err("the task session has ended".to_string())
+        }
+    }
+
     fn terminate(&self, session_id: SessionId) {
         self.state.unsubscribe_from_session(session_id);
         self.state.send_command(session_id, Command::Shutdown);
@@ -260,9 +273,12 @@ mod tests {
     /// The whole `task` seam against the *real* daemon implementation
     /// rather than a stub: a `task` call spawns a genuine peer session
     /// here, its user message reaches that session's provider, its events
-    /// come back through the [`crate::session::subscription`] seam, the
-    /// session is shut down as soon as its own turn ends, and the report is
-    /// then fetchable with `task_output`.
+    /// come back through the [`crate::session::subscription`] seam, and the
+    /// report is fetchable with `task_output`. The child stays open after
+    /// its turn, so a follow-up `task` with its session id is answered by
+    /// the same session (`docs/agent-subagent-design.md` decision 5); it is
+    /// shut down, and its subscription released, when its requester goes
+    /// away.
     ///
     /// The launch itself is asynchronous since 2026-07-28
     /// (`docs/agent-async-task-design.md`): the call returns a `started`
@@ -270,7 +286,7 @@ mod tests {
     /// Hermetic -- the child runs on the mock provider, so no network and
     /// no event log are involved.
     #[test]
-    fn task_spawns_a_real_peer_session_and_terminates_it_when_it_finishes() {
+    fn task_child_takes_a_follow_up_and_ends_with_its_requester() {
         let state = test_state();
         let requester_id = SessionId::new();
         let (results_tx, results_rx) = unbounded::<ToolCompletion>();
@@ -319,7 +335,79 @@ mod tests {
                 .expect("a uuid"),
         );
         assert_ne!(child_id, requester_id);
+        assert!(
+            results_rx.try_recv().is_err(),
+            "an asynchronous launch delivers nothing on the tool-completion channel"
+        );
 
+        let report_of = |call_id: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let fetched = call(
+                    &state,
+                    &tool_state,
+                    requester_id,
+                    call_id,
+                    "task_output",
+                    serde_json::json!({ "session_id": child_id.as_uuid().to_string() }),
+                );
+                if fetched["status"] == serde_json::json!("finished") {
+                    return fetched["report"].as_str().expect("a report").to_string();
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the task did not finish: {fetched}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let first = report_of("task-output-e2e");
+        assert!(
+            first.contains("where is the emit site?"),
+            "the task must have answered the forwarded prompt, got: {first}"
+        );
+        assert!(
+            state.sessions.lock().unwrap().contains_key(&child_id),
+            "a child that only finished a turn stays open for a follow-up"
+        );
+
+        let followed = call(
+            &state,
+            &tool_state,
+            requester_id,
+            "task-follow-up-e2e",
+            "task",
+            serde_json::json!({
+                "description": "and its caller",
+                "prompt": "who calls it?",
+                "session_id": child_id.as_uuid().to_string(),
+            }),
+        );
+        assert_eq!(
+            followed["status"],
+            serde_json::json!("started"),
+            "{followed}"
+        );
+        assert_eq!(
+            followed["session_id"],
+            serde_json::json!(child_id.as_uuid().to_string()),
+            "a follow-up goes to the same session"
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let second = loop {
+            let report = report_of("task-output-follow-up-e2e");
+            if report.contains("who calls it?") {
+                break report;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the follow-up was not answered: {report}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(second.contains("who calls it?"), "{second}");
+
+        unregister_session_runtime(requester_id);
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while state.sessions.lock().unwrap().contains_key(&child_id)
             && std::time::Instant::now() < deadline
@@ -328,37 +416,12 @@ mod tests {
         }
         assert!(
             !state.sessions.lock().unwrap().contains_key(&child_id),
-            "the task session must be terminated as soon as its own turn ends"
+            "the child is shut down with its requester"
         );
         assert!(
             !state.has_subscriber(child_id),
             "its event subscription must be released with it"
         );
-        assert!(
-            results_rx.try_recv().is_err(),
-            "an asynchronous launch delivers nothing on the tool-completion channel"
-        );
-
-        let fetched = call(
-            &state,
-            &tool_state,
-            requester_id,
-            "task-output-e2e",
-            "task_output",
-            serde_json::json!({ "session_id": child_id.as_uuid().to_string() }),
-        );
-        assert_eq!(
-            fetched["status"],
-            serde_json::json!("finished"),
-            "{fetched}"
-        );
-        let report = fetched["report"].as_str().expect("a report");
-        assert!(
-            report.contains("where is the emit site?"),
-            "the task must have answered the forwarded prompt, got: {report}"
-        );
-
-        unregister_session_runtime(requester_id);
     }
     #[test]
     fn child_retirement_can_reenter_the_session_table_after_its_parent_entry_is_gone() {
@@ -380,6 +443,9 @@ mod tests {
                     session_id: SessionId::new(),
                     events,
                 })
+            }
+            fn send(&self, _: SessionId, _: String) -> Result<(), String> {
+                unreachable!()
             }
             fn terminate(&self, _: SessionId) {
                 // A real daemon host reacquires this lock in send_command.

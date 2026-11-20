@@ -13,7 +13,9 @@
 //!
 //! Finished children are kept, not dropped: `task_output` must be able to
 //! re-read a full report for as long as the requester session lives
-//! (`docs/agent-async-task-design.md` decision 3). They are released
+//! (`docs/agent-async-task-design.md` decision 3), and a child whose
+//! session is still open can be sent a follow-up
+//! (`docs/agent-subagent-design.md` decision 5). They are released
 //! wholesale by [`remove_requester`] when that session ends.
 
 use std::collections::HashMap;
@@ -52,8 +54,24 @@ pub(super) enum Lookup {
 struct Child {
     requester: SessionId,
     description: String,
-    /// `None` while the child is still running.
+    /// The report of the child's latest finished turn; `None` before its
+    /// first turn has finished.
     outcome: Option<TaskReport>,
+    /// Turns asked of the child -- its first prompt and each follow-up --
+    /// whose report has not come back yet. The child is running while this
+    /// is not zero. A follow-up can be sent while the child is still
+    /// working; its session queues it, and each turn reports on its own.
+    unanswered: u32,
+    /// Whether the child's session is still there to take a follow-up.
+    open: bool,
+}
+
+/// Why a follow-up could not be sent.
+pub(super) enum FollowUpRefusal {
+    /// See [`Lookup::Unknown`].
+    Unknown,
+    /// The child's session has ended.
+    Closed,
 }
 
 #[derive(Default)]
@@ -80,8 +98,37 @@ pub(in crate::tools) fn register(requester: SessionId, child: SessionId, descrip
             requester,
             description,
             outcome: None,
+            unanswered: 1,
+            open: true,
         },
     );
+}
+
+/// Counts one more turn asked of `requester`'s own open `child`, labelled
+/// `description` from now on. Called before the follow-up is sent, so a
+/// child quick enough to answer before this returns is still expected.
+pub(super) fn follow_up(
+    requester: SessionId,
+    child: SessionId,
+    description: String,
+) -> Result<(), FollowUpRefusal> {
+    let mut registry = lock();
+    match registry.children.get_mut(&child) {
+        Some(entry) if entry.requester == requester && entry.open => {
+            entry.unanswered += 1;
+            entry.description = description;
+            Ok(())
+        }
+        Some(entry) if entry.requester == requester => Err(FollowUpRefusal::Closed),
+        _ => Err(FollowUpRefusal::Unknown),
+    }
+}
+
+/// Takes back a follow-up [`follow_up`] counted but that could not be sent.
+pub(super) fn withdraw_follow_up(child: SessionId) {
+    if let Some(entry) = lock().children.get_mut(&child) {
+        entry.unanswered = entry.unanswered.saturating_sub(1);
+    }
 }
 
 /// Test-only: registers `child` as a launched-but-unfinished task of
@@ -95,21 +142,26 @@ pub(super) fn register_hostless(requester: SessionId, child: SessionId, descript
             requester,
             description: description.to_string(),
             outcome: None,
+            unanswered: 1,
+            open: true,
         },
     );
 }
 
-/// Records `child`'s final result and queues its notification for delivery.
-/// Returns the requester to wake, or `None` if that session already went
-/// away (its whole registry footprint is gone, so there is nobody to
-/// notify).
-pub(super) fn complete(child: SessionId, output: TaskReport) -> Option<SessionId> {
+/// Records the result of one of `child`'s turns and queues its notification
+/// for delivery; `open` is whether the child's session is still there to
+/// take a follow-up. Returns the requester to wake, or `None` if that
+/// session already went away (its whole registry footprint is gone, so
+/// there is nobody to notify) or no turn was outstanding.
+pub(super) fn complete(child: SessionId, output: TaskReport, open: bool) -> Option<SessionId> {
     let mut registry = lock();
     let entry = registry.children.get_mut(&child)?;
-    if entry.outcome.is_some() {
-        // A second terminal fold for the same child: keep the first.
+    if entry.unanswered == 0 {
+        // A terminal fold nobody asked for: keep what was reported.
         return None;
     }
+    entry.unanswered = if open { entry.unanswered - 1 } else { 0 };
+    entry.open = open;
     entry.outcome = Some(output.clone());
     let requester = entry.requester;
     let completion = Completion {
@@ -145,14 +197,22 @@ pub(super) fn pending_count(requester: SessionId) -> usize {
         .unwrap_or_default()
 }
 
+/// The label `child` currently goes by: a follow-up may have relabelled it.
+pub(super) fn description(child: SessionId) -> Option<String> {
+    lock()
+        .children
+        .get(&child)
+        .map(|entry| entry.description.clone())
+}
+
 pub(super) fn lookup(requester: SessionId, child: SessionId) -> Lookup {
     let registry = lock();
     match registry.children.get(&child) {
         Some(entry) if entry.requester == requester => match &entry.outcome {
-            Some(output) => Lookup::Finished {
+            Some(output) if entry.unanswered == 0 => Lookup::Finished {
                 output: output.clone(),
             },
-            None => Lookup::Running {
+            _ => Lookup::Running {
                 description: entry.description.clone(),
             },
         },

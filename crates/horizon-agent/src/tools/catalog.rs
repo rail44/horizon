@@ -337,7 +337,10 @@ fn build_definitions() -> Vec<Definition> {
                 notified when it completes; keep working in the meantime. \
                 Prefer several narrowly scoped tasks launched in parallel in one \
                 response over a single broad one. Returns immediately with the task session's \
-                id, which is also how you re-read its report later with task_output."
+                id, which is also how you re-read its report later with task_output. To ask a \
+                task you launched something more -- a gap in its report, the next question on \
+                the same ground -- pass its session_id: it keeps what it already read, and its \
+                answer arrives as another notification."
                 .to_string(),
             input_schema: super::input::schema("task").expect("registered tool input"),
             permission: ToolPermission::AutoAllowRead,

@@ -153,10 +153,17 @@ pub trait ExplorationHost: Send + Sync {
     /// for the model to read as the tool's error result.
     fn start(&self, prompt: String) -> Result<StartedExploration, String>;
 
+    /// Sends `prompt` to a session started by [`Self::start`] as its next
+    /// user message: a follow-up (`docs/agent-subagent-design.md` decision
+    /// 5). A session still working on an earlier turn takes it after that
+    /// turn. `Err` carries a message for the model, as with `start`.
+    fn send(&self, session_id: SessionId, prompt: String) -> Result<(), String>;
+
     /// Terminates a session started by [`Self::start`] and releases its
     /// event subscription. Called exactly once per successful start -- when
-    /// the child's own turn ends, or when the requesting session goes away.
-    /// A no-op for a session that has already ended on its own.
+    /// the child's session ends on its own, or when the requesting session
+    /// goes away; a child that only finished a turn stays open for a
+    /// follow-up. A no-op for a session that has already ended on its own.
     fn terminate(&self, session_id: SessionId);
 
     /// Forwards one live progress observation about `child` to whoever is
@@ -188,6 +195,15 @@ pub(crate) fn start(
             error_output(format!("`{TOOL_ID}` is not available in this session")),
         );
     };
+    if let Some(child) = input.session_id {
+        return follow_up(
+            &*host,
+            session_id,
+            SessionId::from_uuid(child),
+            request,
+            input,
+        );
+    }
 
     let work = super::background::Registration::new(
         session_id,
@@ -236,20 +252,32 @@ pub(crate) fn start(
                 );
             }
         };
-        let outcome = watch_until_terminal(&events, child_work.cancelled(), &mut |activity| {
-            if !child_work.is_cancelled() {
-                emit(TaskProgressState::Running, activity)
+        // One fold per turn: a child that only finished a turn stays open
+        // for a follow-up, and the next fold starts at that follow-up's
+        // user message. The child is stopped only when its session ends.
+        loop {
+            let outcome = watch_until_terminal(&events, child_work.cancelled(), &mut |activity| {
+                if !child_work.is_cancelled() {
+                    emit(TaskProgressState::Running, activity)
+                }
+            });
+            let open = !outcome.terminal.ends_session();
+            if !open && !child_work.finish() {
+                return;
             }
-        });
-        if !child_work.finish() {
-            return;
-        }
-        // A view-side callback must not prevent the durable completion.
-        let _ =
-            std::panic::catch_unwind(AssertUnwindSafe(|| emit(TaskProgressState::Finished, None)));
-        let output = outcome.into_output(child_id, &waiter_description);
-        if let Some(requester) = children::complete(child_id, output) {
-            notify::wake(requester);
+            // A view-side callback must not prevent the durable completion.
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                emit(TaskProgressState::Finished, None)
+            }));
+            let description =
+                children::description(child_id).unwrap_or_else(|| waiter_description.clone());
+            let output = outcome.into_output(child_id, &description);
+            if let Some(requester) = children::complete(child_id, output, open) {
+                notify::wake(requester);
+            }
+            if !open {
+                return;
+            }
         }
     });
 
@@ -257,6 +285,56 @@ pub(crate) fn start(
         request,
         Response::succeeded(TaskOutput::Started {
             session_id: child_id.as_uuid().to_string(),
+            description,
+        }),
+    )
+}
+
+/// `task` with a `session_id`: send `input.prompt` to one of this
+/// session's own open children as a follow-up
+/// (`docs/agent-subagent-design.md` decision 5). The child keeps its
+/// history; its next report arrives as a notification, like the first.
+fn follow_up(
+    host: &dyn ExplorationHost,
+    session_id: SessionId,
+    child: SessionId,
+    request: &ToolCallRequest,
+    input: &crate::tools::input::Task,
+) -> ToolOutput {
+    let description = input.description.trim().to_string();
+    match children::follow_up(session_id, child, description.clone()) {
+        Ok(()) => {}
+        Err(children::FollowUpRefusal::Unknown) => {
+            return synchronous(
+                request,
+                error_output(format!(
+                    "no task with session_id `{}` was launched from this session",
+                    child.as_uuid()
+                )),
+            );
+        }
+        Err(children::FollowUpRefusal::Closed) => {
+            return synchronous(
+                request,
+                error_output(format!(
+                    "the task session `{}` has ended and cannot take a follow-up; launch a new \
+                     task instead",
+                    child.as_uuid()
+                )),
+            );
+        }
+    }
+    if let Err(message) = host.send(child, input.prompt.to_string()) {
+        children::withdraw_follow_up(child);
+        return synchronous(
+            request,
+            error_output(format!("could not send the follow-up: {message}")),
+        );
+    }
+    synchronous(
+        request,
+        Response::succeeded(TaskOutput::Started {
+            session_id: child.as_uuid().to_string(),
             description,
         }),
     )
@@ -279,7 +357,7 @@ pub(crate) fn register_finished_child_for_test(
     output: Value,
 ) {
     children::register_hostless(requester, child, description);
-    children::complete(child, test_report(child, description, output));
+    children::complete(child, test_report(child, description, output), true);
 }
 
 /// `task_output`: the full report of one finished child owned by this
@@ -381,7 +459,9 @@ pub(crate) fn deliver_test_completion(
     output: Value,
 ) {
     children::register_hostless(requester, child, description);
-    if let Some(requester) = children::complete(child, test_report(child, description, output)) {
+    if let Some(requester) =
+        children::complete(child, test_report(child, description, output), true)
+    {
         notify::wake(requester);
     }
 }
@@ -422,7 +502,7 @@ pub(super) fn report_body_is_empty(report: &str) -> bool {
     }
 }
 
-/// How a child's event stream ended.
+/// How a child's turn -- or its whole event stream -- ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Terminal {
     /// The child's turn ended normally -- the report is final.
@@ -450,6 +530,23 @@ pub(super) enum Terminal {
     Cancelled,
     /// The fold itself unwound.
     Panicked(String),
+}
+
+impl Terminal {
+    /// Whether the child's session is gone (or must go) with this ending,
+    /// rather than only its turn: a child that only ended a turn stays
+    /// open for a follow-up. An approval the child can never receive ends
+    /// it too, as before.
+    fn ends_session(&self) -> bool {
+        match self {
+            Terminal::Completed | Terminal::TurnEnded(_) => false,
+            Terminal::Approval
+            | Terminal::Terminated
+            | Terminal::Disconnected
+            | Terminal::Cancelled
+            | Terminal::Panicked(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -598,14 +695,15 @@ fn fold_until_terminal(
                     // record: rig ALSO emits `WaitingForUser` mid-turn in
                     // two measured shapes (the startup/`Initialize` pair,
                     // and approval-gated async-tool boundaries — backlog
-                    // 47). Both are unreachable in a v1 task child (the
+                    // 47). Both are unreachable in a read task child (the
                     // host never sends `Initialize` after the user message,
                     // an approval that would need a human is refused rather
-                    // than raised, every allowed tool is synchronous, and
-                    // task children are never resumed) —
-                    // but if they ever gain an async or approval-capable
-                    // tool, this arm becomes a premature-completion hazard
-                    // and must be revisited.
+                    // than raised, and task children are never resumed
+                    // across a daemon restart; a follow-up is a new user
+                    // message, which starts the next fold) — but `bash` is
+                    // now allowed and can run in the background, and a
+                    // write child will raise approvals, so this arm is a
+                    // premature-completion hazard to revisit with them.
                     Event::StateChanged(SessionState::WaitingForUser) if turn_started => {
                         break match report {
                             Some(_) => Terminal::Completed,

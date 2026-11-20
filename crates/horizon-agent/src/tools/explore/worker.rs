@@ -70,6 +70,9 @@ mod tests {
         fn start(&self, _: String) -> Result<super::super::StartedExploration, String> {
             unreachable!()
         }
+        fn send(&self, _: SessionId, _: String) -> Result<(), String> {
+            unreachable!()
+        }
         fn terminate(&self, _: SessionId) {
             self.stops.fetch_add(1, Ordering::SeqCst);
         }

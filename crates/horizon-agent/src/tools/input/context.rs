@@ -117,8 +117,13 @@ pub(crate) struct RecallSessions {
 pub(crate) struct Task {
     /// Short task label displayed in completion notifications.
     pub description: Text<200>,
-    /// Self-contained question and exact deliverable for the child.
+    /// Self-contained question and exact deliverable for the child; for a
+    /// follow-up, what to do next -- the child keeps its history.
     pub prompt: Text<16384>,
+    /// Send the prompt as a follow-up to a task this session already
+    /// launched, by its session id, instead of starting a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<uuid::Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
