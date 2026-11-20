@@ -322,6 +322,15 @@ interface modal {
     }
 }
 
+/// What a plugin that opens files exports: the shell hands it a file of
+/// one of the media types its manifest says it opens (`opens`), as when
+/// a link to one is followed.
+interface opener {
+    use files.{file};
+
+    open: func(file: file);
+}
+
 /// What a plugin imports: a plugin's world includes it, and declares
 /// only what is its own.
 world imports {

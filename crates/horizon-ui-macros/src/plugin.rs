@@ -13,16 +13,22 @@
 //!   - functions marked `#[command(..)]`: the commands of a pane that
 //!     shows the view, carried out where the cursor's pane does;
 //! - functions marked `#[command(..)]` beside it: the plugin's own
-//!   commands, which need no pane.
+//!   commands, which need no pane;
+//! - a function marked `#[open(types = [..])]` beside it: what a file of
+//!   one of those media types is opened with, when the shell is asked to
+//!   open one (a link to it followed). It takes the `File` and gives
+//!   nothing.
 //!
-//! A plugin has a `mod pane`, a command of its own, or both.
+//! A plugin has a `mod pane`, a command of its own, an `open`, or any of
+//! them together.
 //!
 //! From those it writes the plugin's WIT world (the view as the
 //! interface `pane`, its commands as `pane-commands`, the plugin's own as
-//! `commands`), hands it to `wit-bindgen` for the bindings, exports the
-//! functions through them beside what every plugin exports, and puts a
-//! manifest (the name, the title, each command's title and description,
-//! how a parameter is asked for, what may be read) in a custom section of
+//! `commands`, its `open` as the SDK's `horizon:ui/opener`), hands it to
+//! `wit-bindgen` for the bindings, exports the functions through them
+//! beside what every plugin exports, and puts a manifest (the name, the
+//! title, each command's title and description, how a parameter is asked
+//! for, the media types opened, what may be read) in a custom section of
 //! the wasm. What crosses to the host is the component's type and that
 //! section, as it is for a plugin whose WIT and manifest are written by
 //! hand.
@@ -54,6 +60,9 @@
 //!
 //!     #[command(title = "Find a Note", description = "Search the notes.")]
 //!     pub fn find_a_note() { .. }
+//!
+//!     #[open(types = ["text/markdown"])]
+//!     pub fn open(file: horizon_ui::guest::File) { .. }
 //! }
 //! ```
 
@@ -81,6 +90,45 @@ struct Command {
     title: String,
     description: String,
     destructive: bool,
+}
+
+/// The function a file is opened with, and the media types it opens.
+struct Opener {
+    function: syn::Ident,
+    types: Vec<String>,
+}
+
+/// Takes `function` in as the opener if it is marked `#[open(..)]`.
+fn opener_of(function: &mut ItemFn) -> syn::Result<Option<Opener>> {
+    let Some(attribute) = take(&mut function.attrs, "open") else {
+        return Ok(None);
+    };
+    let mut types = Vec::new();
+    attribute.parse_nested_meta(|meta| {
+        if meta.path.is_ident("types") {
+            types = strings(&meta.value()?.parse::<ExprArray>()?)?;
+            Ok(())
+        } else {
+            Err(meta.error("`types`"))
+        }
+    })?;
+    if types.is_empty() {
+        return Err(error(
+            attribute.span(),
+            "the media types opened: `types = [..]`",
+        ));
+    }
+    let (_, shape) = signature(function)?;
+    if shape != "func(file: file)" {
+        return Err(error(
+            function.sig.span(),
+            "takes the file, `file: File`, and gives nothing",
+        ));
+    }
+    Ok(Some(Opener {
+        function: function.sig.ident.clone(),
+        types,
+    }))
 }
 
 /// How one parameter of `create` is asked for.
@@ -445,6 +493,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
     let mut kept = Vec::new();
     let mut pane = None::<Pane>;
     let mut commands = Commands::default();
+    let mut opener = None::<Opener>;
     for item in items {
         match item {
             Item::Mod(inner) if inner.ident == "pane" => {
@@ -463,16 +512,23 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                         "in `mod pane`: it is the view's a pane shows",
                     ));
                 }
-                commands.take(&mut function)?;
+                if let Some(found) = opener_of(&mut function)? {
+                    if opener.is_some() {
+                        return Err(error(function.sig.ident.span(), "one `#[open(..)]`"));
+                    }
+                    opener = Some(found);
+                } else {
+                    commands.take(&mut function)?;
+                }
                 kept.push(Item::Fn(function));
             }
             other => kept.push(other),
         }
     }
-    if pane.is_none() && commands.said.is_empty() {
+    if pane.is_none() && commands.said.is_empty() && opener.is_none() {
         return Err(error(
             module.ident.span(),
-            "a `mod pane`, or a function marked `#[command(..)]`",
+            "a `mod pane`, or a function marked `#[command(..)]` or `#[open(..)]`",
         ));
     }
 
@@ -486,6 +542,9 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
         text.push_str(&pane.commands.interface("pane-commands"));
     }
     text.push_str(&commands.interface("commands"));
+    if opener.is_some() {
+        text.push_str("\n    export horizon:ui/opener;\n");
+    }
     text.push_str("}\n");
 
     // The manifest: what the component's type does not carry, as JSON.
@@ -494,6 +553,9 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
         "commands": commands.described(),
         "access": { "read": about.read, "write": about.write },
     });
+    if let Some(opener) = &opener {
+        manifest["opens"] = serde_json::json!(opener.types);
+    }
     if let Some(pane) = &pane {
         let created: serde_json::Map<String, serde_json::Value> = (pane.asked.iter())
             .map(|asked| {
@@ -518,6 +580,16 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
         quote! {
             impl exports::commands::Guest for HorizonPlugin {
                 #(#functions)*
+            }
+        }
+    });
+    let opener_export = opener.as_ref().map(|opener| {
+        let function = &opener.function;
+        quote! {
+            impl exports::horizon::ui::opener::Guest for HorizonPlugin {
+                fn open(file: ::horizon_ui::guest::File) {
+                    #function(file)
+                }
             }
         }
     });
@@ -552,6 +624,8 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             struct HorizonPlugin;
 
             #commands_export
+
+            #opener_export
 
             export!(HorizonPlugin);
             // What every plugin exports.

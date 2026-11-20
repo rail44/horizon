@@ -3,11 +3,13 @@
 //! ([`MANIFEST`]).
 //!
 //! The component declares what is its own: the state a pane keeps of it
-//! (the type `mount` takes and `state` gives), and its commands (the
-//! functions of its `commands` interface). Everything every plugin has
+//! (the type `mount` takes and `state` gives), its commands (the
+//! functions of its `commands` interface), and whether it opens files
+//! (`horizon:ui/opener`). Everything every plugin has
 //! comes from `horizon-ui`'s SDK. The manifest says what the component's
 //! types cannot: the extension's name and title, its commands' titles
-//! and descriptions, and what it may read. The two are matched when the
+//! and descriptions, the media types of the files it opens, and what it
+//! may read. The two are matched when the
 //! component is loaded, and one whose commands differ is refused. An
 //! extension written in Rust has both made from one description
 //! (`horizon_ui::plugin`), so they cannot differ.
@@ -55,6 +57,9 @@ struct Manifest {
     /// Of the view a pane shows, if it has one.
     #[serde(default)]
     pane: ManifestPane,
+    /// The media types of the files it opens (`crate::media_type`).
+    #[serde(default)]
+    opens: Vec<String>,
     #[serde(default)]
     access: Access,
 }
@@ -158,6 +163,9 @@ pub struct Extension {
     /// What a new pane of it is made from, if it says (`create`): what
     /// `create` takes, in order.
     pub creates: Option<Vec<Parameter>>,
+    /// The media types of the files it opens (`horizon:ui/opener`); none
+    /// when it opens none.
+    pub opens: Vec<String>,
     /// The component's file.
     pub file: PathBuf,
     compiled: Compiled,
@@ -215,6 +223,8 @@ struct Shape {
     /// What `create` takes, in order, if it exports one. (A file's
     /// `types` are the manifest's to say.)
     creates: Option<Vec<Parameter>>,
+    /// Whether it exports `horizon:ui/opener` with an `open` in it.
+    opener: bool,
 }
 
 /// Reads what the component exports, and holds it to what an extension
@@ -318,6 +328,14 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             ("commands", ComponentItem::ComponentInstance(instance)) => {
                 shape.commands = commands_of(&instance)?;
             }
+            (OPENER, ComponentItem::ComponentInstance(instance)) => {
+                shape.opener = (instance.exports(engine)).any(|(name, item)| {
+                    name == "open" && matches!(item.ty, ComponentItem::ComponentFunc(_))
+                });
+                if !shape.opener {
+                    return Err(format!("the component's `{OPENER}` exports no `open`"));
+                }
+            }
             (name, ComponentItem::ComponentInstance(_))
                 if name.starts_with("horizon:ui/events") =>
             {
@@ -326,8 +344,10 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             _ => {}
         }
     }
-    if !shape.pane && shape.commands.is_empty() {
-        return Err("the component exports no `pane`, and no command of its own".to_string());
+    if !shape.pane && shape.commands.is_empty() && !shape.opener {
+        return Err(
+            "the component exports no `pane`, no command of its own and no `open`".to_string(),
+        );
     }
     if !shape.pane && !shape.pane_commands.is_empty() {
         return Err("the component exports `pane-commands` and no `pane`".to_string());
@@ -337,6 +357,9 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
     }
     Ok(shape)
 }
+
+/// The interface a component that opens files exports.
+const OPENER: &str = "horizon:ui/opener";
 
 /// Holds the commands the component exports and the ones the manifest
 /// names to each other: each must name the other.
@@ -379,7 +402,17 @@ impl Extension {
             pane_commands,
             commands,
             mut creates,
+            opener,
         } = shape_of(&compiled)?;
+        match (opener, manifest.opens.is_empty()) {
+            (true, true) => return Err("the manifest says no media type `open` opens".to_string()),
+            (false, false) => {
+                return Err(format!(
+                    "the manifest says what it opens, and it exports no `{OPENER}`"
+                ));
+            }
+            _ => {}
+        }
         match_commands(&pane_commands, &manifest.pane.commands)?;
         match_commands(&commands, &manifest.commands)?;
         // (What the manifest says of how `create`'s file is asked for.)
@@ -410,6 +443,7 @@ impl Extension {
             pane_commands: listed(manifest.pane.commands),
             commands: listed(manifest.commands),
             creates,
+            opens: manifest.opens,
             file: file.to_path_buf(),
             compiled,
             read: manifest.access.read,
@@ -619,6 +653,44 @@ impl Extension {
                 Err((failed.get_untracked())
                     .unwrap_or_else(|| format!("`{name}` was not carried out")))
             }
+        }
+    }
+}
+
+impl Extension {
+    /// Whether it opens `path`: a file of a media type it says it opens.
+    pub fn opens(&self, path: &Path) -> bool {
+        crate::media_type::is_of(path, &self.opens)
+    }
+
+    /// Opens the file at `path` in an instance made for it, which is what
+    /// comes back, as [`Extension::run_command`] carries out a command.
+    pub fn open(
+        self: &Arc<Self>,
+        path: &Path,
+        asks: Asks,
+        wake: Wake,
+        failed: RwSignal<Option<String>>,
+    ) -> Result<Running, String> {
+        if self.opens.is_empty() {
+            return Err(format!("`{}` opens no file", self.name));
+        }
+        let running = self.instantiate(asks, wake, failed)?;
+        let path = path.to_path_buf();
+        let opened = running.loaded.call(|plugin, accessor| {
+            Box::pin(async move {
+                let open = function(plugin, accessor, Some(OPENER), "open")?;
+                let file = accessor.with(|mut access| {
+                    let file = access.data_mut().file(path)?;
+                    ResourceAny::try_from_resource(file, &mut access).map(Val::Resource)
+                })?;
+                open.call_concurrent(accessor, &[file], &mut []).await
+            })
+        });
+        match opened {
+            Some(()) => Ok(running),
+            None => Err((failed.get_untracked())
+                .unwrap_or_else(|| format!("`{}` did not open the file", self.name))),
         }
     }
 }
