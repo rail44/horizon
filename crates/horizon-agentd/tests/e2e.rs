@@ -38,17 +38,31 @@ use horizon_daemon_testkit::{
     resolve_daemon_binary, spawn_with_link_retry, wait_for_exit,
 };
 
-/// The env var `horizon-agentd`'s `main` reads to artificially delay its
-/// event-log-read-plus-resume phase -- see that binary's own doc comment on
-/// the constant of the same name. Test-only; never set outside this file.
-const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
+/// The env var `horizon-agentd`'s `main` reads to hold its
+/// event-log-read-plus-resume phase until a file is there -- see that
+/// binary's own doc comment on the constant of the same name. Test-only;
+/// never set outside this file.
+const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
 
-/// The env var `horizon-agentd`'s `main` reads to artificially delay its
-/// background DuckDB rebuild task -- the DuckDB analogue of
-/// [`TEST_RESUME_DELAY_MS_VAR`], letting a test prove `initialize`/
-/// `session/list` stay reachable while a slow rebuild is still running.
+/// The env var `horizon-agent`'s writer reads to hold its background DuckDB
+/// rebuild until a file is there -- the DuckDB analogue of
+/// [`TEST_RESUME_GATE_VAR`], letting a test prove `initialize`/
+/// `session/list` stay reachable while a rebuild has not ended.
 /// Test-only; never set outside this file.
-const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
+const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
+
+/// How long an answer that must come may take: only tells "never" apart.
+const NEVER: Duration = Duration::from_secs(30);
+
+/// A file a held phase waits for, not there yet; [`open_gate`] makes it.
+fn gate_path(what: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("hzn-gate-{what}-{}", uuid::Uuid::new_v4().simple()))
+}
+
+/// Lets what waits on `gate` go on.
+fn open_gate(gate: &Path) {
+    std::fs::write(gate, "").expect("make the gate");
+}
 
 /// Resolves the `horizon-agentd` binary to spawn. Only the `env!()` bake
 /// has to be produced here (that macro expands only inside the package that
@@ -99,8 +113,8 @@ fn resolve_agentd_binary_finds_an_existing_binary_via_the_runtime_env_var() {
 /// leak into the next.
 fn agentd_spawn(paths: AgentdPaths) -> AgentdSpawn {
     AgentdSpawn::new(resolve_agentd_binary(), paths)
-        .env_remove(TEST_RESUME_DELAY_MS_VAR)
-        .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
+        .env_remove(TEST_RESUME_GATE_VAR)
+        .env_remove(TEST_DUCKDB_REBUILD_GATE_VAR)
 }
 
 /// Spawns `horizon-agentd` at fresh throwaway paths -- what almost every
@@ -122,44 +136,40 @@ fn spawn_agentd_at(socket_path: PathBuf, event_log_path: PathBuf) -> AgentdProce
     .spawn()
 }
 
-/// Same as [`spawn_agentd_at`], but additionally sets `horizon-agentd`'s
-/// test-only [`TEST_RESUME_DELAY_MS_VAR`] hook -- for the bind-first
-/// ordering test, which needs the log-read-plus-resume phase to take long
-/// enough that `initialize` answering before it finishes (and `session_list`
-/// waiting for it) is provably a consequence of the ordering fix, not
-/// incidental timing.
-fn spawn_agentd_with_resume_delay(
+/// Same as [`spawn_agentd_at`], but with `horizon-agentd`'s
+/// event-log-read-plus-resume phase held until `gate` is made
+/// ([`TEST_RESUME_GATE_VAR`]) -- for the bind-first ordering test:
+/// `initialize` answering while it is held (and `session_list` not) is
+/// then a consequence of the ordering, not of timing.
+fn spawn_agentd_with_resume_gate(
     socket_path: PathBuf,
     event_log_path: PathBuf,
-    resume_delay_ms: u64,
+    gate: &Path,
 ) -> AgentdProcess {
     agentd_spawn(AgentdPaths::scratch_at(
         "agentd-e2e",
         socket_path,
         event_log_path,
     ))
-    .env(TEST_RESUME_DELAY_MS_VAR, resume_delay_ms.to_string())
+    .env(TEST_RESUME_GATE_VAR, gate)
     .spawn()
 }
 
-/// Same as [`spawn_agentd_at`], but additionally sets `horizon-agentd`'s
-/// test-only [`TEST_DUCKDB_REBUILD_DELAY_MS_VAR`] hook -- for proving the
-/// DuckDB rebuild (task 1 of the readiness fix) no longer sits on the
+/// Same as [`spawn_agentd_at`], but with the DuckDB rebuild held until
+/// `gate` is made ([`TEST_DUCKDB_REBUILD_GATE_VAR`]) -- for proving the
+/// rebuild (task 1 of the readiness fix) no longer sits on the
 /// resume-readiness path `session_list` blocks on.
-fn spawn_agentd_with_duckdb_rebuild_delay(
+fn spawn_agentd_with_duckdb_rebuild_gate(
     socket_path: PathBuf,
     event_log_path: PathBuf,
-    rebuild_delay_ms: u64,
+    gate: &Path,
 ) -> AgentdProcess {
     agentd_spawn(AgentdPaths::scratch_at(
         "agentd-e2e",
         socket_path,
         event_log_path,
     ))
-    .env(
-        TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
-        rebuild_delay_ms.to_string(),
-    )
+    .env(TEST_DUCKDB_REBUILD_GATE_VAR, gate)
     .spawn()
 }
 
@@ -2025,25 +2035,30 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
         )],
     );
 
-    const RESUME_DELAY_MS: u64 = 2000;
-    let agentd = spawn_agentd_with_resume_delay(socket_path, event_log_path, RESUME_DELAY_MS);
+    let gate = gate_path("resume");
+    let agentd = spawn_agentd_with_resume_gate(socket_path, event_log_path, &gate);
 
-    let initialize_started = Instant::now();
-    let client = connect(&agentd.socket_path).await;
-    let initialize_elapsed = initialize_started.elapsed();
+    // `initialize` answers while the resume is held...
+    let client = tokio::time::timeout(NEVER, connect(&agentd.socket_path))
+        .await
+        .expect("initialize answers while the resume is held");
+    // ...and `session/list` does not: it answers once the resume is let go,
+    // with what the resume found. (A late answer would slip past the
+    // first wait; one in it is caught.)
+    let listing = list_sessions(&client);
+    tokio::pin!(listing);
     assert!(
-        initialize_elapsed < Duration::from_millis(RESUME_DELAY_MS / 2),
-        "initialize should answer well before the artificial resume delay elapses, took {initialize_elapsed:?}"
+        tokio::time::timeout(Duration::from_millis(300), &mut listing)
+            .await
+            .is_err(),
+        "session/list answered while the resume was held"
     );
-
-    let list_started = Instant::now();
-    let sessions = list_sessions(&client).await;
-    let list_elapsed = list_started.elapsed();
-    assert!(
-        list_elapsed >= Duration::from_millis(RESUME_DELAY_MS) - Duration::from_millis(300),
-        "session/list should have waited for the (artificially slow) resume to finish, took {list_elapsed:?}"
-    );
+    open_gate(&gate);
+    let sessions = tokio::time::timeout(NEVER, listing)
+        .await
+        .expect("session/list answers once the resume is let go");
     assert_listed(&sessions, live_session, None, None);
+    let _ = std::fs::remove_file(&gate);
 }
 
 /// Fix 1's other half: a second daemon against a live socket must bail
@@ -2087,7 +2102,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
         AgentdPaths::scratch_at("agentd-e2e", socket_path.clone(), event_log_path.clone());
     let mut second_command = agentd_hermetic_command(&resolve_agentd_binary(), &second_paths);
     second_command
-        .env_remove(TEST_RESUME_DELAY_MS_VAR)
+        .env_remove(TEST_RESUME_GATE_VAR)
         .stderr(Stdio::piped());
     let mut second = spawn_with_link_retry(&mut second_command);
 
@@ -2143,26 +2158,19 @@ async fn duckdb_rebuild_delay_does_not_block_initialize_or_session_list() {
         )],
     );
 
-    const REBUILD_DELAY_MS: u64 = 2000;
-    let agentd =
-        spawn_agentd_with_duckdb_rebuild_delay(socket_path, event_log_path, REBUILD_DELAY_MS);
+    // The rebuild is held for the whole test: neither answer may wait on it.
+    let gate = gate_path("rebuild");
+    let agentd = spawn_agentd_with_duckdb_rebuild_gate(socket_path, event_log_path, &gate);
 
-    let initialize_started = Instant::now();
-    let client = connect(&agentd.socket_path).await;
-    let initialize_elapsed = initialize_started.elapsed();
-    assert!(
-        initialize_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
-        "initialize should answer well before the artificial duckdb rebuild delay elapses, took {initialize_elapsed:?}"
-    );
-
-    let list_started = Instant::now();
-    let sessions = list_sessions(&client).await;
-    let list_elapsed = list_started.elapsed();
-    assert!(
-        list_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
-        "session/list must not wait on the (slow) duckdb rebuild, took {list_elapsed:?}"
-    );
+    let client = tokio::time::timeout(NEVER, connect(&agentd.socket_path))
+        .await
+        .expect("initialize answers while the duckdb rebuild is held");
+    let sessions = tokio::time::timeout(NEVER, list_sessions(&client))
+        .await
+        .expect("session/list answers while the duckdb rebuild is held");
     assert_listed(&sessions, live_session, None, None);
+    open_gate(&gate);
+    let _ = std::fs::remove_file(&gate);
 }
 
 /// Owner decision 2026-10-11: session start must not wait on the DuckDB
@@ -2195,17 +2203,14 @@ async fn a_session_starts_and_recalls_across_a_slow_duckdb_rebuild() {
         )],
     );
 
-    const REBUILD_DELAY_MS: u64 = 8000;
-    let started = Instant::now();
+    // The rebuild is held until the session has started and recalled.
+    let gate = gate_path("rebuild");
     let agentd = agentd_spawn(AgentdPaths::scratch_at(
         "agentd-e2e",
         socket_path,
         event_log_path,
     ))
-    .env(
-        TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
-        REBUILD_DELAY_MS.to_string(),
-    )
+    .env(TEST_DUCKDB_REBUILD_GATE_VAR, &gate)
     .capture_stderr()
     .spawn();
     let mut client = connect(&agentd.socket_path).await;
@@ -2230,15 +2235,11 @@ async fn a_session_starts_and_recalls_across_a_slow_duckdb_rebuild() {
     let pending =
         recall_output(&collect_until(&mut client, |inbound| tool_output(inbound).is_some()).await);
     assert!(
-        started.elapsed() < Duration::from_millis(REBUILD_DELAY_MS),
-        "session/new and a recall turn must not wait for the rebuild, took {:?}",
-        started.elapsed()
-    );
-    assert!(
         pending.contains("still being rebuilt"),
         "recall during the rebuild must say so: {pending}"
     );
 
+    open_gate(&gate);
     agentd
         .wait_for_stderr_line("DuckDB projection rebuilt (")
         .await;

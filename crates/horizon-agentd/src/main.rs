@@ -73,7 +73,6 @@ mod worktree;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use horizon_agent::config::AgentConfig;
 use horizon_agent::persistence::event_log::{LogCursor, Record, WriterHandle, WriterInit};
@@ -92,12 +91,12 @@ const DAEMON_NAME: &str = "horizon-agentd";
 const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
 
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
-/// number of milliseconds, [`spawn_resume_task`] sleeps that long before
+/// file's path, [`spawn_resume_task`] waits until that file is there before
 /// opening the event log, so a test can prove the bind-first ordering
-/// (`initialize` answers well before this delay elapses; `session/list`/
-/// `session/resume` don't) instead of relying on incidental timing. Never set
-/// in production.
-const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
+/// (`initialize` answers while the resume is held; `session/list`/
+/// `session/resume` don't) instead of relying on incidental timing. Never
+/// set in production.
+const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -191,9 +190,7 @@ fn spawn_resume_task(
     duckdb_cell: SharedDuckdbStore,
 ) {
     tokio::task::spawn_blocking(move || {
-        if let Some(delay) = test_resume_delay() {
-            std::thread::sleep(delay);
-        }
+        horizon_agent::persistence::event_log::wait_for_test_gate(TEST_RESUME_GATE_VAR);
         let PersistenceStartup {
             writer,
             records,
@@ -276,13 +273,6 @@ fn read_whole_log(state: &AgentdState, agent_config: &AgentConfig) -> anyhow::Re
         horizon_agent::persistence::event_log::read(&agent_config.persistence.event_log_path)?
             .records,
     )
-}
-
-fn test_resume_delay() -> Option<Duration> {
-    std::env::var(TEST_RESUME_DELAY_MS_VAR)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
 }
 
 /// Opens this process's own event log writer, using this binary's own
@@ -390,6 +380,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// How long the writer thread's startup read is held open below. The
     /// test's own correctness does not depend on this number: with the

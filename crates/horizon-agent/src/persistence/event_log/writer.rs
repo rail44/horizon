@@ -642,9 +642,7 @@ struct RebuiltStore {
 /// function's caller in [`WriterHandle::open_inner`]) rather than letting
 /// anyone open the file again.
 fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<RebuiltStore> {
-    if let Some(delay) = test_duckdb_rebuild_delay() {
-        thread::sleep(delay);
-    }
+    wait_for_test_gate(TEST_DUCKDB_REBUILD_GATE_VAR);
 
     match store.replace_from_event_log(report) {
         Ok(report) => {
@@ -689,20 +687,26 @@ fn log_skipped_record_summary(report: &ApplyRecordsReport) {
     );
 }
 
-/// Test-only hook, mirroring `horizon-agentd::main`'s own resume-delay hook
-/// (`TEST_RESUME_DELAY_MS_VAR`): when set, artificially delays this thread's
-/// full DuckDB rebuild (which runs on its own thread after
-/// [`WriterInit::Ready`] has been sent -- see [`WriterHandle::open_inner`])
-/// so a test can prove the rebuild never sits on the readiness path
-/// `session_list`/`session_new` block on, nor in front of a flush. Never set
-/// outside tests.
-const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
+/// Test-only hook, as `horizon-agentd::main`'s own resume gate: when set
+/// to a file's path, this thread's full DuckDB rebuild (which runs on its
+/// own thread after [`WriterInit::Ready`] has been sent -- see
+/// [`WriterHandle::open_inner`]) waits until that file is there, so a test
+/// can prove the rebuild never sits on the readiness path
+/// `session_list`/`session_new` block on, nor in front of a flush, for as
+/// long as it holds the rebuild. Never set outside tests.
+pub const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
 
-fn test_duckdb_rebuild_delay() -> Option<Duration> {
-    std::env::var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
+/// Test-only: when the variable `var` names a file, waits until that file
+/// is there -- a test holds what follows until it makes the file. Returns
+/// at once when the variable is not set.
+pub fn wait_for_test_gate(var: &str) {
+    let Some(gate) = std::env::var_os(var).filter(|gate| !gate.is_empty()) else {
+        return;
+    };
+    let gate = std::path::PathBuf::from(gate);
+    while !gate.exists() {
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Encode and flush the complete JSONL record before updating derived state.
@@ -1719,10 +1723,12 @@ mod tests {
     /// complete while it is still running, and the store is handed out only
     /// once everything appended meanwhile is in it.
     fn assert_rebuild_does_not_hold_the_writer(seed_records: u64) {
-        // nextest runs every test in its own process, so this cannot leak.
-        // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR, "1500") };
         let dir = tempfile::tempdir().unwrap();
+        // The rebuild is held until the gate is made. nextest runs every
+        // test in its own process, so this cannot leak.
+        let gate = dir.path().join("rebuild-gate");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(TEST_DUCKDB_REBUILD_GATE_VAR, &gate) };
         let (log, db) = (
             dir.path().join("events.jsonl"),
             dir.path().join("state.duckdb"),
@@ -1751,6 +1757,7 @@ mod tests {
             "the flush must return while the rebuild is still running"
         );
 
+        std::fs::write(&gate, "").unwrap();
         let store = duckdb_rx.recv().unwrap().expect("rebuilt store");
         let mut expected: Vec<String> = (0..seed_records).map(|seq| format!("seed{seq}")).collect();
         expected.extend(["window0".to_string(), "window1".to_string()]);
@@ -1770,7 +1777,7 @@ mod tests {
             })
         );
         // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR) };
+        unsafe { std::env::remove_var(TEST_DUCKDB_REBUILD_GATE_VAR) };
         shut_down(Boot {
             writer,
             report,

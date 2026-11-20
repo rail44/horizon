@@ -1704,10 +1704,17 @@ mod projection_resume_tests {
     /// longer waits on the rebuild.
     #[test]
     fn full_mode_resume_commits_fixups_while_the_rebuild_is_still_running() {
-        // nextest runs every test in its own process, so this cannot leak.
-        // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS", "3000") };
         let dir = tempfile::tempdir().unwrap();
+        // The rebuild is held until the gate is made. nextest runs every
+        // test in its own process, so this cannot leak.
+        let gate = dir.path().join("rebuild-gate");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe {
+            std::env::set_var(
+                horizon_agent::persistence::event_log::TEST_DUCKDB_REBUILD_GATE_VAR,
+                &gate,
+            )
+        };
         let (log, db) = (
             dir.path().join("events.jsonl"),
             dir.path().join("state.duckdb"),
@@ -1726,7 +1733,6 @@ mod projection_resume_tests {
             )],
         );
 
-        let started = std::time::Instant::now();
         let (writer, init, duckdb) = WriterHandle::open_silently(&log, Some(db.clone()));
         let WriterInit::Ready(report) = init.recv().unwrap() else {
             panic!("writer startup failed");
@@ -1737,18 +1743,15 @@ mod projection_resume_tests {
         );
         let state = test_state();
         state.set_writer(Some(writer.clone()));
+        // Resumed, its fixups committed, while the rebuild is held.
         resume_persisted_sessions(&state, report.records);
-        assert!(
-            started.elapsed() < Duration::from_millis(3000),
-            "resume took {:?}, as long as the delayed rebuild",
-            started.elapsed()
-        );
         assert!(
             duckdb.try_recv().is_err(),
             "resume must have finished before the rebuild did"
         );
         assert!(live_sessions(&state).contains(&mid_turn));
 
+        std::fs::write(&gate, "").unwrap();
         let store = duckdb.recv().unwrap().expect("rebuilt projection");
         let events: Vec<_> = store
             .session_records(mid_turn, u64::MAX >> 1)
