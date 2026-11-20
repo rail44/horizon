@@ -110,16 +110,15 @@ fn spawn_daemon(
     binary_name: &str,
 ) -> Result<(), String> {
     let binary = resolve_daemon_binary(binary_name);
-    daemon_command(&binary, socket_path, control_socket)
-        .spawn()
-        .map(|_child| ())
-        .map_err(|err| {
-            format!(
-                "failed to spawn {} ({err}) -- run `cargo build --workspace` to build \
-                 {binary_name}, then try again",
-                binary.display()
-            )
-        })
+    let mut command = daemon_command(&binary, socket_path, control_socket);
+    detach_stdio(&mut command, socket_path);
+    command.spawn().map(|_child| ()).map_err(|err| {
+        format!(
+            "failed to spawn {} ({err}) -- run `cargo build --workspace` to build \
+             {binary_name}, then try again",
+            binary.display()
+        )
+    })
 }
 
 /// Builds the `<daemon> --socket <path>` command [`spawn_daemon`] spawns,
@@ -140,6 +139,44 @@ fn daemon_command(
         .arg(socket_path)
         .env("HORIZON_SOCKET", control_socket);
     command
+}
+
+/// Where a daemon listening on `socket_path` writes its stdout and stderr:
+/// beside the socket, with the extension `log` (`agentd.sock` ->
+/// `agentd.log`).
+fn daemon_log_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("log")
+}
+
+/// Gives the daemon stdio of its own instead of the spawner's.
+///
+/// A daemon outlives the Horizon that started it, and so outlives the
+/// terminal that Horizon may have been started from. Inherited, its stdout
+/// and stderr would be that terminal; once the terminal closes, every write
+/// fails with `EIO`, and `eprintln!` panics on a failed write -- an agent
+/// session then ends at its first diagnostic line. So stdin is `/dev/null`
+/// and both outputs are appended to [`daemon_log_path`]: appended, so a
+/// respawned daemon keeps what the previous one last wrote. A log that
+/// cannot be opened sends the output nowhere rather than back to the
+/// terminal.
+fn detach_stdio(command: &mut std::process::Command, socket_path: &Path) {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::process::Stdio;
+
+    command.stdin(Stdio::null());
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(daemon_log_path(socket_path));
+    match log.and_then(|file| Ok((file.try_clone()?, file))) {
+        Ok((stdout, stderr)) => {
+            command.stdout(stdout).stderr(stderr);
+        }
+        Err(_) => {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
 }
 
 /// Establishes the remoc connection over an already-connected stream and
@@ -238,6 +275,31 @@ mod tests {
             value,
             Some(std::ffi::OsStr::new("/tmp/horizon-control-test.sock"))
         );
+    }
+
+    /// What a spawned daemon writes reaches the log beside its socket, and
+    /// it reads nothing from the spawner's stdin.
+    #[test]
+    fn a_daemon_writes_to_the_log_beside_its_socket_not_to_the_spawner() {
+        let dir = std::env::temp_dir().join(format!("hzn-spawn-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("agentd.sock");
+        let log = daemon_log_path(&socket);
+        assert_eq!(log, dir.join("agentd.log"));
+        std::fs::write(&log, "earlier daemon\n").unwrap();
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "echo out; echo err >&2; if read line; then echo read; else echo eof; fi",
+        ]);
+        detach_stdio(&mut command, &socket);
+        let status = command.status().unwrap();
+        assert!(status.success());
+
+        let written = std::fs::read_to_string(&log).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(written, "earlier daemon\nout\nerr\neof\n");
     }
 
     /// Both daemons resolve through the same "next to the running
