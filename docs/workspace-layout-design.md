@@ -168,8 +168,8 @@ What is drawn is chosen so that what holds what reads from the drawing
   cards (`in-tab`).
 - A group's strip is above its card, with no frame of its own. The tabs
   share its width, in the body's size; those not shown are their words, a
-  faint line between two of them, and the shown one is outlined in the
-  accent.
+  faint line between two of them, and the shown one is outlined -- in
+  the accent in the group with the focus (in workspace mode, the cursor).
 - A pane's tab label names it where the pane is all of its tab. Any
   other pane -- one of a split tab, one in no group -- has a tag in its
   top right corner, clear of a terminal's text, which begins at the

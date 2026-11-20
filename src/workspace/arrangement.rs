@@ -393,6 +393,11 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
                             .is_some_and(|tab| tab.active)
                             .then_some(styles::ACTIVE)
                     })
+                    // (The group with the focus, or the cursor in the mode.)
+                    .class_dyn(move || {
+                        (shell.model.with(Workspace::cursor_group) == Some(group))
+                            .then_some(styles::FOCUSED)
+                    })
                     .child(el("div").class(styles::TITLE).text_dyn(move || {
                         tab(index).map_or_default(|tab| {
                             activity::marked(tab.activity.as_ref(), tab.title)

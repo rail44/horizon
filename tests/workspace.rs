@@ -1314,6 +1314,31 @@ fn a_chord_bound_to_a_command_that_cannot_run_now_is_the_views_key() {
 }
 
 #[test]
+fn the_shown_tab_is_marked_in_the_group_with_the_focus() {
+    let opened = open();
+    let marked = || -> Vec<NodeId> {
+        let active = opened.all("active");
+        (opened.all("focused").into_iter())
+            .filter(|node| active.contains(node) && opened.all("tab-label").contains(node))
+            .collect()
+    };
+    assert_eq!(marked().len(), 1);
+    // A split from the strip goes beside the group: the focus is on a pane
+    // in no group, and no tab is marked.
+    opened.chord();
+    opened.character("k");
+    assert!(opened.model(Workspace::cursor_strip).is_some());
+    opened.character("s");
+    assert!(!opened.mode());
+    assert!(marked().is_empty());
+    // Back in the group, it is again.
+    opened.chord();
+    opened.character("h");
+    opened.named(NamedKey::Enter);
+    assert_eq!(marked().len(), 1);
+}
+
+#[test]
 fn tabs_are_shown_in_turn_in_the_mode_with_a_split_tab_among_them() {
     use horizon_workspace::commands::CommandId;
     let opened = open();
