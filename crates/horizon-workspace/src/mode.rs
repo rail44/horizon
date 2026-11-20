@@ -373,9 +373,10 @@ mod tests {
         assert_eq!(workspace.tab_count(), 0);
         assert!(workspace.is_workspace_mode_active());
         assert_eq!(workspace.cursor_pane_id(), None);
-        // The raw "explicitly entered" bookkeeping never had to flip --
-        // the getter's zero-tab bypass is doing all the work.
-        assert_eq!(workspace.workspace_mode, WorkspaceMode::PaneInput);
+        // Nothing entered the mode: the empty workspace alone is in it, so
+        // a tab opened again leaves it.
+        workspace.open_tab_with_new_session_activated(crate::SessionKind::Terminal, true);
+        assert!(!workspace.is_workspace_mode_active());
     }
 
     #[test]
@@ -435,20 +436,17 @@ mod tests {
 
     #[test]
     fn committing_with_no_cursor_still_exits_the_mode() {
-        // `Enter` with nothing to commit to (zero tabs) must still clear
-        // the raw "explicitly entered" bookkeeping -- even though
-        // `is_workspace_mode_active()` keeps reporting `true` afterward
-        // regardless, since the workspace is still empty (the zero-tab
-        // bypass), so the getter itself can no longer distinguish
-        // "committed" from "never entered" the way it could before this
-        // bypass existed.
+        // `Enter` with nothing to commit to (zero tabs) still leaves the
+        // mode: the workspace stays in it only while it is empty, and a
+        // tab opened afterwards has the keys.
         let mut workspace = Workspace::mvp();
         workspace.terminate_active_session();
         workspace.enter_workspace_mode();
 
         workspace.commit_workspace_mode();
 
-        assert_eq!(workspace.workspace_mode, WorkspaceMode::PaneInput);
         assert!(workspace.is_workspace_mode_active());
+        workspace.open_tab_with_new_session_activated(crate::SessionKind::Terminal, true);
+        assert!(!workspace.is_workspace_mode_active());
     }
 }
