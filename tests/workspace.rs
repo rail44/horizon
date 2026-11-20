@@ -873,6 +873,14 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
     );
 }
 
+/// A file whose making tells a program in a test's terminal to go on:
+/// `until [ -e FILE ]` waits on it.
+fn go_file(what: &str) -> std::path::PathBuf {
+    let go = std::env::temp_dir().join(format!("hzn-go-{what}-{}", std::process::id()));
+    let _ = std::fs::remove_file(&go);
+    go
+}
+
 #[test]
 fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
     use std::cell::RefCell;
@@ -896,13 +904,20 @@ fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
     opened.wait(first, "the command", |text| text.contains("told-2"));
     assert!(posted.borrow().is_empty(), "{:?}", posted.borrow());
 
-    // From a pane that no longer has them: posted, for its session.
-    opened.run(r"sleep 0.4; printf '\033]777;notify;Build;done\007'");
+    // From a pane that no longer has them: posted, for its session. (The
+    // program says it once the keys have gone, when told to.)
+    let go = go_file("notify");
+    opened.run(&format!(
+        r"until [ -e {go} ]; do sleep 0.02; done; printf '\033]777;notify;Build;done\007'",
+        go = go.display()
+    ));
     opened.chord();
     opened.character("s");
     let second = opened.panes()[1];
     assert!(opened.model(|model| model.is_active_pane(second)));
+    std::fs::write(&go, "").unwrap();
     opened.until("the notification", || !posted.borrow().is_empty());
+    let _ = std::fs::remove_file(&go);
     assert_eq!(
         *posted.borrow(),
         [(session, Some("Build".to_string()), "done".to_string())]
@@ -970,12 +985,19 @@ fn what_a_program_says_of_its_state_is_on_its_tab() {
         Some("approve Bash: ls")
     );
 
-    // Done while another tab is the one looked at: news, on the tab.
-    opened.run(r"sleep 0.4; printf '\033]7501;state=done:app=claude-code\033\\'");
+    // Done while another tab is the one looked at: news, on the tab. (The
+    // program says it once the other tab is looked at, when told to.)
+    let go = go_file("done");
+    opened.run(&format!(
+        r"until [ -e {go} ]; do sleep 0.02; done; printf '\033]7501;state=done:app=claude-code\033\\'",
+        go = go.display()
+    ));
     opened.chord();
     opened.character("t");
     assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    std::fs::write(&go, "").unwrap();
     opened.until("done", || state() == Some(ProgramState::Done));
+    let _ = std::fs::remove_file(&go);
     assert!(activity().is_some_and(|activity| !activity.seen));
     assert!(tab(0).starts_with("● "), "{}", tab(0));
     assert!(!tab(1).starts_with('●'), "{}", tab(1));
