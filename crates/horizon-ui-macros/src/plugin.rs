@@ -45,7 +45,7 @@
 //!         pub fn mount(state: Option<State>) -> u64 { .. }
 //!         pub fn state() -> State { .. }
 //!
-//!         #[create(file(extensions = ["md"]))]
+//!         #[create(file(types = ["text/markdown"]))]
 //!         pub fn create(file: File) -> State { .. }
 //!
 //!         #[command(title = "Back", description = "Go back.")]
@@ -86,7 +86,8 @@ struct Command {
 /// How one parameter of `create` is asked for.
 struct Asked {
     parameter: String,
-    extensions: Vec<String>,
+    /// The media types of the files to choose among.
+    types: Vec<String>,
 }
 
 fn error(span: Span, said: &str) -> syn::Error {
@@ -305,19 +306,19 @@ fn pane_of(module: ItemMod) -> syn::Result<Pane> {
                 }
                 let (names, shape) = signature(&function)?;
                 if let Some(attribute) = created {
-                    // (How each parameter is asked for: `file(extensions = [..])`.)
+                    // (How each parameter is asked for: `file(types = [..])`.)
                     if !matches!(attribute.meta, syn::Meta::Path(_)) {
                         attribute.parse_nested_meta(|meta| {
                             let parameter = (meta.path.get_ident())
                                 .ok_or_else(|| meta.error("a parameter's name"))?
                                 .to_string();
-                            let mut extensions = Vec::new();
+                            let mut types = Vec::new();
                             meta.parse_nested_meta(|meta| {
-                                if meta.path.is_ident("extensions") {
-                                    extensions = strings(&meta.value()?.parse::<ExprArray>()?)?;
+                                if meta.path.is_ident("types") {
+                                    types = strings(&meta.value()?.parse::<ExprArray>()?)?;
                                     Ok(())
                                 } else {
-                                    Err(meta.error("`extensions`"))
+                                    Err(meta.error("`types`"))
                                 }
                             })?;
                             if !names.iter().any(|name| *name == parameter) {
@@ -325,7 +326,7 @@ fn pane_of(module: ItemMod) -> syn::Result<Pane> {
                             }
                             asked.push(Asked {
                                 parameter: kebab(&parameter),
-                                extensions,
+                                types,
                             });
                             Ok(())
                         })?;
@@ -496,7 +497,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
     if let Some(pane) = &pane {
         let created: serde_json::Map<String, serde_json::Value> = (pane.asked.iter())
             .map(|asked| {
-                let said = serde_json::json!({ "extensions": asked.extensions });
+                let said = serde_json::json!({ "types": asked.types });
                 (asked.parameter.to_string(), said)
             })
             .collect();

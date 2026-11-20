@@ -9,6 +9,7 @@ pub mod control;
 pub mod desktop_notify;
 pub mod extension;
 pub mod finder;
+pub mod media_type;
 pub mod plugin;
 pub mod plugin_host;
 pub mod preview;

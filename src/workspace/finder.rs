@@ -31,12 +31,12 @@ pub(super) fn view(shell: Shell, plugin: &'static str, placement: Placement) -> 
     let Some(extension) = plugins::extension(plugin) else {
         return el("div");
     };
-    let Some(extensions) = extension.file_asked_for().map(<[String]>::to_vec) else {
+    let Some(types) = extension.file_asked_for().map(<[String]>::to_vec) else {
         return el("div");
     };
     let root = shell.working_directory();
     let finder = Finder {
-        source: Source::under(root.clone(), extensions, shell.kept().wake.clone()),
+        source: Source::under(root.clone(), types, shell.kept().wake.clone()),
         picked: Callback::new(move |path: String| {
             shell.modal.set(None);
             match extension.created_on(Some(root.join(path)), &root) {

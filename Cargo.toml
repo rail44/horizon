@@ -129,6 +129,8 @@ blitz-paint = { workspace = true }
 blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
 ignore = "0.4"
+# A file's media type from its name (`src/media_type.rs`).
+mime_guess = { version = "2", default-features = false }
 nucleo = "0.5"
 # Reads an extension's manifest out of its component: the version
 # wasmtime itself is built on.

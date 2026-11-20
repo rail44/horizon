@@ -76,11 +76,11 @@ impl Source {
         Rc::new(source)
     }
 
-    /// The files under `root` with one of `extensions` (any file when
-    /// there are none), listed on a thread of its own and handed over as
+    /// The files under `root` of one of `types` (any file when there are
+    /// none), listed on a thread of its own and handed over as
     /// they are found. The listing stops when what it was asked under
     /// ends.
-    pub fn under(root: PathBuf, extensions: Vec<String>, wake: Wake) -> Rc<Self> {
+    pub fn under(root: PathBuf, types: Vec<String>, wake: Wake) -> Rc<Self> {
         let source = Self::new(wake.clone(), true);
         let injector = source.nucleo.borrow().injector();
         let listing = source.listing.clone();
@@ -88,7 +88,7 @@ impl Source {
         let stop = stopped.clone();
         on_cleanup(move || stop.store(true, Ordering::Relaxed));
         std::thread::spawn(move || {
-            walk(&root, &extensions, &stopped, |batch| {
+            walk(&root, &types, &stopped, |batch| {
                 for file in batch {
                     injector.push(file, |file, columns| columns[0] = file.as_str().into());
                 }

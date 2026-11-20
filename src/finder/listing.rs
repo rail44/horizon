@@ -10,21 +10,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// How many files are handed over at a time.
 const BATCH: usize = 512;
 
-/// Whether `path` is one of the files wanted: any file when `extensions`
-/// is empty, else one whose extension is among them, whatever its case.
-fn wanted(path: &Path, extensions: &[String]) -> bool {
-    extensions.is_empty()
-        || (path.extension().and_then(|extension| extension.to_str())).is_some_and(|extension| {
-            (extensions.iter()).any(|wanted| wanted.eq_ignore_ascii_case(extension))
-        })
+/// Whether `path` is one of the files wanted: any file when `types` is
+/// empty, else one of one of them (`crate::media_type`).
+fn wanted(path: &Path, types: &[String]) -> bool {
+    types.is_empty() || crate::media_type::is_of(path, types)
 }
 
-/// The files under `root` with one of `extensions`, as paths from `root`
+/// The files under `root` of one of `types`, as paths from `root`
 /// with `/` between their parts, handed to `found` in batches until
 /// `stopped` says to stop.
 pub(super) fn walk(
     root: &Path,
-    extensions: &[String],
+    types: &[String],
     stopped: &AtomicBool,
     found: impl Fn(Vec<String>),
 ) {
@@ -44,7 +41,7 @@ pub(super) fn walk(
         let Ok(path) = entry.path().strip_prefix(root) else {
             continue;
         };
-        if !wanted(path, extensions) {
+        if !wanted(path, types) {
             continue;
         }
         let parts: Vec<_> = (path.components())
@@ -67,10 +64,10 @@ mod tests {
 
     use super::walk;
 
-    fn listed(root: &std::path::Path, extensions: &[&str]) -> Vec<String> {
-        let extensions: Vec<String> = extensions.iter().map(|text| text.to_string()).collect();
+    fn listed(root: &std::path::Path, types: &[&str]) -> Vec<String> {
+        let types: Vec<String> = types.iter().map(|text| text.to_string()).collect();
         let found = Mutex::new(Vec::new());
-        walk(root, &extensions, &AtomicBool::new(false), |batch| {
+        walk(root, &types, &AtomicBool::new(false), |batch| {
             found.lock().unwrap().extend(batch)
         });
         found.into_inner().unwrap()
@@ -97,7 +94,7 @@ mod tests {
         // (`.gitignore` is read where there is a repository.)
         std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         assert_eq!(
-            listed(&root, &["md"]),
+            listed(&root, &["text/markdown"]),
             [".notes/todo.md", "README.md", "docs/a.MD"]
         );
         assert!(listed(&root, &[]).contains(&"docs/b.txt".to_string()));

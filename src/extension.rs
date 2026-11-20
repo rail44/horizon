@@ -73,10 +73,10 @@ struct ManifestPane {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestParameter {
-    /// For a file: the extensions of the files to choose among; any file
-    /// when there are none.
+    /// For a file: the media types of the files to choose among
+    /// (`crate::media_type`); any file when there are none.
     #[serde(default)]
-    extensions: Vec<String>,
+    types: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -174,12 +174,9 @@ pub struct Extension {
 /// One thing an extension's `create` takes to make a new pane's state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Parameter {
-    /// A file, chosen among those with one of `extensions` (any file when
+    /// A file, chosen among those of one of `types` (any file when
     /// there are none).
-    File {
-        name: String,
-        extensions: Vec<String>,
-    },
+    File { name: String, types: Vec<String> },
     /// Words: the next argument of the command line. One that is
     /// `optional` may be left out.
     Text { name: String, optional: bool },
@@ -216,7 +213,7 @@ struct Shape {
     /// Those of its `commands` interface.
     commands: Vec<String>,
     /// What `create` takes, in order, if it exports one. (A file's
-    /// `extensions` are the manifest's to say.)
+    /// `types` are the manifest's to say.)
     creates: Option<Vec<Parameter>>,
 }
 
@@ -248,7 +245,7 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             taken.push(match ty {
                 Type::Own(resource) if Some(&resource) == file.as_ref() => Parameter::File {
                     name,
-                    extensions: Vec::new(),
+                    types: Vec::new(),
                 },
                 Type::Own(resource) if Some(&resource) == working_directory.as_ref() => {
                     Parameter::WorkingDirectory
@@ -387,10 +384,10 @@ impl Extension {
         match_commands(&commands, &manifest.commands)?;
         // (What the manifest says of how `create`'s file is asked for.)
         for parameter in creates.iter_mut().flatten() {
-            if let Parameter::File { name, extensions } = parameter {
-                *extensions = (manifest.pane.create.remove(name.as_str()))
+            if let Parameter::File { name, types } = parameter {
+                *types = (manifest.pane.create.remove(name.as_str()))
                     .unwrap_or_default()
-                    .extensions;
+                    .types;
             }
         }
         if let Some(name) = manifest.pane.create.keys().next() {
@@ -459,11 +456,11 @@ impl Extension {
 }
 
 impl Extension {
-    /// The extensions of the files `create`'s file is chosen among, if it
-    /// takes a file.
+    /// The media types of the files `create`'s file is chosen among, if
+    /// it takes a file.
     pub fn file_asked_for(&self) -> Option<&[String]> {
         (self.creates.iter().flatten()).find_map(|parameter| match parameter {
-            Parameter::File { extensions, .. } => Some(extensions.as_slice()),
+            Parameter::File { types, .. } => Some(types.as_slice()),
             _ => None,
         })
     }

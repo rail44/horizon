@@ -62,7 +62,7 @@ mod markdown {
             }
         }
 
-        #[create(file(extensions = ["md", "markdown"]))]
+        #[create(file(types = ["text/markdown"]))]
         pub fn create(file: File) -> State {
             State {
                 path: Some(file.path()),
