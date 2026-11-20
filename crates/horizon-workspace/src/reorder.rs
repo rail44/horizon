@@ -72,7 +72,7 @@ impl LayoutNode {
 
 impl Cursor {
     /// The node the cursor is on: a pane, or a group as a whole.
-    fn key(self) -> NodeKey {
+    pub(crate) fn key(self) -> NodeKey {
         match self {
             Self::Pane(pane) => NodeKey::Pane(pane),
             Self::Strip(group) => NodeKey::Group(group),

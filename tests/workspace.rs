@@ -456,6 +456,34 @@ fn a_boundary_dragged_changes_the_panes_shares_and_builds_nothing() {
 }
 
 #[test]
+fn the_keys_of_the_mode_change_the_shares_of_the_split_around_the_cursor() {
+    let opened = open();
+    opened.chord();
+    opened.character("s");
+    let widths = || -> Vec<i64> {
+        (opened.all("pane").into_iter())
+            .map(|pane| opened.bounds(pane).2.round() as i64)
+            .collect()
+    };
+    let even = widths();
+    assert_eq!(even.len(), 2);
+    assert!((even[0] - even[1]).abs() <= 1, "{even:?}");
+    // In the mode, the cursor on the new pane, the right one: `>` widens
+    // it, from the one before it.
+    opened.chord();
+    opened.character(">");
+    let wider = widths();
+    assert!(wider[1] > even[1] && wider[0] < even[0], "{even:?} {wider:?}");
+    // No split down around it: `+` changes nothing.
+    opened.character("+");
+    assert_eq!(widths(), wider);
+    // `=` makes them even again.
+    opened.character("=");
+    assert_eq!(widths(), even);
+    assert!(opened.mode());
+}
+
+#[test]
 fn a_shell_that_exits_takes_its_pane_and_the_last_leaves_an_empty_workspace() {
     let opened = open();
     let pane = opened.panes()[0];

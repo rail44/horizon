@@ -15,6 +15,7 @@ mod operations;
 pub mod persistence;
 mod query;
 mod reorder;
+mod resize;
 mod session;
 mod session_id;
 pub mod snapshot;
@@ -29,6 +30,7 @@ pub use persistence::{
     InventoryError, InventoryReconcile, SessionInventory, WORKSPACE_STATE_VERSION,
     WorkspaceStateError,
 };
+pub use resize::RESIZE_STEP;
 pub use session_id::SessionId;
 pub use types::{PaneId, PluginPane, SessionKind, SplitAxis, Workspace};
 

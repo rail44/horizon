@@ -7,7 +7,7 @@ use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_ui::{prevent_default, stop_propagation};
 use horizon_workspace::commands::CommandId;
-use horizon_workspace::{Direction, SessionKind, Workspace};
+use horizon_workspace::{Direction, RESIZE_STEP, SessionKind, SplitAxis, Workspace};
 use keyboard_types::{Key, NamedKey};
 
 use super::keymap::Bound;
@@ -76,6 +76,7 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     }
     let step = |direction| shell.change(|model| model.move_cursor(direction));
     let swap = |direction| shell.change(|model| _ = model.swap_cursor(direction));
+    let resize = |axis, step| shell.change(|model| _ = model.resize_cursor(axis, step));
     let shifted = key.modifiers.shift();
     match &key.key {
         Key::Character(_) => match character {
@@ -87,6 +88,13 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
             "J" => swap(Direction::Down),
             "K" => swap(Direction::Up),
             "L" => swap(Direction::Right),
+            // The split around the cursor's part, a step at a time, as vim
+            // has its windows': `<` `>` across, `-` `+` down, `=` even.
+            "<" => resize(SplitAxis::Horizontal, -RESIZE_STEP),
+            ">" => resize(SplitAxis::Horizontal, RESIZE_STEP),
+            "-" => resize(SplitAxis::Vertical, -RESIZE_STEP),
+            "+" => resize(SplitAxis::Vertical, RESIZE_STEP),
+            "=" => shell.change(|model| _ = model.equalize_cursor()),
             "t" => shell.execute(CommandId::NewTab),
             "s" => shell.execute(CommandId::SplitRight),
             "a" if kept.spawn_agent.is_some() => {
