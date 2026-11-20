@@ -236,7 +236,7 @@ fn what_is_typed_runs_and_a_chord_interrupts() {
     // (The shell drops what is typed before it is back at its prompt.)
     opened.wait("the prompt", |text| text.trim_end().ends_with('$'));
     opened.run("echo after-$((1+1))");
-    opened.wait("the shell again", |text| text.contains("after-2"));
+    opened.done("the shell again", |text| text.contains("after-2"));
 
     // Backspace takes out what is before the cursor. An arrow reaches the
     // shell as its escape sequence, which this shell, having no line

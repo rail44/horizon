@@ -157,7 +157,11 @@ fn a_session_of_a_real_terminald_runs_what_is_typed_into_the_view() {
     wait("a prompt", &|text| text.trim_end().ends_with('$'));
 
     run(&app, "echo daemon-$((6*7))");
-    wait("the command's output", &|text| text.contains("daemon-42"));
+    // And the prompt after it: what is typed next is typed at the prompt,
+    // not echoed in among what the command still writes.
+    wait("the command's output", &|text| {
+        text.contains("daemon-42") && text.trim_end().ends_with('$')
+    });
     // The box's size reached the daemon's PTY.
     let (columns, rows) = terminal.size();
     run(&app, "stty size");
