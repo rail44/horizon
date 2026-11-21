@@ -292,6 +292,22 @@ fn shift_and_a_direction_swap_panes_and_m_moves_a_pane_to_another_tab() {
 }
 
 #[test]
+fn a_pane_that_is_all_of_its_tab_has_a_tag_with_its_name() {
+    let opened = open();
+    assert_eq!(opened.panes().len(), 1);
+    // Named by its tab's label, the pane still has its tag laid out --
+    // the grip and its name -- to show when the pointer comes over it.
+    let tags = opened.all("tag");
+    assert_eq!(tags.len(), 1);
+    let (_, _, width, height) = opened.bounds(tags[0]);
+    assert!(
+        width > 0. && height > 0.,
+        "the tag is laid out: {width}x{height}"
+    );
+    assert_eq!(opened.all("tag-name").len(), 1);
+}
+
+#[test]
 fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();

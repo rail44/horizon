@@ -182,17 +182,15 @@ pub(crate) mod styles {
         .pane > .landing.to-top { bottom: 50%; }
         .pane > .landing.to-bottom { top: 50%; }
 
-        /* A pane's tag, where its tab's label does not name it alone: its
-           name and the mark it is taken by, in its corner, while the
-           pointer is over the pane or in workspace mode. */
+        /* A pane's tag: its name and the mark it is taken by, in its
+           corner, while the pointer is over the pane or in workspace mode. */
         .pane > .tag { position: absolute; top: var(--u4); right: var(--u4); z-index: 56;
-                       flex: none; display: none; align-items: center; gap: var(--u4);
+                       flex: none; display: flex; align-items: center; gap: var(--u4);
                        max-width: 50%; padding: 0 var(--u8) 0 var(--u4);
                        border: var(--line) solid var(--surface-chrome); border-radius: var(--radius);
                        background: var(--band); font-size: var(--meta-size);
                        line-height: var(--meta-line); color: var(--text-muted);
                        white-space: nowrap; overflow: hidden; cursor: grab; opacity: 0; }
-        .pane > .tag.titled { display: flex; }
         /* (It takes a press while it does not show too: the pointer is over
            the pane, and it shows, wherever it can be pressed.) */
         .pane:hover > .tag, .pane > .tag.in-mode { opacity: 1; }

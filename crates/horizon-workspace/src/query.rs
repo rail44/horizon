@@ -379,13 +379,6 @@ impl Workspace {
         Some(self.pane_title(pane))
     }
 
-    /// Whether `pane` is all its tab has: its tab's label stands for it.
-    pub fn pane_is_its_tab(&self, pane: PaneId) -> bool {
-        (self.root.tabs_around(pane).last())
-            .and_then(|(_, tab)| self.root.tab(*tab))
-            .is_some_and(|tab| tab.root == crate::types::LayoutNode::Pane(pane))
-    }
-
     /// The active pane of the tab at `index` of `group`.
     pub fn tab_active_pane(&self, group: TabGroupId, index: usize) -> Option<PaneId> {
         Some(self.root.group(group)?.tabs.get(index)?.active)

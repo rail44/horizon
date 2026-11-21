@@ -159,19 +159,15 @@ impl Shell {
 }
 
 /// `pane`'s tag: its name and the grip it is taken by, in its top right
-/// corner, clear of a terminal's text, which begins at the left. It is
-/// there where the tab's label does not name the pane alone -- a pane of a
-/// split tab, or one in no group -- and it shows while the pointer is over
-/// the pane or in workspace mode.
+/// corner, clear of a terminal's text, which begins at the left. Every
+/// pane has one, a pane that is all of its tab too, and it shows while the
+/// pointer is over the pane or in workspace mode.
 pub(super) fn tag(shell: Shell, pane: PaneId) -> El {
     el("div")
         .class(styles::TAG)
         // (What it shows by is on the tag itself, not on the pane or the
         // page: a class an element around it gains is not taken into its
         // style in every case.)
-        .class_dyn(move || {
-            (!shell.model.with(|model| model.pane_is_its_tab(pane))).then_some(styles::TITLED)
-        })
         .class_dyn(move || {
             (
                 shell.mode.get().then_some(styles::IN_MODE),
