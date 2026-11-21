@@ -362,6 +362,12 @@ impl ToolSessionState {
         }
     }
 
+    /// Every domain this session may reach right now -- the copy a `task`
+    /// child starts with (`docs/agent-subagent-design.md` decision 12).
+    pub(crate) fn allowed_domains(&self) -> Vec<String> {
+        self.inner.domains.shared().domains()
+    }
+
     pub(crate) fn is_domain_allowed(&self, domain: &str) -> bool {
         self.inner.domains.is_allowed(domain)
     }

@@ -47,7 +47,8 @@ pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_ref
 // because `horizon-agentd` implements it and installs it on every
 // session's `ToolSessionState`, the same way it constructs the network
 // proxy and judge handles this module also exposes.
-pub use explore::{ExplorationHost, StartedExploration};
+pub use explore::{ExplorationHost, StartedExploration, TaskStart};
+pub use input::TaskAccess;
 // The board daemon seam (`docs/board-keeper-design.md`): `pub` for the
 // same reason as `ExplorationHost` — `horizon-agentd` implements
 // `BoardHost` and installs it on every session's `ToolSessionState`.

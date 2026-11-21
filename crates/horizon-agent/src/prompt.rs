@@ -82,11 +82,11 @@ fn is_git_repository(cwd: &Path) -> bool {
 ///
 /// `tools::catalog`'s `task` description states the same constraints.
 pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
-     - `task` runs a read-only investigation in a parallel session and reports back, keeping the \
-     intermediate reading out of your context.\n\
-     - Use it for an open-ended exploration or a multi-file search; read one to three known files \
-     yourself.\n\
-     - You implement the changes in this session — task agents cannot write files.";
+     - `task` runs a piece of work in a parallel session and reports back, keeping the \
+     intermediate work out of your context.\n\
+     - Read tasks (the default) investigate: use them for open-ended exploration or a multi-file \
+     search; read one to three known files yourself.\n\
+     - Write tasks do a self-contained change on a branch of their own; you review and merge it.";
 
 /// Builds the system prompt (rig calls this the completion request's
 /// "preamble") from session environment facts, followed by any

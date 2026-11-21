@@ -125,6 +125,23 @@ pub struct StartedExploration {
     /// emitted any (the host installs the subscription *before* spawning
     /// the session, so nothing is missed).
     pub events: Receiver<Event>,
+    /// The branch a write child works on, for its requester to integrate;
+    /// `None` for a read child.
+    pub branch: Option<String>,
+}
+
+/// What a `task` launch asks of the host.
+pub struct TaskStart {
+    /// The child's first user message -- its whole history.
+    pub prompt: String,
+    /// Read or write (`docs/agent-subagent-design.md` decision 1).
+    pub access: crate::tools::input::TaskAccess,
+    /// The requester's filesystem grants as they are at launch
+    /// (`docs/agent-subagent-design.md` decision 12). A read child keeps
+    /// only those that read.
+    pub filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    /// The domains the requester may reach, as they are at launch.
+    pub domains: Vec<String>,
 }
 
 /// The daemon capability `task` is built on: spawn a peer session,
@@ -147,11 +164,13 @@ pub trait ExplorationHost: Send + Sync {
         true
     }
 
-    /// Spawns a read-only task session on the requester's own provider and
-    /// sends `prompt` as its first user message -- the session's entire
-    /// history; there is no other seeding. `Err` carries a message suitable
+    /// Spawns a task session on the requester's own provider and sends the
+    /// prompt as its first user message -- the session's entire history;
+    /// its only other seeding is the copy of the requester's grants. A read
+    /// child shares the requester's root; a write child gets a worktree made
+    /// for it from the requester's `HEAD`. `Err` carries a message suitable
     /// for the model to read as the tool's error result.
-    fn start(&self, prompt: String) -> Result<StartedExploration, String>;
+    fn start(&self, start: TaskStart) -> Result<StartedExploration, String>;
 
     /// Sends `prompt` to a session started by [`Self::start`] as its next
     /// user message: a follow-up (`docs/agent-subagent-design.md` decision
@@ -231,7 +250,12 @@ pub(crate) fn start(
     if work.is_cancelled() {
         return synchronous(request, error_output("session is stopping"));
     }
-    let started = match host.start(input.prompt.to_string()) {
+    let started = match host.start(TaskStart {
+        prompt: input.prompt.to_string(),
+        access: input.access,
+        filesystem_grants: tool_state.retained_filesystem_grants(),
+        domains: tool_state.allowed_domains(),
+    }) {
         Ok(started) => started,
         Err(message) => {
             return synchronous(
@@ -244,7 +268,12 @@ pub(crate) fn start(
     let child_id = started.session_id;
     let description = input.description.trim().to_string();
     let started_at_epoch_ms = unix_epoch_ms();
-    children::register(session_id, child_id, description.clone());
+    children::register(
+        session_id,
+        child_id,
+        description.clone(),
+        started.branch.clone(),
+    );
     let child_work = worker::ChildWork::attach(work, host.clone(), child_id);
 
     let events = started.events;
@@ -595,6 +624,7 @@ impl Outcome {
             session_id: session_id.as_uuid().to_string(),
             description: description.into(),
             report: self.report,
+            branch: None,
             message,
         }
     }
@@ -852,6 +882,10 @@ fn test_report(child: SessionId, description: &str, output: Value) -> TaskReport
         description: description.into(),
         report: output
             .get("report")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        branch: output
+            .get("branch")
             .and_then(Value::as_str)
             .map(str::to_owned),
         message: output

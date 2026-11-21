@@ -104,8 +104,16 @@ impl SessionEnvironment<'_> {
         // through the proxy below. The runtime grant flow (`tools::approval`'s
         // domain-denial-retry path, `SessionDomainPolicy::allow`) still applies
         // on top for anything not listed here.
-        let domains =
-            SessionDomainPolicy::with_allowed(configured_domains(state, workspace_root.as_deref()));
+        // A `task` child starts with a copy of its requester's grants
+        // (`docs/agent-subagent-design.md` decision 12).
+        let seed = lock_unpoisoned(&state.task_seeds)
+            .remove(&session_id)
+            .unwrap_or_default();
+        let domains = SessionDomainPolicy::with_allowed(
+            configured_domains(state, workspace_root.as_deref())
+                .into_iter()
+                .chain(seed.domains),
+        );
         if let Err(error) = horizon_sandbox::preflight() {
             eprintln!(
                 "horizon-agentd: sandbox helper preflight failed for session {session_id:?}: \
@@ -183,7 +191,7 @@ impl SessionEnvironment<'_> {
             }
         };
         let mut filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
-        for grant in retained_grants {
+        for grant in seed.filesystem_grants.iter().chain(retained_grants) {
             if !filesystem_grants.contains(grant) {
                 filesystem_grants.push(grant.clone());
             }

@@ -66,6 +66,10 @@ pub(crate) struct TaskReport {
     /// What the child found, once it finished.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
+    /// The branch a write child committed its work on, for the requester to
+    /// review and integrate (`docs/agent-subagent-design.md` decision 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// Why the child stopped before finishing, when it did: the authority
     /// for task-output failure. A child may stop with a useful partial
     /// report, so this is independent of `report`.

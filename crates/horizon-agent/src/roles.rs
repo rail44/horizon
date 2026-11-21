@@ -237,6 +237,61 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      builds, or runs tests is refused. When the answer genuinely needs that, say so in your \
      final message and hand the step back to the requester instead of attempting it.";
 
+/// [`WRITE_TASK_ROLE`]'s id: a persistence and cleanup identity like
+/// [`EXPLORE_ROLE_ID`], recognized by [`is_exploration`] alongside it.
+pub const WRITE_TASK_ROLE_ID: &str = "task-write";
+
+/// The write mode of `task` (`docs/agent-subagent-design.md` decisions 1,
+/// 3 and 10): a child that does a self-contained change in a worktree made
+/// for it, branched from its requester's `HEAD`, and commits it on its own
+/// branch for the requester to review and integrate. The same mechanism as
+/// [`EXPLORE_ROLE`] with write tools: no budget, approvals shown through the
+/// requester, and no `task` of its own, so it cannot delegate further.
+pub(crate) const WRITE_TASK_ROLE: RoleDefinition = RoleDefinition {
+    id: WRITE_TASK_ROLE_ID,
+    title: "Task Session",
+    prompt_section: WRITE_TASK_ROLE_PROMPT_SECTION,
+    allowed_tool_ids: Some(&[
+        "fs_read",
+        "fs_grep",
+        "fs_glob",
+        "fs_write",
+        "fs_edit",
+        "bash",
+        "bash_output",
+        "bash_cancel",
+        "recall_search",
+        "recall_read",
+        "recall_sessions",
+        "knowledge_read",
+        "skill_read",
+        "web_search",
+        "web_fetch",
+        "request_sandbox_area",
+    ]),
+    model: None,
+    uncapped_turns: true,
+    read_only: false,
+    include_repository_instructions: true,
+    skill_ids: &[],
+    standing: false,
+    unattended: false,
+};
+
+const WRITE_TASK_ROLE_PROMPT_SECTION: &str = "You are a task session: another agent handed you \
+     one self-contained change and will read only your final message, never your tool calls. \
+     You work in a git worktree made for you, on a branch of your own, branched from where the \
+     requester was; its other sessions may be working in other worktrees of the same \
+     repository at the same time. There is no human to ask; take the most plausible reading of \
+     an ambiguous instruction, and when an approval is needed it is shown to the human through \
+     the requester.\n\
+     \n\
+     Stay in your worktree: do not change branches, do not touch the requester's checkout or \
+     any other worktree, and do not push. Run the checks the repository asks for. When the \
+     change is done, commit it on your branch -- the requester reviews and merges that branch. \
+     End with what you changed, the commits you made, and what you checked and with what \
+     result; say plainly what you could not finish.";
+
 /// Whether `role_id` names an exploration session -- [`EXPLORE_ROLE`], a
 /// `task` child. This is the one predicate `horizon-agentd` needs to tell
 /// such sessions apart from every other session it hosts, without a wire
@@ -251,13 +306,13 @@ pub fn is_exploration(role_id: &RoleId) -> bool {
 }
 
 fn is_exploration_id(id: &str) -> bool {
-    id == EXPLORE_ROLE_ID
+    id == EXPLORE_ROLE_ID || id == WRITE_TASK_ROLE_ID
 }
 
 /// Every role this build knows about. A `Vec`-free static slice since the
 /// set is fixed at compile time -- see the module doc on keeping this
 /// minimal rather than data-driven.
-static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE];
+static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE, &WRITE_TASK_ROLE];
 
 /// Roles registered at runtime by the composition root (`horizon-agentd`)
 /// from external crates (the board's roles, the wiki's thread role) -- see

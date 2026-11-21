@@ -64,6 +64,8 @@ struct Child {
     unanswered: u32,
     /// Whether the child's session is still there to take a follow-up.
     open: bool,
+    /// The branch a write child works on; every report of it names it.
+    branch: Option<String>,
 }
 
 /// Why a follow-up could not be sent.
@@ -91,7 +93,12 @@ fn lock() -> std::sync::MutexGuard<'static, Registry> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-pub(in crate::tools) fn register(requester: SessionId, child: SessionId, description: String) {
+pub(in crate::tools) fn register(
+    requester: SessionId,
+    child: SessionId,
+    description: String,
+    branch: Option<String>,
+) {
     lock().children.insert(
         child,
         Child {
@@ -100,6 +107,7 @@ pub(in crate::tools) fn register(requester: SessionId, child: SessionId, descrip
             outcome: None,
             unanswered: 1,
             open: true,
+            branch,
         },
     );
 }
@@ -144,6 +152,7 @@ pub(super) fn register_hostless(requester: SessionId, child: SessionId, descript
             outcome: None,
             unanswered: 1,
             open: true,
+            branch: None,
         },
     );
 }
@@ -153,9 +162,10 @@ pub(super) fn register_hostless(requester: SessionId, child: SessionId, descript
 /// take a follow-up. Returns the requester to wake, or `None` if that
 /// session already went away (its whole registry footprint is gone, so
 /// there is nobody to notify) or no turn was outstanding.
-pub(super) fn complete(child: SessionId, output: TaskReport, open: bool) -> Option<SessionId> {
+pub(super) fn complete(child: SessionId, mut output: TaskReport, open: bool) -> Option<SessionId> {
     let mut registry = lock();
     let entry = registry.children.get_mut(&child)?;
+    output.branch = entry.branch.clone();
     if entry.unanswered == 0 {
         // A terminal fold nobody asked for: keep what was reported.
         return None;

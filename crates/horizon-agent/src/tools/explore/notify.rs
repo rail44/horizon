@@ -127,6 +127,12 @@ fn entry(position: usize, completion: &Completion) -> String {
         "[{position}] task \"{description}\" (session_id: {session_id}) — {status}",
         description = completion.description,
     );
+    if let Some(branch) = &result.branch {
+        entry.push_str(&format!(
+            "\nIts work is on branch `{branch}`, in a worktree of its own: review what it \
+             committed there and merge what you keep into your branch."
+        ));
+    }
     if usable {
         let (head, truncated) = truncate_report(result.report.as_deref().unwrap_or_default());
         entry.push('\n');

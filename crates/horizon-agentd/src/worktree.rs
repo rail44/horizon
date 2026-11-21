@@ -237,6 +237,13 @@ pub(crate) fn create_isolated_worktree_at(
     })
 }
 
+/// Whether `dir`'s working tree has changes not yet committed -- a write
+/// child starts from its requester's `HEAD`, so what is not committed
+/// there would not reach it (`docs/agent-subagent-design.md` decision 3).
+pub(crate) fn has_uncommitted_changes(dir: &Path) -> Result<bool, String> {
+    Ok(!run_git(dir, &["status", "--porcelain"])?.trim().is_empty())
+}
+
 /// The branch a session's worktree is made on: one per session, in a
 /// directory of its own under `refs/heads/horizon/`, so that the session can
 /// be let write its own ref without being let write any other session's

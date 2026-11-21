@@ -30,6 +30,13 @@ pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, 
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
 /// every connection `horizon-agentd` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
+/// A copy of a requester's grants for a `task` child it is about to spawn.
+#[derive(Default)]
+pub(crate) struct TaskSeed {
+    pub(crate) filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    pub(crate) domains: Vec<String>,
+}
+
 pub(crate) struct AgentdState {
     /// The live provider registry, behind a `Mutex` so a `Reload Config`
     /// can rebuild it in place (see [`Self::reload_provider_config`])
@@ -123,6 +130,11 @@ pub(crate) struct AgentdState {
     /// startup-only, refreshed on `Reload Agent Runtime` (daemon respawn),
     /// not live-reloadable. Empty at every test construction site.
     pub(super) trusted_projects: Vec<std::path::PathBuf>,
+    /// What a `task` child starts with of its requester's authority, left
+    /// by the requester's host just before it spawns the child and taken
+    /// once when the child's environment is first prepared
+    /// (`docs/agent-subagent-design.md` decision 12).
+    pub(crate) task_seeds: Mutex<HashMap<SessionId, TaskSeed>>,
 }
 
 impl AgentdState {
@@ -145,6 +157,7 @@ impl AgentdState {
             sessions: Mutex::new(HashMap::new()),
             pending_host_tool_requests: Mutex::new(HashMap::new()),
             agent_subscribers: Mutex::new(HashMap::new()),
+            task_seeds: Mutex::new(HashMap::new()),
             session_subscriptions: Mutex::new(HashMap::new()),
             host_tools_outgoing: Mutex::new(None),
             resume_ready: AtomicBool::new(false),

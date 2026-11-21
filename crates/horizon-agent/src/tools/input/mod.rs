@@ -8,6 +8,7 @@ mod filesystem;
 mod memory;
 
 pub(crate) use area::RequestSandboxArea;
+pub use context::TaskAccess;
 pub(crate) use context::*;
 pub(crate) use filesystem::*;
 pub(crate) use memory::MemoryUpdate;

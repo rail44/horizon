@@ -124,6 +124,21 @@ pub(crate) struct Task {
     /// launched, by its session id, instead of starting a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<uuid::Uuid>,
+    /// read (default): investigate and report, writing nothing. write: do a
+    /// self-contained change in a worktree of its own, committed on a
+    /// branch of its own for you to review and merge. Ignored for a
+    /// follow-up.
+    #[serde(default)]
+    pub access: TaskAccess,
+}
+
+/// What a `task` child may do (`docs/agent-subagent-design.md` decision 1).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskAccess {
+    #[default]
+    Read,
+    Write,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]

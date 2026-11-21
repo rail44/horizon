@@ -1299,11 +1299,6 @@ fn delegation_routing_section_describes_task_without_prescribing_an_order() {
     let section = crate::prompt::DELEGATION_ROUTING_SECTION;
 
     assert!(section.contains("task"), "{section}");
-    assert!(section.contains("read-only"), "{section}");
-    assert!(
-        section.contains("You implement the changes in this session"),
-        "{section}"
-    );
     for banned in ["FIRST", "MUST", "Do not", "do not"] {
         assert!(
             !section.contains(banned),
@@ -1312,21 +1307,18 @@ fn delegation_routing_section_describes_task_without_prescribing_an_order() {
     }
 }
 
-/// A dogfooded session delegated the implementation itself to `task`
-/// children, which are read-only by construction and so could only explore
-/// again until their budget ran out. The section states where
-/// implementation happens and that a task agent cannot do it.
+/// A dogfooded session once delegated an implementation to a read-only
+/// `task` child, which could only explore again. With the write mode
+/// (`docs/agent-subagent-design.md` decision 1) the section says which mode
+/// does what, and that a write task's change comes back as a branch for
+/// this session to review and merge.
 #[test]
-fn delegation_routing_section_keeps_implementation_in_this_session() {
+fn delegation_routing_section_tells_the_two_modes_apart() {
     let section = crate::prompt::DELEGATION_ROUTING_SECTION;
 
-    assert!(
-        section.contains(
-            "You implement the changes in this session — task agents cannot write \
-                          files"
-        ),
-        "{section}"
-    );
+    assert!(section.contains("Read tasks"), "{section}");
+    assert!(section.contains("Write tasks"), "{section}");
+    assert!(section.contains("review and merge"), "{section}");
 }
 
 #[test]

@@ -67,7 +67,10 @@ mod tests {
         stops: AtomicUsize,
     }
     impl ExplorationHost for DelayedHost {
-        fn start(&self, _: String) -> Result<super::super::StartedExploration, String> {
+        fn start(
+            &self,
+            _: super::super::TaskStart,
+        ) -> Result<super::super::StartedExploration, String> {
             unreachable!()
         }
         fn send(&self, _: SessionId, _: String) -> Result<(), String> {
@@ -114,7 +117,7 @@ mod tests {
         host.stopped.store(true, Ordering::SeqCst);
         let work = Registration::new(session, Lifetime::Session, WorkKind::Child);
         background::close_session(session);
-        super::super::children::register(session, child, "late".into());
+        super::super::children::register(session, child, "late".into(), None);
         let child_work = ChildWork::attach(work, host.clone(), child);
         assert!(!child_work.finish());
         drop(child_work);

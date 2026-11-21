@@ -324,23 +324,22 @@ fn build_definitions() -> Vec<Definition> {
         Definition {
             id: "task".to_string(),
             title: "Delegate a Task".to_string(),
-            description: "Launch a read-only agent in a parallel session sharing this workspace \
-                to handle multi-step investigation autonomously. For open-ended codebase \
-                exploration or multi-file search, prefer task instead of running searches \
-                yourself — this keeps intermediate output out of your context. Describe the \
-                question and the exact deliverable (paths, line numbers, facts, a step plan) in \
-                the prompt. The task agent does its own orientation inside its own session. For \
-                one to three known files, read them directly \
-                instead. Task agents are read-only — they investigate, locate, and plan, but \
-                cannot write files or run commands that modify state; implementation happens in \
-                this session after the report returns. Runs in the background — you will be \
-                notified when it completes; keep working in the meantime. \
-                Prefer several narrowly scoped tasks launched in parallel in one \
-                response over a single broad one. Returns immediately with the task session's \
-                id, which is also how you re-read its report later with task_output. To ask a \
-                task you launched something more -- a gap in its report, the next question on \
-                the same ground -- pass its session_id: it keeps what it already read, and its \
-                answer arrives as another notification."
+            description: "Launch an agent in a parallel session to handle a piece of work \
+                autonomously, keeping its intermediate output out of your context. It runs in \
+                the background -- you are notified when it finishes; keep working meanwhile. \
+                access \"read\" (the default) investigates and reports: use it for \
+                independent questions you want answered while you go on, and whenever you want \
+                the conclusion rather than the files' contents; for one to three known files, \
+                read them yourself. Several narrow read tasks launched in parallel in one \
+                response beat one broad one. access \"write\" does a self-contained change in \
+                a git worktree of its own, branched from your HEAD (commit your own changes \
+                first), and commits it on a branch of its own that you review and merge; give \
+                each write task a scope the others do not touch. Describe the question or the \
+                change and the exact deliverable in the prompt -- the agent knows only what you \
+                write there. Returns immediately with the task session's id, which is how you \
+                re-read its report with task_output. To ask a task you launched something more \
+                -- a gap in its report, a fix to its change -- pass its session_id: it keeps \
+                what it already did, and its answer arrives as another notification."
                 .to_string(),
             input_schema: super::input::schema("task").expect("registered tool input"),
             permission: ToolPermission::AutoAllowRead,
@@ -677,9 +676,9 @@ mod tests {
     #[test]
     fn task_and_grep_descriptions_route_consistently() {
         let task = definition("task");
+        // The child knows only its prompt, so the description says so.
         assert!(
-            task.description
-                .contains("does its own orientation inside its own session"),
+            task.description.contains("knows only what you write there"),
             "{}",
             task.description
         );
@@ -690,30 +689,17 @@ mod tests {
             "{}",
             task.description
         );
-
-        // The generic `task` name reads as write-capable, so the read-only
-        // constraint and where implementation happens are stated outright.
-        assert!(
-            task.description.contains("Task agents are read-only"),
-            "{}",
-            task.description
-        );
-        assert!(
-            task.description
-                .contains("implementation happens in this session after the report returns"),
-            "{}",
-            task.description
-        );
-
-        // Several narrow launches rather than one broad one.
-        assert!(
-            task.description.contains(
-                "Prefer several narrowly scoped tasks launched in parallel in one response over \
-                 a single broad one"
-            ),
-            "{}",
-            task.description
-        );
+        // The generic `task` name reads as write-capable either way, so what
+        // each mode does is stated outright (`docs/agent-subagent-design.md`
+        // decisions 1 and 9).
+        for phrase in [
+            "access \"read\" (the default) investigates and reports",
+            "access \"write\" does a self-contained change",
+            "you review and merge",
+            "Several narrow read tasks launched in parallel in one response beat one broad one",
+        ] {
+            assert!(task.description.contains(phrase), "{}", task.description);
+        }
 
         let grep = definition("fs_grep");
         assert!(

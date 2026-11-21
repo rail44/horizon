@@ -92,15 +92,21 @@ impl ScriptedHost {
 }
 
 impl ExplorationHost for ScriptedHost {
-    fn start(&self, prompt: String) -> Result<StartedExploration, String> {
+    fn start(&self, start: TaskStart) -> Result<StartedExploration, String> {
         if let Some(error) = &self.start_error {
             return Err(error.clone());
         }
-        self.started.lock().unwrap().push(prompt);
+        self.started.lock().unwrap().push(start.prompt);
         let session_id = SessionId::new();
         let (tx, events) = crossbeam_channel::unbounded();
         self.children.lock().unwrap().push((session_id, tx));
-        Ok(StartedExploration { session_id, events })
+        let branch = (start.access == crate::tools::input::TaskAccess::Write)
+            .then(|| format!("horizon/{}/work", &session_id.as_uuid().to_string()[..8]));
+        Ok(StartedExploration {
+            session_id,
+            events,
+            branch,
+        })
     }
 
     fn send(&self, session_id: SessionId, prompt: String) -> Result<(), String> {
@@ -619,8 +625,8 @@ struct ForwardingHost {
 }
 
 impl ExplorationHost for ForwardingHost {
-    fn start(&self, prompt: String) -> Result<StartedExploration, String> {
-        self.inner.start(prompt)
+    fn start(&self, start: TaskStart) -> Result<StartedExploration, String> {
+        self.inner.start(start)
     }
     fn send(&self, session_id: SessionId, prompt: String) -> Result<(), String> {
         self.inner.send(session_id, prompt)

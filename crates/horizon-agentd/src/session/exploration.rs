@@ -47,8 +47,59 @@ pub(super) struct AgentdExplorationHost {
 }
 
 impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
-    fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
+    fn start(
+        &self,
+        start: horizon_agent::tools::TaskStart,
+    ) -> Result<horizon_agent::tools::StartedExploration, String> {
         let session_id = SessionId::new();
+        let horizon_agent::tools::TaskStart {
+            prompt,
+            access,
+            filesystem_grants,
+            domains,
+        } = start;
+        // A write child works in a worktree made for it from the
+        // requester's `HEAD`, and records the requester as its parent
+        // (`docs/agent-subagent-design.md` decisions 3 and 11); a read child
+        // shares the requester's own root as a peer.
+        let (role, workspace_root, parent, worktree) = match access {
+            horizon_agent::tools::TaskAccess::Read => (
+                horizon_agent::roles::EXPLORE_ROLE_ID,
+                self.workspace_root.clone(),
+                None,
+                None,
+            ),
+            horizon_agent::tools::TaskAccess::Write => {
+                let root = self
+                    .workspace_root
+                    .as_deref()
+                    .ok_or("a write task needs a workspace in a git repository")?;
+                if crate::worktree::has_uncommitted_changes(root)? {
+                    return Err("your working tree has changes that are not committed; a \
+                         write task starts from your HEAD, so commit them first"
+                        .to_string());
+                }
+                let info = crate::worktree::create_isolated_worktree_at(
+                    root,
+                    session_id.as_uuid(),
+                    "HEAD",
+                )?;
+                (
+                    horizon_agent::roles::WRITE_TASK_ROLE_ID,
+                    Some(info.path.clone()),
+                    Some(self.requester_id),
+                    Some(info),
+                )
+            }
+        };
+        let branch = worktree.as_ref().map(|info| info.branch.clone());
+        lock_unpoisoned(&self.state.task_seeds).insert(
+            session_id,
+            crate::session::state::TaskSeed {
+                filesystem_grants,
+                domains,
+            },
+        );
         // Subscribe first, spawn second -- the ordering requirement
         // `super::subscription` documents: the subscription has to exist
         // before the session's thread can emit anything.
@@ -57,12 +108,10 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
             self.state.clone(),
             session_id,
             self.provider_id.clone(),
-            Some(horizon_agent::roles::RoleId(
-                horizon_agent::roles::EXPLORE_ROLE_ID.to_string(),
-            )),
-            self.workspace_root.clone(),
-            None,
-            None,
+            Some(horizon_agent::roles::RoleId(role.to_string())),
+            workspace_root,
+            parent,
+            worktree,
             Vec::new(),
         );
         if !self
@@ -75,6 +124,7 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
         Ok(horizon_agent::tools::StartedExploration {
             session_id: subscription.session_id,
             events: subscription.events,
+            branch,
         })
     }
 
@@ -225,7 +275,12 @@ mod tests {
         };
         let started = horizon_agent::tools::ExplorationHost::start(
             &host,
-            format!("fs_read path: {}", outside_file.display()),
+            horizon_agent::tools::TaskStart {
+                prompt: format!("fs_read path: {}", outside_file.display()),
+                access: horizon_agent::tools::TaskAccess::Read,
+                filesystem_grants: Vec::new(),
+                domains: Vec::new(),
+            },
         )
         .expect("the explore session starts");
 
@@ -350,6 +405,153 @@ mod tests {
     /// receipt at once and nothing lands on `async_results` at all.
     /// Hermetic -- the child runs on the mock provider, so no network and
     /// no event log are involved.
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(dir).args(args);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(key);
+            }
+        }
+        command.env("GIT_CONFIG_GLOBAL", "/dev/null");
+        command.env("GIT_CONFIG_SYSTEM", "/dev/null");
+        assert!(command.status().unwrap().success(), "git {args:?}");
+    }
+
+    /// `docs/agent-subagent-design.md` decisions 1, 3 and 11 against the
+    /// real daemon: a write task is refused while the requester has changes
+    /// not committed; once committed, the child runs in a worktree made for
+    /// it from the requester's `HEAD`, on its own branch, records the
+    /// requester as its parent, and its report names the branch.
+    #[test]
+    fn a_write_task_works_on_a_branch_of_its_own_from_the_requesters_head() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path().canonicalize().unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("README.md"), "root\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "root",
+            ],
+        );
+        let head = {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["rev-parse", "HEAD"])
+                .env_remove("GIT_DIR")
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+
+        let state = test_state();
+        let requester_id = SessionId::new();
+        let (results_tx, _results) = unbounded::<ToolCompletion>();
+        let host: Arc<dyn horizon_agent::tools::ExplorationHost> =
+            Arc::new(AgentdExplorationHost {
+                state: state.clone(),
+                requester_id,
+                provider_id: ProviderId("builtin.agent.mock".to_string()),
+                workspace_root: Some(root.clone()),
+                requester_unattended: false,
+                forwarded: Default::default(),
+            });
+        let tool_state = horizon_agent::tools::ToolSessionBuilder::for_current_dir(
+            AgentToolsConfig::default(),
+            RecallContext::default(),
+        )
+        .with_exploration_host(Some(host))
+        .build();
+        register_session_runtime(
+            requester_id,
+            tool_state.clone(),
+            LiveState::with_disabled_persistence(),
+            results_tx,
+        );
+        let launch = |call_id: &str| {
+            call(
+                &state,
+                &tool_state,
+                requester_id,
+                call_id,
+                "task",
+                serde_json::json!({
+                    "description": "change the readme",
+                    "prompt": "change the readme",
+                    "access": "write",
+                }),
+            )
+        };
+
+        std::fs::write(root.join("README.md"), "uncommitted\n").unwrap();
+        let refused = launch("write-dirty");
+        assert_eq!(refused["is_error"], serde_json::json!(true), "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("commit them first")),
+            "{refused}"
+        );
+        git(&root, &["checkout", "--", "README.md"]);
+
+        let launched = launch("write-clean");
+        assert_eq!(
+            launched["status"],
+            serde_json::json!("started"),
+            "{launched}"
+        );
+        let child_id =
+            SessionId::from_uuid(launched["session_id"].as_str().unwrap().parse().unwrap());
+        let slug = &child_id.as_uuid().to_string()[..8];
+        let branch = format!("horizon/{slug}/work");
+        {
+            let sessions = state.sessions.lock().unwrap();
+            let entry = sessions.get(&child_id).expect("the child runs");
+            assert_eq!(
+                entry.workspace_root.as_deref(),
+                Some(root.join(".horizon/worktrees").join(slug).as_path())
+            );
+            assert_eq!(entry.parent_session_id, Some(requester_id));
+            assert_eq!(
+                entry
+                    .worktree
+                    .as_ref()
+                    .map(|info| (info.branch.clone(), info.base.clone())),
+                Some((branch.clone(), head.clone()))
+            );
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let fetched = loop {
+            let fetched = call(
+                &state,
+                &tool_state,
+                requester_id,
+                "write-output",
+                "task_output",
+                serde_json::json!({ "session_id": child_id.as_uuid().to_string() }),
+            );
+            if fetched["status"] == serde_json::json!("finished") {
+                break fetched;
+            }
+            assert!(std::time::Instant::now() < deadline, "{fetched}");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(fetched["branch"], serde_json::json!(branch), "{fetched}");
+
+        unregister_session_runtime(requester_id);
+    }
+
     #[test]
     fn task_child_takes_a_follow_up_and_ends_with_its_requester() {
         let state = test_state();
@@ -503,12 +705,16 @@ mod tests {
             lock_was_free: AtomicBool,
         }
         impl ExplorationHost for ChildHost {
-            fn start(&self, _: String) -> Result<StartedExploration, String> {
+            fn start(
+                &self,
+                _: horizon_agent::tools::TaskStart,
+            ) -> Result<StartedExploration, String> {
                 let (tx, events) = unbounded();
                 *self.events.lock().unwrap() = Some(tx);
                 Ok(StartedExploration {
                     session_id: SessionId::new(),
                     events,
+                    branch: None,
                 })
             }
             fn send(&self, _: SessionId, _: String) -> Result<(), String> {
