@@ -77,8 +77,11 @@ pub(super) struct Scanned {
     pub bytes: Vec<u8>,
     /// The notifications completed by the chunk, in arrival order.
     pub notifications: Vec<TerminalNotification>,
-    /// The OSC 7501 sequences completed by the chunk, in arrival order.
-    pub program_status: Vec<Message>,
+    /// The OSC 7501 sequences completed by the chunk, in arrival order,
+    /// each with where it stood in `bytes`: how many of them came before
+    /// it. A question is answered there, after what the parser answers of
+    /// the bytes before it and before what it answers of the bytes after.
+    pub program_status: Vec<(usize, Message)>,
 }
 
 impl Scanned {
@@ -86,7 +89,8 @@ impl Scanned {
     fn take(&mut self, kind: CaptureKind, payload: &[u8]) {
         match kind {
             CaptureKind::ProgramStatus => {
-                self.program_status.extend(program_status::parse(payload))
+                let at = self.bytes.len();
+                (self.program_status).extend(program_status::parse(payload).map(|m| (at, m)))
             }
             CaptureKind::Nine | CaptureKind::SevenSeven7 => {
                 self.notifications.extend(parse_payload(kind, payload));
@@ -608,7 +612,8 @@ mod tests {
         assert_eq!(found.bytes, b"abc");
         assert!(found.notifications.is_empty());
         assert_eq!(found.program_status.len(), 2);
-        assert_eq!(found.program_status[1], Message::Query);
+        assert_eq!(found.program_status[0].0, 1);
+        assert_eq!(found.program_status[1], (2, Message::Query));
     }
 
     #[test]

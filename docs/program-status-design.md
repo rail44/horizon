@@ -23,7 +23,10 @@ its runtime says of it (§3).
 2. **The answer** — a program asks `ESC ] 7501 ; ? ST` whether its reports
    are read. `TerminalCore::write_vt` answers on the PTY with the states
    and kinds it reads (`program_status::QUERY_REPLY`). Claude Code reports
-   only to a terminal that answered.
+   only to a terminal that answered, and only where the answer comes before
+   the one to DA1, which it asks right after: the engine takes in the bytes
+   up to each question before it is answered, so the answers keep the
+   order of the questions when both are read at once.
 3. **The root record only** — a report is
    `ESC ] 7501 ; key=value(:key=value)* ST`. Read from it: `state`, `kind`
    (with `blocked`), `app`, `msg` (base64). A record with an `id` is one of
@@ -117,8 +120,10 @@ is part of what is kept.
   status stands until the terminal session ends. Horizon reads no OSC 133
   prompt marks, which is the protocol's other occasion to drop a record.
 - Anything, for a program that does not report: an agent that does not
-  implement the protocol, Claude Code inside tmux or as a background
-  session (`claude --bg`, also while attached), or Codex before 0.163.0.
+  implement the protocol, Claude Code inside tmux, or Codex before
+  0.163.0. A background session of Claude Code (`claude --bg`) reports
+  through `claude agents` while that is attached to it, in the terminal
+  `claude agents` runs in (§5).
 
 ## 5. Measured
 
@@ -142,6 +147,19 @@ test that runs a real program and logs what it reports and when):
 Without the answer the same session reported nothing over OSC 7501 and put
 its mark in the title (`✳ Claude Code`, `◐ Claude Code`); with it, the
 title came without the mark.
+
+`claude agents`, Claude Code 2.1.330, 2026-11-21, in a PTY that answered
+as the terminal core does (a script; nothing typed into a session):
+
+| Occasion | Report |
+| --- | --- |
+| Start | `ESC [ ? u` and `ESC ] 7501 ; ? BEL` in one write, DA1 in the next |
+| The list | none; the title is the list's (`1 awaiting input · claude agents`) |
+| A background session attached | `clear`, then the session's own status (`done`, `idle`) |
+| The window resized while attached | the same status again |
+| Focus in or out while attached | none |
+| Two attached to one session | each its status |
+| The DA1 answer before the OSC 7501 one | nothing over OSC 7501 for as long as it runs |
 
 Codex was not measured. Its source (HEAD of 2026-11-17) reports without
 asking, returns from `done` to `idle` on the next key, paste or click, and

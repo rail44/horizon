@@ -236,19 +236,28 @@ impl TerminalCore {
     pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
         let scanned = self.osc_notifications.feed(bytes);
         let bytes = scanned.bytes;
-        self.terminal.vt_write(&bytes);
-
-        let mut events = self.events.drain();
-        events.output = bytes.to_vec();
-        events.notifications = scanned.notifications;
-        for message in scanned.program_status {
+        // A program tells whether OSC 7501 is read by which answer comes
+        // first, this one or the engine's to a question sent right after
+        // it (Claude Code sends DA1): the engine takes in the bytes up to
+        // each question before it is answered.
+        let mut fed = 0;
+        let mut program_status = Vec::new();
+        for (at, message) in scanned.program_status {
             match message {
                 program_status::Message::Query => {
-                    events.pty_writes.push(program_status::QUERY_REPLY.to_vec());
+                    self.terminal.vt_write(&bytes[fed..at]);
+                    fed = at;
+                    self.events.pty_write(program_status::QUERY_REPLY);
                 }
-                program_status::Message::Update(update) => events.program_status.push(update),
+                program_status::Message::Update(update) => program_status.push(update),
             }
         }
+        self.terminal.vt_write(&bytes[fed..]);
+
+        let mut events = self.events.drain();
+        events.output = bytes;
+        events.notifications = scanned.notifications;
+        events.program_status = program_status;
         events
     }
 

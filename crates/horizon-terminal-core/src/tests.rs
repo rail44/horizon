@@ -1714,6 +1714,27 @@ fn a_program_asking_whether_its_status_is_read_is_answered() {
 }
 
 #[test]
+fn questions_read_in_one_chunk_are_answered_in_the_order_they_were_asked() {
+    let reply =
+        b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\";
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    // What Claude Code writes as it starts, read at once: the keyboard
+    // protocol's question, whether OSC 7501 is read, and DA1, whose
+    // answer coming first tells it that OSC 7501 is not.
+    let events = core.write_vt(b"\x1b[?u\x1b]7501;?\x07\x1b[c");
+
+    assert_eq!(
+        events.pty_writes,
+        [
+            b"\x1b[?0u".to_vec(),
+            reply.to_vec(),
+            b"\x1b[?62;22c".to_vec()
+        ]
+    );
+    assert_eq!(events.output, b"\x1b[?u\x1b[c");
+}
+
+#[test]
 fn a_programs_status_is_read_off_the_stream_and_leaves_the_screen_alone() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(
