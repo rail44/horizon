@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_components::{AlertDialog, MenuButton, MenuItem, MenuLabel};
+use horizon_components::{AlertDialog, Icon, MenuButton, MenuItem, MenuLabel};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
@@ -54,7 +54,7 @@ mod styles {
                 padding: var(--u8) var(--u8) var(--u4); font-size: var(--meta-size);
                 line-height: var(--meta-line); color: var(--text-muted); }
         .row { display: flex; align-items: flex-start; box-sizing: border-box;
-               padding: var(--u8) var(--u12) var(--u8) 0;
+               padding: var(--u4) var(--u12) var(--u4) 0;
                border: var(--line) solid transparent; border-radius: var(--radius);
                cursor: pointer; }
         .row:hover { background: var(--band); }
@@ -62,24 +62,23 @@ mod styles {
         .row:hover .actions, .row.selected .actions { opacity: 1; }
         /* The cursor: a line, in the accent. */
         .row.selected { border-color: var(--accent); }
-        .state { flex: none; font-size: var(--micro-size); line-height: var(--micro-line); }
-        .state.warning { color: var(--chip-warning-text); }
-        .state.accent { color: var(--chip-accent-text); }
-        .state.info { color: var(--chip-info-text); }
-        .state.danger { color: var(--chip-danger-text); }
+        .lead { flex: none; display: flex; width: var(--u16); color: var(--text-muted); }
+        .lead.warning { color: var(--chip-warning-text); }
+        .lead.accent { color: var(--chip-accent-text); }
+        .lead.info { color: var(--chip-info-text); }
+        .lead.danger { color: var(--chip-danger-text); }
         .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-        .headline { display: flex; align-items: baseline; gap: var(--u8); }
+        .line { display: flex; align-items: center; gap: var(--u8); min-width: 0; }
+        .spacer { flex: 1; }
         .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
                  text-overflow: ellipsis; }
-        .kind { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
-                font-size: var(--micro-size); line-height: var(--micro-line);
-                color: var(--text-muted); }
+        .title.away { color: var(--text-muted); }
         .time { flex: none; width: var(--u28); text-align: right;
                 font-size: var(--micro-size); line-height: var(--micro-line);
                 color: var(--text-muted); }
-        .meta { overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-                font-size: var(--micro-size); line-height: var(--micro-line);
-                color: var(--text-muted); }
+        .under { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+                 text-overflow: ellipsis; font-size: var(--meta-size);
+                 line-height: var(--meta-line); color: var(--text-muted); }
         .foot { flex: none; display: flex; flex-wrap: wrap; align-items: center;
                 gap: 0 var(--u4); padding: var(--u4) var(--u8); font-size: var(--micro-size);
                 line-height: var(--micro-line); color: var(--text-muted); }
@@ -383,41 +382,66 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
             within: Some(within),
         }
     };
-    // The title's line says everything of the session but its words,
-    // which are under it where there are some. What state it is in is
-    // the chip's to say, and nothing else of the row's.
-    let headline = el("div")
-        .class(styles::HEADLINE)
-        .child(
-            el("span")
-                .class(styles::TITLE)
-                .text_dyn(said(|session| session.title.clone())),
-        )
-        .child(
-            el("span")
-                .class(styles::KIND)
-                .text_dyn(said(|session| list::kind(session).to_string())),
-        )
-        .each(
-            move || {
-                this.with(|row| {
-                    let session = &row.as_ref()?.session;
-                    Some((list::chip(session)?, tone(session)))
-                })
-                .into_iter()
-                .collect()
-            },
-            |(word, _)| *word,
-            |(word, tone)| el("span").class((styles::STATE, *tone)).text(word),
-        )
-        .child(el("span").class(styles::TIME).text_dyn(move || {
-            let now = state.now.get();
-            this.with(|row| {
-                let activity = row.as_ref()?.session.activity.as_ref()?;
-                Some(list::ago(activity.since_ms, now))
-            })
-            .unwrap_or_default()
-        }));
+    // Two lines, each there whatever the session is doing, so a row is as
+    // tall whichever: its title, with what state it is in by an icon in
+    // the place of its kind's, and since when; under it its kind, the
+    // state's word and its words. A session no pane shows has its title
+    // muted.
+    let tone_of = move || {
+        this.with(|row| {
+            let session = &row.as_ref()?.session;
+            list::chip(session).map(|_| tone(session))
+        })
+    };
+    let word = move || this.with(|row| list::chip(&row.as_ref()?.session).map(str::to_string));
+    let terminal = move || {
+        this.with(|row| {
+            row.as_ref()
+                .is_some_and(|row| row.session.kind == "terminal")
+        })
+    };
+    let lead = el("span").class(styles::LEAD).class_dyn(tone_of).each(
+        move || vec![(word(), terminal())],
+        |(word, terminal)| (word.clone(), *terminal),
+        |(word, terminal)| match (word.as_deref(), terminal) {
+            (Some("working"), _) => Icon::CircleNotch.view(),
+            (Some("failed"), _) => Icon::XCircle.view(),
+            (Some("unseen"), _) => Icon::Circle.view(),
+            (Some(_), _) => Icon::Warning.view(),
+            (None, true) => Icon::TerminalWindow.view(),
+            (None, false) => Icon::Robot.view(),
+        },
+    );
+    let title = el("span")
+        .class(styles::TITLE)
+        .class_dyn(move || {
+            (this.with(|row| row.as_ref().is_some_and(|row| !row.session.attached)))
+                .then_some(styles::AWAY)
+        })
+        .text_dyn(said(|session| session.title.clone()));
+    let time = el("span").class(styles::TIME).text_dyn(move || {
+        let now = state.now.get();
+        this.with(|row| {
+            let activity = row.as_ref()?.session.activity.as_ref()?;
+            Some(list::ago(activity.since_ms, now))
+        })
+        .unwrap_or_default()
+    });
+    let said_under = move || {
+        let kind = this.with(|row| row.as_ref().map(|row| list::kind(&row.session).to_string()));
+        let parts: Vec<String> = [kind, word(), detail()].into_iter().flatten().collect();
+        parts.join(" · ")
+    };
+    let first = el("div")
+        .class(styles::LINE)
+        .child(lead)
+        .child(title)
+        .child(el("span").class(styles::SPACER))
+        .child(time);
+    let second = el("div")
+        .class(styles::LINE)
+        .child(el("span").class(styles::LEAD))
+        .child(el("span").class(styles::UNDER).text_dyn(said_under));
     let element = el("div")
         .class(styles::ROW)
         .class_dyn(move || is_chosen().then_some(styles::SELECTED))
@@ -428,16 +452,8 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
                     let depth = this.with(|row| row.as_ref().map_or(0, |row| row.depth));
                     format!("{}px", 12 + depth * 16)
                 })
-                .child(headline)
-                // The line under the title is there whether the session has
-                // words or not (a no-break space holds it), so a row is as
-                // tall whatever its session is doing, and the rows under
-                // it stay where they are.
-                .child(
-                    el("div")
-                        .class(styles::META)
-                        .text_dyn(move || detail().unwrap_or_else(|| "\u{a0}".to_string())),
-                ),
+                .child(first)
+                .child(second),
         )
         .child(
             el("div")
