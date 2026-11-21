@@ -39,7 +39,7 @@ pub fn fixed_palette_rgb(index: u8) -> Option<[u8; 3]> {
 /// `TerminalFrame::palette_overrides` carries that sparse index→RGB table,
 /// and the view consults it before the theme. The engine answers a
 /// program's color queries from its own palette.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalColor {
     Named(NamedColor),
     Indexed(u8),
@@ -60,7 +60,7 @@ pub enum TerminalColor {
 ///   `BrightForeground`/`DimForeground`. Under `INVERSE` a cell's two
 ///   colors change places after the promotion, so a promoted form can be
 ///   a cell's background and `Background` its text's color.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum NamedColor {
     Black,
     Red,
