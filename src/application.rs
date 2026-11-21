@@ -22,7 +22,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Wake, Waker};
 
 use anyrender::{RenderContext, WindowRenderer};
@@ -161,6 +161,7 @@ impl ApplicationHandler for Application {
             let shell = InputMethodShell {
                 window: view.window.clone(),
                 inner: shell,
+                told: Mutex::default(),
             };
             view.doc.inner_mut().set_shell_provider(Arc::new(shell));
             self.inner.windows.insert(view.window_id(), view);
@@ -349,9 +350,36 @@ fn redraw(view: &mut View<Renderer>) {
 /// otherwise goes on with the kind the last window that sent one gave it,
 /// and a password field's takes its IBus input sources away from the
 /// switcher while this window has the focus.
+///
+/// A cursor area and kind the input method was last told are not told it
+/// again ([`Told`]): the document tells them after every layout, and
+/// neither mutter nor GNOME Shell drops a repeat, so each would reach
+/// GNOME Shell's script and IBus once a frame.
 struct InputMethodShell {
     window: Arc<dyn winit::window::Window>,
     inner: BlitzShellProvider,
+    told: Mutex<Told>,
+}
+
+/// Where the text is and its kind, as the input method was last told
+/// them since it was last turned on or off.
+#[derive(Default)]
+struct Told(Option<((f32, f32, f32, f32), ImePurpose)>);
+
+impl Told {
+    /// Whether `now` is news to the input method, kept as what it was told
+    /// if so.
+    fn news(&mut self, now: ((f32, f32, f32, f32), ImePurpose)) -> bool {
+        let news = self.0 != Some(now);
+        self.0 = Some(now);
+        news
+    }
+
+    /// Turning the input method on tells it an area of its own, and off
+    /// lets go of what it was told.
+    fn forget(&mut self) {
+        self.0 = None;
+    }
 }
 
 /// The kind of text what has the focus takes, in winit's words.
@@ -364,6 +392,7 @@ fn purpose() -> ImePurpose {
 
 impl ShellProvider for InputMethodShell {
     fn set_ime_enabled(&self, is_enabled: bool) {
+        self.told.lock().unwrap().forget();
         if !is_enabled {
             return self.inner.set_ime_enabled(false);
         }
@@ -382,12 +411,16 @@ impl ShellProvider for InputMethodShell {
     }
 
     fn set_ime_cursor_area(&self, x: f32, y: f32, width: f32, height: f32) {
+        let purpose = purpose();
+        if !(self.told.lock().unwrap()).news(((x, y, width, height), purpose)) {
+            return;
+        }
         let data = ImeRequestData::default()
             .with_cursor_area(
                 LogicalPosition::new(x, y).into(),
                 LogicalSize::new(width, height).into(),
             )
-            .with_hint_and_purpose(ImeHint::NONE, purpose());
+            .with_hint_and_purpose(ImeHint::NONE, purpose);
         let _ = self.window.request_ime_update(ImeRequest::Update(data));
     }
 
@@ -431,5 +464,27 @@ impl ShellProvider for InputMethodShell {
     }
     fn drag_window(&self) {
         self.inner.drag_window();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use winit::window::ImePurpose;
+
+    use super::Told;
+
+    #[test]
+    fn the_input_method_is_told_what_changed_and_again_once_turned_on() {
+        let caret = (10., 20., 8., 16.);
+        let mut told = Told::default();
+        assert!(told.news((caret, ImePurpose::Terminal)));
+        // The next frame's layout, with nothing moved.
+        assert!(!told.news((caret, ImePurpose::Terminal)));
+        // The caret moved, then the focus went to a text field there.
+        assert!(told.news(((18., 20., 8., 16.), ImePurpose::Terminal)));
+        assert!(told.news(((18., 20., 8., 16.), ImePurpose::Normal)));
+        // Turned on again, the input method has an area of its own.
+        told.forget();
+        assert!(told.news(((18., 20., 8., 16.), ImePurpose::Normal)));
     }
 }
