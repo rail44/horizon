@@ -1405,6 +1405,130 @@ fn the_panes_of_a_split_in_a_tab_have_one_line_between_them_the_focused_ones() {
 }
 
 #[test]
+fn a_focused_panes_line_lies_on_the_line_beside_it_wherever_the_boundaries_are() {
+    use anyrender::ImageRenderer as _;
+    use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+    use horizon_workspace::commands::CommandId;
+
+    // Arrangements whose edges land on a half display pixel, where two
+    // edges meant to meet were once rounded opposite ways: three panes down
+    // with the shares moved, at 150 %, and a split in a split at 125 %.
+    let arrangements: [(f32, u32, u32, &[CommandId], &str); 2] = [
+        (
+            1.5,
+            1200,
+            800,
+            &[CommandId::SplitDown, CommandId::SplitDown],
+            "--",
+        ),
+        (
+            1.25,
+            1201,
+            801,
+            &[CommandId::SplitRight, CommandId::SplitDown],
+            "",
+        ),
+    ];
+    let settle = |opened: &Opened| {
+        for _ in 0..3 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    for (scale, width, height, splits, shares) in arrangements {
+        let opened = open();
+        (opened.app.document().borrow_mut()).set_viewport(Viewport::new(
+            width,
+            height,
+            scale,
+            ColorScheme::Light,
+        ));
+        opened.app.resolve();
+        for split in splits {
+            opened.shell.execute(*split);
+            settle(&opened);
+        }
+        if !shares.is_empty() {
+            opened.chord();
+            for key in shares.chars() {
+                opened.character(&key.to_string());
+            }
+            opened.named(NamedKey::Escape);
+            settle(&opened);
+        }
+        for (index, pane) in opened.panes().into_iter().enumerate() {
+            opened
+                .shell
+                .model
+                .update(|model| _ = model.activate_pane(pane));
+            settle(&opened);
+            let element = opened.all("pane")[index];
+            assert!(opened.all("focused").contains(&element));
+            let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+            let mut pixels = Vec::new();
+            let document = opened.app.document();
+            renderer.render_to_vec(
+                |scene| {
+                    let mut document = document.borrow_mut();
+                    blitz_paint::paint_scene(
+                        scene,
+                        &mut document,
+                        scale as f64,
+                        width,
+                        height,
+                        0,
+                        0,
+                    )
+                },
+                &mut pixels,
+            );
+            let at = |x: i64, y: i64| {
+                let pixel = (y as usize * width as usize + x as usize) * 4;
+                [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+            };
+            // Across each side, a third of the way along it (clear of a
+            // boundary meeting it from the other side): the pane's ground,
+            // its line one display pixel wide, and what is beyond -- with no
+            // other line beside its own.
+            let (x, y, wide, tall) = opened.bounds(element);
+            let (left, top) = ((x * scale) as i64, (y * scale) as i64);
+            let (right, bottom) = (((x + wide) * scale) as i64, ((y + tall) * scale) as i64);
+            let (along_x, along_y) = (left + (right - left) / 3, top + (bottom - top) / 3);
+            let sides = [
+                (
+                    "left",
+                    (left - 4..left + 4).map(|c| at(c, along_y)).collect(),
+                ),
+                (
+                    "right",
+                    (right - 4..right + 4).map(|c| at(c, along_y)).collect(),
+                ),
+                ("top", (top - 4..top + 4).map(|r| at(along_x, r)).collect()),
+                (
+                    "bottom",
+                    (bottom - 4..bottom + 4)
+                        .map(|r| at(along_x, r))
+                        .collect::<Vec<_>>(),
+                ),
+            ];
+            for (side, across) in sides {
+                let mut runs: Vec<([u8; 3], usize)> = Vec::new();
+                for pixel in across {
+                    match runs.last_mut() {
+                        Some((color, length)) if *color == pixel => *length += 1,
+                        _ => runs.push((pixel, 1)),
+                    }
+                }
+                assert!(
+                    runs.len() == 3 && runs[1].1 == 1,
+                    "pane {index}'s {side} side at {scale}: {runs:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_tabs_outline_is_one_display_pixel_on_every_side_at_a_fractional_scale() {
     use anyrender::ImageRenderer as _;
     use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};

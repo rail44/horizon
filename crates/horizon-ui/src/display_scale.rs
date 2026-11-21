@@ -23,7 +23,18 @@
 //! So after each resolve the layout is rounded again, from the same
 //! unrounded layout, by taffy's own `round_layout` -- handed every length
 //! in display pixels, which it rounds to whole numbers, and giving back
-//! CSS pixels. Upstream's fix rounds to the same grid inside blitz-dom
+//! CSS pixels.
+//!
+//! Each length is first put on a grid of a sixty-fourth of a display
+//! pixel. Two edges meant to meet -- a boundary's far side and the start
+//! of the box after it -- come out of the layout's arithmetic a few
+//! hundred-thousandths of a pixel apart (419.5 and 419.49997), and where
+//! they are on a half pixel the two are rounded opposite ways: the box
+//! starts on the boundary's line instead of after it, and the focus drawn
+//! just outside the box lies beside that line, not on it. On the grid the
+//! two are the same number, and a sum of lengths on it is exact.
+//!
+//! Upstream's fix rounds to the same grid inside blitz-dom
 //! (DioxusLabs/blitz#902, for #837); once a Blitz with it is in, this goes.
 
 use std::cell::Cell;
@@ -108,7 +119,10 @@ impl TraverseTree for DevicePixels<'_> {}
 
 impl RoundTree for DevicePixels<'_> {
     fn get_unrounded_layout(&self, id: NodeId) -> Layout {
-        scaled(*self.node(id).unrounded_layout(), self.scale)
+        let scale = self.scale;
+        mapped(*self.node(id).unrounded_layout(), |length| {
+            (length * scale * GRID).round() / GRID
+        })
     }
 
     fn set_final_layout(&mut self, id: NodeId, rounded: &Layout) {
@@ -118,7 +132,7 @@ impl RoundTree for DevicePixels<'_> {
         // What taffy rounds, back in CSS pixels; the rest as laid out,
         // as taffy itself leaves it.
         let mut layout = *node.unrounded_layout();
-        let rounded = scaled(*rounded, 1. / scale);
+        let rounded = mapped(*rounded, |length| length / scale);
         layout.location = rounded.location;
         layout.size = rounded.size;
         layout.scrollable_overflow_rect = rounded.scrollable_overflow_rect;
@@ -141,10 +155,13 @@ impl RoundTree for DevicePixels<'_> {
     }
 }
 
-/// `layout` with the lengths taffy rounds multiplied by `by`.
-fn scaled(layout: Layout, by: f32) -> Layout {
-    let length = |length: f32| length * by;
-    let rect = |rect: Rect<f32>| rect.map(length);
+/// The grid, in parts of a display pixel, every length is put on before it
+/// is rounded.
+const GRID: f32 = 64.;
+
+/// `layout` with `length` applied to each of the lengths taffy rounds.
+fn mapped(layout: Layout, length: impl Fn(f32) -> f32) -> Layout {
+    let rect = |rect: Rect<f32>| rect.map(&length);
     let overflow = layout.scrollable_overflow_rect;
     Layout {
         location: Point {
