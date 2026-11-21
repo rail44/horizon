@@ -275,6 +275,22 @@ impl Opened {
             .into_iter()
             .find(|title| chosen.starts_with(title.as_str()))
     }
+
+    /// Steps the list's cursor to the row titled `title`: up to the first
+    /// row, then down to it.
+    fn choose(&self, title: &str) {
+        let rows = self.titles().len();
+        for _ in 0..rows {
+            self.character("k");
+        }
+        for _ in 0..rows {
+            if self.chosen().as_deref() == Some(title) {
+                return;
+            }
+            self.character("j");
+        }
+        assert_eq!(self.chosen().as_deref(), Some(title));
+    }
 }
 
 /// A repository and a directory outside one, to work in.
@@ -432,8 +448,13 @@ fn where_the_chosen_session_is_the_workspace_shows_as_workspace_mode_does() {
             opened.app.resolve();
         }
     };
+    // Opened from the mode, its cursor on the terminal, the list's cursor
+    // starts on the terminal's session.
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("shell"));
     // With the focus in the list, on a session no pane shows: every pane
     // but the list's is veiled, and the cursor is on none.
+    opened.choose("build");
     settle();
     assert_eq!(opened.chosen().as_deref(), Some("build"));
     assert!(veiled(terminal) && !veiled(list));
@@ -447,6 +468,93 @@ fn where_the_chosen_session_is_the_workspace_shows_as_workspace_mode_does() {
     assert_eq!(opened.chosen().as_deref(), Some("shell"));
     assert!(marked(terminal, "cursor"));
     assert!(!veiled(list));
+}
+
+#[test]
+fn the_lists_cursor_follows_the_focus_and_the_modes_cursor() {
+    use horizon_workspace::{Direction, Side};
+
+    // The list in a group on the left, and two terminals side by side in
+    // one on the right.
+    let config = horizon_config::parse(
+        r#"
+        startup_layout = "two"
+        [layouts.two]
+        split = "horizontal"
+        children = [
+          { tabs = [ { view = "sessions" } ] },
+          { workspace = true },
+        ]
+        "#,
+    )
+    .unwrap();
+    let opened = open_with(Opening {
+        config,
+        ..Opening::default()
+    });
+    opened.until("the layout", || {
+        opened.model(|model| model.all_pane_ids().len()) == 2 && opened.titles().len() == 1
+    });
+    let first = opened.model(|model| {
+        model.pane_location_for_session(model.active_terminal_session_id().expect("the terminal"))
+    });
+    let first = first.expect("its pane");
+    let second = opened.shell.model.try_update(|model| {
+        model.activate_pane(first);
+        model.split_cursor_with_new_session(SessionKind::Terminal, Side::Right, true)
+    });
+    let second = second.expect("the model");
+    opened.until("the second terminal", || opened.titles().len() == 2);
+    let settle = || {
+        for _ in 0..3 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+
+    // The focus on the second terminal, and on the first: the list's
+    // cursor is on the session of the one with it.
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #2"));
+    opened.shell.model.update(|model| {
+        model.activate_pane(first);
+    });
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #1"));
+
+    // In workspace mode, the list's cursor follows the mode's, and the
+    // focus stays where it was.
+    opened.shell.model.update(Workspace::enter_workspace_mode);
+    settle();
+    opened
+        .shell
+        .model
+        .update(|model| model.move_cursor(Direction::Right));
+    settle();
+    assert_eq!(
+        opened.model(|model| model.cursor_session_id()),
+        Some(second)
+    );
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #2"));
+    assert_ne!(
+        opened.model(|model| model.active_session_id()),
+        Some(second)
+    );
+    // Back on the first, and on to the list's own pane, which shows no
+    // session: the list's cursor stays where it was.
+    opened
+        .shell
+        .model
+        .update(|model| model.move_cursor(Direction::Left));
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #1"));
+    opened
+        .shell
+        .model
+        .update(|model| model.move_cursor(Direction::Left));
+    settle();
+    assert_eq!(opened.model(|model| model.cursor_session_id()), None);
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #1"));
 }
 
 #[test]
@@ -548,9 +656,12 @@ fn the_chosen_sessions_tab_in_another_group_is_shown() {
         }
     };
     settle();
-    // The list's cursor on the terminal not shown, the first row: its tab,
-    // in the other group, is shown, and the list stays.
-    assert_eq!(opened.chosen().as_deref(), Some("Terminal #1"));
+    // The list's cursor followed the focus to the second terminal. Moved
+    // to the terminal not shown: its tab, in the other group, is shown,
+    // and the list stays.
+    assert_eq!(opened.chosen().as_deref(), Some("Terminal #2"));
+    opened.choose("Terminal #1");
+    settle();
     assert!(visible().contains(&hidden));
     assert!(visible().contains(&list));
     settle();
@@ -590,23 +701,18 @@ fn over_the_workspace_in_the_mode_the_lists_cursor_is_the_one_shown() {
     }));
     settle();
     assert!(cursor());
-    // The list over the workspace, still in the mode: its cursor, on a
-    // session no pane shows, is the one shown, on no pane.
+    // The list over the workspace, still in the mode: its cursor starts
+    // on the session of the mode's, the terminal's.
     opened.manage();
     settle();
     assert!(opened.model(Workspace::is_workspace_mode_active));
-    assert_eq!(opened.chosen().as_deref(), Some("build"));
-    assert!(!cursor());
-    // On the terminal's session, on the terminal.
-    for _ in 0..3 {
-        opened.key(Key::Named(NamedKey::ArrowDown));
-    }
-    settle();
     assert_eq!(opened.chosen().as_deref(), Some("shell"));
     assert!(cursor());
-    // Up again, and the list gone: the mode's is shown again.
+    // On a session no pane shows, the list's is the one shown, on no
+    // pane.
     opened.key(Key::Named(NamedKey::ArrowUp));
     settle();
+    assert_eq!(opened.chosen().as_deref(), Some("measure"));
     assert!(!cursor());
     opened.key(Key::Named(NamedKey::Escape));
     settle();
@@ -670,8 +776,10 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
     let tall = heights(&opened);
     assert!(tall.iter().all(|height| *height == tall[0]), "{tall:?}");
 
+    // The list's cursor starts on the session the focus was on.
+    assert_eq!(opened.chosen().as_deref(), Some("shell"));
     // The keys: a step, and the next that waits, round the list.
-    assert_eq!(opened.chosen().as_deref(), Some("build"));
+    opened.choose("build");
     opened.character("j");
     assert_eq!(opened.chosen().as_deref(), Some("tests"));
     opened.character("n");
@@ -723,7 +831,7 @@ fn the_chosen_session_is_ended_once_the_list_is_told_so() {
     // With what was derived from it: asked in a dialog over the whole
     // workspace -- the pane is narrow -- and kept on Escape. The band
     // asks nothing.
-    assert_eq!(opened.chosen().as_deref(), Some("build"));
+    opened.choose("build");
     opened.character("X");
     opened.until("the question", || opened.asked().is_some());
     assert!(
@@ -782,6 +890,7 @@ fn the_chosen_session_is_gone_to_and_a_terminal_opened_where_it_works() {
     };
 
     // `t`: a terminal in a tab of its own.
+    opened.choose("build");
     let tabs = opened.model(Workspace::tab_count);
     opened.character("t");
     opened.until("the terminal", || {
@@ -797,6 +906,9 @@ fn the_chosen_session_is_gone_to_and_a_terminal_opened_where_it_works() {
     opened.app.resolve();
     opened.until("the terminal's row", || opened.titles().len() == 6);
     assert!(!shown(made.finished));
+    // (The list's cursor followed the focus to the terminal, and stays
+    // where its row was.)
+    opened.choose("build");
     opened.character("n");
     assert_eq!(opened.chosen().as_deref(), Some("measure"));
     opened.key(Key::Named(NamedKey::Enter));
@@ -925,8 +1037,10 @@ fn the_session_manager_is_the_list_over_the_workspace() {
     );
     let foot = opened.texts("foot").join(" ");
     assert!(foot.ends_with("EscClose"), "{foot}");
+    // Its cursor starts on the session the focus was on.
+    assert_eq!(opened.chosen().as_deref(), Some("shell"));
     // Asked over the list itself, which is over the workspace already.
-    opened.character("j");
+    opened.choose("tests");
     opened.character("x");
     opened.until("the question", || opened.asked().is_some());
     assert!(opened.asked_over_the_list());
@@ -1192,6 +1306,7 @@ fn the_list_left_of_the_tab_group_is_not_cut_by_what_it_opens() {
 
     // Enter on a session no pane shows: its pane is in the group, and the
     // list keeps its place and its width.
+    opened.choose("build");
     opened.character("n");
     assert_eq!(opened.chosen().as_deref(), Some("measure"));
     opened.key(Key::Named(NamedKey::Enter));

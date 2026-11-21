@@ -3,8 +3,9 @@
 //! can be done to the chosen one. A pane of it keeps nothing: the
 //! sessions are the shell's (`horizon:ui/sessions`), and so is what is
 //! done to them (`horizon:ui/session-control`). The chosen session is
-//! where the workspace shows workspace mode's cursor, while the focus is in
-//! the list (`horizon:ui/workspace`'s `cursor`).
+//! where the workspace shows its cursor, while the focus is in the list,
+//! and otherwise it follows the workspace's cursor and focus
+//! (`horizon:ui/workspace`).
 //!
 //! What the list is made of -- the order, what a search finds -- is
 //! `list`, and the view is `view`.
@@ -16,7 +17,15 @@ mod view;
 #[horizon_ui::plugin(
     name = "sessions",
     title = "Sessions",
-    uses = ["sessions", "session-control", "modal", "workspace.cursor"]
+    uses = [
+        "sessions",
+        "session-control",
+        "modal",
+        "workspace.focus",
+        "workspace.cursor",
+        "workspace.set-cursor",
+        "workspace.watch"
+    ]
 )]
 mod sessions {
     pub mod pane {
