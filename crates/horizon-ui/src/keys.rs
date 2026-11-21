@@ -146,3 +146,28 @@ impl El {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Kept, kept};
+
+    #[test]
+    fn an_elements_keys_are_read_back_in_their_order() {
+        let read = kept("j/k\tmove\t1\nenter\tgo to\t0\nnot a key");
+        assert_eq!(
+            read,
+            [
+                Kept {
+                    spelled: "j/k".into(),
+                    label: "move".into(),
+                    typed: true,
+                },
+                Kept {
+                    spelled: "enter".into(),
+                    label: "go to".into(),
+                    typed: false,
+                },
+            ]
+        );
+    }
+}

@@ -217,7 +217,10 @@ Requirements:
   - Pane header: pane type, pane state, and local affordances.
   - Palette: command discovery and execution.
   - Inspector: optional state inspection and advanced management.
-  - Status bar: lightweight feedback, diagnostics, or temporary state.
+  - Status bar: the keys that work where the keys are, each with what it
+    does (not every operation: that is the palette's), and room for
+    lightweight feedback, diagnostics, or temporary state
+    (`docs/status-bar-design.md`).
 - Avoid hidden destructive behavior. Termination should be explicit and visually
   distinct from closing a surface.
 - Leave room for growth. Terminal, agent, and plugin views must fit the same

@@ -1434,3 +1434,35 @@ fn paint_the_sidebar() {
     }
     std::fs::write(out, picture).expect("the picture written");
 }
+
+#[test]
+fn in_the_search_field_the_bar_says_its_keys_and_a_typed_key_is_searched_for() {
+    let opened = open();
+    let places = Places::made("searched");
+    make(&opened, &places);
+    opened.list();
+    opened.until("the rows", || opened.titles().len() == 5);
+    opened.until("the list's keys", || {
+        opened.bar().starts_with("j/kmoveentergo to")
+    });
+
+    // In the field what is typed is searched for: its own keys, and none
+    // of the list's that are typed.
+    opened.character("/");
+    opened.until("the field's keys", || {
+        opened.bar().starts_with("enterdoneescclear")
+    });
+    let bar = opened.bar();
+    assert!(!bar.contains("j/k") && !bar.contains("tterminal"), "{bar}");
+    let tabs = opened.model(Workspace::tab_count);
+    opened.character("t");
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::tab_count), tabs);
+
+    // Done, the list's keys are the bar's again.
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the list's keys again", || {
+        opened.bar().starts_with("j/kmove")
+    });
+}
