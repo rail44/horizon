@@ -74,6 +74,11 @@ impl Page<'_> {
         Some((x - scroll.x, y - scroll.y))
     }
 
+    /// How many device pixels the display has to a CSS pixel.
+    pub fn scale(&self) -> f64 {
+        self.0.viewport().scale_f64()
+    }
+
     /// An element's width and height.
     pub fn size(&self, element: El) -> Option<(f64, f64)> {
         let size = self.0.get_node(element.0)?.final_layout().size;
