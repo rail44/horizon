@@ -712,8 +712,8 @@ lands:
   the session list's turning icon animated beside three terminals. The view
   keeps drawn rows as pixels in its own texture (the custom widget's resource
   path), keyed by row content in the shell. A frame is one image fill per
-  row. Rows are a whole number of display pixels tall. The first step is a
-  lavapipe investigation, which picks the test strategy (§6).
+  row. Rows are a whole number of display pixels tall. Tests paint through
+  Vello's GPU offscreen renderer, on a GPU or lavapipe (§6).
 
 ### Knowledge layer (v1 shipped 2026-08-05)
 
