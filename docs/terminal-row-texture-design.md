@@ -287,13 +287,55 @@ What the tests are:
 
 ## 7. Measuring
 
-`cargo bench --bench scenarios -- terminal/` (`docs/performance-scenarios.md`)
-before and after, in a debug and a release build, comparing the `scene`
-column.
+The recording scene the bench paints into by default lends no device, so
+its `scene` column times the screen drawn whole either way. `--gpu` paints
+each frame with `VelloImageRenderer` and reads it back, so the store is
+used. `terminal/idle` times frames that change nothing in a full screen:
+the case in §1. `--window` (a real window on the desktop) is run only with
+the owner's consent each time.
 
-Add a scenario for the case in §1: frames that change nothing in a visible
-terminal. `--window` (the `render` column, GPU included) opens a real window
-on the desktop and is run only with the owner's consent each time.
+### Measured 2026-11-22
+
+Debug build, `--gpu`, the median in milliseconds:
+
+- before: the source as of the commit that added this document;
+- after: the store;
+- the machine was heavily loaded throughout (its swap full), so
+  differences of a few milliseconds are within the noise.
+
+`render`, the whole frame:
+
+| scenario | 1920 cells | 12000 cells | 48000 cells |
+| --- | --- | --- | --- |
+| idle | 5.4 → 4.7 | 20.9 → 18.5 | 80.4 → 53.5 |
+| lines | 5.1 → 5.1 | 31.4 → 22.8 | 108 → 85 |
+| typing | 3.7 → 3.4 | 16.1 → 18.2 | 42.8 → 56.5 |
+| scrollback | 3.2 → 3.5 | 14.3 → 18.3 | 45.0 → 56.6 |
+
+The frame split, at 48000 cells:
+
+| scenario | `paint_scene` (commands, on the CPU) | the rest (Vello's encoding, the GPU, the read back) |
+| --- | --- | --- |
+| idle, before | 25.3 | 55.1 |
+| idle, after | 0.2 | 56.6 |
+| typing, before (an almost empty screen) | 0.4 | 42.7 |
+| typing, after | 1.3 | 57.6 |
+
+What the numbers show:
+
+- A frame that changes nothing in the terminal no longer costs its grid on
+  the CPU: 25 ms became 0.2 ms.
+- The rest of a frame gained a cost of its own that does not depend on what
+  the screen shows: about 15 ms at 48000 cells on an almost empty screen.
+
+**Open.** `anyrender_vello` marks every registered texture dirty before
+each render (`window_renderer.rs`, and the offscreen renderer alike), so
+Vello copies the whole store into its image atlas every frame. That copy
+is the likeliest part of the added cost, but it is not confirmed:
+
+- A store of the visible rows plus five, instead of twice the rows, did
+  not lower it measurably.
+- Neither the copy's share nor a remedy is established yet.
 
 ## 8. Scope
 
