@@ -103,8 +103,8 @@ impl SandboxedRun {
             filesystem_grants: tools.effective_sandbox_grants(),
             origin,
             git_metadata_roots,
-            writable: if tools.is_read_only() {
-                super::exec::Writable::Nothing
+            writable: if let Some(reason) = tools.read_only() {
+                super::exec::Writable::Nothing(reason)
             } else if tools.primary_checkout_writable() {
                 super::exec::Writable::Workspace
             } else {

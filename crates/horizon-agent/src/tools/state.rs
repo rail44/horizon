@@ -58,6 +58,42 @@ impl Default for RecallContext {
     }
 }
 
+/// Why a session may write nothing at all. Its shell runs with no writable
+/// root, a write it attempts is refused as ungrantable rather than offered
+/// as a grant, and `fs_write`/`fs_edit`, `request_sandbox_area`, a `bash`
+/// call with no sandbox to contain it, and a write `task` child are refused
+/// before anything runs. The reason only changes what the session is told
+/// to do instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadOnly {
+    /// A delegated `task` child that only reads
+    /// (`docs/agent-subagent-design.md` decision 7): whatever writes is
+    /// left to the session that delegated to it.
+    Delegated,
+    /// A session whose role writes only in a worktree of its own
+    /// (`roles::RoleWrites::InOwnWorktree`) and that has none yet.
+    UntilOwnWorktree,
+}
+
+impl ReadOnly {
+    /// What the session is told when a write is refused: why nothing can
+    /// grant it, and what to do instead.
+    pub(crate) fn guidance(self) -> &'static str {
+        match self {
+            Self::Delegated => {
+                "this session is read-only: its shell can write nowhere, so nothing can grant \
+                 this. Use commands that only read, and leave the step that writes to the \
+                 session that delegated to you"
+            }
+            Self::UntilOwnWorktree => {
+                "this session writes only in a worktree of its own and has none yet, so nothing \
+                 can grant this. Use commands and tools that only read; writing files, building, \
+                 and running tests wait until the session's own worktree is active"
+            }
+        }
+    }
+}
+
 /// Per-session file-tool state: the workspace root every absolute path is
 /// confined to, the mtimes recorded by `fs_read`/`fs_write`/`fs_edit` for
 /// the staleness gate (`docs/agent-tools-design.md`, "Edit Semantics"), and
@@ -141,22 +177,21 @@ struct Inner {
     /// `config_read`/`config_write` degrade to an actionable error instead
     /// of guessing a path.
     config_path: Option<PathBuf>,
-    /// Whether this session has no client that could answer an approval
-    /// prompt: the explore role's sessions (`task` children), which are
-    /// never attached to a pane and
-    /// whose only consumer is whoever is waiting for their final report. A
-    /// call that would otherwise wait for a human resolves as a refused
-    /// tool result instead, so the session keeps running
+    /// Whether nobody is there to answer an approval prompt for this session
+    /// (`roles::RoleDefinition::unattended`): a wiki thread, a board
+    /// session. A call that would otherwise wait for a human resolves as a
+    /// refused tool result instead, so the session keeps running
     /// (`tools::approval::unattended_refusal_result`). Threaded in after
     /// construction through [`ToolSessionBuilder`]: only
     /// `horizon-agentd`'s `session::run_session` knows the session's role.
     /// `false` everywhere except that call site.
     unattended: bool,
-    /// Whether this session's shell may write nothing at all
-    /// (`roles::RoleDefinition::read_only`, `docs/agent-subagent-design.md`
-    /// decision 7): its sandbox gets no writable root and no write grant.
-    /// Threaded in through [`ToolSessionBuilder`] alongside `unattended`.
-    read_only: bool,
+    /// Why this session may write nothing at all, or `None` when it may
+    /// (`roles::RoleDefinition::writes`, `docs/agent-subagent-design.md`
+    /// decision 7): its sandbox gets no writable root and no write grant,
+    /// and the file-writing tools are refused before they run. Threaded in
+    /// through [`ToolSessionBuilder`] alongside `unattended`.
+    read_only: Option<ReadOnly>,
     /// This session's own network-proxy pair (`docs/agent-approval-
     /// design.md`'s "Staging" leg 4b -- `tools::network::
     /// SessionNetworkProxy`), if one was started for it. `None` means
@@ -285,9 +320,9 @@ impl ToolSessionState {
         self.inner.unattended
     }
 
-    /// Whether this session's shell may write nothing at all -- see
+    /// Why this session may write nothing at all, if it may not -- see
     /// [`Inner::read_only`]'s doc comment.
-    pub(crate) fn is_read_only(&self) -> bool {
+    pub(crate) fn read_only(&self) -> Option<ReadOnly> {
         self.inner.read_only
     }
 

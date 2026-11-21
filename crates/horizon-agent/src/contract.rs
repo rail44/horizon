@@ -1118,6 +1118,22 @@ pub enum ApprovalKind {
     },
 }
 
+impl ApprovalKind {
+    /// The result of the attempt that already ran, for a kind that offers
+    /// to retry one; `None` for a kind asked before anything ran.
+    pub fn prior_result(&self) -> Option<&ToolCallResult> {
+        match self {
+            Self::DomainDenialRetry { prior_result, .. }
+            | Self::FilesystemDenialRetry { prior_result, .. }
+            | Self::MachServiceGrant { prior_result, .. }
+            | Self::PrimaryCheckoutRetry { prior_result, .. } => Some(prior_result),
+            // Named rather than `_`, so that a new kind does not compile
+            // until it says whether it holds a prior result.
+            Self::Standard | Self::DomainGrant { .. } | Self::SandboxAreaGrant { .. } => None,
+        }
+    }
+}
+
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was
 /// asked to complete against, so the persisted event log doesn't depend on
 /// separately-stored config to answer "which model was this turn waiting

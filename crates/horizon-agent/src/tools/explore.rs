@@ -232,6 +232,21 @@ pub(crate) fn start(
             error_output(format!("`{TOOL_ID}` is not available in this session")),
         );
     };
+    // A session that may not write does not get its writing done by a
+    // child either: a write child's worktree would hold the work it may
+    // not do itself.
+    if input.session_id.is_none()
+        && input.access == crate::tools::input::TaskAccess::Write
+        && let Some(read_only) = tool_state.read_only()
+    {
+        return synchronous(
+            request,
+            error_output(format!(
+                "a write task cannot be started from this session: {}",
+                read_only.guidance()
+            )),
+        );
+    }
     if let Some(child) = input.session_id {
         return follow_up(
             &*host,

@@ -21,7 +21,7 @@ use crate::tools::output::{annotate_denied_domains, annotate_sandboxed};
 pub(super) struct Protected<'a> {
     pub(super) git_metadata: &'a [PathBuf],
     pub(super) unapproved_primary_checkout: Option<&'a Path>,
-    pub(super) read_only: bool,
+    pub(super) read_only: Option<crate::tools::ReadOnly>,
 }
 
 pub(super) fn complete(
@@ -50,8 +50,8 @@ pub(super) fn complete(
         unapproved_primary_checkout,
         read_only,
     } = protected;
-    if read_only {
-        divert_read_only_denials(&mut denials);
+    if let Some(reason) = read_only {
+        divert_read_only_denials(&mut denials, reason);
     }
     let git_metadata_denied = divert_git_metadata_denials(&mut denials, git_metadata);
     let annotate = |value: &mut Response, denials: &horizon_sandbox::ContainmentDenials| {
@@ -146,18 +146,18 @@ fn annotate_common(
     }
 }
 
-const READ_ONLY_GUIDANCE: &str = "this session is read-only: its shell can write nowhere, so \
-     nothing can grant this. Use commands that only read, and leave the step that writes to the \
-     session that delegated to you";
-
 /// Moves every filesystem denial into the ungrantable set: a read-only
 /// session's shell has no writable root by design, so no grant applies and
-/// none is offered (`docs/agent-subagent-design.md` decision 7).
-fn divert_read_only_denials(denials: &mut horizon_sandbox::ContainmentDenials) {
+/// none is offered (`docs/agent-subagent-design.md` decision 7). The
+/// guidance is `reason`'s.
+fn divert_read_only_denials(
+    denials: &mut horizon_sandbox::ContainmentDenials,
+    reason: crate::tools::ReadOnly,
+) {
     for denial in std::mem::take(&mut denials.filesystem) {
         let entry = horizon_sandbox::UngrantableDenial {
             attempted_path: denial.attempted_path,
-            guidance: READ_ONLY_GUIDANCE.into(),
+            guidance: reason.guidance().into(),
         };
         if !denials.ungrantable.contains(&entry) {
             denials.ungrantable.push(entry);
@@ -479,7 +479,7 @@ mod tests {
             domains,
             git_metadata,
             unapproved_primary_checkout,
-            false,
+            None,
         )
     }
 
@@ -488,7 +488,7 @@ mod tests {
         domains: Vec<String>,
         git_metadata: &[PathBuf],
         unapproved_primary_checkout: Option<&Path>,
-        read_only: bool,
+        read_only: Option<crate::tools::ReadOnly>,
     ) -> (BashCompletion, PathBuf) {
         let cwd = Arc::new(Mutex::new(PathBuf::from("/workspace")));
         let identity = crate::test_support::tool_identity(&crate::contract::ToolCallId(
@@ -574,7 +574,13 @@ mod tests {
     /// (`docs/agent-subagent-design.md` decision 7).
     #[test]
     fn a_read_only_session_gets_no_grant_offer_for_a_refused_write() {
-        let (completion, _) = finish_as(captured(Some(0), false), Vec::new(), &[], None, true);
+        let (completion, _) = finish_as(
+            captured(Some(0), false),
+            Vec::new(),
+            &[],
+            None,
+            Some(crate::tools::ReadOnly::Delegated),
+        );
         let BashCompletion::Finished(result) = completion else {
             panic!("a read-only session's denial must not ask for a grant: {completion:?}");
         };
@@ -592,6 +598,37 @@ mod tests {
             "{entry}"
         );
         assert!(result.output.get("denied_filesystem_paths").is_none());
+    }
+
+    /// A session that writes only in a worktree of its own and has none yet
+    /// is refused the same way, and told that the write waits for that
+    /// worktree rather than for the session that delegated to it.
+    #[test]
+    fn a_session_without_its_own_worktree_is_told_the_write_waits_for_it() {
+        let (completion, _) = finish_as(
+            captured(Some(0), false),
+            Vec::new(),
+            &[],
+            Some(Path::new("/outside")),
+            Some(crate::tools::ReadOnly::UntilOwnWorktree),
+        );
+        let BashCompletion::Finished(result) = completion else {
+            panic!("the refusal must not ask for the checkout or a grant: {completion:?}");
+        };
+        let entry = result.output["ungrantable_filesystem_paths"]
+            .as_array()
+            .expect("the refused write is reported")
+            .iter()
+            .find(|entry| entry["path"] == "/outside/file")
+            .cloned()
+            .expect("the refused write is among the ungrantable paths");
+        assert!(
+            entry["guidance"]
+                .as_str()
+                .is_some_and(|guidance| guidance.contains("worktree of its own")
+                    && !guidance.contains("delegated")),
+            "{entry}"
+        );
     }
 
     #[test]

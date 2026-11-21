@@ -133,9 +133,18 @@ struct Requester {
 
 impl Requester {
     fn new(host: Option<Arc<dyn ExplorationHost>>) -> Self {
+        Self::with_read_only(host, None)
+    }
+
+    /// A requester that may not write, for `read_only`'s reason.
+    fn with_read_only(
+        host: Option<Arc<dyn ExplorationHost>>,
+        read_only: Option<crate::tools::ReadOnly>,
+    ) -> Self {
         let session_id = SessionId::new();
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_exploration_host(host)
+            .with_read_only(read_only)
             .build();
         let live_state = LiveState::with_disabled_persistence();
         let (results_tx, _results) = crossbeam_channel::unbounded();
@@ -821,6 +830,35 @@ fn an_empty_prompt_or_description_is_rejected_without_spawning_anything() {
 
     assert!(host.started.lock().unwrap().is_empty());
     assert!(terminated.lock().unwrap().is_empty());
+}
+
+/// A requester that may not write gets no write child either: the child's
+/// worktree would hold the work it may not do itself. A read child still
+/// starts.
+#[test]
+fn a_requester_that_may_not_write_cannot_start_a_write_child() {
+    let (host, _terminated) = ScriptedHost::new();
+    let requester = Requester::with_read_only(
+        Some(host.clone()),
+        Some(crate::tools::ReadOnly::UntilOwnWorktree),
+    );
+    let output = requester.call(
+        "t1",
+        TOOL_ID,
+        json!({ "description": "build it", "prompt": "make", "access": "write" }),
+    );
+    assert_eq!(output["is_error"], json!(true));
+    assert!(
+        output["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("worktree of its own")),
+        "{output}"
+    );
+    assert!(host.started.lock().unwrap().is_empty());
+
+    let output = requester.launch("t2", "map a call site", "look");
+    assert_ne!(output["is_error"], json!(true), "{output}");
+    assert_eq!(host.started.lock().unwrap().len(), 1);
 }
 
 #[test]

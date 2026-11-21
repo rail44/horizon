@@ -1,6 +1,6 @@
 //! Board policy is supplied by skills on ordinary agent sessions.
 
-use horizon_agent::roles::RoleDefinition;
+use horizon_agent::roles::{RoleDefinition, RoleWrites};
 
 pub(super) const ORGANIZER: &str = "board-organizer";
 pub(super) const TASK: &str = "board-task";
@@ -24,7 +24,9 @@ pub(crate) fn register() {
         allowed_tool_ids: None,
         model: None,
         uncapped_turns: false,
-        read_only: false,
+        // Writable once `board_session action=implement` (or a review
+        // request) gives the session its own worktree; board #100.
+        writes: RoleWrites::InOwnWorktree,
         include_repository_instructions: true,
         skill_ids: match skill {
             "board-organizer" => &["board-organizer"],
@@ -32,7 +34,9 @@ pub(crate) fn register() {
             _ => &["board-reviewer"],
         },
                 standing,
-        unattended: false,
+        // What the judge leaves to a human is refused instead of parked;
+        // board #100.
+        unattended: true,
     })
     .collect();
     horizon_agent::roles::register_external(definitions);

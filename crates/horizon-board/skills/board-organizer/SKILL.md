@@ -16,6 +16,10 @@ skills for concurrency and integration policy; do not encode a fixed scheduler.
 Registration brings a task here first. Choose which task sessions should
 investigate or consult next, and use board_session action=consult with the task
 id and a concrete request. Its final answer goes to that task's board conversation.
+A consultation reads: ask for what reading code, history, and records can
+answer, not for builds, test runs, or reproducing behavior by running it. A
+task session writes nothing until implementation gives it a worktree of its
+own; what needs running waits for that.
 Investigation or consultation may be useful before a prerequisite is complete.
 Task sessions check their agreed direction and prerequisite results before
 implementation. Direct owner messages can start their task session too.

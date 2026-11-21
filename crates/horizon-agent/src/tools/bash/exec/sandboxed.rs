@@ -21,10 +21,11 @@ pub(in crate::tools::bash) enum Writable {
     /// The workspace root is an unapproved primary checkout: it stays
     /// readable and every write beneath it is refused.
     WorkspaceButNotThePrimaryCheckout,
-    /// Nothing: a read-only session's shell (`roles::RoleDefinition::
-    /// read_only`, `docs/agent-subagent-design.md` decision 7). No writable
-    /// root, no write grant, and so no scratch directory either.
-    Nothing,
+    /// Nothing: a read-only session's shell (`tools::ReadOnly`,
+    /// `docs/agent-subagent-design.md` decision 7), for the reason it
+    /// carries. No writable root, no write grant, and so no scratch
+    /// directory either.
+    Nothing(crate::tools::ReadOnly),
 }
 
 // --- sandboxed execution (tier 1: docs/agent-approval-design.md) ----------
@@ -167,7 +168,10 @@ pub(in crate::tools::bash) fn run_sandboxed(
             git_metadata: &git_metadata_paths(workspace_root),
             unapproved_primary_checkout: (writable == Writable::WorkspaceButNotThePrimaryCheckout)
                 .then_some(workspace_root),
-            read_only: writable == Writable::Nothing,
+            read_only: match writable {
+                Writable::Nothing(reason) => Some(reason),
+                _ => None,
+            },
         },
         timeout,
         cwd_handle,

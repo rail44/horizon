@@ -90,7 +90,7 @@ pub use execution::{
 pub use network::{SessionDomainPolicy, SessionNetworkProxy};
 pub use processing::process_agent_provider_event;
 pub use state::{
-    RecallContext, ToolSessionBuilder, ToolSessionState, register_session_runtime,
+    ReadOnly, RecallContext, ToolSessionBuilder, ToolSessionState, register_session_runtime,
     unregister_session_runtime,
 };
 // Narrow, crate-internal-only read for the approval judge --

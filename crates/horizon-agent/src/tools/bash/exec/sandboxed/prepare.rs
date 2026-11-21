@@ -82,7 +82,7 @@ pub(super) fn prepare(
     if writable == super::Writable::WorkspaceButNotThePrimaryCheckout {
         writable_root_exclusions.push(workspace_root.to_path_buf());
     }
-    let writable_roots = if writable == super::Writable::Nothing {
+    let writable_roots = if matches!(writable, super::Writable::Nothing(_)) {
         writable_root_exclusions.clear();
         Vec::new()
     } else {
@@ -107,7 +107,7 @@ pub(super) fn prepare(
     }
     // A read-only shell keeps only what lets it read: a project's configured
     // trees and the harness's own grants are writable ones.
-    if writable == super::Writable::Nothing {
+    if matches!(writable, super::Writable::Nothing(_)) {
         effective_grants
             .retain(|grant| grant.access == horizon_sandbox::FilesystemGrantAccess::Read);
     }
@@ -293,7 +293,7 @@ mod writable_tests {
             None,
             &[],
             &grants,
-            Writable::Nothing,
+            Writable::Nothing(crate::tools::ReadOnly::Delegated),
         );
         assert!(prepared.policy.writable_roots.is_empty());
         assert!(prepared.policy.writable_root_exclusions.is_empty());

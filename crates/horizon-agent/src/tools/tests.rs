@@ -2649,7 +2649,7 @@ fn tier1_sandboxed_bash_in_a_read_only_session_reads_but_writes_nowhere() {
     let root = temp_workspace("tier1-bash-read-only");
     fs::write(root.join("notes.txt"), "kept\n").unwrap();
     let tool_state = crate::tools::ToolSessionBuilder::new(root.clone())
-        .with_read_only(true)
+        .with_read_only(Some(crate::tools::ReadOnly::Delegated))
         .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();

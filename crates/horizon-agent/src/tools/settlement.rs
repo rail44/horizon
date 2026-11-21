@@ -1,10 +1,7 @@
 //! Settle stopped provider batches against the host's acknowledged results.
 use super::{ToolUpdate, processing::Processing};
 use crate::{
-    contract::{
-        ApprovalKind, Command, ProviderEvent, SessionId, ToolCallIdentity, ToolCallResult,
-        ToolOutcome,
-    },
+    contract::{Command, ProviderEvent, SessionId, ToolCallIdentity, ToolCallResult, ToolOutcome},
     frame::{AgentFrameItem, tool_call_occurrences},
     live::LiveState,
 };
@@ -45,19 +42,7 @@ pub(super) fn settle(
             // Closing that offer must preserve the result of the attempt that ran.
             let prior = frame.items.iter().rev().find_map(|item| match item {
                 AgentFrameItem::ApprovalRequested(approval) => {
-                    let result = match &approval.kind {
-                        ApprovalKind::DomainDenialRetry { prior_result, .. }
-                        | ApprovalKind::FilesystemDenialRetry { prior_result, .. }
-                        | ApprovalKind::MachServiceGrant { prior_result, .. }
-                        | ApprovalKind::PrimaryCheckoutRetry { prior_result, .. } => prior_result,
-                        // Named rather than `_`, so that a new kind does not
-                        // compile until it says whether it holds a prior result.
-                        // Nothing ran before an area request was offered,
-                        // so there is no prior result to preserve.
-                        ApprovalKind::Standard
-                        | ApprovalKind::DomainGrant { .. }
-                        | ApprovalKind::SandboxAreaGrant { .. } => return None,
-                    };
+                    let result = approval.kind.prior_result()?;
                     (result.call_id == identity.call_id
                         && result.occurrence_id == identity.occurrence_id)
                         .then_some(result.clone())
@@ -92,7 +77,9 @@ pub(super) fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{ApprovalRequest, Event, OccurrenceId, ToolCallId, ToolCallRequest};
+    use crate::contract::{
+        ApprovalKind, ApprovalRequest, Event, OccurrenceId, ToolCallId, ToolCallRequest,
+    };
     fn request(call: &str, occurrence: &str) -> ToolCallRequest {
         ToolCallRequest {
             call_id: ToolCallId(call.into()),

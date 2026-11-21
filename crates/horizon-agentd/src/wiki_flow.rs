@@ -48,7 +48,7 @@ pub(crate) fn register() {
             allowed_tool_ids: Some(agent::THREAD_ROLE_TOOLS),
             model: None,
             uncapped_turns: false,
-            read_only: false,
+            writes: horizon_agent::roles::RoleWrites::Anywhere,
             include_repository_instructions: true,
             skill_ids: agent::THREAD_ROLE_SKILLS,
             standing: false,
