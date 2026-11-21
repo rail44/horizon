@@ -14,6 +14,9 @@ use horizon_ui::testing::{Pointer, click_at, pointer};
 use horizon_workspace::{Cursor, PaneId, SessionId, SessionKind, Side, Workspace};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
+#[path = "probe/scale.rs"]
+mod probe_scale;
+
 mod support;
 
 struct Opened {

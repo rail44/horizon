@@ -108,7 +108,16 @@ impl TraverseTree for DevicePixels<'_> {}
 
 impl RoundTree for DevicePixels<'_> {
     fn get_unrounded_layout(&self, id: NodeId) -> Layout {
-        scaled(*self.node(id).unrounded_layout(), self.scale)
+        let layout = scaled(*self.node(id).unrounded_layout(), self.scale);
+        let off = std::env::var_os("PROBE_NOSNAP").is_some();
+        let snap = |v: f32| if off { v } else { (v * 64.).round() / 64. };
+        Layout {
+            location: Point { x: snap(layout.location.x), y: snap(layout.location.y) },
+            size: Size { width: snap(layout.size.width), height: snap(layout.size.height) },
+            border: layout.border.map(snap),
+            padding: layout.padding.map(snap),
+            ..layout
+        }
     }
 
     fn set_final_layout(&mut self, id: NodeId, rounded: &Layout) {
