@@ -18,8 +18,8 @@ use horizon_terminal_core::{
     ClipboardDestination, KeyEventKind, NamedColor, TerminalColor, TerminalColorScheme,
     TerminalCommand, TerminalCursorShape, TerminalFrame, TerminalKeyInput, TerminalLine,
     TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
-    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalStyle,
-    TerminalUnderline, TerminalUpdate, fixed_palette_rgb,
+    TerminalScroll, TerminalSelection, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
+    TerminalStyle, TerminalUnderline, TerminalUpdate, fixed_palette_rgb,
 };
 use horizon_ui::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, DomEventData, MouseEventButton,
@@ -45,7 +45,7 @@ mod rows;
 mod session;
 mod shaping;
 
-use rows::{row_height, row_px};
+use rows::{row_height, row_px, scroll_shift};
 pub use session::{Input, Session};
 use shaping::{Ink, Row, Shaper};
 
@@ -1202,6 +1202,94 @@ fn glyphs(
     }
 }
 
+/// What every row of a frame is drawn with, in device pixels.
+struct Pen {
+    /// The grid's width.
+    width: f64,
+    /// A cell's width, and a row's height (whole: [`row_px`]).
+    cell: f64,
+    line: f64,
+    /// A row's baseline below its top.
+    baseline: f32,
+    font_px: f32,
+    /// How far into a device pixel the box starts, across and down.
+    inset: (f64, f64),
+    background: [u8; 3],
+    selection: [u8; 3],
+}
+
+/// Draws one row with its top at `top`: its own ground, the backgrounds of
+/// its runs, the part of the selection on it (`selected`, as columns), its
+/// glyphs, the characters drawn as shapes, and the lines under and through
+/// it. Nothing is drawn outside the row: the row is a strip of the grid
+/// whatever is beside it (`docs/terminal-row-texture-design.md` §3.5).
+fn paint_row(
+    scene: &mut impl PaintScene,
+    pen: &Pen,
+    shaped: &Shaped,
+    selected: Option<std::ops::Range<usize>>,
+    top: f64,
+) {
+    let Pen {
+        cell, line, inset, ..
+    } = *pen;
+    // (Edges on the display's pixels: two fills that meet part of a pixel
+    // in leave a line between them.)
+    let (upper, lower) = (on_pixel(top, inset.1), on_pixel(top + line, inset.1));
+    let cells = |from: usize, to: usize| {
+        Rect::new(
+            on_pixel(from as f64 * cell, inset.0),
+            upper,
+            on_pixel(to as f64 * cell, inset.0),
+            lower,
+        )
+    };
+    let strip = Rect::new(0., upper, pen.width, lower);
+    scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &strip);
+    fill(scene, pen.background, strip);
+    for (columns, color) in &shaped.row.backgrounds {
+        fill(scene, *color, cells(columns.start, columns.end));
+    }
+    if let Some(columns) = selected {
+        fill(scene, pen.selection, cells(columns.start, columns.end));
+    }
+    glyphs(
+        scene,
+        shaped,
+        &shaped.line.cells,
+        cell,
+        0.,
+        top,
+        pen.baseline,
+    );
+    shapes(scene, shaped, cell, top, line, pen.font_px, inset);
+    // How thick a line under or through text is.
+    let thick = (pen.font_px as f64 / 14.).round().max(1.);
+    rules(scene, shaped, cell, top, pen.baseline as f64, thick, inset);
+    scene.pop_layer();
+}
+
+/// The columns of row `row` a selection covers, on a grid `columns` wide:
+/// whole rows between its ends, both inclusive.
+fn selected_columns(
+    selection: &TerminalSelection,
+    row: usize,
+    columns: usize,
+) -> Option<std::ops::Range<usize>> {
+    if !(selection.start.row..=selection.end.row).contains(&row) {
+        return None;
+    }
+    let from = match row == selection.start.row {
+        true => selection.start.col,
+        false => 0,
+    };
+    let to = match row == selection.end.row {
+        true => selection.end.col + 1,
+        false => columns,
+    };
+    Some(from..to)
+}
+
 impl horizon_ui::blitz_dom::Widget for Screen {
     fn paint(
         &mut self,
@@ -1242,16 +1330,14 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             row_px(look.line_height, scale),
         );
         let font_px = look.font_size * scale as f32;
-        // How thick a line under or through text is.
-        let thick = (font_px as f64 / 14.).round().max(1.);
         let (left, above) = self.state.origin.get();
         let inset = ((left * scale).fract(), (above * scale).fract());
         if self.shaped_at != scale {
             self.history.1.clear();
         }
         // Scrolled back: rows of the window of history held, moved up by
-        // the part of a row the view is into its top one. No cursor and no
-        // selection: those are of the live screen.
+        // the part of a row the view is into its top one, in whole device
+        // pixels. No cursor and no selection: those are of the live screen.
         let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
         if let Some((window, range, into)) = scrolled {
             if self.shaped_at != scale {
@@ -1260,6 +1346,16 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 self.baseline =
                     (self.shaper).baseline(scale as f32, row_height(look.line_height, scale));
             }
+            let pen = Pen {
+                width: width as f64,
+                cell,
+                line,
+                baseline: self.baseline,
+                font_px,
+                inset,
+                background: palette.background(),
+                selection: look.selection,
+            };
             // The rows shaped are this window's, by their place in it.
             let held = std::sync::Arc::as_ptr(&window) as usize;
             if self.history.0 != held {
@@ -1269,32 +1365,12 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             self.history.1.retain(|row, _| near.contains(row));
             let clip = Rect::new(0., 0., width as f64, height as f64);
             scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &clip);
+            let shift = scroll_shift(into, line);
             for (place, row) in range.enumerate() {
-                let top = (place as f64 - into as f64) * line;
                 let shaper = &mut self.shaper;
                 let shaped = (self.history.1.entry(row))
                     .or_insert_with(|| shape(&window.lines[row], shaper, scale as f32, palette));
-                for (columns, color) in &shaped.row.backgrounds {
-                    let behind = Rect::new(
-                        on_pixel(columns.start as f64 * cell, inset.0),
-                        top,
-                        on_pixel(columns.end as f64 * cell, inset.0),
-                        top + line,
-                    );
-                    fill(&mut scene, *color, behind);
-                }
-                glyphs(
-                    &mut scene,
-                    shaped,
-                    &shaped.line.cells,
-                    cell,
-                    0.,
-                    top,
-                    self.baseline,
-                );
-                shapes(&mut scene, shaped, cell, top, line, font_px, inset);
-                let baseline = self.baseline as f64;
-                rules(&mut scene, shaped, cell, top, baseline, thick, inset);
+                paint_row(&mut scene, &pen, shaped, None, place as f64 * line - shift);
             }
             scene.pop_layer();
             return scene;
@@ -1347,47 +1423,21 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 on_pixel((row + 1) as f64 * line, inset.1),
             )
         };
+        let pen = Pen {
+            width: width as f64,
+            cell,
+            line,
+            baseline: self.baseline,
+            font_px,
+            inset,
+            background: palette.background(),
+            selection: look.selection,
+        };
+        let columns = self.state.cells.get().1;
         for (index, shaped) in self.rows.iter().enumerate() {
-            for (columns, color) in &shaped.row.backgrounds {
-                fill(&mut scene, *color, cells(index, columns.start, columns.end));
-            }
-        }
-        // The selection: whole rows between its ends, both inclusive.
-        if let Some(selection) = &frame.selection {
-            let columns = self.state.cells.get().1;
-            for row in selection.start.row..=selection.end.row {
-                let from = match row == selection.start.row {
-                    true => selection.start.col,
-                    false => 0,
-                };
-                let to = match row == selection.end.row {
-                    true => selection.end.col + 1,
-                    false => columns,
-                };
-                fill(&mut scene, look.selection, cells(row, from, to));
-            }
-        }
-        for (index, shaped) in self.rows.iter().enumerate() {
-            glyphs(
-                &mut scene,
-                shaped,
-                &shaped.line.cells,
-                cell,
-                0.,
-                index as f64 * line,
-                self.baseline,
-            );
-            shapes(
-                &mut scene,
-                shaped,
-                cell,
-                index as f64 * line,
-                line,
-                font_px,
-                inset,
-            );
-            let (top, baseline) = (index as f64 * line, self.baseline as f64);
-            rules(&mut scene, shaped, cell, top, baseline, thick, inset);
+            let selected = (frame.selection.as_ref())
+                .and_then(|selection| selected_columns(selection, index, columns));
+            paint_row(&mut scene, &pen, shaped, selected, index as f64 * line);
         }
 
         if let Some(cursor) = frame.cursor {
