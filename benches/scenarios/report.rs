@@ -116,7 +116,7 @@ fn smallest<'a>(all: &'a [Measured], of: &Measured) -> &'a Measured {
 
 /// The times in milliseconds: the median of each part, then the median,
 /// 95th percentile and longest of the whole frame.
-pub fn table(all: &[Measured]) -> String {
+pub fn table(all: &[Measured], on_gpu: bool) -> String {
     let mut table = String::new();
     let shown = all.iter().find_map(|measured| measured.late);
     if let Some((refresh, _)) = shown {
@@ -124,6 +124,12 @@ pub fn table(all: &[Measured]) -> String {
             table,
             "drawn into a window; the display shows a frame for {:.2} ms",
             milliseconds(refresh)
+        );
+    }
+    if on_gpu {
+        let _ = writeln!(
+            table,
+            "drawn on the GPU with no window, each frame read back when done"
         );
     }
     let _ = writeln!(
@@ -134,7 +140,11 @@ pub fn table(all: &[Measured]) -> String {
         "frames",
         "act",
         "layout",
-        if shown.is_some() { "render" } else { "scene" },
+        if shown.is_some() || on_gpu {
+            "render"
+        } else {
+            "scene"
+        },
         "median",
         "p95",
         "max"

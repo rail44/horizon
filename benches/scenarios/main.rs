@@ -17,13 +17,17 @@
 //! timed here. With `--window` the frames are drawn into a window on the
 //! desktop instead (`window.rs`), and the third part is `render`: the
 //! scene, the GPU's work on it and its presentation, which waits for the
-//! display.
+//! display. With `--gpu` they are drawn by Vello on the GPU with no window
+//! and read back, and `render` is that: what a view that keeps pixels on
+//! the renderer's device (the terminal's rows) does in a window, and what
+//! the recording scene does not see.
 //!
 //! ```sh
 //! cargo bench --bench scenarios                # every scenario
 //! cargo bench --bench scenarios -- agent/      # those whose name has `agent/`
 //! cargo bench --bench scenarios -- --json out.json
 //! cargo bench --bench scenarios -- --window    # drawn into a window
+//! cargo bench --bench scenarios -- --gpu       # drawn on the GPU, no window
 //! ```
 
 use std::time::{Duration, Instant};
@@ -70,7 +74,22 @@ pub struct Stage {
     pub app: App,
     size: (u32, u32),
     scene: anyrender::Scene,
+    /// With `--gpu`, the renderer the page is drawn with: Vello on the GPU,
+    /// with no window, read back after each frame.
+    gpu: Option<anyrender_vello::VelloImageRenderer>,
     pub frames: Vec<Frame>,
+}
+
+/// Whether the frames are drawn on the GPU with no window: `--gpu`.
+static ON_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn on_gpu() -> bool {
+    ON_GPU.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn gpu_renderer(width: u32, height: u32) -> Option<anyrender_vello::VelloImageRenderer> {
+    use anyrender::ImageRenderer as _;
+    on_gpu().then(|| anyrender_vello::VelloImageRenderer::new(width, height))
 }
 
 impl Stage {
@@ -86,6 +105,7 @@ impl Stage {
             app,
             size: (width, height),
             scene: anyrender::Scene::new(),
+            gpu: gpu_renderer(width, height),
             frames: Vec::new(),
         };
         stage.settle();
@@ -98,6 +118,19 @@ impl Stage {
         let (width, height) = self.size;
         if window::is_open() {
             return window::render(&document, width, height);
+        }
+        if let Some(renderer) = &mut self.gpu {
+            use anyrender::ImageRenderer as _;
+            let mut pixels = Vec::new();
+            let started = Instant::now();
+            renderer.render_to_vec(
+                |scene| {
+                    let mut document = document.borrow_mut();
+                    blitz_paint::paint_scene(scene, &mut document, 1.0, width, height, 0, 0)
+                },
+                &mut pixels,
+            );
+            return started.elapsed();
         }
         let started = Instant::now();
         self.scene.reset();
@@ -164,6 +197,9 @@ impl Stage {
             false => (width, height),
         };
         self.size = (width, height);
+        if self.gpu.is_some() {
+            self.gpu = gpu_renderer(width, height);
+        }
         let document = self.app.document();
         (document.borrow_mut()).set_viewport(Viewport::new(width, height, 1.0, ColorScheme::Light));
     }
@@ -251,6 +287,7 @@ fn main() {
         match argument.as_str() {
             "--json" => json = arguments.next(),
             "--window" => window::open(),
+            "--gpu" => ON_GPU.store(true, std::sync::atomic::Ordering::Relaxed),
             // What `cargo bench` passes to every bench target.
             "--bench" => {}
             "--list" => {
@@ -279,7 +316,7 @@ fn main() {
             measured.push(report::Measured::of(&scenario, size, &frames, shown));
         }
     }
-    print!("{}", report::table(&measured));
+    print!("{}", report::table(&measured, on_gpu()));
     if let Some(path) = json {
         std::fs::write(&path, report::json(&measured)).expect("the JSON file written");
     }

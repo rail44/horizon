@@ -38,6 +38,12 @@ pub fn scenarios() -> Vec<Scenario> {
             sizes: CELLS,
             run: scrollback,
         },
+        Scenario {
+            name: "terminal/idle",
+            unit: "cells",
+            sizes: CELLS,
+            run: idle,
+        },
     ]
 }
 
@@ -159,6 +165,21 @@ fn lines(cells: usize) -> Vec<Frame> {
     opened.frames_taking_in("the end of the output", |text| {
         text.lines().any(|line| line == "output-done")
     });
+    opened.stage.frames
+}
+
+/// Frames that change nothing in a full screen: what the page drawn again
+/// for something else (an animation beside the terminal) costs it.
+fn idle(cells: usize) -> Vec<Frame> {
+    let mut opened = open(cells);
+    let line = "x".repeat(opened.columns - 14);
+    opened.run(&format!("seq -f '%012.0f {line}' 1 200; echo screen-full"));
+    opened.wait("a full screen", |text| {
+        text.lines().any(|line| line == "screen-full")
+    });
+    for _ in 0..100 {
+        opened.stage.frame(|_| {});
+    }
     opened.stage.frames
 }
 
