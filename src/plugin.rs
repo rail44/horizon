@@ -79,12 +79,6 @@ pub trait Plugin {
     /// Its commands, in the order the palette lists them.
     fn commands() -> Vec<Command<Self::Command>>;
 
-    /// The keys a pane of it takes, as the bar at the bottom of the window
-    /// shows them while the pane has the focus: the most wanted first.
-    fn hints() -> Vec<Hint> {
-        Vec::new()
-    }
-
     /// The state of a new pane, made from what was given for it.
     fn create(given: Given) -> Result<Self::State, String>;
 
@@ -100,24 +94,6 @@ pub trait Plugin {
         state: Self::State,
         ask: Callback<Self::Asked>,
     ) -> Mounted<Self::State, Self::Command>;
-}
-
-/// A key a view takes, and what it does, as the bar at the bottom of the
-/// window says it: `keys` as they are spelled there (`j/k`, `enter`,
-/// `ctrl+shift+c`), and what they do in a few words.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Hint {
-    pub keys: String,
-    pub label: String,
-}
-
-impl Hint {
-    pub fn new(keys: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            keys: keys.into(),
-            label: label.into(),
-        }
-    }
 }
 
 /// A command as the palette lists it and a key binding names it.

@@ -9,14 +9,11 @@
 use std::rc::Rc;
 
 use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::keys::Key;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{
-    Callable, Callback, Component, El, dispatched, each_layout, el, prevent_default, relayout,
-    stop_propagation,
-};
-use keyboard_types::{Key, NamedKey};
+use horizon_ui::{Callable, Callback, Component, El, dispatched, each_layout, el, relayout};
 
 use horizon_components::{Field, Prompt};
 
@@ -197,28 +194,30 @@ impl Component for Finder {
                 format!("{}/{}{more}", results.matched, results.all)
             })
         };
+        // The choice, among the files found now.
+        let now = move || {
+            let count = results.with_untracked(|results| results.found.len());
+            chosen.get_untracked().min(count.saturating_sub(1))
+        };
+        let step = move |by: isize| {
+            move || {
+                let count = results.with_untracked(|results| results.found.len());
+                let to = (now() as isize + by).clamp(0, count.saturating_sub(1) as isize);
+                choose(to as usize);
+            }
+        };
         el("div")
             .class(styles::FINDER)
-            .on("keydown", move |event| {
-                let DomEventData::KeyDown(key) = &event.data else {
-                    return;
-                };
-                let count = results.with_untracked(|results| results.found.len());
-                let last = count.saturating_sub(1);
-                let now = chosen.get_untracked().min(last);
-                let (down, up) = ((now + 1).min(last), now.saturating_sub(1));
-                match &key.key {
-                    Key::Named(NamedKey::ArrowDown) => choose(down),
-                    Key::Named(NamedKey::ArrowUp) => choose(up),
-                    Key::Named(NamedKey::Tab) if key.modifiers.shift() => choose(up),
-                    Key::Named(NamedKey::Tab) => choose(down),
-                    Key::Named(NamedKey::Enter) => take(now),
-                    // Anything else is the field's.
-                    _ => return,
-                }
-                prevent_default();
-                stop_propagation();
-            })
+            // Anything else is the field's; Escape is the sheet's.
+            .keys(vec![
+                Key::group("↑/↓", "move")
+                    .bind("down", step(1))
+                    .bind("up", step(-1))
+                    .bind("tab", step(1))
+                    .bind("shift+tab", step(-1)),
+                Key::new("enter", "open", move || take(now())),
+                Key::when("esc", "close", || false),
+            ])
             .child(
                 el("div")
                     .class(styles::SEARCH)

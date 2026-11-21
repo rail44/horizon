@@ -10,6 +10,8 @@ blitz-traits = { workspace = true }
 reactive_graph = { workspace = true }
 any_spawner = { workspace = true }
 horizon-ui-macros = { path = "../horizon-ui-macros" }
+# A key as a view's keys and a key binding spell it (`src/chord.rs`).
+keyboard-types = "0.8"
 
 # The document is the host's: a view built into a wasm plugin reaches it
 # over `wit/plugin.wit` (`src/guest.rs`).
@@ -25,10 +27,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
-keyboard-types = "0.8"
-
-[dev-dependencies]
-keyboard-types = "0.8"
 
 [lints]
 workspace = true

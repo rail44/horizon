@@ -122,5 +122,5 @@ pub(super) fn view(shell: Shell) -> El {
             shell.apply_layout(name);
         }
     };
-    picker::view(shell.search, rows, picked)
+    picker::view(shell.search, rows, picked, "apply")
 }

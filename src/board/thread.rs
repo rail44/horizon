@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use crate::board::chrome;
 use crate::board::model::{
-    self, ThreadCommand, Voice, command_for_key, fold_preview, read_through, status_text,
-    step_post, task_session_id, unread_count, voice,
+    self, THREAD_KEYS, ThreadCommand, Voice, fold_preview, read_through, status_text, step_post,
+    task_session_id, unread_count, voice,
 };
 use horizon_board::{Comment, Item, read_position_advances};
 use horizon_ui::blitz_traits::events::DomEventData;
@@ -27,7 +27,6 @@ use horizon_ui::{
 use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
 
-use super::list::key_name;
 use super::{Activity, Job, Sessions, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use horizon_components::markdown::{Headings, render};
@@ -852,18 +851,9 @@ pub fn view(
         }
     });
 
-    root.on("keydown", move |event| {
-        let DomEventData::KeyDown(key) = &event.data else {
-            return;
-        };
-        if key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
-            return;
-        }
-        if let Some(command) = key_name(key).and_then(|name| command_for_key(&name)) {
-            state.execute(command);
-            prevent_default();
-        }
-    })
+    root.keys(super::list::keyed(THREAD_KEYS, move |command| {
+        state.execute(command)
+    }))
     // The band, the column and the field are built once and stay: with no
     // task to show they are only not drawn.
     .class(styles::BOARD_THREAD)

@@ -18,7 +18,7 @@ pub use super::measure::{display_width, rendered_lines};
 
 /// Everything the thread view can be asked to do. Keys, buttons, and clicks
 /// all resolve to one of these, so a chord is attached to behaviour in
-/// exactly one place ([`command_for_key`]).
+/// exactly one place ([`THREAD_KEYS`]).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ThreadCommand {
     NextPost,
@@ -72,14 +72,6 @@ pub struct Keyed<C: 'static> {
     pub bound: &'static [(&'static str, C)],
 }
 
-/// The command for the key named `key` in `keys`.
-fn keyed<C: Clone>(keys: &[Keyed<C>], key: &str) -> Option<C> {
-    (keys.iter())
-        .flat_map(|keyed| keyed.bound)
-        .find(|(name, _)| *name == key)
-        .map(|(_, command)| command.clone())
-}
-
 /// The thread view's key map, the most wanted first. A key's name; a
 /// chord carrying any modifier other than shift never reaches it.
 pub const THREAD_KEYS: &[Keyed<ThreadCommand>] = &[
@@ -109,11 +101,6 @@ pub const THREAD_KEYS: &[Keyed<ThreadCommand>] = &[
         bound: &[("escape", ThreadCommand::LeaveComposer)],
     },
 ];
-
-/// The thread view's command for the key named `key`.
-pub fn command_for_key(key: &str) -> Option<ThreadCommand> {
-    keyed(THREAD_KEYS, key)
-}
 
 /// The list view's key map, the most wanted first.
 pub const LIST_KEYS: &[Keyed<ListCommand>] = &[
@@ -148,11 +135,6 @@ pub const LIST_KEYS: &[Keyed<ListCommand>] = &[
         bound: &[("o", ListCommand::ToggleFinished)],
     },
 ];
-
-/// The list view's command for the key named `key`.
-pub fn list_command_for_key(key: &str) -> Option<ListCommand> {
-    keyed(LIST_KEYS, key)
-}
 
 // ---------------------------------------------------------------------------
 // The tree order

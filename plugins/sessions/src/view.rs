@@ -25,6 +25,7 @@ use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
 use horizon_ui::guest::{self, Close, CursorTarget, modal, watch_sessions, watch_workspace};
+use horizon_ui::keys::Key;
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::on_cleanup;
@@ -33,7 +34,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntra
 use horizon_ui::{
     Callback, Class, Component, El, each_layout, el, prevent_default, stop_propagation,
 };
-use keyboard_types::{Key, NamedKey};
+use keyboard_types::NamedKey;
 
 use crate::list::{self, Group, Row};
 
@@ -81,9 +82,6 @@ mod styles {
         .under { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
                  text-overflow: ellipsis; font-size: var(--meta-size);
                  line-height: var(--meta-line); color: var(--text-muted); }
-        .foot { flex: none; display: flex; flex-wrap: wrap; align-items: center;
-                gap: 0 var(--u4); padding: var(--u4) var(--u8); font-size: var(--micro-size);
-                line-height: var(--micro-line); color: var(--text-muted); }
         .asking { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                   display: flex; justify-content: center; align-items: center;
                   padding: var(--u24); }
@@ -92,10 +90,6 @@ mod styles {
         .dialog { position: relative; border: var(--line) solid var(--border);
                   border-radius: var(--radius-large); overflow: hidden;
                   box-shadow: var(--shadow-modal); }
-        .hint { display: flex; align-items: center; gap: var(--u4); padding: 0 var(--u4);
-                border-radius: var(--radius); cursor: pointer; }
-        .hint:hover { background: var(--hover); }
-        .key { font-weight: 600; color: var(--text); }
     }
     .over { width: 720px; height: 480px; display: flex; }
     .over > .sessions { flex: 1; }
@@ -120,16 +114,6 @@ enum Act {
     Search,
 }
 
-/// What the band shows, in order.
-const BAND: [Act; 6] = [
-    Act::GoTo,
-    Act::Terminal,
-    Act::Terminate,
-    Act::TerminateDerived,
-    Act::NextWaiting,
-    Act::Search,
-];
-
 /// What a row's menu does to its session, in order.
 const ON_A_ROW: [Act; 4] = [
     Act::GoTo,
@@ -151,18 +135,6 @@ impl Act {
         }
     }
 
-    /// What the band calls it.
-    fn short(self) -> &'static str {
-        match self {
-            Self::GoTo => "Go to",
-            Self::Terminal => "Terminal",
-            Self::Terminate => "Terminate",
-            Self::TerminateDerived => "With derived",
-            Self::NextWaiting => "Next waiting",
-            Self::Search => "Search",
-        }
-    }
-
     /// What a row's menu calls it.
     fn named(self) -> &'static str {
         match self {
@@ -174,16 +146,6 @@ impl Act {
             Self::Search => "Search",
         }
     }
-
-    /// The act a typed key is, where it is one.
-    fn of_key(key: &Key) -> Option<Self> {
-        let typed = match key {
-            Key::Named(NamedKey::Enter) => "Enter",
-            Key::Character(character) => character.as_str(),
-            _ => return None,
-        };
-        BAND.into_iter().find(|act| act.key() == typed)
-    }
 }
 
 /// Does an act.
@@ -191,9 +153,6 @@ type Run = Rc<dyn Fn(Act)>;
 
 /// What differs with where the list is shown.
 struct Shown {
-    /// What the band says after the list's own keys: a key that is not
-    /// the list's, and what it does.
-    left_with: Option<(&'static str, &'static str)>,
     /// Whether the list asks over the whole workspace before it ends a
     /// session; where it does not, it asks over itself.
     asks_over_the_workspace: bool,
@@ -209,7 +168,6 @@ struct Shown {
 /// Escape takes a search back.
 pub fn pane() -> El {
     list(Shown {
-        left_with: None,
         asks_over_the_workspace: true,
         escape_takes_a_search_back: true,
         gone: Rc::new(|| {}),
@@ -220,7 +178,6 @@ pub fn pane() -> El {
 /// and Escape is the sheet's, which leaves it too.
 pub fn over(close: Close) -> El {
     let list = list(Shown {
-        left_with: Some(("Esc", "Close")),
         asks_over_the_workspace: false,
         escape_takes_a_search_back: false,
         gone: Rc::new(move || close.close()),
@@ -708,10 +665,29 @@ fn list(shown: Shown) -> El {
             follow();
         }
     });
+    let takes_back = shown.escape_takes_a_search_back;
     let field = move || {
         let input = el("input")
             .attr("type", "text")
             .attr("placeholder", "Search")
+            .keys(vec![
+                Key::new("enter", "done", move || {
+                    state.searching.set(false);
+                    root.focus();
+                }),
+                Key::when(
+                    "esc",
+                    if takes_back { "clear" } else { "close" },
+                    move || {
+                        if takes_back {
+                            state.query.set(String::new());
+                            state.searching.set(false);
+                            root.focus();
+                        }
+                        takes_back
+                    },
+                ),
+            ])
             .on("input", move |event| {
                 if let DomEventData::Input(input) = &event.data {
                     state.query.set(input.value.clone());
@@ -725,18 +701,6 @@ fn list(shown: Shown) -> El {
                 false => input,
             })
     };
-    let by_band = run.clone();
-    let left = shown.gone.clone();
-    let foot = el("div")
-        .class(styles::FOOT)
-        .children(BAND.into_iter().map(|act| {
-            let run = by_band.clone();
-            hint((act.key(), act.short()), move || run(act))
-        }))
-        .children((shown.left_with.into_iter()).map(move |said| {
-            let left = left.clone();
-            hint(said, move || left())
-        }));
 
     // Asked whether to end a session: over the whole workspace, or over
     // the list. The keys come back to the list once it is answered.
@@ -796,68 +760,43 @@ fn list(shown: Shown) -> El {
             field,
         )
         .child(list)
-        .child(foot)
         .each(asking_over_the_list, Clone::clone, over_the_list);
 
-    root.on("keydown", move |event| {
+    // The list's keys, in the order they are wanted.
+    let mut keys = vec![
+        Key::group("j/k", "move")
+            .bind("j", move || step(1, false))
+            .bind("down", move || step(1, false))
+            .bind("k", move || step(-1, false))
+            .bind("up", move || step(-1, false)),
+    ];
+    for (spelled, chord, label, act) in [
+        ("enter", "enter", "go to", Act::GoTo),
+        ("t", "t", "terminal", Act::Terminal),
+        ("x", "x", "terminate", Act::Terminate),
+        ("X", "shift+x", "with derived", Act::TerminateDerived),
+        ("n", "n", "next waiting", Act::NextWaiting),
+        ("/", "/", "search", Act::Search),
+    ] {
+        let run = run.clone();
+        keys.push(Key::group(spelled, label).bind(chord, move || run(act)));
+    }
+    // (Over the workspace, Escape is the sheet's, which leaves the list.)
+    if !takes_back {
+        keys.push(Key::when("esc", "close", || false));
+    }
+    root.keys(keys).on("keydown", move |event| {
         let DomEventData::KeyDown(key) = &event.data else {
             return;
         };
-        if key.is_composing || key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
-            return;
-        }
         state.now.set(now_ms());
-        let character = match &key.key {
-            Key::Character(character) => character.as_str(),
-            _ => "",
-        };
-        // In the search's field, the keys are what is searched for.
-        if state.searching.get_untracked() {
-            match &key.key {
-                Key::Named(NamedKey::Enter) => state.searching.set(false),
-                Key::Named(NamedKey::Escape) if shown.escape_takes_a_search_back => {
-                    state.query.set(String::new());
-                    state.searching.set(false);
-                }
-                _ => return,
-            }
-            root.focus();
+        // (A search that stands is taken back.)
+        let escape = key.key == keyboard_types::Key::Named(NamedKey::Escape);
+        if escape && takes_back && !state.query.get_untracked().is_empty() {
+            state.query.set(String::new());
             prevent_default();
             stop_propagation();
-            return;
         }
-        match (&key.key, character) {
-            (_, "j") | (Key::Named(NamedKey::ArrowDown), _) => step(1, false),
-            (_, "k") | (Key::Named(NamedKey::ArrowUp), _) => step(-1, false),
-            (key, _) if Act::of_key(key).is_some() => {
-                if let Some(act) = Act::of_key(key) {
-                    run(act);
-                }
-            }
-            // (A search that stands is taken back.)
-            (Key::Named(NamedKey::Escape), _)
-                if shown.escape_takes_a_search_back && !state.query.get_untracked().is_empty() =>
-            {
-                state.query.set(String::new());
-            }
-            _ => return,
-        }
-        prevent_default();
-        stop_propagation();
     });
     root.focus()
-}
-
-/// A key in the band and what it does, which a press does too. The press
-/// leaves the keys where they were.
-fn hint((key, does): (&str, &str), press: impl Fn() + 'static) -> El {
-    el("span")
-        .class(styles::HINT)
-        .child(el("span").class(styles::KEY).text(key))
-        .child(el("span").text(does))
-        .on("pointerdown", |_| prevent_default())
-        .on("click", move |_| {
-            press();
-            prevent_default();
-        })
 }

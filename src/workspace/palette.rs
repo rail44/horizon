@@ -58,5 +58,5 @@ pub(super) fn view(shell: Shell) -> El {
             shell.change(Workspace::exit_workspace_mode);
         }
     };
-    picker::view(shell.search, rows, picked)
+    picker::view(shell.search, rows, picked, "run")
 }

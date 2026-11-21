@@ -5,13 +5,13 @@
 //! confirms it.
 
 use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::keys::Key;
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Class, El, el, prevent_default, stop_propagation};
-use keyboard_types::{Key, NamedKey};
+use horizon_ui::{Class, El, el};
 
 use super::styles;
 use horizon_components::{Field, Prompt};
@@ -54,14 +54,15 @@ pub(super) struct Row {
 }
 
 /// Builds the list: `rows` gives the rows for what is typed, and `picked`
-/// is told which of them was confirmed, by Enter or a click. Leaving goes back to workspace
-/// mode as it was.
+/// is told which of them was confirmed, by Enter or a click, which does
+/// `enter` in a few words. Leaving goes back to workspace mode as it was.
 pub(super) fn view(
     search: Search,
     rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     picked: impl Fn(usize) + Clone + 'static,
+    enter: &str,
 ) -> El {
-    view_in_steps(search, rows, picked, || false)
+    list(search, rows, picked, enter, ("close", || false))
 }
 
 /// [`view`] for a list of more than one step: Escape asks `back`, which
@@ -71,7 +72,19 @@ pub(super) fn view_in_steps(
     search: Search,
     rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     picked: impl Fn(usize) + Clone + 'static,
+    enter: &str,
     back: impl Fn() -> bool + 'static,
+) -> El {
+    list(search, rows, picked, enter, ("back", back))
+}
+
+/// The list, Escape doing `leave` by `back` or else left to the sheet.
+fn list(
+    search: Search,
+    rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
+    picked: impl Fn(usize) + Clone + 'static,
+    enter: &str,
+    (leave, back): (&str, impl Fn() -> bool + 'static),
 ) -> El {
     let input = el("input")
         .attr("type", "text")
@@ -105,35 +118,37 @@ pub(super) fn view_in_steps(
             )
         },
     );
+    // The choice, among the rows there are now.
+    let chosen = move || {
+        let count = rows.with_untracked(Vec::len);
+        (
+            search.chosen.get_untracked().min(count.saturating_sub(1)),
+            count,
+        )
+    };
+    let step = move |by: isize| {
+        let (at, count) = chosen();
+        let to = (at as isize + by).clamp(0, count.saturating_sub(1) as isize);
+        search.chosen.set(to as usize);
+    };
     el("div")
         .class(styles::PICKER)
-        .on("keydown", move |event| {
-            let DomEventData::KeyDown(key) = &event.data else {
-                return;
-            };
-            if key.key == Key::Named(NamedKey::Escape) && !back() {
-                return;
-            }
-            let count = rows.with_untracked(Vec::len);
-            let chosen = search.chosen.get_untracked().min(count.saturating_sub(1));
-            let (down, up) = (
-                (chosen + 1).min(count.saturating_sub(1)),
-                chosen.saturating_sub(1),
-            );
-            match &key.key {
-                Key::Named(NamedKey::ArrowDown) => search.chosen.set(down),
-                Key::Named(NamedKey::ArrowUp) => search.chosen.set(up),
-                Key::Named(NamedKey::Tab) if key.modifiers.shift() => search.chosen.set(up),
-                Key::Named(NamedKey::Tab) => search.chosen.set(down),
-                Key::Named(NamedKey::Escape) => {}
-                _ if count == 0 => return,
-                Key::Named(NamedKey::Enter) => picked(chosen),
-                // Anything else is the field's.
-                _ => return,
-            }
-            prevent_default();
-            stop_propagation();
-        })
+        // Anything else is the field's.
+        .keys(vec![
+            Key::group("↑/↓", "move")
+                .bind("down", move || step(1))
+                .bind("up", move || step(-1))
+                .bind("tab", move || step(1))
+                .bind("shift+tab", move || step(-1)),
+            Key::when("enter", enter, move || {
+                let (at, count) = chosen();
+                if count > 0 {
+                    picked(at);
+                }
+                count > 0
+            }),
+            Key::when("esc", leave, back),
+        ])
         .child(el("div").class(styles::SEARCH).child(Field {
             input,
             prompt: Some(Prompt {

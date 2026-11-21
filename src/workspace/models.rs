@@ -190,5 +190,5 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
         }
         stepped
     };
-    picker::view_in_steps(shell.search, rows, picked, back)
+    picker::view_in_steps(shell.search, rows, picked, "choose", back)
 }

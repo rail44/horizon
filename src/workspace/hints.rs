@@ -1,19 +1,20 @@
 //! The bar at the bottom of the window (board #84): the keys that work
 //! where the keys are, each with what it does. Workspace mode's while it
-//! is on, those of what is over the workspace while something is, and
-//! otherwise the view's with the focus and the chords the configuration
-//! binds. Each key is in a box of its own, its words after it; the bar
-//! is one line, and what does not fit is left out whole from the end.
-//! It is not pressed: what is pressed is the keys.
+//! is on; otherwise those the elements the focus is in take
+//! (`horizon_ui::keys`, a plugin's view's as the shell's own), and, but
+//! over the workspace, the chords the configuration binds. Each key is in
+//! a box of its own, its words after it; the bar is one line, and what
+//! does not fit is left out whole from the end. It is not pressed: what
+//! is pressed is the keys.
 
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithUntracked};
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
 use horizon_ui::{El, Page, each_layout, el};
 use horizon_workspace::Workspace;
 
+use super::Shell;
 use super::keymap::Bound;
 use super::keys::MODE;
-use super::{Modal, Shell};
-use crate::plugin::Hint;
 
 mod styles {
     horizon_ui::css_module! {"
@@ -34,11 +35,20 @@ mod styles {
     "}
 }
 
-/// A view an extension said the keys of, and what it said.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct Hinted {
-    view: El,
-    hints: Vec<Hint>,
+/// A key the bar says, spelled as it is there, and what it does.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Hint {
+    keys: String,
+    label: String,
+}
+
+impl Hint {
+    fn new(keys: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            keys: keys.into(),
+            label: label.into(),
+        }
+    }
 }
 
 impl Shell {
@@ -46,7 +56,7 @@ impl Shell {
     /// the focus moves with no signal of its own to follow.
     pub(super) fn bar(&self) -> El {
         let shell = *self;
-        let shown = horizon_ui::reactive_graph::signal::RwSignal::new(Vec::<Hint>::new());
+        let shown = RwSignal::new(Vec::<Hint>::new());
         each_layout(move |page| {
             let now = shell.hints_now(page);
             if shown.with_untracked(|was| *was != now) {
@@ -65,37 +75,11 @@ impl Shell {
         )
     }
 
-    /// Says `hints` are the keys of the extension's view `view`, while the
-    /// focus is in it; none takes them back.
-    pub(super) fn hint(&self, view: El, hints: Vec<Hint>) {
-        self.hinted.update(|hinted| {
-            hinted.retain(|hinted| hinted.view != view);
-            if !hints.is_empty() {
-                hinted.push(Hinted { view, hints });
-            }
-        });
-    }
-
     /// The keys of where the keys are now.
     fn hints_now(&self, page: &Page) -> Vec<Hint> {
-        if let Some(modal) = self.modal.get_untracked() {
-            let picked = |verb: &str, leave: &str| {
-                vec![
-                    Hint::new("↑/↓", "move"),
-                    Hint::new("enter", verb),
-                    Hint::new("esc", leave),
-                ]
-            };
-            return match modal {
-                Modal::Extension(_) => self.view_hints(page),
-                Modal::Palette => picked("run", "close"),
-                Modal::Chooser(_) | Modal::Finder(..) => picked("open", "close"),
-                Modal::Models(_) => picked("choose", "back"),
-                Modal::Layouts => picked("apply", "close"),
-                Modal::MoveTo => picked("move", "close"),
-            };
-        }
-        if self.mode.get_untracked() {
+        // Workspace mode's are the shell's own, under a sheet over the
+        // workspace too, which has the keys then.
+        if self.mode.get_untracked() && self.modal.get_untracked().is_none() {
             // With no tab, what is typed searches the views the workspace
             // shows; `:` is still the commands'.
             if self.model.with_untracked(Workspace::tab_count) == 0 {
@@ -106,27 +90,13 @@ impl Shell {
                 .map(|group| Hint::new(group.keys, group.label))
                 .collect();
         }
-        let mut hints = self.view_hints(page);
-        if hints.is_empty() {
-            let plugin = self.model.with_untracked(|model| {
-                (model.cursor_pane_id())
-                    .and_then(|pane| model.pane_plugin(pane))
-                    .map(|plugin| plugin.name.clone())
-            });
-            hints = plugin.map_or_else(Vec::new, |name| super::plugins::hints(&name));
+        let mut hints: Vec<Hint> = (page.focused_keys().into_iter())
+            .map(|key| Hint::new(key.spelled, key.label))
+            .collect();
+        if self.modal.get_untracked().is_none() {
+            hints.extend(self.chord_hints());
         }
-        hints.extend(self.chord_hints());
         hints
-    }
-
-    /// The keys an extension's view with the focus said.
-    fn view_hints(&self, page: &Page) -> Vec<Hint> {
-        self.hinted.with_untracked(|hinted| {
-            (hinted.iter())
-                .find(|hinted| page.has_focus_within(hinted.view))
-                .map(|hinted| hinted.hints.clone())
-                .unwrap_or_default()
-        })
     }
 
     /// The chords the configuration binds that work now: workspace mode's,

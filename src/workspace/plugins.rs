@@ -120,19 +120,6 @@ pub(super) fn commands() -> Vec<Listed> {
     commands
 }
 
-/// The keys a pane of the built-in plugin `name` takes, as the bar shows
-/// them; none for any other.
-pub(super) fn hints(name: &str) -> Vec<crate::plugin::Hint> {
-    match name {
-        LIST => BoardListPlugin::hints(),
-        THREAD => BoardThreadPlugin::hints(),
-        PREVIEW => PreviewPlugin::hints(),
-        _ if name == TerminalPlugin::NAME => TerminalPlugin::hints(),
-        _ if name == AgentPlugin::NAME => AgentPlugin::hints(),
-        _ => Vec::new(),
-    }
-}
-
 /// A pane of `P` on `state`, as the model keeps it.
 pub(super) fn pane<P: Plugin>(state: P::State) -> PluginPane {
     PluginPane {
