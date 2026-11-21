@@ -87,6 +87,45 @@ impl Chord {
     }
 }
 
+impl Chord {
+    /// The chord as the bar at the bottom of the window spells it:
+    /// `ctrl+shift+c`, `ctrl+'`, `esc`.
+    pub fn label(&self) -> String {
+        let mut label = String::new();
+        for (held, name) in [
+            (self.ctrl, "ctrl+"),
+            (self.shift, "shift+"),
+            (self.alt, "alt+"),
+            (self.meta, "meta+"),
+        ] {
+            if held {
+                label.push_str(name);
+            }
+        }
+        match &self.key {
+            ChordKey::Character(' ') => label.push_str("space"),
+            ChordKey::Character(character) => label.push(*character),
+            ChordKey::Named(named) => label.push_str(match named {
+                NamedKey::Enter => "enter",
+                NamedKey::Escape => "esc",
+                NamedKey::Tab => "tab",
+                NamedKey::Backspace => "backspace",
+                NamedKey::Delete => "delete",
+                NamedKey::ArrowUp => "↑",
+                NamedKey::ArrowDown => "↓",
+                NamedKey::ArrowLeft => "←",
+                NamedKey::ArrowRight => "→",
+                NamedKey::Home => "home",
+                NamedKey::End => "end",
+                NamedKey::PageUp => "pgup",
+                NamedKey::PageDown => "pgdn",
+                _ => "?",
+            }),
+        }
+        label
+    }
+}
+
 fn key_named(token: &str) -> Option<ChordKey> {
     let lower = token.to_ascii_lowercase();
     let named = match lower.as_str() {
@@ -187,6 +226,11 @@ impl Keymap {
     }
 
     /// What the configuration binds `event` to.
+    /// The configuration's bindings, in its order.
+    pub fn bindings(&self) -> &[(Chord, Bound)] {
+        &self.bindings
+    }
+
     pub fn bound(&self, event: &BlitzKeyEvent) -> Option<Bound> {
         let binding = self.bindings.iter().find(|(chord, _)| chord.matches(event));
         binding.map(|(_, bound)| bound.clone())

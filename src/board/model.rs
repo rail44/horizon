@@ -63,30 +63,95 @@ pub enum ListCommand {
     Reorder,
 }
 
-/// The thread view's key map. `key` is the key's name; a chord
-/// carrying any modifier other than shift never reaches this.
-pub fn command_for_key(key: &str) -> Option<ThreadCommand> {
-    Some(match key {
-        "j" | "down" => ThreadCommand::NextPost,
-        "k" | "up" => ThreadCommand::PreviousPost,
-        "e" => ThreadCommand::ToggleCurrentPost,
-        "enter" => ThreadCommand::FocusComposer,
-        "escape" => ThreadCommand::LeaveComposer,
-        _ => return None,
-    })
+/// Keys that do one thing in a view, as its key map and the bar at the
+/// bottom of the window both read them: how the bar spells them, what
+/// they do in a few words, and each key's name with its command.
+pub struct Keyed<C: 'static> {
+    pub spelled: &'static str,
+    pub label: &'static str,
+    pub bound: &'static [(&'static str, C)],
 }
 
-/// The list view's key map.
+/// The command for the key named `key` in `keys`.
+fn keyed<C: Clone>(keys: &[Keyed<C>], key: &str) -> Option<C> {
+    (keys.iter())
+        .flat_map(|keyed| keyed.bound)
+        .find(|(name, _)| *name == key)
+        .map(|(_, command)| command.clone())
+}
+
+/// The thread view's key map, the most wanted first. A key's name; a
+/// chord carrying any modifier other than shift never reaches it.
+pub const THREAD_KEYS: &[Keyed<ThreadCommand>] = &[
+    Keyed {
+        spelled: "j/k",
+        label: "move",
+        bound: &[
+            ("j", ThreadCommand::NextPost),
+            ("down", ThreadCommand::NextPost),
+            ("k", ThreadCommand::PreviousPost),
+            ("up", ThreadCommand::PreviousPost),
+        ],
+    },
+    Keyed {
+        spelled: "enter",
+        label: "reply",
+        bound: &[("enter", ThreadCommand::FocusComposer)],
+    },
+    Keyed {
+        spelled: "e",
+        label: "fold",
+        bound: &[("e", ThreadCommand::ToggleCurrentPost)],
+    },
+    Keyed {
+        spelled: "esc",
+        label: "leave reply",
+        bound: &[("escape", ThreadCommand::LeaveComposer)],
+    },
+];
+
+/// The thread view's command for the key named `key`.
+pub fn command_for_key(key: &str) -> Option<ThreadCommand> {
+    keyed(THREAD_KEYS, key)
+}
+
+/// The list view's key map, the most wanted first.
+pub const LIST_KEYS: &[Keyed<ListCommand>] = &[
+    Keyed {
+        spelled: "j/k",
+        label: "move",
+        bound: &[
+            ("j", ListCommand::SelectNext),
+            ("down", ListCommand::SelectNext),
+            ("k", ListCommand::SelectPrevious),
+            ("up", ListCommand::SelectPrevious),
+        ],
+    },
+    Keyed {
+        spelled: "enter",
+        label: "open",
+        bound: &[("enter", ListCommand::OpenThread)],
+    },
+    Keyed {
+        spelled: "l/h",
+        label: "expand / collapse",
+        bound: &[
+            ("l", ListCommand::Expand),
+            ("right", ListCommand::Expand),
+            ("h", ListCommand::Collapse),
+            ("left", ListCommand::Collapse),
+        ],
+    },
+    Keyed {
+        spelled: "o",
+        label: "finished",
+        bound: &[("o", ListCommand::ToggleFinished)],
+    },
+];
+
+/// The list view's command for the key named `key`.
 pub fn list_command_for_key(key: &str) -> Option<ListCommand> {
-    Some(match key {
-        "j" | "down" => ListCommand::SelectNext,
-        "k" | "up" => ListCommand::SelectPrevious,
-        "l" | "right" => ListCommand::Expand,
-        "h" | "left" => ListCommand::Collapse,
-        "o" => ListCommand::ToggleFinished,
-        "enter" => ListCommand::OpenThread,
-        _ => return None,
-    })
+    keyed(LIST_KEYS, key)
 }
 
 // ---------------------------------------------------------------------------

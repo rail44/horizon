@@ -59,6 +59,7 @@ mod control;
 mod extensions;
 mod finder;
 pub(crate) mod held;
+mod hints;
 mod keymap;
 mod keys;
 mod layouts;
@@ -76,7 +77,10 @@ mod session_feed;
 
 pub(crate) mod styles {
     horizon_ui::css_module! {"
-    .workspace { position: relative; display: flex; flex-direction: column; height: 100%;
+    /* The workspace over the bar at the bottom of the window. */
+    .window { display: flex; flex-direction: column; height: 100%; }
+    .workspace { position: relative; display: flex; flex-direction: column; flex: 1;
+                 min-height: 0;
                  box-sizing: border-box; padding: var(--u8);
                  outline: none; background: var(--background); color: var(--text);
                  font-family: var(--font-family); font-size: var(--body-size);
@@ -584,6 +588,8 @@ pub struct Shell {
     /// The extensions' views that hold workspace mode's cursor, and the
     /// cursor of the one with the focus, shown (`lent_cursor`).
     held: RwSignal<Vec<lent_cursor::Held>>,
+    /// The keys extensions' views said, for the bar (`hints`).
+    hinted: RwSignal<Vec<hints::Hinted>>,
     lent: RwSignal<Option<lent_cursor::Lent>>,
     /// The boundary being dragged.
     resizing: RwSignal<Option<arrangement::Resize>>,
@@ -1307,6 +1313,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         modal: RwSignal::new(None),
         search: picker::Search::new(),
         held: RwSignal::new(Vec::new()),
+        hinted: RwSignal::new(Vec::new()),
         lent: RwSignal::new(None),
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),
@@ -1447,5 +1454,9 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());
     horizon_ui::each_effects(move || shell.let_go_of_commanded());
-    (themed(move || shell.theme.get(), root), shell)
+    let window = el("div")
+        .class(styles::WINDOW)
+        .child(root)
+        .child(shell.bar());
+    (themed(move || shell.theme.get(), window), shell)
 }
