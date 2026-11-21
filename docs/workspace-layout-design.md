@@ -181,12 +181,11 @@ What is drawn is chosen so that what holds what reads from the drawing
   share its width, in the body's size; those not shown are their words, a
   faint line between two of them, and the shown one is outlined -- in
   the accent in the group with the focus (in workspace mode, the cursor).
-- A pane's tab label names it where the pane is all of its tab. Any
-  other pane -- one of a split tab, one in no group -- has a tag in its
-  top right corner, clear of a terminal's text, which begins at the
-  left: its name and the grip it is taken by. The tag shows while the
-  pointer is over the pane or in workspace mode, so the pane with the
-  focus does not repeat its tab's label.
+- Every pane has a tag in its top right corner, clear of a terminal's
+  text, which begins at the left: its name and the grip it is taken by
+  -- a pane that is all of its tab too, though its tab's label names it
+  as well (owner decision 2026-11-21). The tag shows while the pointer is
+  over the pane or in workspace mode.
 - The pane with the focus has its line in the accent. In workspace mode
   every pane is veiled and the cursor's is tinted with the accent; on a
   strip, its shown tab is. A tab that is one pane is that pane's card, so
