@@ -322,22 +322,46 @@ interface modal {
     }
 }
 
-/// The workspace, as a plugin's view goes about it.
+/// The workspace, as a plugin's view goes about it: the focus, where the
+/// keys go, and the cursor, what the workspace's commands act on.
 interface workspace {
-    /// Workspace mode's cursor, moved from a plugin's view, for as long
-    /// as the plugin holds this: while the focus is in the view, every
-    /// pane but the one the view is in is veiled as in the mode, and the
-    /// pane that shows the session the cursor was moved to is the
-    /// cursor's, its tab shown -- or, where that tab is of the group the
-    /// view is in, the tab's label. The keys stay the view's.
-    resource cursor {
-        /// `view` is the plugin's node the cursor is moved from: a view
-        /// of its in a pane, or over the workspace.
-        constructor(view: u64);
+    /// What the cursor is on.
+    variant cursor-target {
+        /// The session of this id (`horizon:ui/sessions`'): the pane that
+        /// shows it, or, moved there from a view (`set-cursor`), a
+        /// session no pane shows.
+        session(string),
+        /// A pane that shows no session: the board, a plugin's view.
+        pane,
+        /// A tab group's strip: the group as a whole.
+        strip,
+    }
 
-        /// Moves the cursor to the session `session`; none, or a session
-        /// no pane shows, puts it on no pane.
-        move-to: func(session: option<string>);
+    /// The session of the pane that has the keys; none where that pane
+    /// shows none, or where something over the workspace has them.
+    focus: func() -> option<string>;
+
+    /// The cursor, while it is shown: workspace mode's, or one moved from
+    /// a view (`set-cursor`), which is shown in its place while the focus
+    /// is in that view.
+    cursor: func() -> option<cursor-target>;
+
+    /// Moves the cursor from the plugin's view `view` (a node of its in a
+    /// pane, or over the workspace) to the session `session`, for as long
+    /// as the view is there: while the focus is in the view, every pane
+    /// but the one the view is in is veiled as in the mode, and the pane
+    /// that shows the session is the cursor's, its tab shown -- or, where
+    /// that tab is of the group the view is in, the tab's label. A session
+    /// no pane shows puts it on no pane. The keys stay the view's. None
+    /// takes it back.
+    set-cursor: func(view: u64, session: option<string>);
+
+    /// The focus and the cursor watched for as long as this is held.
+    resource watch {
+        constructor();
+        /// Comes back once `focus` or `cursor` says otherwise: while
+        /// this was waited in, or since it last came back.
+        changed: async func();
     }
 }
 

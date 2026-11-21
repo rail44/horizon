@@ -743,11 +743,12 @@ pub fn start_tasks() {
     }));
 }
 
-/// Something watched ([`watch`], [`watch_sessions`]). For a file: until
-/// it is dropped, `changed` is called whenever the
-/// file changed and has sat still. `changed` reads the file and writes
-/// signals, whose effects draw it; it does not change the document
-/// itself, which may not be changed when it is called.
+/// Something watched ([`watch`], [`watch_sessions`],
+/// [`watch_workspace`]). For a file: until it is dropped, `changed` is
+/// called whenever the file changed and has sat still. `changed` reads
+/// the file and writes signals, whose effects draw it; it does not
+/// change the document itself, which may not be changed when it is
+/// called.
 pub struct Watch(Rc<Cell<bool>>);
 
 impl Drop for Watch {
@@ -819,22 +820,47 @@ impl Close {
     }
 }
 
-/// Workspace mode's cursor, moved from a view of the plugin's
-/// (`horizon:ui/workspace`): shown while the focus is in that view, for as
-/// long as this is held.
-pub struct WorkspaceCursor(bindings::horizon::ui::workspace::Cursor);
+/// What the workspace's cursor is on (`horizon:ui/workspace`).
+pub use bindings::horizon::ui::workspace::CursorTarget;
 
-impl WorkspaceCursor {
-    /// Moves the cursor to the session `session` (`horizon:ui/sessions`'
-    /// id); none, or one no pane shows, puts it on no pane.
-    pub fn move_to(&self, session: Option<&str>) {
-        self.0.move_to(session);
-    }
+/// The session of the pane that has the keys (`horizon:ui/sessions`' id);
+/// none where that pane shows none, or where something over the workspace
+/// has them.
+pub fn focus() -> Option<String> {
+    bindings::horizon::ui::workspace::focus()
 }
 
-/// Holds workspace mode's cursor, moved from `view`.
-pub fn workspace_cursor(view: El) -> WorkspaceCursor {
-    WorkspaceCursor(bindings::horizon::ui::workspace::Cursor::new(id(view)))
+/// The workspace's cursor, while it is shown: workspace mode's, or one
+/// moved from a view ([`set_cursor`]).
+pub fn cursor() -> Option<CursorTarget> {
+    bindings::horizon::ui::workspace::cursor()
+}
+
+/// Moves the workspace's cursor from `view` to the session `session`
+/// (`horizon:ui/sessions`' id), shown while the focus is in `view` and for
+/// as long as it is there; none takes it back.
+pub fn set_cursor(view: El, session: Option<&str>) {
+    bindings::horizon::ui::workspace::set_cursor(id(view), session);
+}
+
+/// The workspace's focus and cursor watched: until what is returned is
+/// dropped, `changed` is called whenever either says otherwise. As with
+/// [`watch_sessions`], `changed` reads and writes signals, and does not
+/// change the document itself.
+pub fn watch_workspace(changed: impl Fn() + 'static) -> Watch {
+    let dropped = Rc::new(Cell::new(false));
+    let stops = dropped.clone();
+    let watching = bindings::horizon::ui::workspace::Watch::new();
+    spawn(async move {
+        while !stops.get() {
+            watching.changed().await;
+            if stops.get() {
+                break;
+            }
+            changed();
+        }
+    });
+    Watch(dropped)
 }
 
 /// Puts the view `view` makes over the workspace, in a sheet in the middle

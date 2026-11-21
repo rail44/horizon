@@ -237,8 +237,9 @@ at all."
 ## The cursor moved from an extension's view (2026-11-21)
 
 An extension's view may move the mode's cursor while the keys stay the
-view's (`horizon:ui/workspace`'s `cursor`, `workspace.cursor` in the
-manifest's `uses`; `src/workspace/lent_cursor.rs`, board #95). The list
+view's (`horizon:ui/workspace`'s `set-cursor`, `workspace.set-cursor` in
+the manifest's `uses`; `src/workspace/lent_cursor.rs`, board #95), for
+as long as the view is there or until it takes the cursor back. The list
 of sessions does: its cursor -- the chosen row, a tint as the mode's is
 -- is the workspace's too. While the focus is in such a view, every pane
 but the one it is in is veiled as in the mode, and the pane that shows
@@ -254,6 +255,22 @@ sheet over the workspace, which has the keys: the list of sessions,
 opened over the workspace from the palette in the mode, moves the cursor
 shown, and the mode's comes back once the sheet is gone. The list of
 sessions marks its own cursor, the chosen row, by a line in the accent.
+
+An extension reads the focus and the cursor as two things, as the shell
+has them (`horizon:ui/workspace`'s `focus` and `cursor`, with a `watch`
+that comes back when either changes; `src/workspace/lent_cursor.rs`'s
+`feed_workspace`). `focus` is the session of the pane with the keys, none
+while something over the workspace has them; `cursor` is what the cursor
+shown is on -- a session, a pane that shows none, or a tab group's strip
+-- the mode's, or the one a view moved in its place. The list of
+sessions follows them while the focus is not in it: its cursor goes to
+the session the cursor is on, or, with no cursor, to the session the
+focus is on, and stays where it was when either is on no session it
+shows. Opened, in a pane or over the workspace, it starts there. While
+the focus is in the list its cursor is the list's own: what the
+workspace says of it may be behind it then. It follows again once the
+focus has left it, and when its rows change, since the workspace may say
+it is on a session before the list is told of the session.
 
 ## What an empty workspace shows (2026-11-20)
 

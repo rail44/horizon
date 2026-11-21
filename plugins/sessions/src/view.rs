@@ -15,7 +15,7 @@
 //! over the workspace ([`over`]), which going to a session leaves. The
 //! two are the same list ([`list`]) told what differs ([`Shown`]).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,12 +24,12 @@ use horizon_components::{AlertDialog, Icon, MenuButton, MenuItem, MenuLabel};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
-use horizon_ui::guest::{self, Close, modal, watch_sessions};
+use horizon_ui::guest::{self, Close, CursorTarget, modal, watch_sessions, watch_workspace};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::on_cleanup;
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With};
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntracked};
 use horizon_ui::{
     Callback, Class, Component, El, each_layout, el, prevent_default, stop_propagation,
 };
@@ -476,12 +476,23 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
 /// into view by.
 type Rows = Rc<RefCell<HashMap<String, El>>>;
 
+/// The session the workspace's cursor is on, or else the one the focus is
+/// on: what the list's cursor follows. None where the cursor is on no
+/// session, or the focus is on none.
+fn followed() -> Option<String> {
+    match guest::cursor() {
+        Some(CursorTarget::Session(id)) => Some(id),
+        Some(CursorTarget::Pane | CursorTarget::Strip) => None,
+        None => guest::focus(),
+    }
+}
+
 fn list(shown: Shown) -> El {
     let state = State {
         sessions: RwSignal::new(host::all()),
         query: RwSignal::new(String::new()),
         searching: RwSignal::new(false),
-        chosen: RwSignal::new(None),
+        chosen: RwSignal::new(followed()),
         asked: RwSignal::new(None),
         now: RwSignal::new(now_ms()),
     };
@@ -503,6 +514,41 @@ fn list(shown: Shown) -> El {
     });
     let order: Memo<Vec<Row>> = Memo::new(move |_| {
         groups.with(|groups| groups.iter().flat_map(|group| group.rows.clone()).collect())
+    });
+    // The cursor follows the workspace's cursor and focus to a session the
+    // list shows, but while the focus is in the list: its own cursor is the
+    // one shown then, and what the workspace says of it may be behind it.
+    // (In workspace mode the keys are the shell's, not the list's.)
+    // The focus is looked at after each layout, so the list follows again
+    // once it has left the list too.
+    let follow = move || {
+        let Some(followed) = followed() else {
+            return;
+        };
+        let shown =
+            order.with_untracked(|order| order.iter().any(|row| row.session.id == followed));
+        if shown && state.chosen.get_untracked().as_ref() != Some(&followed) {
+            state.chosen.set(Some(followed));
+        }
+    };
+    let has_keys = Rc::new(Cell::new(false));
+    // (A session the workspace is on may be told of after it: the list
+    // follows again when its rows change.)
+    let keyed = has_keys.clone();
+    Effect::new(move |_| {
+        order.with(|_| ());
+        if !keyed.get() {
+            follow();
+        }
+    });
+    let keyed = has_keys.clone();
+    Effect::new(move |_| {
+        let keyed = keyed.clone();
+        watch_workspace(move || {
+            if !keyed.get() {
+                follow();
+            }
+        })
     });
     // The choice stays on a session there is: where the chosen one has
     // gone, on what took its place.
@@ -652,8 +698,13 @@ fn list(shown: Shown) -> El {
     let root = el("div").class(styles::SESSIONS).attr("tabindex", "0");
     // Where the chosen session is, the workspace shows as workspace mode
     // does, while the focus is in the list.
-    let cursor = guest::workspace_cursor(root);
-    Effect::new(move |_| cursor.move_to(state.chosen.get().as_deref()));
+    Effect::new(move |_| guest::set_cursor(root, state.chosen.get().as_deref()));
+    each_layout(move |page| {
+        let now = page.has_focus_within(root);
+        if has_keys.replace(now) && !now {
+            follow();
+        }
+    });
     let field = move || {
         let input = el("input")
             .attr("type", "text")

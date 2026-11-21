@@ -54,6 +54,7 @@ wasmtime::component::bindgen!({
         "horizon:ui/files.[method]watch.changed": async | store | trappable,
         "horizon:ui/theme.save": async | store | trappable,
         "horizon:ui/sessions.[method]watch.changed": async | store | trappable,
+        "horizon:ui/workspace.[method]watch.changed": async | store | trappable,
         "horizon:ui/modal.[method]modal.closed": async | store | trappable,
         default: trappable,
     },
@@ -68,7 +69,7 @@ wasmtime::component::bindgen!({
         "horizon:ui/files.watch": Watching,
         "horizon:ui/sessions.watch": SessionsWatching,
         "horizon:ui/modal.modal": ModalShown,
-        "horizon:ui/workspace.cursor": CursorHeld,
+        "horizon:ui/workspace.watch": WorkspaceWatching,
     },
 });
 
@@ -184,21 +185,57 @@ impl Default for Limits {
     }
 }
 
-/// Workspace mode's cursor a plugin holds, moved from its view `node`.
-pub struct CursorHeld {
-    node: NodeId,
+pub use self::horizon::ui::workspace::CursorTarget;
+
+/// The focus and the cursor a plugin watches, for as long as the plugin
+/// holds this.
+pub struct WorkspaceWatching(tokio::sync::watch::Receiver<u64>);
+
+/// The workspace's focus and cursor as plugins are given them: the shell
+/// says what they are whenever they change, and a plugin reads them and
+/// waits for the next change.
+pub struct WorkspaceFeed {
+    now: Mutex<(Option<String>, Option<CursorTarget>)>,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
-/// What the host does with workspace mode's cursor for a plugin, by the
-/// view the cursor is moved from.
+impl Default for WorkspaceFeed {
+    fn default() -> Self {
+        Self {
+            now: Mutex::default(),
+            changes: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+impl WorkspaceFeed {
+    /// Says what the focus and the cursor are; the plugins that wait are
+    /// told where that is not what they were.
+    pub fn set(&self, focus: Option<String>, cursor: Option<CursorTarget>) {
+        let mut now = self.now.lock().unwrap();
+        if *now != (focus.clone(), cursor.clone()) {
+            *now = (focus, cursor);
+            self.changes.send_modify(|change| *change += 1);
+        }
+    }
+
+    fn focus(&self) -> Option<String> {
+        self.now.lock().unwrap().0.clone()
+    }
+
+    fn cursor(&self) -> Option<CursorTarget> {
+        self.now.lock().unwrap().1.clone()
+    }
+}
+
+/// What the host does with the workspace's focus and cursor for a plugin.
 #[derive(Clone)]
-pub struct CursorAsks {
-    /// The view holds a cursor.
-    pub hold: Rc<dyn Fn(NodeId)>,
-    /// Its cursor is moved to a session, or to none.
-    pub move_to: Rc<dyn Fn(NodeId, Option<String>)>,
-    /// It is let go of.
-    pub release: Rc<dyn Fn(NodeId)>,
+pub struct WorkspaceAsks {
+    /// What the focus and the cursor are.
+    pub feed: Arc<WorkspaceFeed>,
+    /// Moves the cursor from a view of the plugin's to a session, or takes
+    /// it back.
+    pub set_cursor: Rc<dyn Fn(NodeId, Option<String>)>,
 }
 
 /// What the host does for a plugin beyond the document, as whoever shows
@@ -215,8 +252,8 @@ pub struct Asks {
     pub sessions: Option<SessionAsks>,
     /// A view of the plugin's over the workspace.
     pub modal: Option<ModalAsks>,
-    /// Workspace mode's cursor, moved from a view of the plugin's.
-    pub cursor: Option<CursorAsks>,
+    /// The workspace's focus and cursor.
+    pub workspace: Option<WorkspaceAsks>,
 }
 
 /// What the host does with the shell's theme for a plugin.
@@ -248,15 +285,13 @@ enum Asked {
     Session(SessionAsk),
     OpenModal(NodeId, ModalClosed),
     CloseModal(NodeId),
-    HoldCursor(NodeId),
-    MoveCursor(NodeId, Option<String>),
-    ReleaseCursor(NodeId),
+    SetCursor(NodeId, Option<String>),
 }
 
 /// What of the host's beyond the document a plugin may use, as its
 /// manifest's `uses` names it: an interface, all of it (`sessions`), or one
 /// function or resource of one (`session-control.terminate`,
-/// `workspace.cursor`). The rest of the host's -- the document, its
+/// `workspace.set-cursor`). The rest of the host's -- the document, its
 /// events, the pane, the desktop, the files it is lent -- every plugin
 /// uses.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -276,7 +311,7 @@ const USED: &[(&str, &[&str])] = &[
         ],
     ),
     ("modal", &["modal"]),
-    ("workspace", &["cursor"]),
+    ("workspace", &["focus", "cursor", "set-cursor", "watch"]),
 ];
 
 impl Uses {
@@ -346,8 +381,10 @@ pub struct State {
     sessions: Option<Arc<SessionsFeed>>,
     /// Whether whoever shows it lets it put a view over the workspace.
     modal: bool,
-    /// Whether whoever shows it lets it move workspace mode's cursor.
-    cursor: bool,
+    /// The workspace's focus and cursor, if whoever shows it gives them.
+    workspace: Option<Arc<WorkspaceFeed>>,
+    /// The views it moved the cursor from, which take it back as they go.
+    cursored: HashSet<NodeId>,
     /// What of the above its manifest says it uses.
     uses: Uses,
 }
@@ -472,6 +509,9 @@ impl Host for State {
         let gone = host::remove(self.own(node)?);
         for node in &gone {
             self.owned.remove(node);
+            if self.cursored.remove(node) {
+                (self.left.lock().unwrap().asked).push(Asked::SetCursor(*node, None));
+            }
         }
         Ok(gone.into_iter().map(|node| node.as_u64()).collect())
     }
@@ -769,35 +809,67 @@ impl self::horizon::ui::session_control::Host for State {
     }
 }
 
-impl self::horizon::ui::workspace::Host for State {}
+impl State {
+    fn workspace(&self) -> wasmtime::Result<&Arc<WorkspaceFeed>> {
+        (self.workspace.as_ref()).ok_or_else(|| {
+            wasmtime::Error::msg("the workspace's focus and cursor are not given to this plugin")
+        })
+    }
+}
 
-impl self::horizon::ui::workspace::HostCursor for State {
-    fn new(&mut self, view: u64) -> wasmtime::Result<Resource<CursorHeld>> {
+impl self::horizon::ui::workspace::Host for State {
+    fn focus(&mut self) -> wasmtime::Result<Option<String>> {
+        self.may("workspace", "focus")?;
+        Ok(self.workspace()?.focus())
+    }
+
+    fn cursor(&mut self) -> wasmtime::Result<Option<CursorTarget>> {
         self.may("workspace", "cursor")?;
-        if !self.cursor {
-            return Err(wasmtime::Error::msg(
-                "workspace mode's cursor is not given to this plugin",
-            ));
-        }
+        Ok(self.workspace()?.cursor())
+    }
+
+    fn set_cursor(&mut self, view: u64, session: Option<String>) -> wasmtime::Result<()> {
+        self.may("workspace", "set-cursor")?;
+        self.workspace()?;
         let node = self.own(view)?;
-        (self.left.lock().unwrap().asked).push(Asked::HoldCursor(node));
-        Ok(self.table.push(CursorHeld { node })?)
+        match session.is_some() {
+            true => self.cursored.insert(node),
+            false => self.cursored.remove(&node),
+        };
+        (self.left.lock().unwrap().asked).push(Asked::SetCursor(node, session));
+        Ok(())
+    }
+}
+
+impl self::horizon::ui::workspace::HostWatch for State {
+    fn new(&mut self) -> wasmtime::Result<Resource<WorkspaceWatching>> {
+        self.may("workspace", "watch")?;
+        let changes = self.workspace()?.changes.subscribe();
+        Ok(self.table.push(WorkspaceWatching(changes))?)
     }
 
-    fn move_to(
-        &mut self,
-        cursor: Resource<CursorHeld>,
-        session: Option<String>,
+    fn drop(&mut self, watch: Resource<WorkspaceWatching>) -> wasmtime::Result<()> {
+        self.table.delete(watch)?;
+        Ok(())
+    }
+}
+
+impl<T: Send> self::horizon::ui::workspace::HostWatchWithStore<T> for HasSelf<State> {
+    async fn changed(
+        accessor: &Accessor<T, Self>,
+        watch: Resource<WorkspaceWatching>,
     ) -> wasmtime::Result<()> {
-        let node = self.table.get(&cursor)?.node;
-        (self.left.lock().unwrap().asked).push(Asked::MoveCursor(node, session));
-        Ok(())
-    }
-
-    fn drop(&mut self, cursor: Resource<CursorHeld>) -> wasmtime::Result<()> {
-        let held = self.table.delete(cursor)?;
-        (self.left.lock().unwrap().asked).push(Asked::ReleaseCursor(held.node));
-        Ok(())
+        // As the sessions' watch: what was seen stays the resource's.
+        let mut changes = accessor.with(|mut access| -> wasmtime::Result<_> {
+            Ok(access.get().table.get(&watch)?.0.clone())
+        })?;
+        if changes.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        accessor.with(|mut access| -> wasmtime::Result<_> {
+            access.get().table.get_mut(&watch)?.0 = changes;
+            Ok(())
+        })
     }
 }
 
@@ -1070,6 +1142,9 @@ pub struct Loaded {
     /// The views it has put over the workspace: one still there is taken
     /// away when the plugin goes, and each goes with it.
     over: RefCell<Vec<NodeId>>,
+    /// The views it moved the cursor from: each takes it back when the
+    /// plugin goes.
+    cursored: RefCell<HashSet<NodeId>>,
 }
 
 impl Drop for Loaded {
@@ -1082,6 +1157,11 @@ impl Drop for Loaded {
                 (modal.close)(node);
             }
             host::remove(node);
+        }
+        if let Some(workspace) = &self.asks.workspace {
+            for node in self.cursored.take() {
+                (workspace.set_cursor)(node, None);
+            }
         }
     }
 }
@@ -1179,19 +1259,13 @@ impl Loaded {
                         (modal.close)(node);
                     }
                 }
-                Asked::HoldCursor(node) => {
-                    if let Some(cursor) = &self.asks.cursor {
-                        (cursor.hold)(node);
-                    }
-                }
-                Asked::MoveCursor(node, session) => {
-                    if let Some(cursor) = &self.asks.cursor {
-                        (cursor.move_to)(node, session);
-                    }
-                }
-                Asked::ReleaseCursor(node) => {
-                    if let Some(cursor) = &self.asks.cursor {
-                        (cursor.release)(node);
+                Asked::SetCursor(node, session) => {
+                    if let Some(workspace) = &self.asks.workspace {
+                        match session.is_some() {
+                            true => self.cursored.borrow_mut().insert(node),
+                            false => self.cursored.borrow_mut().remove(&node),
+                        };
+                        (workspace.set_cursor)(node, session);
                     }
                 }
             }
@@ -1436,7 +1510,8 @@ pub fn instantiate(
             theme: asks.theme.as_ref().map(|theme| (theme.now)()),
             sessions: asks.sessions.as_ref().map(|sessions| sessions.feed.clone()),
             modal: asks.modal.is_some(),
-            cursor: asks.cursor.is_some(),
+            workspace: (asks.workspace.as_ref()).map(|workspace| workspace.feed.clone()),
+            cursored: HashSet::new(),
             uses,
         },
     );
@@ -1491,6 +1566,7 @@ pub fn instantiate(
         effects_wait: Cell::new(false),
         layout_work: Cell::new(false),
         over: RefCell::default(),
+        cursored: RefCell::default(),
     });
     // The plugin is made by the future's first polls: a call that asks
     // nothing of it is answered once it is there.
@@ -1526,6 +1602,23 @@ mod tests {
         for name in ["clipboard", "sessions.end", "session-control.show.now"] {
             assert!(Uses::new(vec![name.to_string()]).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn the_workspaces_feed_tells_those_who_wait_only_of_what_changed() {
+        let feed = WorkspaceFeed::default();
+        let mut changes = feed.changes.subscribe();
+        let on = |id: &str| Some(CursorTarget::Session(id.to_string()));
+        feed.set(Some("s-1".to_string()), None);
+        assert!(changes.has_changed().unwrap());
+        changes.mark_unchanged();
+        feed.set(Some("s-1".to_string()), None);
+        assert!(!changes.has_changed().unwrap());
+        // The cursor is told apart from the focus.
+        feed.set(Some("s-1".to_string()), on("s-1"));
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(feed.focus().as_deref(), Some("s-1"));
+        assert_eq!(feed.cursor(), on("s-1"));
     }
 
     #[test]

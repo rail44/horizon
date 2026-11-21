@@ -533,6 +533,8 @@ struct Kept {
     watched: RefCell<Vec<extensions::Watched>>,
     /// What plugins are told the workspace's sessions are.
     sessions_feed: Arc<crate::plugin_host::SessionsFeed>,
+    /// What plugins are told the workspace's focus and cursor are.
+    workspace_feed: Arc<crate::plugin_host::WorkspaceFeed>,
     /// The view an extension has over the workspace, and how many were
     /// asked for.
     over: RefCell<Option<Over>>,
@@ -1328,6 +1330,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             extensions_read: Cell::new(false),
             watched: RefCell::default(),
             sessions_feed: Arc::default(),
+            workspace_feed: Arc::default(),
             over: RefCell::default(),
             over_asked: Cell::new(0),
             choices: Cell::new(None),
@@ -1355,6 +1358,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     });
     each_layout(move |_| shell.take_in_sessions());
     shell.feed_sessions();
+    shell.feed_workspace();
     // The model is kept as it changes, though not at every step of a
     // boundary being dragged.
     if let Some(mut save) = opening.save {
