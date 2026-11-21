@@ -67,6 +67,8 @@ mod styles {
         .lead.accent { color: var(--chip-accent-text); }
         .lead.info { color: var(--chip-info-text); }
         .lead.danger { color: var(--chip-danger-text); }
+        /* At work, its icon turns. */
+        .turning { animation: turn 1s linear infinite; }
         .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         .line { display: flex; align-items: center; gap: var(--u8); min-width: 0; }
         .spacer { flex: 1; }
@@ -97,6 +99,7 @@ mod styles {
     }
     .over { width: 720px; height: 480px; display: flex; }
     .over > .sessions { flex: 1; }
+    @keyframes turn { to { transform: rotate(1turn); } }
     "}
 }
 
@@ -404,7 +407,7 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
         move || vec![(word(), terminal())],
         |(word, terminal)| (word.clone(), *terminal),
         |(word, terminal)| match (word.as_deref(), terminal) {
-            (Some("working"), _) => Icon::CircleNotch.view(),
+            (Some("working"), _) => Icon::CircleNotch.view().class(styles::TURNING),
             (Some("failed"), _) => Icon::XCircle.view(),
             (Some("unseen"), _) => Icon::Circle.view(),
             (Some(_), _) => Icon::Warning.view(),

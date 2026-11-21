@@ -79,8 +79,9 @@ its owner for.
   the tab's label, not a designed indicator.
 - **The list of sessions** (`plugins/sessions`, in a pane or as the
   list over the workspace) — a row is two lines, as Zed's list of threads
-  draws one (board #95): an icon for the attention or `working` (one for
-  the kind -- a terminal's or an agent's -- where there is neither), the
+  draws one (board #95): an icon for the attention or `working`, which
+  turns, a turn a second (one for the kind -- a terminal's or an
+  agent's -- where there is neither), the
   title, muted where no pane shows the session, and how long it has been
   in its state; under it the program's name or the session's kind, the
   attention's or `working`'s word, and its words. The extension reads these from the host's

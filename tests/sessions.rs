@@ -1210,6 +1210,45 @@ fn the_startup_layout_puts_the_list_left_of_the_workspace_once_it_is_read() {
     assert_eq!(opened.model(Workspace::detached_session_count), 1);
 }
 
+#[test]
+fn a_working_sessions_icon_turns() {
+    let opened = open();
+    let places = Places::made("turning");
+    let _made = make(&opened, &places);
+    opened.list();
+    opened.until("the rows", || opened.titles().len() == 5);
+    // Only the session at work, "tests", has an icon that turns.
+    let turning = horizon_ui::testing::find(&opened.app, opened.root, "turning");
+    assert_eq!(turning.len(), 1);
+    let rows = opened.nodes("row");
+    let within =
+        |row: NodeId| horizon_ui::testing::find(&opened.app, row, "turning").contains(&turning[0]);
+    assert!(within(rows[1]), "the icon is not on the row of \"tests\"");
+    // A turn a second: none at its start, a quarter of one a quarter of a
+    // second on.
+    let turned = |seconds: f64| {
+        opened.app.resolve_at(seconds);
+        let document = opened.app.document();
+        let document = document.borrow();
+        let node = document.get_node(turning[0]).expect("the icon");
+        node.transform()
+            .as_deref()
+            .map_or([1., 0., 0., 1.], |transform| {
+                let [a, b, c, d, _, _] = transform.as_coeffs();
+                [a, b, c, d]
+            })
+    };
+    let near = |got: [f64; 4], want: [f64; 4]| {
+        got.iter()
+            .zip(want)
+            .all(|(got, want)| (got - want).abs() < 1e-3)
+    };
+    let start = turned(0.0);
+    assert!(near(start, [1., 0., 0., 1.]), "{start:?}");
+    let quarter = turned(0.25);
+    assert!(near(quarter, [0., 1., -1., 0.]), "{quarter:?}");
+}
+
 /// Paints the list in a pane, in this machine's theme, to the file
 /// `HORIZON_SESSIONS_OUT` names (a PPM): a picture for a person to look
 /// at. With `HORIZON_SESSIONS_ASK` set, as it asks before it ends a
