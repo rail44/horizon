@@ -1238,6 +1238,12 @@ impl Shell {
     }
 
     /// The terminal a pane shows.
+    /// A runtime is being reloaded: asked for, and not yet back with its
+    /// sessions attached again.
+    pub fn reloading_a_runtime(&self) -> bool {
+        self.kept().reloading.get().is_some()
+    }
+
     pub fn terminal(&self, pane: PaneId) -> Option<Terminal> {
         let kept = self.kept();
         let panes = kept.panes.borrow();

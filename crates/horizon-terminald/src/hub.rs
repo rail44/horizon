@@ -205,6 +205,7 @@ mod tests {
             executable: "/nonexistent/horizon-terminald".into(),
             socket: "/nonexistent/terminald.sock".into(),
             listener: -1,
+            again: None,
         });
         Hub::new(TerminalHost::new(), "test-terminald", next)
     }

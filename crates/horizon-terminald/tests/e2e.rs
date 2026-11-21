@@ -360,6 +360,65 @@ async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socke
     wait_for_session_end(&mut attachment.events).await;
 }
 
+/// `hand_over` gives the terminals to the daemon's next image
+/// (`docs/terminald-handover-design.md`): the call is never answered, the
+/// same process goes on with the listening socket, and a client that
+/// connects again finds each terminal with its screen and the same shell
+/// in it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handover_keeps_the_terminals_their_screens_and_their_programs() {
+    let mut terminald = spawn_terminald();
+    let pid = terminald.child.id();
+    let session_id = uuid::Uuid::new_v4();
+    let client = connect_hub(&terminald.socket_path).await;
+    let mut attachment = client
+        .hub
+        .create_terminal(session_id, terminal_spec(std::env::temp_dir(), None))
+        .await
+        .expect("create should succeed");
+    // (The words are put together by the shell, so what is typed does
+    // not read as what it prints.)
+    send_terminal_command(
+        &attachment.commands,
+        TerminalCommand::Input(b"KEPT=kept-$((3*3)); printf 'BEFORE_%s\\n' HANDOVER\n".to_vec()),
+    )
+    .await;
+    screen_until(&mut attachment, "BEFORE_HANDOVER").await;
+
+    let answered = client.hub.hand_over().await;
+    assert!(
+        matches!(answered, Err(HubError::Call(_))),
+        "a handover is never answered, got {answered:?}"
+    );
+    drop(attachment);
+    drop(client);
+
+    let client = connect_hub(&terminald.socket_path).await;
+    assert_eq!(
+        client.hub.list_terminals().await.unwrap(),
+        vec![TerminalSummary { session_id }]
+    );
+    let mut attachment = client
+        .hub
+        .attach_terminal(session_id)
+        .await
+        .expect("the terminal is there after the handover");
+    let screen = screen_until(&mut attachment, "BEFORE_HANDOVER").await;
+    assert!(screen.contains("BEFORE_HANDOVER"), "{screen:?}");
+    send_terminal_command(
+        &attachment.commands,
+        TerminalCommand::Input(b"printf 'AFTER_%s\\n' \"$KEPT\"\n".to_vec()),
+    )
+    .await;
+    screen_until(&mut attachment, "AFTER_kept-9").await;
+    // The process that started it, still running.
+    assert_eq!(terminald.child.id(), pid);
+    assert!(terminald.child.try_wait().unwrap().is_none());
+
+    send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
+    wait_for_session_end(&mut attachment.events).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
     let terminald = spawn_terminald();

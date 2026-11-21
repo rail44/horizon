@@ -261,8 +261,11 @@ fn the_workspace_comes_back_with_its_sessions_after_the_shell_is_closed() {
     daemon.stop(terminald.handle());
 }
 
+/// `Reload Terminal Runtime` has the daemon hand its terminals to its next
+/// image (`docs/terminald-handover-design.md`): the panes keep their
+/// sessions, their screens, and the shells in them.
 #[test]
-fn reloading_the_terminal_runtime_ends_its_terminals_and_leaves_a_new_one() {
+fn reloading_the_terminal_runtime_hands_its_terminals_over() {
     use horizon_workspace::commands::CommandId;
 
     let daemon = Daemon::prepare();
@@ -274,26 +277,29 @@ fn reloading_the_terminal_runtime_ends_its_terminals_and_leaves_a_new_one() {
     until(&app, "a prompt", || {
         text(first[0].0).trim_end().ends_with('$')
     });
-    run(&app, "echo before-$((2*2))");
+    run(&app, "KEPT=kept-$((3*3)); echo before-$((2*2))");
     until(&app, "the output", || text(first[0].0).contains("before-4"));
 
-    // The terminals leave the workspace at once; when the daemon is back
-    // the workspace, left empty, has one new terminal, with the keys.
+    let before = terminald.handle();
     shell.execute(CommandId::ReloadTerminalRuntime);
-    app.run_effects();
-    app.resolve();
-    assert_eq!(panes(&shell), []);
+    assert!(shell.reloading_a_runtime());
     // (Asked again while it goes on, nothing more happens.)
     shell.execute(CommandId::ReloadTerminalRuntime);
-    until(&app, "a new terminal", || panes(&shell).len() == 1);
-    let new = panes(&shell);
-    assert_ne!(new[0].1, first[0].1);
-    until(&app, "a prompt", || {
-        text(new[0].0).trim_end().ends_with('$')
+    until(&app, "the reload done", || !shell.reloading_a_runtime());
+    assert!(!terminald.handle().same_runtime(&before));
+    // The same pane on the same session, with what it showed, and the
+    // same shell in it.
+    assert_eq!(panes(&shell), first);
+    until(&app, "the pane drawn again", || {
+        shell.terminal(first[0].0).is_some()
     });
-    run(&app, "echo after-$((5*5))");
-    until(&app, "the output", || text(new[0].0).contains("after-25"));
-    assert!(!text(new[0].0).contains("before-4"));
+    until(&app, "the screen from before", || {
+        text(first[0].0).contains("before-4")
+    });
+    run(&app, "echo after-$KEPT");
+    until(&app, "the output", || {
+        text(first[0].0).contains("after-kept-9")
+    });
 
     drop(app);
     daemon.stop(terminald.handle());

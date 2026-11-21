@@ -112,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         executable,
         socket: socket_path.clone(),
         listener: listener.as_raw_fd(),
+        again: cfg!(target_os = "linux").then(|| "/proc/self/exe".into()),
     });
     // The accept loop is `horizon-wire`'s ("bind, accept, serve, unlink" is
     // the same in both daemons); the SIGTERM hook is not, and this is the

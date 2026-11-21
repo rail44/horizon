@@ -21,6 +21,10 @@ pub(crate) struct NextImage {
     pub(crate) socket: PathBuf,
     /// The listening socket, kept open for the next image.
     pub(crate) listener: RawFd,
+    /// The image this process runs, executed where `executable` does not
+    /// start: on Linux `/proc/self/exe`, readable after a build replaced
+    /// the file.
+    pub(crate) again: Option<PathBuf>,
 }
 
 impl NextImage {
@@ -84,21 +88,18 @@ fn start(handed: &[Handed], next: &NextImage) -> String {
         "--adopt".into(),
         file.as_raw_fd().to_string().into(),
     ];
-    let error = exec(&next.executable, &args);
-    eprintln!(
-        "horizon-terminald: {} did not start: {error}",
-        next.executable.display()
+    let mut error = format!(
+        "{} did not start: {}",
+        next.executable.display(),
+        exec(&next.executable, &args)
     );
-    // The image this process was started from, still readable through
-    // the process's own link after a build replaced the file.
-    #[cfg(target_os = "linux")]
-    let error = {
-        let again = exec(Path::new("/proc/self/exe"), &args);
-        format!("{error}; this build again: {again}")
-    };
+    eprintln!("horizon-terminald: {error}");
+    if let Some(again) = &next.again {
+        error = format!("{error}; this build again: {}", exec(again, &args));
+    }
     restore(&kept);
     drop(file);
-    error.to_string()
+    error
 }
 
 fn exec(executable: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
@@ -118,3 +119,6 @@ fn restore(kept: &[RawFd]) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
