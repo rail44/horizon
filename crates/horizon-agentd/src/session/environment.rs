@@ -193,6 +193,13 @@ impl SessionEnvironment<'_> {
         // Constructed before `workspace_root` is moved into
         // `tool_session_builder_for` below.
         let board = board_host_for(workspace_root.as_deref(), state.clone());
+        // A session in a worktree made for it commits there without asking
+        // (`docs/agent-subagent-design.md` decision 10).
+        let own_worktree_grants = workspace_root
+            .as_deref()
+            .filter(|_| isolated)
+            .map(|root| worktree::own_metadata_grants(root, session_id.as_uuid()))
+            .unwrap_or_default();
         let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
             .with_primary_checkout(primary_checkout)
             // An unattended role's session (a `task` child, a wiki thread)
@@ -211,6 +218,7 @@ impl SessionEnvironment<'_> {
                     .is_some_and(|role| role.read_only),
             )
             .with_filesystem_grants(filesystem_grants.clone())
+            .with_own_worktree_grants(own_worktree_grants)
             .with_loopback_connect(loopback_connect)
             .with_skills(if trusted {
                 SkillRegistry::discover(&skill_root)

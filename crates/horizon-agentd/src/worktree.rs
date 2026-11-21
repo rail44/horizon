@@ -209,7 +209,7 @@ pub(crate) fn create_isolated_worktree_at(
 
     let slug = short_slug(session_id);
     let worktree_path = repo_root.join(".horizon").join("worktrees").join(&slug);
-    let branch = format!("horizon/{slug}");
+    let branch = session_branch(&slug);
     let worktree_path_str = worktree_path.to_str().ok_or_else(|| {
         format!(
             "worktree path {} is not valid UTF-8",
@@ -235,6 +235,70 @@ pub(crate) fn create_isolated_worktree_at(
         branch,
         base: base_ref,
     })
+}
+
+/// The branch a session's worktree is made on: one per session, in a
+/// directory of its own under `refs/heads/horizon/`, so that the session can
+/// be let write its own ref without being let write any other session's
+/// (`docs/agent-subagent-design.md` decision 10). Git updates a ref by
+/// writing `<ref>.lock` beside it and renaming it into place, which the
+/// sandbox allows only to a writable directory.
+fn session_branch(slug: &str) -> String {
+    format!("horizon/{slug}/work")
+}
+
+/// What a session in its own worktree may write of that worktree's Git
+/// metadata without asking (`docs/agent-subagent-design.md` decision 10):
+/// its gitdir, its branch's ref and reflog directories, and the object
+/// store. The gitdir's `config.worktree`, `commondir` and `gitdir` stay
+/// unwritable -- the first can set `core.hooksPath`, the other two point
+/// Git elsewhere -- as do the repository's `hooks` and `config`, which no
+/// grant here covers. Empty for a worktree made before its branch had a
+/// directory of its own, or one whose layout does not check out.
+pub(crate) fn own_metadata_grants(
+    worktree: &Path,
+    session_id: Uuid,
+) -> Vec<horizon_sandbox::FilesystemGrant> {
+    own_metadata_grants_checked(worktree, session_id).unwrap_or_default()
+}
+
+fn own_metadata_grants_checked(
+    worktree: &Path,
+    session_id: Uuid,
+) -> Option<Vec<horizon_sandbox::FilesystemGrant>> {
+    use horizon_sandbox::{FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope};
+
+    let absolute = |flag: &str| {
+        run_git(worktree, &["rev-parse", "--path-format=absolute", flag])
+            .ok()
+            .and_then(|path| std::fs::canonicalize(path.trim()).ok())
+    };
+    let common = absolute("--git-common-dir")?;
+    let gitdir = absolute("--git-dir")?;
+    if !gitdir.starts_with(common.join("worktrees")) {
+        return None;
+    }
+    let slug = short_slug(session_id);
+    let refs = common.join("refs/heads/horizon").join(&slug);
+    if !refs.join("work").is_file() {
+        return None;
+    }
+    let reflog = common.join("logs/refs/heads/horizon").join(&slug);
+    std::fs::create_dir_all(&reflog).ok()?;
+    let tree = |path: PathBuf, excluded: &[&str]| {
+        Some(FilesystemGrant {
+            path: std::fs::canonicalize(path).ok()?,
+            access: FilesystemGrantAccess::ReadWrite,
+            scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: excluded.iter().map(PathBuf::from).collect(),
+        })
+    };
+    Some(vec![
+        tree(gitdir, &["config.worktree", "commondir", "gitdir"])?,
+        tree(refs, &[])?,
+        tree(reflog, &[])?,
+        tree(common.join("objects"), &[])?,
+    ])
 }
 
 /// Re-adopts the existing worktree owned by a resumed session without
@@ -359,13 +423,19 @@ pub(crate) fn restore_worktree(
     identity: &horizon_agent::contract::SessionWorktree,
     session_id: Uuid,
 ) -> Result<WorktreeInfo, String> {
-    let expected_branch = format!("horizon/{}", short_slug(session_id));
+    let slug = short_slug(session_id);
     let repository =
         std::fs::canonicalize(&identity.repository).map_err(|error| error.to_string())?;
     let expected_path = repository
         .join(".horizon/worktrees")
         .join(short_slug(session_id));
-    if identity.path != expected_path || identity.branch != expected_branch {
+    // A worktree made before branches moved under the session's own
+    // directory keeps its `horizon/<slug>` branch; it is still the
+    // session's, and only lacks the metadata grant (`own_metadata_grants`).
+    if identity.path != expected_path
+        || (identity.branch != session_branch(&slug)
+            && identity.branch != format!("horizon/{slug}"))
+    {
         return Err("Retained environment identity does not match session ownership".into());
     }
     run_git(
@@ -785,7 +855,7 @@ mod tests {
             .expect("worktree creation should succeed");
 
         let slug = short_slug(session_id);
-        assert_eq!(info.branch, format!("horizon/{slug}"));
+        assert_eq!(info.branch, format!("horizon/{slug}/work"));
         assert_eq!(
             info.path,
             repo.path()
@@ -1052,5 +1122,111 @@ mod tests {
 
         assert!(!remove_worktree_if_clean(&info));
         assert!(info.path.is_dir(), "dirty worktree must be kept");
+    }
+
+    /// `docs/agent-subagent-design.md` decision 10, through the real
+    /// sandbox: a session in its own worktree commits there without asking,
+    /// and still cannot move another branch, rewrite `config.worktree`, or
+    /// touch another session's branch. Runs the real sandbox, so the
+    /// `sandboxed` nextest profile skips it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_session_commits_in_its_own_worktree_and_reaches_no_other_branch() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let session_id = Uuid::new_v4();
+        let other = create_isolated_worktree(repo.path(), Uuid::new_v4()).unwrap();
+        let info = create_isolated_worktree(repo.path(), session_id).unwrap();
+        let grants = own_metadata_grants(&info.path, session_id);
+        assert_eq!(grants.len(), 4, "{grants:?}");
+
+        let common = info.repo_root.join(".git");
+        let gitdir = common.join("worktrees").join(short_slug(session_id));
+        let main_before = run_git(&info.repo_root, &["rev-parse", "HEAD"]).unwrap();
+        let other_before = run_git(&info.repo_root, &["rev-parse", &other.branch]).unwrap();
+        let run = |script: String| {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.arg("-c").arg(script).current_dir(&info.path);
+            scrub_git_env(&mut command);
+            command.env("GIT_CONFIG_GLOBAL", "/dev/null");
+            command.env("GIT_CONFIG_SYSTEM", "/dev/null");
+            let policy = horizon_sandbox::SandboxPolicy {
+                writable_roots: vec![info.path.clone()],
+                writable_root_exclusions: vec![info.path.join(".git")],
+                readable_scope: horizon_sandbox::ReadableScope::Full,
+                network: horizon_sandbox::NetworkPolicy::Disabled,
+            };
+            let sandboxed = horizon_sandbox::spawn_with_filesystem_grants(
+                command,
+                &policy,
+                &grants,
+                horizon_sandbox::SandboxStdio::inherit(),
+            )
+            .expect("spawn the sandbox");
+            let mut child = sandboxed.child;
+            child.wait().unwrap().success()
+        };
+
+        assert!(run("echo changed > README.md && git add README.md && \
+             git -c user.name=Test -c user.email=test@example.com commit -q -m change"
+            .into()));
+        assert_ne!(
+            run_git(&info.repo_root, &["rev-parse", &info.branch]).unwrap(),
+            info.base,
+            "the commit moved the session's own branch"
+        );
+
+        assert!(!run("git update-ref refs/heads/main HEAD".into()));
+        assert!(!run(format!(
+            "git update-ref refs/heads/{} HEAD",
+            other.branch
+        )));
+        assert!(!run(format!(
+            "echo '[core]' >> {}",
+            gitdir.join("config.worktree").display()
+        )));
+        assert!(!run(format!(
+            "echo x >> {}",
+            common.join("config").display()
+        )));
+        assert_eq!(
+            run_git(&info.repo_root, &["rev-parse", "HEAD"]).unwrap(),
+            main_before
+        );
+        assert_eq!(
+            run_git(&info.repo_root, &["rev-parse", &other.branch]).unwrap(),
+            other_before
+        );
+        assert!(!gitdir.join("config.worktree").exists());
+    }
+
+    /// A worktree made before its branch had a directory of its own is
+    /// still restored, and gets no metadata grant.
+    #[test]
+    fn an_old_style_branch_is_restored_without_a_metadata_grant() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let session_id = Uuid::new_v4();
+        let slug = short_slug(session_id);
+        let path = repo.path().join(".horizon/worktrees").join(&slug);
+        git(
+            repo.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &format!("horizon/{slug}"),
+                path.to_str().unwrap(),
+            ],
+        );
+        let base = run_git(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+        let identity = horizon_agent::contract::SessionWorktree {
+            repository: repo.path().to_path_buf(),
+            path: path.canonicalize().unwrap(),
+            branch: format!("horizon/{slug}"),
+            base,
+        };
+        let restored = restore_worktree(&identity, session_id).expect("restored");
+        assert!(own_metadata_grants(&restored.path, session_id).is_empty());
     }
 }

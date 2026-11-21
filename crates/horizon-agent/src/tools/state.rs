@@ -88,6 +88,13 @@ struct Inner {
     /// (`horizon_sandbox::suggest_grants`), and a config-injected tree
     /// never had a denial at all.
     filesystem_grants: RefCell<Vec<horizon_sandbox::FilesystemGrant>>,
+    /// What the session may write of its own worktree's Git metadata
+    /// (`docs/agent-subagent-design.md` decision 10), resolved by the host
+    /// when the session's root is a worktree made for it. Merged into every
+    /// sandboxed spawn like the grants above, but neither retained nor
+    /// handed on: it belongs to this worktree, not to the session's
+    /// authority.
+    own_worktree_grants: Vec<horizon_sandbox::FilesystemGrant>,
     /// The `bash` tool's tracked working directory
     /// (`docs/agent-tools-design.md`, "Bash Semantics"): a fresh process per
     /// call, with `cd` persisted across calls by the harness rather than a
@@ -316,7 +323,12 @@ impl ToolSessionState {
     /// rides along on any sandboxed spawn, not just the retry that won it.
     pub(crate) fn effective_sandbox_grants(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
         let services = self.mach_services();
-        let grants = self.filesystem_grants_snapshot();
+        let mut grants = self.filesystem_grants_snapshot();
+        for grant in &self.inner.own_worktree_grants {
+            if !grants.contains(grant) && horizon_sandbox::revalidate_grant(grant).is_ok() {
+                grants.push(grant.clone());
+            }
+        }
         #[cfg(target_os = "macos")]
         {
             let mut grants = grants;

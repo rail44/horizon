@@ -146,7 +146,11 @@ and the main session merged a worker's branch 19 times.
     for any session in its own worktree, not only a child, so a requester
     working in its own worktree integrates a child's branch without
     asking either; a requester in the primary checkout is asked as
-    before.
+    before. Git moves a ref by writing `<ref>.lock` beside it and renaming
+    it into place, which the sandbox allows only to a writable directory,
+    so a session's branch is `horizon/<slug>/work`, in a directory of its
+    own (「1でよいです」); a worktree made before keeps its
+    `horizon/<slug>` branch and gets no grant.
 
 11. **A daemon restart ends a write child and keeps its work.** 「iで」.
     The child is terminated rather than resumed, as an exploration child

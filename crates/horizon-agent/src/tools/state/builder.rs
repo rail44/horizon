@@ -56,6 +56,7 @@ impl ToolSessionBuilder {
                 workspace_root,
                 recorded_mtimes: RefCell::new(HashMap::new()),
                 filesystem_grants: RefCell::new(Vec::new()),
+                own_worktree_grants: Vec::new(),
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
                 tools,
                 recall,
@@ -168,6 +169,16 @@ impl ToolSessionBuilder {
     }
 
     /// Seed only grants that still revalidate against the filesystem.
+    /// What the session may write of its own worktree's Git metadata
+    /// (`docs/agent-subagent-design.md` decision 10).
+    pub fn with_own_worktree_grants(
+        mut self,
+        grants: Vec<horizon_sandbox::FilesystemGrant>,
+    ) -> Self {
+        self.inner.own_worktree_grants = grants;
+        self
+    }
+
     pub fn with_filesystem_grants(mut self, grants: Vec<horizon_sandbox::FilesystemGrant>) -> Self {
         self.inner.filesystem_grants = RefCell::new(
             grants
