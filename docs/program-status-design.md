@@ -75,9 +75,12 @@ its owner for.
   Code's `✳` and `◐`), which is why the tab draws one. The mark is text in
   the tab's label, not a designed indicator.
 - **The list of sessions** (`plugins/sessions`, in a pane or as the
-  list over the workspace) — a row carries the program's name or the session's
-  kind, its words, the attention or `working` as a chip, and how long it
-  has been in its state. The extension reads these from the host's
+  list over the workspace) — a row is two lines, as Zed's list of threads
+  draws one (board #95): an icon for the attention or `working` (one for
+  the kind -- a terminal's or an agent's -- where there is neither), the
+  title, muted where no pane shows the session, and how long it has been
+  in its state; under it the program's name or the session's kind, the
+  attention's or `working`'s word, and its words. The extension reads these from the host's
   `sessions` interface (`src/workspace/session_feed.rs`).
 - **`horizon sessions`** — `SessionEntry::activity`
   (`crates/horizon-control/src/contract.rs`): `state` (the kind's own

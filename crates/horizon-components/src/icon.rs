@@ -22,6 +22,18 @@ pub enum Icon {
     DotsThree,
     /// Two columns of three dots: a grip, to take something and move it.
     DotsSixVertical,
+    /// A terminal's window.
+    TerminalWindow,
+    /// A robot: an agent.
+    Robot,
+    /// A warning: something waits on its owner.
+    Warning,
+    /// A cross in a circle: it failed.
+    XCircle,
+    /// A circle with a notch: at work.
+    CircleNotch,
+    /// A circle.
+    Circle,
 }
 
 impl Icon {
@@ -30,6 +42,12 @@ impl Icon {
         match self {
             Self::DotsThree => include_str!("../icons/phosphor/dots-three.svg"),
             Self::DotsSixVertical => include_str!("../icons/phosphor/dots-six-vertical.svg"),
+            Self::TerminalWindow => include_str!("../icons/phosphor/terminal-window.svg"),
+            Self::Robot => include_str!("../icons/phosphor/robot.svg"),
+            Self::Warning => include_str!("../icons/phosphor/warning.svg"),
+            Self::XCircle => include_str!("../icons/phosphor/x-circle.svg"),
+            Self::CircleNotch => include_str!("../icons/phosphor/circle-notch.svg"),
+            Self::Circle => include_str!("../icons/phosphor/circle.svg"),
         }
     }
 
@@ -58,7 +76,16 @@ mod tests {
 
     #[test]
     fn an_icon_s_file_has_the_one_path_it_draws() {
-        for icon in [Icon::DotsThree, Icon::DotsSixVertical] {
+        for icon in [
+            Icon::DotsThree,
+            Icon::DotsSixVertical,
+            Icon::TerminalWindow,
+            Icon::Robot,
+            Icon::Warning,
+            Icon::XCircle,
+            Icon::CircleNotch,
+            Icon::Circle,
+        ] {
             let path = icon.path();
             assert!(path.starts_with('M') && path.ends_with('Z'), "{path}");
             assert_eq!(icon.file().matches("<path").count(), 1);

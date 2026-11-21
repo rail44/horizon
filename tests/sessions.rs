@@ -635,10 +635,11 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
         "{bands:?}"
     );
     assert!(bands[1].ends_with("notes1"), "{bands:?}");
-    // Each row says what its session is and does, and its state.
+    // Each row says what its session is and does, and its state: its
+    // title and since when, and under it its kind, state and words.
     let rows = opened.texts("label");
     assert!(
-        rows[0].starts_with("buildagentapproval") && rows[0].ends_with("Run bash"),
+        rows[0].starts_with("build") && rows[0].ends_with("agent · approval · Run bash"),
         "{rows:?}"
     );
     assert!(rows[1].contains("working"), "{rows:?}");
@@ -647,12 +648,11 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
         "{rows:?}"
     );
     assert!(
-        rows[4].starts_with("wikiagent") && rows[4].ends_with("Updated two pages."),
+        rows[4].starts_with("wiki") && rows[4].ends_with("agent · Updated two pages."),
         "{rows:?}"
     );
-    // (A terminal whose program says nothing has no state to be in since;
-    // the line for its words is there, empty.)
-    assert_eq!(rows[3].trim_end_matches('\u{a0}'), "shellterminal");
+    // (A terminal whose program says nothing has no state to be in since.)
+    assert_eq!(rows[3], "shellterminal");
     // A row is as tall whatever its session is doing or says.
     let heights = |opened: &Opened| -> Vec<i64> {
         let document = opened.app.document();
