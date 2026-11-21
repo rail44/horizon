@@ -249,7 +249,10 @@ on no pane. No pane gets the focus, and Enter in the view goes to the
 session as it did; the view's pane, put back in the boxes made again for
 a tab shown, is given the keys again. An extension hears of no focus
 going and coming, so the shell looks where the focus is after each
-layout; the mode itself, entered, takes the place of it. The list of
+layout. The mode itself, entered, takes the place of it -- but under a
+sheet over the workspace, which has the keys: the list of sessions,
+opened over the workspace from the palette in the mode, moves the cursor
+shown, and the mode's comes back once the sheet is gone. The list of
 sessions marks its own cursor, the chosen row, by a line in the accent.
 
 ## What an empty workspace shows (2026-11-20)

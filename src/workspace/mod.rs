@@ -789,8 +789,8 @@ impl Shell {
                 })
                 .class_dyn(move || place.get().filter(|at| at.left).map(|_| styles::EDGE_LEFT))
                 .class_dyn(move || {
-                    if shell.lent_cursor_on(id) {
-                        return Some(styles::CURSOR);
+                    if shell.lent_shown() {
+                        return shell.lent_cursor_on(id).then_some(styles::CURSOR);
                     }
                     match (shell.cursor.get() == Some(id), shell.mode.get()) {
                         (true, true) => Some(styles::CURSOR),

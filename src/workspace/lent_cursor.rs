@@ -63,7 +63,10 @@ impl Shell {
     pub(super) fn follow_lent_cursor(&self) {
         let shell = *self;
         each_layout(move |page| {
-            let lent = if shell.mode.get_untracked() {
+            // (The mode's own cursor is the one shown in the mode, but under
+            // a sheet over the workspace, which has the keys.)
+            let mode = shell.mode.get_untracked() && shell.modal.get_untracked().is_none();
+            let lent = if mode {
                 None
             } else {
                 let held = shell.held.get_untracked();
@@ -113,6 +116,11 @@ impl Shell {
     /// cursor is shown, but for the pane that view is in.
     pub(super) fn veiled(&self, pane: PaneId) -> bool {
         self.mode.get() || self.lent.get().is_some_and(|lent| lent.from != Some(pane))
+    }
+
+    /// Whether a view's cursor is shown: the mode's is not, then.
+    pub(super) fn lent_shown(&self) -> bool {
+        self.lent.get().is_some()
     }
 
     /// Whether a view's cursor is on `pane`.

@@ -383,7 +383,7 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
         .class_dyn(move || {
             let on = shell.model.with(|model| model.workspace_cursor());
             (
-                (on == Some(Cursor::Strip(group))).then_some(styles::CURSOR),
+                (on == Some(Cursor::Strip(group)) && !shell.lent_shown()).then_some(styles::CURSOR),
                 shell
                     .is_drop(super::moving::Target::Strip(group))
                     .then_some(styles::DROP),

@@ -560,6 +560,61 @@ fn the_chosen_sessions_tab_in_another_group_is_shown() {
 }
 
 #[test]
+fn over_the_workspace_in_the_mode_the_lists_cursor_is_the_one_shown() {
+    let opened = open();
+    let places = Places::made("over-mode");
+    let made = make(&opened, &places);
+    let terminal = opened.model(|model| model.pane_location_for_session(made.first).unwrap());
+    let element = opened
+        .shell
+        .pane_element(terminal)
+        .expect("the terminal is drawn");
+    let cursor =
+        || horizon_ui::testing::find(&opened.app, element, "cursor").first() == Some(&element);
+    let settle = || {
+        for _ in 0..3 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    // In the mode, its cursor on the terminal.
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("'".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    settle();
+    assert!(cursor());
+    // The list over the workspace, still in the mode: its cursor, on a
+    // session no pane shows, is the one shown, on no pane.
+    opened.manage();
+    settle();
+    assert!(opened.model(Workspace::is_workspace_mode_active));
+    assert_eq!(opened.chosen().as_deref(), Some("build"));
+    assert!(!cursor());
+    // On the terminal's session, on the terminal.
+    for _ in 0..3 {
+        opened.key(Key::Named(NamedKey::ArrowDown));
+    }
+    settle();
+    assert_eq!(opened.chosen().as_deref(), Some("shell"));
+    assert!(cursor());
+    // Up again, and the list gone: the mode's is shown again.
+    opened.key(Key::Named(NamedKey::ArrowUp));
+    settle();
+    assert!(!cursor());
+    opened.key(Key::Named(NamedKey::Escape));
+    settle();
+    assert!(!opened.managed());
+    assert!(cursor());
+}
+
+#[test]
 fn the_sessions_are_listed_by_project_with_what_waits_first() {
     let opened = open();
     let places = Places::made("listed");
