@@ -2963,6 +2963,7 @@ dependencies = [
  "toml_edit",
  "unicode-width",
  "uuid",
+ "vello",
  "wasmparser 0.261.0",
  "wasmtime",
  "wasmtime-wasi",

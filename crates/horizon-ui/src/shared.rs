@@ -129,6 +129,25 @@ pub(crate) fn enter(shared: &Rc<Shared>) {
     CURRENT.with(|current| *current.borrow_mut() = Some(shared.clone()));
 }
 
+/// Stops `shared` being the app this thread reaches, if it is: what it
+/// keeps (the document, the widgets in it) is then let go of with its
+/// last owner, not left until the thread ends, when what some of it holds
+/// (a GPU device's objects) can no longer be let go of.
+pub(crate) fn leave(shared: &Rc<Shared>) {
+    let left = CURRENT
+        .try_with(|current| {
+            let mut current = current.try_borrow_mut().ok()?;
+            match current.as_ref() {
+                Some(entered) if Rc::ptr_eq(entered, shared) => current.take(),
+                _ => None,
+            }
+        })
+        .ok()
+        .flatten();
+    // Let go of outside the borrow: what it drops may ask for the app.
+    drop(left);
+}
+
 pub(crate) fn current() -> Option<Rc<Shared>> {
     CURRENT.with(|current| current.borrow().clone())
 }

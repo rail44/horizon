@@ -45,10 +45,12 @@ mod rows;
 mod session;
 mod shaping;
 mod slots;
+mod store;
 
 use rows::{row_height, row_px, scroll_shift};
 pub use session::{Input, Session};
 use shaping::{Ink, Row, Shaper};
+use store::{Ground, RowStore, Wanted};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -144,6 +146,9 @@ struct State {
     /// ([`row_height`]): the look's line height made a whole number of
     /// device pixels at the display's scale.
     row: Cell<f64>,
+    /// Whether the screen was last painted from the rows kept as pixels on
+    /// the renderer's device, rather than drawn whole.
+    painted_from_kept: Cell<bool>,
     /// Where the box is on the page, in CSS pixels: on a display that is
     /// not at one device pixel to the CSS pixel, the box may start part of
     /// a device pixel in, which what is drawn to whole device pixels
@@ -191,6 +196,7 @@ impl State {
             session,
             off_the_page: Cell::new(false),
             row: Cell::new(row_height(look.line_height, 1.)),
+            painted_from_kept: Cell::new(false),
             look: RefCell::new(look),
             restyled: Cell::new(0),
             frame: RefCell::new(None),
@@ -304,6 +310,13 @@ impl Terminal {
     /// when a frame is taken in.
     pub fn frame_number(&self) -> u64 {
         self.state.seen.get()
+    }
+
+    /// Whether the screen was last painted from the rows it keeps as pixels
+    /// on the renderer's device (`docs/terminal-row-texture-design.md`), as
+    /// a renderer on a GPU paints it, rather than drawn whole.
+    pub fn painted_from_kept_rows(&self) -> bool {
+        self.state.painted_from_kept.get()
     }
 
     /// Asks the session to copy what is selected.
@@ -704,6 +717,8 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 // (The first paint takes the look as it is then.)
                 styled: u64::MAX,
                 set: Vec::new(),
+                store: None,
+                last: None,
             }
         });
 
@@ -1133,6 +1148,31 @@ struct Screen {
     styled: u64,
     /// The colors the program had set when the rows were shaped.
     set: Vec<(u16, [u8; 3])>,
+    /// The rows drawn, kept as pixels on the window's device, when the page
+    /// is painted on one.
+    store: Option<RowStore>,
+    /// What was painted last, and what it was painted from: painted again
+    /// as it is while nothing it was painted from has changed.
+    last: Option<(Painted, anyrender::Scene)>,
+}
+
+/// Everything a frame of the screen is painted from.
+#[derive(PartialEq)]
+struct Painted {
+    /// The frame's number among the session's.
+    seen: u64,
+    /// The window of history shown, its rows, and how far into its top row
+    /// the view is, while scrolled back.
+    scrolled: Option<(usize, std::ops::Range<usize>, u32)>,
+    size: (u32, u32),
+    scale: u64,
+    styled: u64,
+    cells: (u64, usize, usize),
+    origin: (u64, u64),
+    focused: bool,
+    preedit: String,
+    /// The device it was painted from the store on, if it was.
+    device: Option<vello::wgpu::Device>,
 }
 
 fn fill(scene: &mut impl PaintScene, color: [u8; 3], rect: Rect) {
@@ -1291,10 +1331,37 @@ fn selected_columns(
     Some(from..to)
 }
 
+/// A row of the frame being painted: where it was shaped, the columns of
+/// the selection on it, and its top in the grid in device pixels.
+struct Shown {
+    from: ShownFrom,
+    selected: Option<std::ops::Range<usize>>,
+    top: f64,
+}
+
+#[derive(Clone, Copy)]
+enum ShownFrom {
+    /// The live screen's row of this index.
+    Live(usize),
+    /// The row of the window of history held, by its place in it.
+    History(usize),
+}
+
+fn shaped_row<'a>(
+    rows: &'a [Shaped],
+    history: &'a std::collections::HashMap<usize, Shaped>,
+    from: ShownFrom,
+) -> &'a Shaped {
+    match from {
+        ShownFrom::Live(index) => &rows[index],
+        ShownFrom::History(row) => &history[&row],
+    }
+}
+
 impl horizon_ui::blitz_dom::Widget for Screen {
     fn paint(
         &mut self,
-        _context: &mut dyn anyrender::RenderContext,
+        context: &mut dyn anyrender::RenderContext,
         _styles: &horizon_ui::blitz_dom::node::ComputedStyles,
         width: u32,
         height: u32,
@@ -1311,11 +1378,35 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             self.shaped_at = 0.;
         }
         let whole = Rect::new(0., 0., width as f64, height as f64);
-        let frame = self.state.frame.borrow();
+        let frame = state.frame.borrow();
         let Some(frame) = frame.as_ref() else {
             fill(&mut scene, look.background, whole);
             return scene;
         };
+        let device = (context.renderer_specific_context())
+            .and_then(|context| context.downcast::<anyrender_vello::DeviceHandle>().ok());
+        let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
+        let (cells, origin) = (self.state.cells.get(), self.state.origin.get());
+        let painted = Painted {
+            seen: self.state.seen.get(),
+            scrolled: (scrolled.as_ref()).map(|(window, range, into)| {
+                let held = std::sync::Arc::as_ptr(window) as usize;
+                (held, range.clone(), into.to_bits())
+            }),
+            size: (width, height),
+            scale: scale.to_bits(),
+            styled: self.styled,
+            cells: (cells.0.to_bits(), cells.1, cells.2),
+            origin: (origin.0.to_bits(), origin.1.to_bits()),
+            focused: self.state.focused.get(),
+            preedit: self.state.preedit.borrow().clone(),
+            device: device.as_ref().map(|handle| handle.device.clone()),
+        };
+        if let Some((before, scene)) = &self.last
+            && *before == painted
+        {
+            return scene.clone();
+        }
         let palette = Palette {
             look,
             set: &frame.palette_overrides,
@@ -1326,65 +1417,129 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             self.set = frame.palette_overrides.clone();
             self.shaped_at = 0.;
         }
-        let (cell, line) = (
-            self.state.cells.get().0 * scale,
-            row_px(look.line_height, scale),
-        );
+        let (cell, line) = (cells.0 * scale, row_px(look.line_height, scale));
         let font_px = look.font_size * scale as f32;
-        let (left, above) = self.state.origin.get();
-        let inset = ((left * scale).fract(), (above * scale).fract());
+        let inset = ((origin.0 * scale).fract(), (origin.1 * scale).fract());
         if self.shaped_at != scale {
             self.history.1.clear();
-        }
-        // Scrolled back: rows of the window of history held, moved up by
-        // the part of a row the view is into its top one, in whole device
-        // pixels. No cursor and no selection: those are of the live screen.
-        let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
-        if let Some((window, range, into)) = scrolled {
-            if self.shaped_at != scale {
-                self.shaped_at = scale;
-                self.rows.clear();
-                self.baseline =
-                    (self.shaper).baseline(scale as f32, row_height(look.line_height, scale));
-            }
-            let pen = Pen {
-                width: width as f64,
-                cell,
-                line,
-                baseline: self.baseline,
-                font_px,
-                inset,
-                background: palette.background(),
-                selection: look.selection,
-            };
-            // The rows shaped are this window's, by their place in it.
-            let held = std::sync::Arc::as_ptr(&window) as usize;
-            if self.history.0 != held {
-                self.history = (held, std::collections::HashMap::new());
-            }
-            let near = range.start.saturating_sub(range.len())..range.end + range.len();
-            self.history.1.retain(|row, _| near.contains(row));
-            let clip = Rect::new(0., 0., width as f64, height as f64);
-            scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &clip);
-            let shift = scroll_shift(into, line);
-            for (place, row) in range.enumerate() {
-                let shaper = &mut self.shaper;
-                let shaped = (self.history.1.entry(row))
-                    .or_insert_with(|| shape(&window.lines[row], shaper, scale as f32, palette));
-                paint_row(&mut scene, &pen, shaped, None, place as f64 * line - shift);
-            }
-            scene.pop_layer();
-            return scene;
-        }
-
-        if self.shaped_at != scale {
             self.rows.clear();
             self.shaped_at = scale;
             self.baseline =
                 (self.shaper).baseline(scale as f32, row_height(look.line_height, scale));
         }
-        // A row drawn before is not shaped again, at whatever place it is
-        // now: output that scrolls moves every row and changes one.
+        let shown = match &scrolled {
+            // Scrolled back: rows of the window of history held, moved up
+            // by the part of a row the view is into its top one, in whole
+            // device pixels. No cursor and no selection: those are of the
+            // live screen.
+            Some((window, range, into)) => {
+                // The rows shaped are this window's, by their place in it.
+                let held = std::sync::Arc::as_ptr(window) as usize;
+                if self.history.0 != held {
+                    self.history = (held, std::collections::HashMap::new());
+                }
+                let near = range.start.saturating_sub(range.len())..range.end + range.len();
+                self.history.1.retain(|row, _| near.contains(row));
+                let shift = scroll_shift(*into, line);
+                (range.clone().enumerate())
+                    .map(|(place, row)| {
+                        let shaper = &mut self.shaper;
+                        (self.history.1.entry(row)).or_insert_with(|| {
+                            shape(&window.lines[row], shaper, scale as f32, palette)
+                        });
+                        Shown {
+                            from: ShownFrom::History(row),
+                            selected: None,
+                            top: place as f64 * line - shift,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+            None => {
+                self.shape_live(&frame.lines, scale, palette);
+                (0..self.rows.len())
+                    .map(|index| Shown {
+                        from: ShownFrom::Live(index),
+                        selected: (frame.selection.as_ref())
+                            .and_then(|selection| selected_columns(selection, index, cells.1)),
+                        top: index as f64 * line,
+                    })
+                    .collect()
+            }
+        };
+        let pen = Pen {
+            width: width as f64,
+            cell,
+            line,
+            baseline: self.baseline,
+            font_px,
+            inset,
+            background: palette.background(),
+            selection: look.selection,
+        };
+        let ground = Ground {
+            styled: self.styled,
+            set: frame.palette_overrides.clone(),
+            scale: scale.to_bits(),
+            cell: cell.to_bits(),
+            inset: (inset.0.to_bits(), inset.1.to_bits()),
+        };
+        let stored = device.is_some_and(|device| {
+            let wanted: Vec<Wanted<'_>> = (shown.iter())
+                .map(|row| Wanted {
+                    shaped: shaped_row(&self.rows, &self.history.1, row.from),
+                    selected: row.selected.clone(),
+                    top: row.top,
+                })
+                .collect();
+            // The visible rows, the one a part of which a scroll shows, and
+            // as many again for rows scrolled back to.
+            let capacity = 2 * (cells.2 as u32 + 1);
+            let greatest = device.device.limits().max_texture_dimension_2d;
+            let Some(layout) = slots::Layout::for_rows(capacity, width, line as u32, greatest)
+            else {
+                return false;
+            };
+            if !(self.store.as_ref()).is_some_and(|store| store.is(&device, &layout)) {
+                if let Some(store) = self.store.take() {
+                    store.release(context);
+                }
+                self.store = RowStore::new(context, &device, layout);
+            }
+            (self.store.as_mut())
+                .is_some_and(|store| store.paint(&mut scene, &pen, &ground, &wanted, height as f64))
+        });
+        self.state.painted_from_kept.set(stored);
+        if !stored {
+            scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &whole);
+            for row in &shown {
+                let shaped = shaped_row(&self.rows, &self.history.1, row.from);
+                paint_row(&mut scene, &pen, shaped, row.selected.clone(), row.top);
+            }
+            scene.pop_layer();
+        }
+        if scrolled.is_none()
+            && let Some(cursor) = frame.cursor
+        {
+            self.paint_cursor(&mut scene, &pen, cursor, palette, scale);
+        }
+        self.last = Some((painted, scene.clone()));
+        scene
+    }
+
+    /// The renderer the page was painted with is gone, and the texture the
+    /// rows were kept in with it.
+    fn destroy_surfaces(&mut self) {
+        self.store = None;
+        self.last = None;
+    }
+}
+
+impl Screen {
+    /// Shapes the live screen's `lines` into `self.rows`, a row drawn before
+    /// not again, at whatever place it is now: output that scrolls moves
+    /// every row and changes one.
+    fn shape_live(&mut self, lines: &[TerminalLine], scale: f64, palette: Palette) {
         let mut before: Vec<Option<Shaped>> = (std::mem::take(&mut self.rows).into_iter())
             .map(Some)
             .collect();
@@ -1393,7 +1548,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         // found: after a couple, the screen is taken to be all new (output
         // faster than the frames), and the rest are not looked for.
         let (mut below, mut missed) = (0, 0);
-        for (index, wanted) in frame.lines.iter().enumerate() {
+        for (index, wanted) in lines.iter().enumerate() {
             let same = |shaped: &Option<Shaped>| {
                 (shaped.as_ref()).is_some_and(|shaped| shaped.line == *wanted)
             };
@@ -1413,7 +1568,21 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             };
             self.rows.push(shaped);
         }
+    }
 
+    /// Draws the cursor over the rows, or what the input method is
+    /// composing at it.
+    fn paint_cursor(
+        &mut self,
+        scene: &mut anyrender::Scene,
+        pen: &Pen,
+        cursor: horizon_terminal_core::TerminalCursor,
+        palette: Palette,
+        scale: f64,
+    ) {
+        let Pen {
+            cell, line, inset, ..
+        } = *pen;
         // (Edges on the display's pixels: two fills that meet part of a
         // pixel in leave a line between them.)
         let cells = |row: usize, from: usize, to: usize| {
@@ -1424,76 +1593,55 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 on_pixel((row + 1) as f64 * line, inset.1),
             )
         };
-        let pen = Pen {
-            width: width as f64,
-            cell,
-            line,
-            baseline: self.baseline,
-            font_px,
-            inset,
-            background: palette.background(),
-            selection: look.selection,
-        };
-        let columns = self.state.cells.get().1;
-        for (index, shaped) in self.rows.iter().enumerate() {
-            let selected = (frame.selection.as_ref())
-                .and_then(|selection| selected_columns(selection, index, columns));
-            paint_row(&mut scene, &pen, shaped, selected, index as f64 * line);
+        let place = cells(cursor.row, cursor.col, cursor.col + 1);
+        let [r, g, b] = palette.cursor();
+        let preedit = self.state.preedit.borrow();
+        if !preedit.is_empty() {
+            // What is being composed, over the cells from the cursor,
+            // underlined.
+            let composing = TerminalLine::of(&preedit, TerminalStyle::default());
+            let shaped = shape(&composing, &mut self.shaper, scale as f32, palette);
+            let wide = shaped.line.width();
+            let over = cells(cursor.row, cursor.col, cursor.col + wide);
+            fill(scene, palette.background(), over);
+            glyphs(
+                scene,
+                &shaped,
+                &shaped.line.cells,
+                cell,
+                place.x0,
+                place.y0,
+                self.baseline,
+            );
+            let under = Rect::new(over.x0, over.y1 - 1.5 * scale, over.x1, over.y1);
+            fill(scene, palette.cursor(), under);
+        } else if !self.state.focused.get() || cursor.shape == TerminalCursorShape::HollowBlock {
+            // Without the focus, or where the program asks for it, the
+            // cursor's outline.
+            scene.stroke(
+                &Stroke::new(scale),
+                Affine::IDENTITY,
+                Color::from_rgb8(r, g, b),
+                None,
+                &place.inset(-scale / 2.),
+            );
+        } else {
+            let shape = match cursor.shape {
+                TerminalCursorShape::Underline => {
+                    Rect::new(place.x0, place.y1 - 2. * scale, place.x1, place.y1)
+                }
+                TerminalCursorShape::Beam => {
+                    Rect::new(place.x0, place.y0, place.x0 + 2. * scale, place.y1)
+                }
+                _ => place,
+            };
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::from_rgba8(r, g, b, 0xc0),
+                None,
+                &shape,
+            );
         }
-
-        if let Some(cursor) = frame.cursor {
-            let place = cells(cursor.row, cursor.col, cursor.col + 1);
-            let [r, g, b] = palette.cursor();
-            let preedit = self.state.preedit.borrow();
-            if !preedit.is_empty() {
-                // What is being composed, over the cells from the cursor,
-                // underlined.
-                let composing = TerminalLine::of(&preedit, TerminalStyle::default());
-                let shaped = shape(&composing, &mut self.shaper, scale as f32, palette);
-                let wide = shaped.line.width();
-                let over = cells(cursor.row, cursor.col, cursor.col + wide);
-                fill(&mut scene, palette.background(), over);
-                glyphs(
-                    &mut scene,
-                    &shaped,
-                    &shaped.line.cells,
-                    cell,
-                    place.x0,
-                    place.y0,
-                    self.baseline,
-                );
-                let under = Rect::new(over.x0, over.y1 - 1.5 * scale, over.x1, over.y1);
-                fill(&mut scene, palette.cursor(), under);
-            } else if !self.state.focused.get() || cursor.shape == TerminalCursorShape::HollowBlock
-            {
-                // Without the focus, or where the program asks for it, the
-                // cursor's outline.
-                scene.stroke(
-                    &Stroke::new(scale),
-                    Affine::IDENTITY,
-                    Color::from_rgb8(r, g, b),
-                    None,
-                    &place.inset(-scale / 2.),
-                );
-            } else {
-                let shape = match cursor.shape {
-                    TerminalCursorShape::Underline => {
-                        Rect::new(place.x0, place.y1 - 2. * scale, place.x1, place.y1)
-                    }
-                    TerminalCursorShape::Beam => {
-                        Rect::new(place.x0, place.y0, place.x0 + 2. * scale, place.y1)
-                    }
-                    _ => place,
-                };
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    Color::from_rgba8(r, g, b, 0xc0),
-                    None,
-                    &shape,
-                );
-            }
-        }
-        scene
     }
 }

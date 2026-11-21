@@ -8,6 +8,18 @@ fn frame(slots: &mut Slots<&'static str>, rows: &[&'static str]) -> Vec<Option<P
         .collect()
 }
 
+trait Slot {
+    fn slot(self) -> usize;
+}
+
+impl Slot for Placed {
+    fn slot(self) -> usize {
+        match self {
+            Placed::Kept(slot) | Placed::Fresh(slot) => slot,
+        }
+    }
+}
+
 fn fresh(placed: &[Option<Placed>]) -> usize {
     (placed.iter())
         .filter(|placed| matches!(placed, Some(Placed::Fresh(_))))

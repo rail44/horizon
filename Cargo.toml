@@ -133,6 +133,9 @@ horizon-shell-runtime = { path = "crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 anyrender = "0.14"
 anyrender_vello = "0.15"
+# A terminal draws the rows it keeps as pixels with Vello itself, on the
+# window's device (`src/terminal/store.rs`).
+vello = "0.11"
 # The terminal's screen is a widget that paints itself: both crates draw
 # one only with this feature on.
 blitz-dom = { workspace = true }

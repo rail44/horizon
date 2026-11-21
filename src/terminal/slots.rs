@@ -19,14 +19,6 @@ pub(super) enum Placed {
     Fresh(usize),
 }
 
-impl Placed {
-    pub(super) fn slot(self) -> usize {
-        match self {
-            Placed::Kept(slot) | Placed::Fresh(slot) => slot,
-        }
-    }
-}
-
 struct Entry<T> {
     hash: u64,
     row: T,
@@ -51,10 +43,6 @@ impl<T> Slots<T> {
             by_hash: HashMap::new(),
             frame: 1,
         }
-    }
-
-    pub(super) fn capacity(&self) -> usize {
-        self.entries.len()
     }
 
     /// Forgets every row: what they were drawn with has changed.
