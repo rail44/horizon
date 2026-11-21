@@ -123,6 +123,11 @@ pub struct TerminalHubHello {
     /// The highest mutually supported version.
     pub negotiated: u32,
     pub binary_id: String,
+    /// The daemon answers [`TerminalHub::hand_over`]. An image without it
+    /// closes the connection on the call, as it would on a handover, so a
+    /// client asks only a daemon that says this.
+    #[serde(default)]
+    pub hands_over: bool,
 }
 
 /// What [`TerminalHub::create_terminal`]/[`TerminalHub::attach_terminal`]
@@ -144,8 +149,8 @@ pub struct TerminalAttachment {
 /// (`docs/terminald-split-design.md` decision 1). Carved off the agent
 /// daemon's hub in v17 so terminal hosting lives in its own rarely-restarted process:
 /// `Reload Agent Runtime` drains the *agent* daemon and never touches a
-/// PTY, while `Reload Terminal Runtime` is the explicit, destructive
-/// counterpart for this one.
+/// PTY, while `Reload Terminal Runtime` has this one hand its terminals to
+/// its next image ([`hand_over`](TerminalHub::hand_over)).
 ///
 /// **Append-only from here on** (design decision 5): every
 /// restart of the daemon serving this trait kills real interactive shells,
@@ -177,10 +182,10 @@ pub trait TerminalHub {
     /// shows it asks for its state (`TerminalCommand::WantState`).
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
 
-    /// Flush-and-exit: shuts every hosted terminal down and exits. The
-    /// destructive half of `Reload Terminal Runtime`. The call itself
-    /// typically errors because the process is gone before a reply can
-    /// travel.
+    /// Flush-and-exit: shuts every hosted terminal down and exits. What a
+    /// daemon that cannot [`hand_over`](Self::hand_over) is replaced with.
+    /// The call itself typically errors because the process is gone before
+    /// a reply can travel.
     async fn drain(&self) -> Result<(), HubError>;
 
     /// Gives every terminal to the daemon's next build: the daemon

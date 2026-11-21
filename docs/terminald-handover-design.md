@@ -101,13 +101,15 @@ Session`.
 ## The shell's side
 
 `Reload Agent Runtime` already keeps its sessions across a new daemon
-(`reload_agent_runtime` in `src/workspace/reload.rs`): it lets go of its
-attachments without a word to the sessions, has the panes made again,
-and once the runtime is back takes the runtime's list in (`take_in`) and
-attaches to each. The handover reload is the same with terminals:
-`Terminald::hand_over` in place of `Terminald::restart` (no drain, no
-`terminate_session`), then the new connection's `list_terminals` taken in
-and each pane made again, which attaches and asks for the state.
+(`reload_agent_runtime` in `src/workspace/reload.rs`): once the runtime is
+back it takes the runtime's list in (`take_in`) and attaches to each. The
+terminal reload does the same off the UI thread (`Terminald::hand_over`):
+the handover, a new connection, its `list_terminals`, and
+`attach_terminals`, as the shell's opening does (`src/restore.rs`). The
+panes keep their sessions until the new ones are attached, since a pane
+made in between would start a terminal of its own; then the list is taken
+in, the attached sessions replace the old, and the panes are made again,
+each asking for its terminal's state.
 
 A handover to a build whose terminal wire version differs from the
 shell's is refused at the shell's next `hello`, as any skew is
@@ -120,8 +122,16 @@ are still there for it.
 `docs/terminald-split-design.md`), and the terminal wire version does not
 move: a new method is additive (`docs/remoc-adoption-design.md` §4 rule
 2), which `check-wire-schema.sh` now classifies as such (a top-level
-`*_hub` table is a named map, like `$defs`). An image that does not have
-`hand_over` answers the call with a decode error and keeps its terminals.
+`*_hub` table is a named map, like `$defs`).
+
+An image without `hand_over` closes the connection on the call (measured
+2026-11-21 against a build from before it) and keeps its terminals, so a
+closed connection does not tell it from a handover. `TerminalHubHello`
+says whether a daemon hands over (`hands_over`, `#[serde(default)]`), and
+the shell asks only one that does; one that does not is drained, which
+ends its terminals once, at the move to a build that hands over. A daemon
+whose `hello` refuses the shell cannot say: it is asked to hand over, the
+shell connects again, and only one it still cannot talk to is drained.
 
 `hand_over` is answered whatever version the client negotiated, as `drain`
 is (`an_incompatible_version_range_is_rejected_but_drain_still_works`): a

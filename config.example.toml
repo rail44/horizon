@@ -179,8 +179,8 @@ font_size = 13.0
 # new tab in the tab group the cursor is in), focus-next-pane,
 # close-active-pane,
 # close-active-tab, terminate-active-session, terminate-all-detached-sessions,
-# reload-agent-runtime, reload-terminal-runtime (restarts horizon-terminald --
-# destructive: every terminal session ends), reload-config, manage-sessions
+# reload-agent-runtime, reload-terminal-runtime (hands the terminals to a
+# rebuilt horizon-terminald; they go on), reload-config, manage-sessions
 # (the list of sessions over the workspace; a command of the sessions
 # extension), open-terminal-in-session-directory,
 # open-board,

@@ -35,9 +35,10 @@ runtime — run `cargo build --workspace` first (and again after touching
 `crates/horizon-terminal-core`/`crates/horizon-terminald`), then use the
 matching reload command from the command palette to retry:
 `Reload Agent Runtime` restarts the agent daemon and leaves terminals
-alone, `Reload Terminal Runtime` restarts the terminal daemon and is
-explicitly destructive (every terminal session, and whatever is running in
-it, ends).
+alone, `Reload Terminal Runtime` has the terminal daemon hand its terminals
+to the rebuilt binary (`docs/terminald-handover-design.md`): the sessions,
+and whatever runs in them, go on. A terminal daemon built before handovers
+is drained instead, once, and its terminals end.
 
 **A protocol bump needs a full Horizon restart, not a runtime reload.**
 The shell and `horizon-agentd` compare `HORIZON_ACP_EXT_VERSION`

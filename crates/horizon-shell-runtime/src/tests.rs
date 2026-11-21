@@ -168,6 +168,7 @@ impl TerminalHub for FakeTerminalHub {
         Ok(TerminalHubHello {
             negotiated: TERMINAL_PROTOCOL_VERSION,
             binary_id: "fake-terminald".to_string(),
+            hands_over: true,
         })
     }
 

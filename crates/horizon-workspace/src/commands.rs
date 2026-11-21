@@ -41,13 +41,13 @@ command_ids! {
         TerminateActiveSession,
         TerminateAllDetachedSessions,
         ReloadAgentRuntime,
-        /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
-        /// decision 3). Deliberately separate from
-        /// [`CommandId::ReloadAgentRuntime`] and deliberately destructive:
-        /// picking up a `horizon-terminal-core` change means replacing the
-        /// process that owns every PTY, so every terminal session -- and
-        /// whatever is running inside it -- ends. The close-vs-terminate
-        /// discipline applies to daemons too.
+        /// Has `horizon-terminald` hand every terminal to its next image,
+        /// the rebuilt binary (`docs/terminald-handover-design.md`):
+        /// picking up a `horizon-terminal-core` change replaces the code
+        /// of the process that owns every PTY, and the terminal sessions
+        /// -- and whatever runs inside them -- go on. Separate from
+        /// [`CommandId::ReloadAgentRuntime`] (`docs/terminald-split-design.md`
+        /// decision 3).
         ReloadTerminalRuntime,
         ReloadConfig,
         /// Puts the workspace in one of the configuration's layouts
@@ -219,8 +219,8 @@ impl CommandId {
                 "reload-terminal-runtime",
                 "Reload Terminal Runtime",
                 CommandCategory::Workspace,
-                "Restart horizon-terminald. Terminates every terminal session and its \
-                          shell.",
+                "Hand every terminal to a rebuilt horizon-terminald. The terminal \
+                          sessions, and what runs in them, go on.",
             ),
             CommandId::ReloadConfig => (
                 "reload-config",
@@ -279,9 +279,7 @@ impl CommandId {
             description,
             destructive: matches!(
                 self,
-                CommandId::TerminateActiveSession
-                    | CommandId::TerminateAllDetachedSessions
-                    | CommandId::ReloadTerminalRuntime
+                CommandId::TerminateActiveSession | CommandId::TerminateAllDetachedSessions
             ),
         }
     }
@@ -419,19 +417,14 @@ mod tests {
 
     #[test]
     fn only_session_ending_commands_are_marked_destructive() {
-        // `ReloadTerminalRuntime` belongs here with the two explicit
-        // terminates: restarting `horizon-terminald` ends every terminal
-        // session and the processes inside them
-        // (`docs/terminald-split-design.md` decision 3). Its sibling
-        // `ReloadAgentRuntime` does not -- since the split it restarts
-        // only the agent daemon, whose sessions are resumed from the event
-        // log rather than killed.
+        // Neither reload ends a session: `ReloadAgentRuntime` resumes the
+        // agent sessions from the event log, and `ReloadTerminalRuntime`
+        // hands the terminals to the daemon's next image
+        // (`docs/terminald-handover-design.md`).
         for command in core_commands() {
             let expected = matches!(
                 command.id,
-                CommandId::TerminateActiveSession
-                    | CommandId::TerminateAllDetachedSessions
-                    | CommandId::ReloadTerminalRuntime
+                CommandId::TerminateActiveSession | CommandId::TerminateAllDetachedSessions
             );
             assert_eq!(
                 command.destructive, expected,

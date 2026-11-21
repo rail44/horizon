@@ -315,9 +315,14 @@ pub struct AgentRuntime {
     pub find: Asks<SessionId, Option<RunningAgent>>,
 }
 
-/// What `Reload Terminal Runtime` does with the runtime: ends it, with
-/// every terminal in it, and starts it again. Called off the UI thread.
-pub type ReloadTerminals = Arc<dyn Fn() + Send + Sync>;
+/// What `Reload Terminal Runtime` does with the runtime: has it hand its
+/// terminals to its next image, and attaches to every terminal it then
+/// runs. Called off the UI thread.
+pub type ReloadTerminals = Arc<
+    dyn Fn() -> Result<Vec<(uuid::Uuid, horizon_shell_runtime::TerminalSessionHandle)>, String>
+        + Send
+        + Sync,
+>;
 
 /// The runtime being ended and started again.
 #[derive(Clone, Copy, PartialEq, Eq)]

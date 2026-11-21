@@ -4,12 +4,13 @@
 //! Structurally the twin of [`super::agent`], with two deliberate
 //! differences that follow from what this daemon *is*:
 //!
-//! 1. **Draining is destructive.** `horizon-terminald` was born at wire v17,
-//!    so a stale terminald is always a remoc peer and the one recovery path
-//!    is the version-stable rtc `drain` — the same path agentd is left with
-//!    now that its pre-remoc prober is gone. What differs is the price: this
-//!    drain kills every PTY, and whatever runs inside them, so all three
-//!    mismatch shapes funnel through the single once-per-runtime budget in
+//! 1. **A stale daemon hands over before it is drained.** `horizon-terminald`
+//!    was born at wire v17, so a stale terminald is always a remoc peer and
+//!    the recovery goes over the version-stable rtc surface. It is first
+//!    asked to `hand_over` its terminals to its next image, the build on
+//!    disk; only one that still cannot be talked to after that is drained,
+//!    which kills every PTY and whatever runs inside them. All three
+//!    mismatch shapes funnel through the once-per-runtime budget in
 //!    [`recover_stale_terminald`].
 //! 2. **Below-schema skew insurance** (design decision 6, the mechanized
 //!    tmux 3.6 lesson). This daemon is deliberately long-lived, so the
@@ -61,8 +62,12 @@ const SKEW_LIVENESS_WINDOW: Duration = Duration::from_millis(200);
 
 /// The action the user is told to take when the skew insurance fires — the
 /// only command that replaces a running `horizon-terminald`.
-const SKEW_REMEDY: &str = "rebuild (`cargo build --workspace`) and run `Reload Terminal Runtime` \
-                           (this terminates every terminal session)";
+const SKEW_REMEDY: &str = "rebuild (`cargo build --workspace`) and run `Reload Terminal Runtime`";
+
+/// How long [`Op::HandOver`] waits for the daemon: each of its sessions
+/// is bounded daemon-side, and a handover that worked ends the call by
+/// closing the connection.
+const HAND_OVER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One typed request from the sync world to the terminal runtime.
 pub(super) enum Op {
@@ -81,6 +86,22 @@ pub(super) enum Op {
         reply: crossbeam_channel::Sender<Result<Vec<TerminalSummary>, String>>,
     },
     Drain,
+    HandOver {
+        reply: crossbeam_channel::Sender<HandOver>,
+    },
+}
+
+/// What asking the daemon to hand its terminals to its next image came to
+/// (`docs/terminald-handover-design.md`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HandOver {
+    /// The image was replaced: the connection closed with the call.
+    Done,
+    /// The terminals went on in this daemon, for this reason.
+    Refused(String),
+    /// The daemon does not hand over (a build before it): it can only be
+    /// drained.
+    Unable,
 }
 
 pub(super) fn spawn(
@@ -105,7 +126,7 @@ pub(super) fn spawn(
             }
         };
         runtime.block_on(async {
-            let mut mismatch_recovery_attempted = false;
+            let mut recovery = Recovery::None;
             let mut retry_delay = Duration::from_millis(50);
             let mut consecutive_silences: u32 = 0;
             loop {
@@ -161,7 +182,7 @@ pub(super) fn spawn(
                         consecutive_silences = 0;
                         if let ControlFlow::Break(()) = recover_stale_terminald(
                             &message,
-                            &mut mismatch_recovery_attempted,
+                            &mut recovery,
                             &socket_path,
                             &routes,
                             &control,
@@ -181,7 +202,7 @@ pub(super) fn spawn(
                         consecutive_silences = 0;
                         if let ControlFlow::Break(()) = recover_stale_terminald(
                             &message,
-                            &mut mismatch_recovery_attempted,
+                            &mut recovery,
                             &socket_path,
                             &routes,
                             &control,
@@ -208,28 +229,55 @@ pub(super) fn spawn(
     });
 }
 
-/// The once-per-runtime recovery for a terminald this build cannot talk to:
-/// drain it over the version-stable rtc surface, then let the caller's next
-/// `connect_or_spawn_terminald_retrying` start a fresh binary. Draining is
-/// *destructive* (it kills the PTYs), which is acceptable only because the
-/// alternative is a terminal daemon nobody can reach at all — and it is
-/// budgeted at once per runtime so a stale binary can never loop on it.
+/// How far [`recover_stale_terminald`] has gone, once per runtime.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recovery {
+    None,
+    /// Asked to hand over; the reconnect still could not talk to it.
+    HandedOver,
+    Drained,
+}
+
+/// The once-per-runtime recovery for a terminald this build cannot talk to,
+/// over the version-stable rtc surface (no `hello` first, since the whole
+/// point is that `hello` already failed). First it is asked to hand its
+/// terminals to its next image, which is the build on disk: the caller's
+/// reconnect then reaches that, with the terminals in it. A daemon that
+/// cannot hand over closes the connection all the same and still cannot
+/// be talked to after it; that one is drained, which kills the PTYs and is
+/// acceptable only because the alternative is a terminal daemon nobody can
+/// reach at all, and the caller's next `connect_or_spawn_terminald_retrying`
+/// starts a fresh binary. Neither step is taken twice, so a stale binary
+/// can never loop on them.
 async fn recover_stale_terminald(
     message: &str,
-    mismatch_recovery_attempted: &mut bool,
+    recovery: &mut Recovery,
     socket_path: &Path,
     routes: &Arc<TerminalRoutes>,
     control: &Arc<RuntimeControl>,
 ) -> ControlFlow<()> {
-    if *mismatch_recovery_attempted {
+    if *recovery == Recovery::None {
+        *recovery = Recovery::HandedOver;
+        eprintln!("{message}; asking horizon-terminald to hand over to the build on disk");
+        tokio::select! {
+            () = hand_over_stale_terminald(socket_path, control.timeouts()) => {}
+            _ = control.cancelled() => {
+                routes.connection_failed("terminald runtime stopped".to_string());
+                return ControlFlow::Break(());
+            }
+        }
+        return ControlFlow::Continue(());
+    }
+    if *recovery == Recovery::Drained {
         let error = format!(
-            "{message} -- automatic drain-and-restart was already attempted once; {SKEW_REMEDY}"
+            "{message} -- automatic handover and drain-and-restart were already attempted \
+             once; {SKEW_REMEDY}"
         );
         eprintln!("horizon-terminald connection stopped: {error}");
         routes.connection_failed(error);
         return ControlFlow::Break(());
     }
-    *mismatch_recovery_attempted = true;
+    *recovery = Recovery::Drained;
     eprintln!("{message}; draining and restarting horizon-terminald");
     let drained = tokio::select! {
         drained = drain_stale_terminald(socket_path, control.timeouts()) => drained,
@@ -290,6 +338,8 @@ pub(super) fn spawn_test_stream<S>(
 struct Live {
     hub: TerminalHubClient<WireCodec>,
     routes: Arc<TerminalRoutes>,
+    /// What the daemon said of [`HandOver`] in its `hello`.
+    hands_over: bool,
 }
 
 async fn run_stream<S>(
@@ -305,7 +355,7 @@ where
         result = establish(stream, control.timeouts().establish) => result,
         _ = control.cancelled() => return StreamEnd::Cancelled,
     };
-    let (hub, conn_task) = match established {
+    let (hub, conn_task, hands_over) = match established {
         Ok(established) => established,
         Err(error) => return error.into(),
     };
@@ -314,6 +364,7 @@ where
     let live = Live {
         hub: hub.clone(),
         routes: routes.clone(),
+        hands_over,
     };
 
     let mut closed = hub.closed();
@@ -337,7 +388,8 @@ where
     end
 }
 
-type EstablishedParts = (TerminalHubClient<WireCodec>, ConnTask);
+/// The client, its connection, and whether the daemon hands over.
+type EstablishedParts = (TerminalHubClient<WireCodec>, ConnTask, bool);
 
 /// Runs the shared connect prelude ([`connect_hub`]), then this hub's own
 /// `hello` and the decision-6 skew probe — the `hello` bounded by the one
@@ -426,7 +478,7 @@ where
         )));
     }
 
-    Ok((hub, conn_task))
+    Ok((hub, conn_task, hello.hands_over))
 }
 
 /// Dispatches one op. Every rtc call runs on its own task (the calls are
@@ -500,6 +552,25 @@ fn handle_op(op: Op, live: &Live, establish: Duration) {
                 let _ = tokio::time::timeout(establish, hub.drain()).await;
             });
         }
+        Op::HandOver { reply } => {
+            if !live.hands_over {
+                let _ = reply.send(HandOver::Unable);
+                return;
+            }
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                let handed = match tokio::time::timeout(HAND_OVER_TIMEOUT, hub.hand_over()).await {
+                    Ok(Ok(refused)) => HandOver::Refused(refused.reason),
+                    // The image is replaced inside the call, and the
+                    // connection closes with it.
+                    Ok(Err(_)) => HandOver::Done,
+                    Err(_) => HandOver::Refused(format!(
+                        "horizon-terminald did not hand over within {HAND_OVER_TIMEOUT:?}"
+                    )),
+                };
+                let _ = reply.send(handed);
+            });
+        }
     }
 }
 
@@ -558,6 +629,29 @@ async fn run_terminal_attachment(
 /// and `drain` are the version-stable hub surface, so the drain travels as
 /// an ordinary rtc call on a fresh connection — no `hello` first, since the
 /// whole point is that `hello` already failed.
+/// Asks a terminald this build cannot negotiate with to hand over, on a
+/// fresh connection with no `hello`, as [`drain_stale_terminald`] drains
+/// one. Its listening socket goes to the next image, so nothing tells a
+/// handover from a daemon that only dropped the call: the reconnect after
+/// it does.
+async fn hand_over_stale_terminald(socket_path: &Path, timeouts: Timeouts) {
+    let Ok(stream) = tokio::net::UnixStream::connect(socket_path).await else {
+        return;
+    };
+    match establish_for_drain::<TerminalHubClient<WireCodec>>(stream, timeouts.establish).await {
+        Ok((hub, conn_task)) => {
+            if let Ok(Ok(refused)) = tokio::time::timeout(HAND_OVER_TIMEOUT, hub.hand_over()).await
+            {
+                eprintln!("horizon-terminald kept its terminals: {}", refused.reason);
+            }
+            conn_task.abort();
+        }
+        Err(error) => {
+            eprintln!("handover connection to the incompatible terminald failed: {error}");
+        }
+    }
+}
+
 async fn drain_stale_terminald(socket_path: &Path, timeouts: Timeouts) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,

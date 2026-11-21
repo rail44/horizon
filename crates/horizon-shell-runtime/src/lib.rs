@@ -43,6 +43,7 @@ pub mod terminal_scrollback;
 pub use agent::SessionSummary;
 pub use attachment::{AgentCommand, AgentUpdate, AttachmentState};
 pub use routing::WorkspaceRootUpdate;
+pub use terminal::HandOver;
 mod terminal;
 
 use std::path::Path;
@@ -661,14 +662,30 @@ impl TerminaldHandle {
             .collect()
     }
 
+    /// Asks the daemon to hand its terminals to its next image
+    /// (`docs/terminald-handover-design.md`), and waits for what that came
+    /// to. A runtime not connected has nothing to hand over.
+    pub fn hand_over(&self) -> HandOver {
+        if !self.control.is_established() {
+            return HandOver::Refused("the terminal runtime is not connected".to_string());
+        }
+        let (reply, handed) = crossbeam_channel::bounded(1);
+        if self.ops.send(terminal::Op::HandOver { reply }).is_err() {
+            return HandOver::Refused("the terminal runtime has stopped".to_string());
+        }
+        handed.recv().unwrap_or_else(|_| {
+            HandOver::Refused("the terminal runtime stopped during the handover".to_string())
+        })
+    }
+
     fn drain(&self) {
         let _ = self.ops.send(terminal::Op::Drain);
     }
 
-    /// The destructive half of `Reload Terminal Runtime` — see
-    /// [`AgentdHandle::begin_reload`] for the return contract. Draining
-    /// terminald kills every PTY it hosts, which is why only that one
-    /// explicitly-destructive command calls this.
+    /// Drains the daemon — see [`AgentdHandle::begin_reload`] for the
+    /// return contract. Draining terminald kills every PTY it hosts, so
+    /// `Reload Terminal Runtime` calls this only for a daemon that cannot
+    /// [`hand_over`](Self::hand_over).
     pub fn begin_reload(&self) -> bool {
         if self.control.is_established() {
             self.drain();

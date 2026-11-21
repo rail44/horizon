@@ -11,7 +11,9 @@
 //! of the daemon commits in the measured window touched only the agent side
 //! and had no causal need to restart a terminal. So terminals moved out, and
 //! this daemon is deliberately *rarely* restarted: `Reload Terminal Runtime`
-//! is the only command that drains it, and it is explicitly destructive.
+//! has it hand its terminals to its next image (`next_image`,
+//! `docs/terminald-handover-design.md`), and only a daemon built before
+//! that is drained, ending its terminals.
 //!
 //! That longevity is also why the terminal wire slice is append-only from
 //! v17 on (design decision 5, see [`TerminalHub`]'s doc): a running

@@ -119,6 +119,7 @@ impl TerminalHub for Hub {
             horizon_wire::negotiate_hello(terminal_version_range(), &client, DAEMON_NAME)?;
         self.hello.mark_completed();
         Ok(TerminalHubHello {
+            hands_over: true,
             negotiated,
             binary_id: self.binary_id.to_string(),
         })
