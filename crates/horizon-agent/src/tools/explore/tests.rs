@@ -1141,3 +1141,43 @@ fn a_follow_up_to_an_unknown_or_ended_child_is_refused() {
     );
     assert!(host.sent.lock().unwrap().is_empty());
 }
+
+// --- daemon restart (docs/agent-subagent-design.md decision 11) -----------
+
+/// A write child ended by a daemon restart is reported to its requester
+/// like any other ending, naming the branch its work was kept on; a session
+/// loop starting with such a notice queued wakes itself to take it.
+#[test]
+fn a_restart_notice_names_the_branch_and_wakes_the_loop_that_starts_after_it() {
+    let requester = SessionId::new();
+    let child = SessionId::new();
+    deliver_restart_notice(
+        requester,
+        child,
+        "change the readme".to_string(),
+        Some("horizon/abcd1234/work".to_string()),
+    );
+
+    let mut wake = register_wake(requester);
+    assert!(
+        wake.try_recv().is_ok(),
+        "the queued notice wakes the new loop"
+    );
+    let notification = take_notification(requester).expect("the notice is queued");
+    assert!(
+        notification.text.contains("change the readme"),
+        "{}",
+        notification.text
+    );
+    assert!(
+        notification.text.contains("horizon/abcd1234/work"),
+        "{}",
+        notification.text
+    );
+    assert!(
+        notification.text.contains("restart"),
+        "{}",
+        notification.text
+    );
+    unregister_wake(requester);
+}

@@ -398,6 +398,38 @@ fn follow_up(
     )
 }
 
+/// Tells `requester` that its write child `child` was ended by a daemon
+/// restart (`docs/agent-subagent-design.md` decision 11): queued as that
+/// child's last report, naming the branch its work was kept on, and
+/// delivered like any other -- at once if the requester's loop is running,
+/// else as soon as it starts.
+pub fn deliver_restart_notice(
+    requester: SessionId,
+    child: SessionId,
+    description: String,
+    branch: Option<String>,
+) {
+    let message = match &branch {
+        Some(_) => "the task session was stopped by a restart of the agent runtime; its work \
+                    was kept on its branch"
+            .to_string(),
+        None => "the task session was stopped by a restart of the agent runtime before it \
+                 committed or changed anything"
+            .to_string(),
+    };
+    children::register(requester, child, description.clone(), branch);
+    let report = TaskReport {
+        session_id: child.as_uuid().to_string(),
+        description,
+        report: None,
+        branch: None,
+        message: Some(message),
+    };
+    if let Some(requester) = children::complete(child, report, false) {
+        notify::wake(requester);
+    }
+}
+
 /// Test-only: puts an already-finished child in the registry, so a test
 /// elsewhere in this crate can exercise `task_output`'s re-fetch without
 /// standing up a scripted `ExplorationHost` and driving a whole child

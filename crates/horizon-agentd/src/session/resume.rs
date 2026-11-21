@@ -73,6 +73,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             session_records,
         ));
     }
+    tally.deliver();
     tally.report();
 }
 
@@ -134,6 +135,7 @@ pub(crate) fn resume_persisted_sessions_from_projection(
             session_records,
         ));
     }
+    tally.deliver();
     tally.report();
     Ok(())
 }
@@ -144,8 +146,18 @@ enum ResumeOutcome {
     /// Retired role, unrestorable environment, or a failed fixup commit.
     NotResumed,
     AlreadyDead,
-    ExplorationTerminated,
+    ExplorationTerminated(Option<RestartNotice>),
     Spawned,
+}
+
+/// What a write child's requester is told after a daemon restart ended the
+/// child (`docs/agent-subagent-design.md` decision 11).
+struct RestartNotice {
+    requester: SessionId,
+    child: SessionId,
+    description: String,
+    /// The branch its work was kept on; `None` when it held none.
+    branch: Option<String>,
 }
 
 /// Counted rather than printed per session: a real archived log can carry
@@ -157,14 +169,33 @@ struct ResumeTally {
     // Counted the same way, for the same reason -- see
     // [`terminate_orphaned_exploration`].
     terminated_explorations: usize,
+    /// Delivered once every session is resumed, so that each requester is
+    /// there to take its notice.
+    restart_notices: Vec<RestartNotice>,
 }
 
 impl ResumeTally {
     fn note(&mut self, outcome: ResumeOutcome) {
         match outcome {
             ResumeOutcome::AlreadyDead => self.skipped_terminated += 1,
-            ResumeOutcome::ExplorationTerminated => self.terminated_explorations += 1,
+            ResumeOutcome::ExplorationTerminated(notice) => {
+                self.terminated_explorations += 1;
+                self.restart_notices.extend(notice);
+            }
             ResumeOutcome::NotResumed | ResumeOutcome::Spawned => {}
+        }
+    }
+
+    /// Tells each ended write child's requester where its work is. Called
+    /// after every session has been resumed.
+    fn deliver(&mut self) {
+        for notice in self.restart_notices.drain(..) {
+            horizon_agent::tools::deliver_restart_notice(
+                notice.requester,
+                notice.child,
+                notice.description,
+                notice.branch,
+            );
         }
     }
 
@@ -251,7 +282,12 @@ fn resume_one_session(
         .is_some_and(horizon_agent::roles::is_exploration)
     {
         return match terminate_orphaned_exploration(&mut appender, &frame) {
-            Ok(()) => ResumeOutcome::ExplorationTerminated,
+            Ok(()) => ResumeOutcome::ExplorationTerminated(restart_notice(
+                session_id,
+                role_id.as_ref(),
+                &restored,
+                &events,
+            )),
             Err(error) => {
                 eprintln!(
                     "horizon-agentd: failed to commit orphaned exploration termination for \
@@ -322,6 +358,51 @@ fn settle_interrupted_turn(
         events.extend(closing);
     }
     Ok(())
+}
+
+/// A write child ended by the restart: its worktree is kept when it holds
+/// work and removed when it holds none, and its requester is to be told
+/// which (`docs/agent-subagent-design.md` decision 11). `None` for a read
+/// child, or one with no recorded requester or worktree.
+fn restart_notice(
+    child: SessionId,
+    role_id: Option<&horizon_agent::roles::RoleId>,
+    restored: &environment::RestoredEnvironment,
+    events: &[Event],
+) -> Option<RestartNotice> {
+    if role_id.map(|role| role.0.as_str()) != Some(horizon_agent::roles::WRITE_TASK_ROLE_ID) {
+        return None;
+    }
+    let requester = restored.spawn_source_session_id?;
+    let worktree = restored.worktree.as_ref()?;
+    let branch = if crate::worktree::holds_work(worktree) {
+        Some(worktree.branch.clone())
+    } else {
+        crate::worktree::remove_worktree_if_clean(worktree);
+        None
+    };
+    // The child's own first message is its task; its label lived only in the
+    // requester's call.
+    let description = events
+        .iter()
+        .find_map(|event| match event {
+            Event::MessageCommitted(message)
+                if message.role == horizon_agent::contract::MessageRole::User =>
+            {
+                message.text.lines().next().map(|line| {
+                    let line: String = line.chars().take(80).collect();
+                    line
+                })
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| "write task".to_string());
+    Some(RestartNotice {
+        requester,
+        child,
+        description,
+        branch,
+    })
 }
 
 /// `docs/agent-explore-design.md` decision 8: an exploration session is

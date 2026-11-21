@@ -244,6 +244,27 @@ pub(crate) fn has_uncommitted_changes(dir: &Path) -> Result<bool, String> {
     Ok(!run_git(dir, &["status", "--porcelain"])?.trim().is_empty())
 }
 
+/// Whether a worktree holds work worth keeping: commits its branch alone
+/// has, or changes not committed (`docs/agent-subagent-design.md` decision
+/// 11). "Its branch alone" rather than "past its base": a worktree adopted
+/// after a restart knows only its current `HEAD` as its base, while a tip
+/// that no other branch contains is a commit made there. An unreadable
+/// worktree counts as holding work, so it is never removed on a guess.
+pub(crate) fn holds_work(info: &WorktreeInfo) -> bool {
+    let committed = run_git(
+        &info.repo_root,
+        &[
+            "branch",
+            "--format=%(refname:short)",
+            "--contains",
+            &format!("refs/heads/{}", info.branch),
+        ],
+    )
+    .map(|branches| branches.lines().all(|branch| branch.trim() == info.branch))
+    .unwrap_or(true);
+    committed || has_uncommitted_changes(&info.path).unwrap_or(true)
+}
+
 /// The branch a session's worktree is made on: one per session, in a
 /// directory of its own under `refs/heads/horizon/`, so that the session can
 /// be let write its own ref without being let write any other session's
@@ -1235,5 +1256,39 @@ mod tests {
         };
         let restored = restore_worktree(&identity, session_id).expect("restored");
         assert!(own_metadata_grants(&restored.path, session_id).is_empty());
+    }
+
+    /// `docs/agent-subagent-design.md` decision 11: a worktree holds work
+    /// when its branch has a commit no other branch has, or changes not
+    /// committed -- judged without its base, which an adopted worktree no
+    /// longer knows.
+    #[test]
+    fn a_worktree_holds_work_once_it_commits_or_changes_something() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let session_id = Uuid::new_v4();
+        let info = create_isolated_worktree(repo.path(), session_id).unwrap();
+        let adopted = adopt_isolated_worktree(&info.path, session_id).unwrap();
+        assert!(!holds_work(&adopted), "fresh from the requester's HEAD");
+
+        std::fs::write(info.path.join("README.md"), "changed\n").unwrap();
+        assert!(holds_work(&adopted), "a change not committed");
+
+        git(&info.path, &["add", "README.md"]);
+        git(
+            &info.path,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "x",
+            ],
+        );
+        let adopted = adopt_isolated_worktree(&info.path, session_id).unwrap();
+        assert!(holds_work(&adopted), "a commit only its branch has");
     }
 }

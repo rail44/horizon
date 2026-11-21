@@ -171,6 +171,11 @@ fn wakers() -> &'static Mutex<HashMap<SessionId, UnboundedSender<()>>> {
 /// loop for the same id never leaves a dead sender behind.
 pub(crate) fn register_wake(session_id: SessionId) -> UnboundedReceiver<()> {
     let (tx, rx) = unbounded_channel();
+    // Completions queued before the loop was there to be woken -- a notice
+    // left across a daemon restart -- are taken as soon as it starts.
+    if super::children::pending_count(session_id) > 0 {
+        let _ = tx.send(());
+    }
     wakers()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
