@@ -14,5 +14,13 @@ pub(super) fn row_height(line_height: f64, scale: f64) -> f64 {
     row_px(line_height, scale) / scale
 }
 
+/// How far up, in whole device pixels, the rows of history are drawn for a
+/// view `into` (a part of a row) its top row, rows being `row_px` tall. The
+/// position scrolled to stays exact; only what is drawn is rounded, by
+/// less than a device pixel.
+pub(super) fn scroll_shift(into: f32, row_px: f64) -> f64 {
+    (into as f64 * row_px).round()
+}
+
 #[cfg(test)]
 mod tests;
