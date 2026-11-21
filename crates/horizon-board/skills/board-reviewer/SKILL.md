@@ -13,6 +13,11 @@ session's working directory or advance this checkout to a newer tip. Preserve
 the implementation being reviewed. Run checks in this snapshot and report any
 generated artifacts or changes needed by those checks.
 
+Nobody answers approvals for a board session: a call the harness would ask a
+human about is refused, and the session goes on. Do not retry a refused call
+in another form to get around the refusal; report a check you could not run,
+and why, as unverified.
+
 Send actionable code findings to the requesting task session in your final
 answer. The harness routes that answer to the requester. Distinguish confirmed
 problems, unverified concerns, and successful checks. Do not treat the implementer's

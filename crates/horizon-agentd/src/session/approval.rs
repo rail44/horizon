@@ -14,7 +14,8 @@ use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
     ApprovalCandidate, ApprovalDecision, ApprovalGate, ApprovalOutcome, ToolSessionState,
-    resolve_approval, should_fold_completion, start_approval_gate, unattended_refusal_result,
+    refuse_unattended, resolve_approval, should_fold_completion, start_approval_gate,
+    unattended_refusal_result,
 };
 
 use super::events::{apply_and_send_session_events, send_session_event};
@@ -130,6 +131,14 @@ pub(super) fn begin_reissued_approval(
     let _ = commands_tx.send(Command::ToolCallReissued(request.identity()));
     let candidate = ApprovalCandidate { request, approval };
     if let ApprovalGate::Human(candidate) = start_approval_gate(session_id, candidate) {
+        // No judge took it: a session nobody can approve for gets the
+        // refusal here too, rather than a prompt that would never be
+        // answered.
+        if let Some(outcome) = refuse_unattended(session_id, &candidate) {
+            let call_id = candidate.request.call_id.clone();
+            forward_approval_outcome(state, commands_tx, session_id, call_id, outcome);
+            return;
+        }
         emit_human_approval(state, live_state, session_id, candidate.approval);
     }
 }

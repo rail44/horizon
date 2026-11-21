@@ -637,7 +637,11 @@ filesystem-retry or the host-execution fallback records that this session may
 write its primary checkout, and the next sandboxed run gets the ordinary
 writable root back. `fs_write`/`fs_edit` run outside the OS sandbox, so they
 keep a pre-execution approval for the same checkout. Isolated worktrees and
-non-primary roots never see either prompt.
+non-primary roots never see either prompt, and neither does a session that
+may write nowhere (`tools::ReadOnly`: a read `task` child, or a board session
+before its own worktree): its shell has no writable root at all, so a write
+in the checkout comes back as ungrantable, and its file-writing tools are
+refused before they run.
 ## Session-first history: `recall_sessions` (2026-11-04)
 
 `recall_sessions` lists persisted sessions newest-first, one row per session:

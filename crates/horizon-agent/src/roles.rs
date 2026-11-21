@@ -42,7 +42,7 @@ pub struct RoleId(pub String);
 /// exists to prove out what more it would need. [`EXPLORE_ROLE`] is that
 /// second role; what it varies beyond the `config` role is its turn budget
 /// and its read-only sandbox ([`Self::uncapped_turns`],
-/// [`Self::read_only`]).
+/// [`Self::writes`]).
 pub struct RoleDefinition {
     /// Matches [`RoleId`]'s inner string exactly -- see [`resolve`].
     pub id: &'static str,
@@ -72,11 +72,13 @@ pub struct RoleDefinition {
     /// a delegated child has no budget (`docs/agent-subagent-design.md`
     /// decision 2) -- what stops it is what stops any session.
     pub uncapped_turns: bool,
-    /// Whether `bash` in sessions with this role runs in a sandbox with no
-    /// writable root, so the operating system keeps it from writing
-    /// (`docs/agent-subagent-design.md` decision 7). Every write it attempts
-    /// is refused as ungrantable rather than offered as a grant.
-    pub read_only: bool,
+    /// Where sessions with this role may write. A session that may not
+    /// write runs `bash` in a sandbox with no writable root, so the
+    /// operating system keeps it from writing
+    /// (`docs/agent-subagent-design.md` decision 7); every write it
+    /// attempts is refused as ungrantable rather than offered as a grant
+    /// (`tools::ReadOnly`).
+    pub writes: RoleWrites,
     /// Whether repository `AGENTS.md`/`CLAUDE.md` instructions
     /// (`instructions::extra_sections`) are ingested for a session with
     /// this role. See [`CONFIG_ROLE`]'s doc comment for why the `config`
@@ -101,12 +103,25 @@ pub struct RoleDefinition {
     /// are not standing. Added for the keeper, which needed exactly this
     /// one field the two prior roles didn't.
     pub standing: bool,
-    /// Whether nobody watches a session with this role: no pane is attached
-    /// to it, so a tool call that would ask for approval is refused instead
-    /// of parked (`ToolSessionState::is_unattended`). Such a role is started
-    /// by the harness, never by the user, so [`user_launchable`] leaves it
-    /// out. The exploration role and the wiki's thread role set it.
+    /// Whether nobody is there to answer an approval for a session with this
+    /// role -- it has no pane, or it works where its owner is not watching
+    /// -- so a tool call the judge would leave to a human is refused instead
+    /// of parked (`ToolSessionState::is_unattended`), and the session goes
+    /// on. Such a role is started by the harness, never by the user, so
+    /// [`user_launchable`] leaves it out. The wiki's thread role and the
+    /// board's roles set it.
     pub unattended: bool,
+}
+
+/// Where a role's sessions may write ([`RoleDefinition::writes`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoleWrites {
+    /// Wherever the session's workspace and grants allow.
+    Anywhere,
+    /// Nowhere: a delegated child that only reads ([`EXPLORE_ROLE`]).
+    Nowhere,
+    /// Only in a worktree made for the session; until it has one, nowhere.
+    InOwnWorktree,
 }
 
 /// Horizon's configuration assistant: the first role -- the concrete
@@ -135,7 +150,7 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     allowed_tool_ids: Some(&["skill_read", "config_read", "config_write"]),
     model: None,
     uncapped_turns: false,
-    read_only: false,
+    writes: RoleWrites::Anywhere,
     include_repository_instructions: false,
     skill_ids: &["horizon-config"],
     standing: false,
@@ -178,7 +193,7 @@ pub const EXPLORE_ROLE_ID: &str = "explore";
 /// The read mode of `task` (`docs/agent-subagent-design.md`): read-only
 /// filesystem, history, and project-knowledge tools, all
 /// `ToolPermission::AutoAllowRead`, plus `bash` in a sandbox with no
-/// writable root ([`RoleDefinition::read_only`]), so it can read Git
+/// writable root ([`RoleDefinition::writes`]), so it can read Git
 /// history and run other read-only commands while the operating system
 /// keeps it from writing. It runs with no turn budget
 /// ([`RoleDefinition::uncapped_turns`]). The allowlist does not
@@ -216,7 +231,7 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     ]),
     model: None,
     uncapped_turns: true,
-    read_only: true,
+    writes: RoleWrites::Nowhere,
     include_repository_instructions: true,
     skill_ids: &[],
     standing: false,
@@ -271,7 +286,7 @@ pub(crate) const WRITE_TASK_ROLE: RoleDefinition = RoleDefinition {
     ]),
     model: None,
     uncapped_turns: true,
-    read_only: false,
+    writes: RoleWrites::Anywhere,
     include_repository_instructions: true,
     skill_ids: &[],
     standing: false,
@@ -430,7 +445,7 @@ mod tests {
         let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
         assert_eq!(role.model, None);
         assert!(!role.uncapped_turns);
-        assert!(!role.read_only);
+        assert_eq!(role.writes, RoleWrites::Anywhere);
     }
 
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
@@ -488,7 +503,7 @@ mod tests {
     /// trip at all (decision 4). Out-of-workspace reads are the exception the
     /// prompt the requester shows covers -- see [`EXPLORE_ROLE`]'s doc comment. The
     /// shell is kept from writing by its sandbox instead
-    /// ([`RoleDefinition::read_only`]).
+    /// ([`RoleDefinition::writes`]).
     #[test]
     fn every_explore_tool_but_the_shell_is_auto_allowed() {
         for tool_id in EXPLORE_ROLE
@@ -510,7 +525,11 @@ mod tests {
         let role =
             resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
         assert!(role.uncapped_turns, "a delegated child has no budget");
-        assert!(role.read_only, "the read mode's shell must not write");
+        assert_eq!(
+            role.writes,
+            RoleWrites::Nowhere,
+            "the read mode's shell must not write"
+        );
         assert!(
             role.include_repository_instructions,
             "an exploration reads the requester's own repository and wants its instructions"
@@ -540,7 +559,7 @@ mod tests {
             allowed_tool_ids: Some(&["fs_read"]),
             model: None,
             uncapped_turns: false,
-            read_only: false,
+            writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
             standing: false,
@@ -567,7 +586,7 @@ mod tests {
             allowed_tool_ids: None,
             model: None,
             uncapped_turns: false,
-            read_only: false,
+            writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
             standing: false,
@@ -593,7 +612,7 @@ mod tests {
             allowed_tool_ids: Some(&[]),
             model: None,
             uncapped_turns: false,
-            read_only: false,
+            writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
             standing: false,

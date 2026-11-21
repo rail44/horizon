@@ -227,3 +227,75 @@ fn environment_rebuild_retains_additional_grants_without_granting_the_old_root()
             .any(|grant| grant.path == old_root)
     );
 }
+
+/// A board session writes only once it has a worktree of its own: prepared
+/// in the shared checkout, a file write is refused before it runs and asks
+/// for nothing; prepared for its own worktree -- as the activation that
+/// makes the worktree prepares it again -- the same write lands.
+#[test]
+fn a_board_session_writes_only_once_prepared_for_its_own_worktree() {
+    use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallRequest};
+    use horizon_agent::tools::{Execution, ToolUpdate, execute_agent_tool};
+
+    crate::board_flow::roles::register();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let note = root.join("note.txt");
+    let state = super::super::test_support::test_state();
+    let config = lock_unpoisoned(&state.agent_config).clone();
+    let provider_id = ProviderId("builtin.agent.mock".into());
+    let role = RoleId("board-task".into());
+    let write = |isolated: bool| {
+        let session_id = SessionId::new();
+        let tools = SessionEnvironment {
+            state: &state,
+            session_id,
+            provider_id: &provider_id,
+            role_id: Some(&role),
+            agent_config: &config,
+        }
+        .prepare(
+            EnvironmentLocation {
+                workspace_root: Some(root.clone()),
+                parent_session_id: None,
+                isolated,
+                trusted: false,
+            },
+            &[],
+        )
+        .tool_state;
+        let request = ToolCallRequest {
+            call_id: ToolCallId("board-write".into()),
+            tool_id: "fs_write".into(),
+            input: serde_json::json!({"path": note, "content": "written\n"}).into(),
+            occurrence_id: OccurrenceId("board-write".into()),
+        };
+        match execute_agent_tool(
+            &super::super::host_tools::AgentdHostTools {
+                state: state.clone(),
+            },
+            &tools,
+            session_id,
+            &LiveState::with_disabled_persistence(),
+            &request,
+        ) {
+            Ok(Execution::Applied(ToolUpdate::Finished { result, .. })) => result,
+            other => panic!("fs_write must resolve at once here, got {other:?}"),
+        }
+    };
+
+    let refused = write(false);
+    assert!(refused.is_error());
+    assert!(
+        refused.output["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("worktree of its own")),
+        "{:?}",
+        refused.output
+    );
+    assert!(!note.exists());
+
+    let written = write(true);
+    assert!(!written.is_error(), "{:?}", written.output);
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "written\n");
+}

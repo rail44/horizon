@@ -115,7 +115,7 @@ fn fold_approval_judgment(
         JudgeDecision::Escalate => {
             // A session nobody can approve for gets the refusal instead of
             // a prompt that would never be answered.
-            if let Some(outcome) = refuse_unattended(session_id, &judgment.candidate.request) {
+            if let Some(outcome) = refuse_unattended(session_id, &judgment.candidate) {
                 let call_id = judgment.candidate.request.call_id.clone();
                 forward_approval_outcome(state, commands_tx, session_id, call_id, outcome);
                 return;

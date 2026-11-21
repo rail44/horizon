@@ -162,16 +162,36 @@ pub fn unattended_refusal_result(
 }
 
 /// [`unattended_refusal_result`] folded into the session's live frame and
-/// paired with the provider command, for a request already recorded there
-/// — what the judge's escalation verdict resolves to in an unattended
-/// session. `None` when the session is attended or has no registered
-/// runtime.
+/// paired with the provider command, for a candidate already recorded there
+/// — what an approval left to a human resolves to in an unattended session.
+/// A candidate offering to retry an attempt that already ran resolves to
+/// that attempt's result instead, as a deny would, with a note that the
+/// retry needed an approval nobody can give: the model keeps what the
+/// command printed. `None` when the session is attended or has no
+/// registered runtime.
 pub fn refuse_unattended(
     session_id: SessionId,
-    request: &ToolCallRequest,
+    candidate: &ApprovalCandidate,
 ) -> Option<ApprovalOutcome> {
     let runtime = session_runtime(session_id)?;
-    let result = unattended_refusal_result(&runtime.tool_state, request)?;
+    if !runtime.tool_state.is_unattended() {
+        return None;
+    }
+    if let Some(prior) = candidate.approval.kind.prior_result() {
+        let mut prior = prior.clone();
+        if let Some(output) = prior.output.as_object_mut() {
+            output.insert(
+                "retry_not_approved".into(),
+                serde_json::Value::String(format!(
+                    "Retrying this call needed an approval ({}), and this session has nobody \
+                     who can give it; this is the result of the attempt that ran.",
+                    candidate.approval.reason
+                )),
+            );
+        }
+        return Some(forward_prior_result(&runtime, prior));
+    }
+    let result = unattended_refusal_result(&runtime.tool_state, &candidate.request)?;
     Some(ApprovalOutcome::from(ToolUpdate::finish(
         &runtime.live_state,
         result,

@@ -135,6 +135,15 @@ pub(crate) fn plan_prepared_call(
     if crate::tools::is_external_tool(&request.tool_id) {
         return ToolPlan::Automatic(AutomaticTool::Synchronous);
     }
+    if let Some(read_only) = tool_state.read_only()
+        && writes_without_containment(&request.tool_id, horizon_sandbox::sandbox_ready())
+    {
+        return ToolPlan::Reject(crate::tools::output::error(format!(
+            "`{}` was not run: {}.",
+            request.tool_id,
+            read_only.guidance()
+        )));
+    }
     if matches!(request.tool_id.as_str(), "fs_write" | "fs_edit")
         && let Some(root) = tool_state.primary_checkout_without_write_access()
     {
@@ -238,6 +247,19 @@ pub(crate) fn plan_prepared_call(
                 request.tool_id
             )))
         }
+    }
+}
+
+/// Whether `tool_id` writes in a way a read-only session's sandbox cannot
+/// refuse after the fact (`tools::ReadOnly`): the file tools run outside
+/// the sandbox, an area request asks for write access itself, and `bash`
+/// with no sandbox to contain it would run on the host. A sandboxed `bash`
+/// call is not among them: it runs with no writable root.
+fn writes_without_containment(tool_id: &str, sandbox_available: bool) -> bool {
+    match tool_id {
+        "fs_write" | "fs_edit" | "request_sandbox_area" => true,
+        "bash" => !sandbox_available,
+        _ => false,
     }
 }
 
@@ -705,6 +727,77 @@ mod tests {
                 .reason
                 .contains("host process's ordinary authority")
         );
+    }
+
+    /// A session that may not write is refused the writes no sandbox can
+    /// take back, before they run and with no approval to ask for, and is
+    /// told why in its reason's words. Its reads still plan as before.
+    #[test]
+    fn a_session_that_may_not_write_is_refused_its_writes_without_an_approval() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        std::fs::write(root_path.join("tracked.txt"), "before").unwrap();
+        let tracked = root_path.join("tracked.txt");
+        let tool_state = crate::tools::ToolSessionBuilder::new(root_path.clone())
+            .with_read_only(Some(crate::tools::ReadOnly::UntilOwnWorktree))
+            .build();
+        let plan = |tool_id: &str, input: serde_json::Value| {
+            plan_tool_call(
+                &tool_state,
+                &ToolCallRequest {
+                    call_id: crate::contract::ToolCallId(format!("call-{tool_id}")),
+                    tool_id: tool_id.into(),
+                    input: input.into(),
+                    occurrence_id: crate::contract::OccurrenceId(format!("call-{tool_id}")),
+                },
+            )
+        };
+
+        for (tool_id, input) in [
+            (
+                "fs_write",
+                serde_json::json!({"path": tracked, "content": "after"}),
+            ),
+            (
+                "fs_edit",
+                serde_json::json!({"edits": [
+                    {"path": tracked, "old_string": "before", "new_string": "after"},
+                ]}),
+            ),
+            (
+                "request_sandbox_area",
+                serde_json::json!({"path": root_path, "reason": "build here"}),
+            ),
+        ] {
+            let ToolPlan::Reject(output) = plan(tool_id, input) else {
+                panic!("{tool_id} must be refused before it runs");
+            };
+            let message = output.message().to_string();
+            assert!(
+                message.contains("worktree of its own"),
+                "{tool_id}: {message}"
+            );
+        }
+        assert_eq!(
+            plan("fs_read", serde_json::json!({"path": tracked})),
+            ToolPlan::Automatic(AutomaticTool::Synchronous)
+        );
+        assert_eq!(std::fs::read_to_string(&tracked).unwrap(), "before");
+    }
+
+    /// A sandboxed `bash` call keeps running for a session that may not
+    /// write -- its sandbox has no writable root -- while one with no
+    /// sandbox to contain it would run on the host, and is refused.
+    #[test]
+    fn bash_writes_without_containment_exactly_when_no_sandbox_contains_it() {
+        assert!(!writes_without_containment("bash", true));
+        assert!(writes_without_containment("bash", false));
+        for tool_id in ["fs_write", "fs_edit", "request_sandbox_area"] {
+            assert!(writes_without_containment(tool_id, true), "{tool_id}");
+        }
+        for tool_id in ["fs_read", "web_fetch", "board_update", "task"] {
+            assert!(!writes_without_containment(tool_id, false), "{tool_id}");
+        }
     }
 
     #[test]

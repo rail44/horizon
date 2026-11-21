@@ -232,6 +232,18 @@ code beforehand. The same task session retains its conversation while changing
 its working environment; creating that environment is not required merely to
 consult on or decompose a task.
 
+**Writes and approvals in board sessions (board #100):** the board's roles
+write only in a worktree of their own (`RoleWrites::InOwnWorktree`). Until
+implementation activates the task's worktree, a task session's shell has no
+writable root, a write it attempts comes back as ungrantable, and
+`fs_write`/`fs_edit`, `request_sandbox_area`, a `bash` call with no sandbox
+and a write `task` child are refused before they run (`tools::ReadOnly`); the
+organizer never has a worktree and so never writes. The roles are also
+unattended: a call the judge leaves to a human is refused rather than parked,
+a retry offer resolves to the result of the attempt that ran, and the session
+goes on. The skills keep consultation to reading and have the session report
+what it could not do in its final answer.
+
 **Worktree base, 2026-09-16:** the owner accepted having the skill-guided agent
 check prerequisite results and choose a suitable starting revision. The creation
 operation takes the selected commit, creates the worktree from it, and records

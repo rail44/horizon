@@ -63,7 +63,7 @@ impl ToolSessionBuilder {
                 skills: SkillRegistry::default(),
                 config_path: None,
                 unattended: false,
-                read_only: false,
+                read_only: None,
                 network: None,
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
@@ -123,8 +123,9 @@ impl ToolSessionBuilder {
         self
     }
 
-    /// Record whether this session's shell may write nothing at all.
-    pub fn with_read_only(mut self, read_only: bool) -> Self {
+    /// Record why this session may write nothing at all, or `None` when it
+    /// may (`ReadOnly`).
+    pub fn with_read_only(mut self, read_only: Option<super::ReadOnly>) -> Self {
         self.inner.read_only = read_only;
         self
     }

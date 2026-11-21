@@ -16,10 +16,11 @@ use horizon_agent::hosting::{AgentWireEvent, WorkspaceRootResolved};
 use horizon_agent::judge::JudgeHandle;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::PersistedSessionContext;
-use horizon_agent::roles::RoleId;
+use horizon_agent::roles::{RoleId, RoleWrites};
 use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
-    RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState, register_session_runtime,
+    ReadOnly, RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState,
+    register_session_runtime,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -210,20 +211,28 @@ impl SessionEnvironment<'_> {
             .unwrap_or_default();
         let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
             .with_primary_checkout(primary_checkout)
-            // An unattended role's session (a `task` child, a wiki thread)
-            // is never attached to a pane, so an approval prompt raised for
-            // it would reach nobody.
+            // An unattended role's session (a wiki thread, a board session)
+            // has nobody to answer an approval prompt raised for it.
             .with_unattended(
                 role_id
                     .and_then(horizon_agent::roles::resolve)
                     .is_some_and(|role| role.unattended),
             )
-            // A read-only role's shell writes nowhere
-            // (`docs/agent-subagent-design.md` decision 7).
+            // A role that may not write here gets a shell that writes
+            // nowhere (`docs/agent-subagent-design.md` decision 7); one that
+            // writes only in its own worktree gets a writable one when the
+            // activation that makes the worktree prepares this again.
             .with_read_only(
-                role_id
+                match role_id
                     .and_then(horizon_agent::roles::resolve)
-                    .is_some_and(|role| role.read_only),
+                    .map(|role| role.writes)
+                {
+                    Some(RoleWrites::Nowhere) => Some(ReadOnly::Delegated),
+                    Some(RoleWrites::InOwnWorktree) if !isolated => {
+                        Some(ReadOnly::UntilOwnWorktree)
+                    }
+                    _ => None,
+                },
             )
             .with_filesystem_grants(filesystem_grants.clone())
             .with_own_worktree_grants(own_worktree_grants)

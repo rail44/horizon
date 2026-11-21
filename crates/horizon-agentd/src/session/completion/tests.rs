@@ -812,6 +812,137 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
     std::fs::remove_dir_all(outside).unwrap();
 }
 
+/// A bash call that already ran, in a session nobody watches, with its
+/// retry offer left to a human: what the model receives is the result of
+/// the attempt that ran, marked as a retry nobody could approve, and no
+/// prompt reaches the client. `escalate` is whether a judge took the offer
+/// and escalated it, or none took it at all.
+fn unattended_retry_resolves_to_the_attempt_that_ran(escalate: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let state = test_state();
+    let live_state = LiveState::with_disabled_persistence();
+    let session_id = SessionId::new();
+    let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
+    let (results_tx, _results_rx) = unbounded::<ToolCompletion>();
+    horizon_agent::tools::register_session_runtime(
+        session_id,
+        horizon_agent::tools::ToolSessionBuilder::for_root(
+            root.path().to_path_buf(),
+            horizon_agent::config::AgentToolsConfig::default(),
+            horizon_agent::tools::RecallContext::default(),
+        )
+        .with_unattended(true)
+        .build(),
+        live_state.clone(),
+        results_tx,
+    );
+    let call_id = ToolCallId("unattended-retry".to_string());
+    let request = horizon_agent::contract::ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: serde_json::json!({ "command": "make" }).into(),
+        occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+    };
+    live_state
+        .extend_provider_events(
+            [
+                Event::ToolCallRequested(request.clone()),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(tool_identity(&call_id)),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
+    let prior = ToolCallResult::new(
+        call_id.clone(),
+        request.occurrence_id.clone(),
+        serde_json::json!({ "exit_code": 2, "output": "what the command printed" }),
+    );
+    let (commands_tx, commands_rx) = unbounded::<Command>();
+    if escalate {
+        // The offer is a fresh occurrence of the call, recorded before the
+        // judge is asked (`begin_reissued_approval`).
+        let mut retry = request.clone();
+        retry.occurrence_id = horizon_agent::contract::OccurrenceId::new();
+        live_state
+            .extend_provider_events(std::iter::once(
+                Event::ToolCallRequested(retry.clone()).into(),
+            ))
+            .unwrap();
+        let request = retry;
+        deliver_judgment(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            horizon_agent::tools::ApprovalJudgment {
+                candidate: ApprovalCandidate {
+                    approval: ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "the retry needs a grant".to_string(),
+                        kind: ApprovalKind::PrimaryCheckoutRetry {
+                            root: root.path().to_path_buf(),
+                            prior_result: prior,
+                        },
+                        occurrence_id: request.occurrence_id.clone(),
+                    },
+                    request: request.clone(),
+                },
+                decision: JudgeDecision::Escalate,
+            },
+        );
+    } else {
+        // The session has no judge, so the offer goes to the human path at
+        // once.
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            ToolCompletion::PrimaryCheckoutDenied {
+                root: root.path().to_path_buf(),
+                result: prior,
+            },
+        );
+    }
+
+    let result = std::iter::from_fn(|| commands_rx.try_recv().ok())
+        .find_map(|command| match command {
+            Command::ToolCallResult(result) => Some(result),
+            _ => None,
+        })
+        .expect("the model gets a result");
+    assert_eq!(result.call_id, call_id);
+    assert_eq!(result.output["output"], "what the command printed");
+    assert!(
+        result.output["retry_not_approved"]
+            .as_str()
+            .is_some_and(|note| note.contains("nobody who can give it")),
+        "{:?}",
+        result.output
+    );
+    let fanned = drain_events(&mut outgoing_rx);
+    assert!(
+        !fanned.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested(_) | Event::StateChanged(SessionState::WaitingForApproval)
+        )),
+        "a session nobody watches must never be shown a prompt: {fanned:?}"
+    );
+    horizon_agent::tools::unregister_session_runtime(session_id);
+}
+
+#[test]
+fn an_unattended_retry_no_judge_takes_resolves_to_the_attempt_that_ran() {
+    unattended_retry_resolves_to_the_attempt_that_ran(false);
+}
+
+#[test]
+fn an_escalated_unattended_retry_resolves_to_the_attempt_that_ran() {
+    unattended_retry_resolves_to_the_attempt_that_ran(true);
+}
+
 #[test]
 fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
     let state = crate::session::test_support::test_state();
