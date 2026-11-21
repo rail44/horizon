@@ -88,8 +88,7 @@ mechanism, with exploration as its read-only mode), then 「全て推奨通り�
    approval request — read or write mode — is shown in the requester's
    pane, naming the child it comes from, and passes the same gate as the
    requester's own calls. A child starts with the requester's grants
-   (filesystem grants, allowed domains, the primary-checkout approval).
-   Read children are no longer unattended.
+   (decision 12). Read children are no longer unattended.
 
 5. **Follow-up returns.** The requester can send another instruction to
    an existing child by its session id; the child continues with its
@@ -121,6 +120,48 @@ mechanism, with exploration as its read-only mode), then 「全て推奨通り�
    for a self-contained piece of work. Whether to narrow this toward
    "only when asked" is left until the new shape has been used.
 
+### Decided 2026-11-21, for the write mode
+
+Settled when stage 4 was reached, on how Claude Code does the same
+(its sandbox lets a command in a linked worktree write the repository's
+shared `.git`, except `hooks/` and `config`, so `git commit` works; a
+worktree subagent commits on its branch and nothing merges it) and on
+the owner's own use: 50 of the 53 worktree children in the owner's
+Claude Code transcripts of 2026-10 and 2026-11 committed on their branch,
+and the main session merged a worker's branch 19 times.
+
+10. **A child's work comes back as its branch, and a session writes its
+    own worktree's Git metadata without asking.** 「Aで」. The write
+    child commits on its branch; the requester reviews the branch and
+    integrates it. Committing wrote Git metadata only through an
+    approved area (`docs/sandbox-area-grants-design.md`), and a session
+    working in its own worktree was asked several times per commit --
+    four approvals over 32 minutes for one commit on 2026-11-19 -- so a
+    session in a worktree Horizon created for it may write that
+    worktree's own metadata with no approval: its gitdir
+    (`.git/worktrees/<slug>`), its own branch's ref and reflog, and the
+    object store. 「推奨でよいです」 for this narrower range over Claude
+    Code's whole shared `.git`: another branch's ref stays unwritable,
+    and `hooks/` and `config` stay unwritable as everywhere. This holds
+    for any session in its own worktree, not only a child, so a requester
+    working in its own worktree integrates a child's branch without
+    asking either; a requester in the primary checkout is asked as
+    before.
+
+11. **A daemon restart ends a write child and keeps its work.** 「iで」.
+    The child is terminated rather than resumed, as an exploration child
+    is (`docs/agent-explore-design.md` decision 8); its worktree and
+    branch are kept when it made commits or left changes, and its
+    requester is told which branch holds them. The child records its
+    requester as its parent so that the requester can be told after the
+    restart.
+
+12. **A child starts with a copy of its requester's grants.** 「推奨で」.
+    At launch the child receives the requester's filesystem grants and
+    allowed domains as they are then; what the child is granted later
+    does not flow back. The primary-checkout approval does not apply: a
+    write child works in its own worktree.
+
 ## Removed
 
 - `EXPLORE_ITERATION_CAP`, and `RoleDefinition::summarize_on_cap` with the
@@ -133,12 +174,6 @@ mechanism, with exploration as its read-only mode), then 「全て推奨通り�
 These are not owner decisions yet; each is raised when its stage is
 reached.
 
-- How the requester integrates a child's branch: integrating writes Git
-  metadata, which the requester's sandbox does not grant by default
-  (`docs/sandbox-area-grants-design.md`).
-- What happens to a child across a daemon restart. Exploration children
-  are terminated on resume today (`docs/agent-explore-design.md` decision
-  8); a write child may hold commits worth re-adopting.
 - The wording of the per-mode guidance (decision 9).
 
 ## Proposed order
@@ -151,4 +186,4 @@ reached.
 3. Approvals through the requester (decision 4). A child starting with
    the requester's grants moves to stage 4: a read child drops every grant
    that writes, so it is the write child the grants matter to.
-4. Write mode in its own worktree (decision 3).
+4. Write mode in its own worktree (decisions 1, 3, 10, 11, 12).
