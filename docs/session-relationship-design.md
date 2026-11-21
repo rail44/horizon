@@ -122,7 +122,7 @@ messaging need, so it is designed once, here.
 ## Implementation notes
 
 - **cwd sourcing is shell-independent.** `horizon-terminald` keeps the
-  PTY child pid (`portable-pty`'s `process_id()`) and samples its cwd
+  PTY child pid (what `pty::Pty::spawn` returns) and samples its cwd
   via `sysinfo` (`/proc/<pid>/cwd` on Linux, libproc on macOS) — at a
   new terminal's spawn for inheritance, and after output settles to
   publish each terminal's current cwd to the shell

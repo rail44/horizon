@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -11,15 +12,14 @@ use horizon_terminal_core::{
     CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalProgramStatus,
     TerminalSpawnSpec, TerminalSummary, TerminalUpdate, core_channels, run_terminal_core,
 };
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
+use crate::pty::{self, Program, Pty};
+
 /// How long [`TerminalHost::create`] waits for a PTY spawn before reporting
-/// an error instead of blocking forever -- see that method's doc comment
-/// for the suspected `portable-pty` fork-safety hazard this guards
-/// against.
+/// an error instead of blocking forever -- see that method's doc comment.
 const TERMINAL_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a session's PTY must stay quiet after it wrote before
@@ -43,7 +43,7 @@ pub(crate) struct TerminalHost {
 struct HostedTerminal {
     command_tx: Sender<TerminalCommand>,
     pid: Option<u32>,
-    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    killer: Arc<dyn HangUp>,
     /// The last cwd published as [`TerminalUpdate::WorkingDirectory`], if
     /// any -- the change filter for [`TerminalHost::publish_cwd`] and the
     /// value a newly installed subscriber is sent first.
@@ -53,6 +53,21 @@ struct HostedTerminal {
     /// the change filter for [`TerminalHost::publish_program_status`] and
     /// what a newly installed subscriber is sent with the cwd.
     program_status: Option<TerminalProgramStatus>,
+}
+
+/// What ends a session's program: a hang-up, as a terminal that closes
+/// sends.
+trait HangUp: Send + Sync {
+    fn hang_up(&self);
+}
+
+/// The session's program, by its process id.
+struct Process(u32);
+
+impl HangUp for Process {
+    fn hang_up(&self) {
+        let _ = pty::hang_up(self.0);
+    }
 }
 
 /// The local (sync-sendable, unbounded) half of one attachment's bridge:
@@ -202,7 +217,7 @@ impl TerminalHost {
             .map(|session| (session.command_tx.clone(), session.killer.clone()))
             .collect::<Vec<_>>();
         for (sender, killer) in sessions {
-            let _ = killer.lock().unwrap().kill();
+            killer.hang_up();
             let _ = sender.send(TerminalCommand::Shutdown);
         }
     }
@@ -211,36 +226,22 @@ impl TerminalHost {
     /// an individual attempt doesn't report back within [`TERMINAL_SPAWN_
     /// TIMEOUT`], and installs the session on the first successful attempt.
     ///
-    /// This exists because of a suspected (code-verified, but not captured
-    /// live -- see `docs/tasks/backlog.md`'s entry on it) hazard in
-    /// `portable-pty` 0.9.0: its `spawn_command` sets a `pre_exec` closure
-    /// that calls `close_random_fds`, which does a heap allocation
-    /// (`std::fs::read_dir`) in the forked child *before* `exec` -- not
-    /// fork-safe in a process this multi-threaded. If another thread held
-    /// e.g. glibc's malloc lock at the instant of `fork`, the child
-    /// inherits it permanently locked and can never reach `exec`; `std::
-    /// process::Command::spawn` blocks the *calling* thread until the
-    /// child execs or reports failure, so a wedged child would wedge the
-    /// caller too, forever, with no way to interrupt it from the outside.
-    /// During this fix's own validation, the same terminal-creation call
-    /// was observed hanging past even a 120s ceiling under contention, at
-    /// a failure rate too high (up to ~20% of runs under sustained load)
-    /// to treat as negligible or purely a test artifact -- but a follow-up
-    /// run instrumented with fine-grained diagnostics did not reproduce it
-    /// live, so the exact mechanism remains a well-evidenced hypothesis,
-    /// not a confirmed root cause.
+    /// `std::process::Command::spawn` blocks the *calling* thread until
+    /// the forked child execs or reports failure, and a child that never
+    /// reaches `exec` would block it forever. The child is prepared with
+    /// system calls alone (`pty::Pty::spawn`): a heap allocation there, as
+    /// `portable-pty` 0.9.0 made, could wait forever on a lock another
+    /// thread of this process held at the instant of the fork
+    /// (`docs/tasks/backlog.md` item 31).
     ///
-    /// Regardless of the precise mechanism, bounding this call is correct
-    /// on its own merits: nothing should let one connection's terminal
-    /// creation block that connection's entire message loop forever. Each
-    /// attempt runs on its own thread with a bounded wait -- there is no
-    /// API to cancel a blocked `Command::spawn`, so a timed-out attempt's
-    /// thread (and, if it's genuinely wedged, the half-started child
-    /// process) is deliberately abandoned rather than joined. If the
-    /// hazard above is the real cause, a *fresh* attempt (a new `fork` at
-    /// a different instant) has good odds of avoiding the same collision,
-    /// so retrying should convert an occasional failure into a rarer one
-    /// without ever surfacing it to the caller.
+    /// Bounding this call is correct on its own merits: nothing should let
+    /// one connection's terminal creation block that connection's entire
+    /// message loop forever. Each attempt runs on its own thread with a
+    /// bounded wait -- there is no API to cancel a blocked
+    /// `Command::spawn`, so a timed-out attempt's thread (and, if it's
+    /// genuinely wedged, the half-started child process) is deliberately
+    /// abandoned rather than joined, and a *fresh* attempt is a new `fork`
+    /// at a different instant.
     ///
     /// Install is **first-wins**: if an abandoned attempt does eventually
     /// succeed after a later retry already installed a session for this
@@ -346,7 +347,7 @@ impl TerminalHost {
                     "horizon-terminald: discarding a late duplicate terminal spawn for \
                      {session_id} (an earlier attempt already won)"
                 );
-                let _ = discarded.killer.lock().unwrap().kill();
+                discarded.killer.hang_up();
                 let _ = discarded.command_tx.send(TerminalCommand::Shutdown);
                 false
             }
@@ -504,17 +505,7 @@ fn spawn_terminal(
     cwd: &Path,
 ) -> anyhow::Result<(HostedTerminal, Receiver<()>, Receiver<TerminalUpdate>)> {
     let size = spec.initial_size.normalized();
-    let pty_system = native_pty_system();
-    let pair = pty_system.openpty(PtySize {
-        rows: size.rows,
-        cols: size.cols,
-        pixel_width: size.pixel_width,
-        pixel_height: size.pixel_height,
-    })?;
-
-    let mut command = CommandBuilder::new(&spec.shell);
-    command.args(&spec.args);
-    command.env("TERM", &spec.term);
+    let mut env: Vec<(OsString, OsString)> = vec![("TERM".into(), (&spec.term).into())];
     // Pairs with the fixed `xterm-256color` TERM (see
     // `workspace/session_lifecycle.rs`'s `terminal_spawn_spec`, the shell
     // crate) so truecolor detection works
@@ -523,7 +514,7 @@ fn spawn_terminal(
     // truecolor-aware launch environment (or an explicit override) is
     // never clobbered.
     if std::env::var_os("COLORTERM").is_none() {
-        command.env("COLORTERM", "truecolor");
+        env.push(("COLORTERM".into(), "truecolor".into()));
     }
     // The terminal view follows OSC 8 hyperlinks and nothing else, and
     // programs that ask `supports-hyperlinks` (Claude Code among them)
@@ -531,20 +522,21 @@ fn spawn_terminal(
     // this says so, unless the inherited environment already says
     // otherwise.
     if std::env::var_os("FORCE_HYPERLINK").is_none() {
-        command.env("FORCE_HYPERLINK", "1");
+        env.push(("FORCE_HYPERLINK".into(), "1".into()));
     }
-    command.env("HORIZON_SOCKET", &spec.control_socket);
-    command.env("HORIZON_SESSION_ID", session_id.to_string());
-    command.cwd(cwd);
-    let child = pair.slave.spawn_command(command)?;
-    let pid = child.process_id();
-    let killer = Arc::new(Mutex::new(child.clone_killer()));
-    drop(child);
-    drop(pair.slave);
+    env.push(("HORIZON_SOCKET".into(), (&spec.control_socket).into()));
+    env.push(("HORIZON_SESSION_ID".into(), session_id.to_string().into()));
+    let program = Program {
+        path: &spec.shell,
+        args: &spec.args,
+        env,
+        cwd,
+    };
+    let (master, pid) = Pty::spawn(size, program)?;
+    let killer: Arc<dyn HangUp> = Arc::new(Process(pid));
 
-    let mut reader = pair.master.try_clone_reader()?;
-    let mut writer = pair.master.take_writer()?;
-    let master = pair.master;
+    let mut reader = master.reader()?;
+    let mut writer = master.writer()?;
 
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
     // That the PTY wrote: at most one waits, the rest are the same news.
@@ -556,7 +548,7 @@ fn spawn_terminal(
     // What the loop writes to the PTY: its answers, and a client's bytes.
     let (written_tx, written_rx) = crossbeam_channel::unbounded();
     let read_update_tx = update_tx.clone();
-    thread::spawn(move || read_pty(&mut *reader, pty_tx, activity_tx, read_update_tx));
+    thread::spawn(move || read_pty(&mut reader, pty_tx, activity_tx, read_update_tx));
     let options = TerminalCoreOptions {
         scrollback_lines: spec.scrollback_lines,
         color_scheme: spec.color_scheme,
@@ -568,7 +560,7 @@ fn spawn_terminal(
     thread::spawn(move || {
         run_writer(
             master,
-            &mut *writer,
+            &mut writer,
             writer_killer,
             command_rx,
             written_rx,
@@ -579,7 +571,7 @@ fn spawn_terminal(
     Ok((
         HostedTerminal {
             command_tx,
-            pid,
+            pid: Some(pid),
             killer,
             cwd: None,
             program_status: None,
@@ -640,9 +632,9 @@ fn read_pty(
 }
 
 fn run_writer(
-    master: Box<dyn MasterPty + Send>,
+    master: Pty,
     writer: &mut dyn Write,
-    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    killer: Arc<dyn HangUp>,
     command_rx: Receiver<TerminalCommand>,
     written: Receiver<Vec<u8>>,
     senders: CoreSenders,
@@ -680,12 +672,7 @@ fn run_writer(
                         let size = size.normalized();
                         if last_size != Some(size) {
                             last_size = Some(size);
-                            let _ = master.resize(PtySize {
-                                rows: size.rows,
-                                cols: size.cols,
-                                pixel_width: size.pixel_width,
-                                pixel_height: size.pixel_height,
-                            });
+                            let _ = master.resize(size);
                         }
                         let _ = resize_tx.send(size);
                     }
@@ -702,7 +689,7 @@ fn run_writer(
                         let _ = stream_tx.send(StreamCommand::Taken(bytes));
                     }
                     TerminalCommand::Shutdown => {
-                        let _ = killer.lock().unwrap().kill();
+                        killer.hang_up();
                         return;
                     }
                 }
@@ -733,24 +720,19 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// A no-op `ChildKiller` standing in for a real PTY's -- these tests
+    /// A no-op `HangUp` standing in for a real program's -- these tests
     /// exercise `TerminalHost::install_if_vacant`'s first-wins *decision*
     /// (the seam this whole fix is about), not a real PTY spawn, so a real
-    /// `portable_pty` child is unnecessary weight; `killed` just records
-    /// whether `kill` was ever called.
+    /// program is unnecessary weight; `killed` just records whether
+    /// `hang_up` was ever called.
     #[derive(Debug, Clone)]
     struct FakeKiller {
         killed: Arc<AtomicBool>,
     }
 
-    impl ChildKiller for FakeKiller {
-        fn kill(&mut self) -> std::io::Result<()> {
+    impl HangUp for FakeKiller {
+        fn hang_up(&self) {
             self.killed.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-
-        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-            Box::new(self.clone())
         }
     }
 
@@ -766,7 +748,7 @@ mod tests {
         let session = HostedTerminal {
             command_tx,
             pid: None,
-            killer: Arc::new(Mutex::new(Box::new(killer))),
+            killer: Arc::new(killer),
             cwd: None,
             program_status: None,
         };

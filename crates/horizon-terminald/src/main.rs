@@ -40,6 +40,7 @@
 //! daemon's PTYs alive.)
 
 mod hub;
+mod pty;
 mod terminal;
 
 use std::sync::Arc;

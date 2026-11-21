@@ -286,6 +286,19 @@ entries live in `backlog-resolved.md` keeping their original numbers
     (`TERMINAL_SPAWN_TIMEOUT`/`MAX_SPAWN_ATTEMPTS`/`install_if_vacant`)
     was re-verified intact. Roadmap item stays open only as the
     owner's close/keep call; no further engineering is queued.
+    **Update 2026-11-21: `horizon-terminald` no longer uses
+    `portable-pty`.** It opens the PTY and starts the program itself
+    (`crates/horizon-terminald/src/pty.rs`, over `libc`), preparing the
+    child with system calls alone: descriptors above the standard three
+    are marked close-on-exec rather than closed --
+    `close_range(CLOSE_RANGE_CLOEXEC)` on Linux 5.11 and later, an
+    `fcntl` loop up to `_SC_OPEN_MAX` (asked before the fork) elsewhere
+    -- so nothing allocates between fork and exec, and the standard
+    library's exec-error pipe stays open (the #7742/#7893 symptom). The
+    macOS branch is not exercised on this machine. `portable-pty`
+    remains only in tests: the root package's `tests/support` and
+    `horizon-terminal-core`'s ignored status probe. The bounded retry
+    stays (it is correct on its own merits).
 
 52. **`split_pane_in_tab` corrupts state when the active tab is
     missing.** Found during the backlog-49 fix (2026-07-19): with zero

@@ -614,6 +614,9 @@ lands:
   `close_range(CLOSE_RANGE_CLOEXEC)` on Linux, bounded `fcntl` loop on
   macOS/BSD — which also fixes upstream #7742/#7893; Horizon consumes
   it via `[patch.crates-io]`). Item stays open tracking that work.
+  2026-11-21: `horizon-terminald` dropped `portable-pty` for a PTY of
+  its own in the same shape (backlog 31's update), the first step
+  toward a terminal daemon that hands its sessions to its next build.
   **terminald split designed 2026-07-30
   (`docs/terminald-split-design.md`)**: terminals move to their own
   rarely-restarted daemon so agent-runtime reloads (67% of daemon

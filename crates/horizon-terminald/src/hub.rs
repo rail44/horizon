@@ -131,10 +131,9 @@ impl TerminalHub for Hub {
         // made structural.
         let channels = self.terminals.subscribe_for_create(session_id);
         // `TerminalHost::create` blocks (bounded spawn attempts with a
-        // watchdog timeout each — see its doc comment on the suspected
-        // portable-pty fork hazard); `serve(true)` runs this call on its
-        // own task, and `spawn_blocking` keeps that task off the async
-        // workers.
+        // watchdog timeout each — see its doc comment); `serve(true)` runs
+        // this call on its own task, and `spawn_blocking` keeps that task
+        // off the async workers.
         let terminals = self.terminals.clone();
         let spawned = tokio::task::spawn_blocking(move || terminals.create(session_id, spec)).await;
         match spawned {

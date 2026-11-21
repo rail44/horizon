@@ -3262,7 +3262,7 @@ dependencies = [
  "horizon-daemon-testkit",
  "horizon-terminal-core",
  "horizon-wire",
- "portable-pty",
+ "libc",
  "remoc",
  "sysinfo",
  "termwiz",
