@@ -603,7 +603,8 @@ lands:
   channel that closes from a live state always persists failed/terminated
   state, so future provider defects cannot leave a pane indefinitely
   `Running` (`docs/agent-runtime-split-design.md`, 2026-07-25 correction).
-- **portable-pty fork-safety root fix** (backlog 28/31).
+- **portable-pty fork-safety root fix — closed 2026-11-21** (backlog 28/31;
+  board #99).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating
   `close_random_fds` between fork/exec); no upstream fix or release
@@ -616,7 +617,8 @@ lands:
   it via `[patch.crates-io]`). Item stays open tracking that work.
   2026-11-21: `horizon-terminald` dropped `portable-pty` for a PTY of
   its own in the same shape (backlog 31's update), the first step
-  toward a terminal daemon that hands its sessions to its next build.
+  toward a terminal daemon that hands its sessions to its next build
+  (board #99). The fork route is not taken, and the item is closed.
   **terminald split designed 2026-07-30
   (`docs/terminald-split-design.md`)**: terminals move to their own
   rarely-restarted daemon so agent-runtime reloads (67% of daemon

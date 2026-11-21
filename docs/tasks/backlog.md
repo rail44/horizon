@@ -201,7 +201,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     it, and decide what the row header shows when two rows share a
     `call_id`.
 
-31. **Suspected upstream fork-safety hazard in `portable-pty` 0.9.0's PTY
+31. **[RESOLVED 2026-11-21, board #99] Suspected upstream fork-safety hazard in `portable-pty` 0.9.0's PTY
     spawn — can wedge a terminal spawn under extreme concurrent load, at a
     rate a bounded retry only partially masks** — found while validating
     the backlog-27/28 fix (raised e2e timeouts to a generous 120s, then hit
@@ -298,7 +298,8 @@ entries live in `backlog-resolved.md` keeping their original numbers
     macOS branch is not exercised on this machine. `portable-pty`
     remains only in tests: the root package's `tests/support` and
     `horizon-terminal-core`'s ignored status probe. The bounded retry
-    stays (it is correct on its own merits).
+    stays (it is correct on its own merits). The `[patch.crates-io]`
+    fork route is not taken (board #99).
 
 52. **`split_pane_in_tab` corrupts state when the active tab is
     missing.** Found during the backlog-49 fix (2026-07-19): with zero
