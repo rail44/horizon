@@ -206,4 +206,21 @@ mod tests {
             assert_eq!(Chord::parse(chord), None, "{chord:?}");
         }
     }
+
+    #[test]
+    fn a_chord_is_spelled_as_the_bar_says_it() {
+        let spelled = |chord: &str| Chord::parse(chord).unwrap().label();
+        assert_eq!(spelled("Ctrl+Shift+C"), "ctrl+shift+c");
+        assert_eq!(spelled("ctrl+'"), "ctrl+'");
+        assert_eq!(spelled("Esc"), "esc");
+        assert_eq!(spelled("down"), "↓");
+        assert_eq!(spelled("space"), "space");
+    }
+
+    #[test]
+    fn a_character_with_no_modifier_but_shift_is_typed() {
+        let typed = |chord: &str| Chord::parse(chord).unwrap().typed();
+        assert!(typed("j") && typed("shift+x") && typed("/") && typed("space"));
+        assert!(!typed("enter") && !typed("ctrl+j") && !typed("alt+x") && !typed("down"));
+    }
 }

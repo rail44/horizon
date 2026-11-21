@@ -461,6 +461,11 @@ their wiring:
   the three as one and `Shell::run` carries one out: buttons, keyboard
   shortcuts, the palette and the command line are bindings to that list —
   do not add ad-hoc behavior in UI handlers.
+- **A view's keys are registered with `El::keys`.** Each key with what it
+  does (`horizon_ui::keys::Key`), once on the element that hears it: the
+  bar at the bottom of the window says the keys of the elements the focus
+  is in, from that registration (`docs/status-bar-design.md`). A key a
+  `keydown` handler of its own hears is not said there.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).
