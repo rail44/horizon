@@ -57,9 +57,43 @@ fn rearm_sync_flush(core: &TerminalCore, sync_flush_rx: &mut Receiver<Instant>) 
 }
 
 /// Applies the colors that have arrived and not been applied.
-fn take_color_schemes(core: &mut TerminalCore, schemes: &Receiver<TerminalColorScheme>) {
+fn take_color_schemes(
+    core: &mut TerminalCore,
+    schemes: &Receiver<TerminalColorScheme>,
+    last: &mut TerminalColorScheme,
+) {
     while let Ok(scheme) = schemes.try_recv() {
         core.set_color_scheme(scheme);
+        *last = scheme;
+    }
+}
+
+/// A terminal as one daemon gives it to the next: the engine's state and
+/// what the loop keeps beside it.
+#[derive(Clone, Debug)]
+pub struct HandedCore {
+    pub size: TerminalSize,
+    pub scrollback_lines: usize,
+    pub color_scheme: TerminalColorScheme,
+    /// [`TerminalCore::state`].
+    pub state: Vec<u8>,
+    /// [`TerminalCore::unread`]: taken in first by the next loop.
+    pub unread: Vec<u8>,
+}
+
+impl HandedCore {
+    fn of(
+        core: &mut TerminalCore,
+        options: &TerminalCoreOptions,
+        scheme: TerminalColorScheme,
+    ) -> Self {
+        Self {
+            size: core.size(),
+            scrollback_lines: options.scrollback_lines,
+            color_scheme: scheme,
+            state: core.state(),
+            unread: core.unread(),
+        }
     }
 }
 
@@ -290,14 +324,76 @@ pub fn run_terminal_core(
     to_pty: Sender<Vec<u8>>,
     update_tx: Sender<TerminalUpdate>,
 ) {
+    let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
+    core.set_color_scheme(options.color_scheme);
+    run_core(
+        core,
+        options,
+        Vec::new(),
+        pty_rx,
+        receivers,
+        to_pty,
+        update_tx,
+    );
+}
+
+/// [`run_terminal_core`] for a terminal another daemon handed over.
+/// `came_across` is told whether its state could be read; where it could
+/// not, the terminal starts empty at the handed size.
+pub fn run_handed_terminal_core(
+    handed: HandedCore,
+    came_across: impl FnOnce(bool),
+    pty_rx: Receiver<Vec<u8>>,
+    receivers: CoreReceivers,
+    to_pty: Sender<Vec<u8>>,
+    update_tx: Sender<TerminalUpdate>,
+) {
+    let size = handed.size.normalized();
+    let read = TerminalCore::from_state(&handed.state);
+    came_across(read.is_some());
+    let mut core = match read {
+        Some(mut core) => {
+            core.set_scrollback_lines(handed.scrollback_lines);
+            if core.size() != size {
+                core.resize(size);
+            }
+            core
+        }
+        None => TerminalCore::with_scrollback(size, handed.scrollback_lines),
+    };
+    core.set_color_scheme(handed.color_scheme);
+    let options = TerminalCoreOptions {
+        scrollback_lines: handed.scrollback_lines,
+        color_scheme: handed.color_scheme,
+    };
+    run_core(
+        core,
+        options,
+        handed.unread,
+        pty_rx,
+        receivers,
+        to_pty,
+        update_tx,
+    );
+}
+
+fn run_core(
+    mut core: TerminalCore,
+    options: TerminalCoreOptions,
+    unread: Vec<u8>,
+    pty_rx: Receiver<Vec<u8>>,
+    receivers: CoreReceivers,
+    to_pty: Sender<Vec<u8>>,
+    update_tx: Sender<TerminalUpdate>,
+) {
     let CoreReceivers {
         resize_rx,
         input_rx,
         color_scheme_rx,
         stream_rx,
+        mut hand_over_rx,
     } = receivers;
-    let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
-    core.set_color_scheme(options.color_scheme);
+    let mut scheme = options.color_scheme;
     // what a view that asked is sent.
     let mut stream = Stream::default();
 
@@ -307,12 +403,22 @@ pub fn run_terminal_core(
     // `rearm_sync_flush` only schedules a wakeup while a window is actually
     // open.
     let mut sync_flush_rx: Receiver<Instant> = crossbeam_channel::never();
+    if !unread.is_empty() {
+        process_pty_chunk(
+            &mut core,
+            &unread,
+            &to_pty,
+            &update_tx,
+            &mut sync_flush_rx,
+            &mut stream,
+        );
+    }
 
     loop {
         // a view's keys go to the PTY without passing here, so
         // what they have a program ask can be read before colors that were
         // sent earlier are: the colors are taken first.
-        take_color_schemes(&mut core, &color_scheme_rx);
+        take_color_schemes(&mut core, &color_scheme_rx, &mut scheme);
         // PTY output drains with priority over UI-originated input -- see
         // `drain_pty_output` for why that reply ordering is load-bearing.
         if !drain_pty_output(
@@ -323,6 +429,10 @@ pub fn run_terminal_core(
             &mut sync_flush_rx,
             &mut stream,
         ) {
+            // The reader is gone, after a hand-over was asked or not.
+            if let Ok(reply) = hand_over_rx.try_recv() {
+                let _ = reply.send(HandedCore::of(&mut core, &options, scheme));
+            }
             return;
         }
 
@@ -351,26 +461,35 @@ pub fn run_terminal_core(
                 // client's bytes are written: a reply to a query written
                 // after the Enter that starts the next program would be
                 // that program's input (`drain_pty_output`).
-                take_color_schemes(&mut core, &color_scheme_rx);
+                take_color_schemes(&mut core, &color_scheme_rx, &mut scheme);
                 if !drain_pty_output(
                     &mut core, &pty_rx, &to_pty, &update_tx,
                     &mut sync_flush_rx, &mut stream,
-                ) { return; }
+                ) {
+                    if let Ok(reply) = hand_over_rx.try_recv() {
+                        let _ = reply.send(HandedCore::of(&mut core, &options, scheme));
+                    }
+                    return;
+                }
                 let _ = to_pty.send(input);
             }
-            recv(color_scheme_rx) -> scheme => {
-                let Ok(scheme) = scheme else {
+            recv(color_scheme_rx) -> new => {
+                let Ok(new) = new else {
                     return;
                 };
                 // What the program is answered with when it asks the
                 // colors (OSC 4/10/11/12).
-                core.set_color_scheme(scheme);
+                core.set_color_scheme(new);
+                scheme = new;
             }
             recv(pty_rx) -> bytes => {
                 let Ok(bytes) = bytes else {
+                    if let Ok(reply) = hand_over_rx.try_recv() {
+                        let _ = reply.send(HandedCore::of(&mut core, &options, scheme));
+                    }
                     return;
                 };
-                take_color_schemes(&mut core, &color_scheme_rx);
+                take_color_schemes(&mut core, &color_scheme_rx, &mut scheme);
                 process_pty_chunk(
                     &mut core,
                     &bytes,
@@ -379,6 +498,26 @@ pub fn run_terminal_core(
                     &mut sync_flush_rx,
                     &mut stream,
                 );
+            }
+            recv(hand_over_rx) -> asked => {
+                let Ok(reply) = asked else {
+                    hand_over_rx = crossbeam_channel::never();
+                    continue;
+                };
+                // The reader is stopped after the asking: what it sent
+                // until then is all there is.
+                for bytes in pty_rx.iter() {
+                    process_pty_chunk(
+                        &mut core,
+                        &bytes,
+                        &to_pty,
+                        &update_tx,
+                        &mut sync_flush_rx,
+                        &mut stream,
+                    );
+                }
+                let _ = reply.send(HandedCore::of(&mut core, &options, scheme));
+                return;
             }
             recv(sync_flush_rx) -> _ => {
                 let events = core.flush_sync_update();
@@ -426,6 +565,130 @@ mod tests {
                 Err(_) => panic!("no {what}"),
             }
         }
+    }
+
+    /// The whole state a running loop sends when asked, read back into a
+    /// terminal.
+    fn screen_of(stream_tx: &Sender<StreamCommand>, updates: &Receiver<TerminalUpdate>) -> String {
+        stream_tx.send(StreamCommand::Want).unwrap();
+        let mut state = Vec::new();
+        loop {
+            if let TerminalUpdate::State { bytes, more } = next(updates, "the state", |update| {
+                matches!(update, TerminalUpdate::State { .. })
+            }) {
+                state.extend_from_slice(&bytes);
+                if !more {
+                    break;
+                }
+            }
+        }
+        TerminalCore::from_state(&state)
+            .expect("a terminal from the state")
+            .snapshot_text()
+    }
+
+    /// A loop handed over after any of these bytes, and the bytes after it
+    /// sent to the loop it is handed to, make the screen they make in one
+    /// loop: in the middle of an escape sequence, of a character, of a
+    /// notification the core holds back.
+    #[test]
+    fn a_loop_handed_over_goes_on_in_the_next_as_in_one() {
+        let written = "$ one\r\n\x1b[31mred\x1b[0m\r\n\x1b]9;held back\x07\
+                       日本語\r\n\x1b]0;a title\x07\x1b[2;5Htwo\r\n$ "
+            .as_bytes();
+        let mut whole = TerminalCore::new(TerminalSize::new(40, 10));
+        whole.write_vt(written);
+        let expected = whole.snapshot_text();
+        let start = |handed: Option<HandedCore>| {
+            let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+            let (to_pty, _from_core) = crossbeam_channel::unbounded();
+            let (update_tx, update_rx) = crossbeam_channel::unbounded();
+            let (senders, receivers) = core_channels();
+            let (came_tx, came_rx) = crossbeam_channel::bounded(1);
+            std::thread::spawn(move || match handed {
+                Some(handed) => run_handed_terminal_core(
+                    handed,
+                    move |read| came_tx.send(read).unwrap(),
+                    pty_rx,
+                    receivers,
+                    to_pty,
+                    update_tx,
+                ),
+                None => run_terminal_core(
+                    TerminalSize::new(40, 10),
+                    TerminalCoreOptions::default(),
+                    pty_rx,
+                    receivers,
+                    to_pty,
+                    update_tx,
+                ),
+            });
+            (pty_tx, senders, update_rx, came_rx)
+        };
+        for cut in [0, 3, 9, 14, 22, 30, 33, 41, 50, written.len()] {
+            let (pty_tx, senders, _updates, _) = start(None);
+            pty_tx.send(written[..cut].to_vec()).unwrap();
+            let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+            senders.hand_over_tx.send(reply_tx).unwrap();
+            // Then the reader stops: its sender goes.
+            drop(pty_tx);
+            let handed = reply_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the handed terminal");
+
+            let (pty_tx, senders, updates, came) = start(Some(handed));
+            assert!(
+                came.recv_timeout(Duration::from_secs(10)).unwrap(),
+                "cut at {cut}"
+            );
+            pty_tx.send(written[cut..].to_vec()).unwrap();
+            // (Asked while the bytes may still be on their way: asked
+            // again until they are in, or the time is up.)
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut screen = screen_of(&senders.stream_tx, &updates);
+            while screen != expected && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+                screen = screen_of(&senders.stream_tx, &updates);
+            }
+            assert_eq!(screen, expected, "cut at {cut}");
+        }
+    }
+
+    /// A handed state the engine cannot read: the terminal starts empty
+    /// at the handed size, and says so.
+    #[test]
+    fn a_handed_state_that_cannot_be_read_starts_an_empty_terminal() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (to_pty, _from_core) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (senders, receivers) = core_channels();
+        let (came_tx, came_rx) = crossbeam_channel::bounded(1);
+        let handed = HandedCore {
+            size: TerminalSize::new(30, 6),
+            scrollback_lines: 100,
+            color_scheme: TerminalColorScheme::default(),
+            state: b"not a state".to_vec(),
+            unread: Vec::new(),
+        };
+        std::thread::spawn(move || {
+            run_handed_terminal_core(
+                handed,
+                move |read| came_tx.send(read).unwrap(),
+                pty_rx,
+                receivers,
+                to_pty,
+                update_tx,
+            );
+        });
+        assert!(!came_rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        pty_tx.send(b"after".to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut screen = screen_of(&senders.stream_tx, &update_rx);
+        while screen.trim_end() != "after" && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            screen = screen_of(&senders.stream_tx, &update_rx);
+        }
+        assert_eq!(screen.trim_end(), "after");
     }
 
     /// The end-to-end failsafe for a synchronized update left open: a PTY

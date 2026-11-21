@@ -189,6 +189,26 @@ impl OscNotificationScanner {
         found
     }
 
+    /// What was fed and is neither with the parser nor taken as a
+    /// sequence yet: the start of a sequence still coming in, introducer
+    /// and all. Fed to a new scanner first, it goes on as this one would.
+    /// (Of a capture past [`PAYLOAD_CAP`], whose notification already went
+    /// out, only the introducer: the rest is swallowed either way.)
+    pub(super) fn unread(&self) -> Vec<u8> {
+        let Some(kind) = self.capture else {
+            return self.buf.clone();
+        };
+        let mut bytes = match kind {
+            CaptureKind::Nine => b"\x1b]9;".to_vec(),
+            CaptureKind::SevenSeven7 => b"\x1b]777;".to_vec(),
+            CaptureKind::ProgramStatus => b"\x1b]7501;".to_vec(),
+        };
+        if !self.overflowing {
+            bytes.extend_from_slice(&self.buf[self.payload_start..]);
+        }
+        bytes
+    }
+
     /// Pass-through scan from `pos`: copy every byte that is not part of a
     /// notification OSC to `out`, and either arm a capture when a
     /// notification header is recognized or hold back an incomplete
@@ -614,6 +634,34 @@ mod tests {
         assert_eq!(found.program_status.len(), 2);
         assert_eq!(found.program_status[0].0, 1);
         assert_eq!(found.program_status[1], (2, Message::Query));
+    }
+
+    #[test]
+    fn what_is_unread_goes_on_in_another_scanner_as_in_this_one() {
+        let whole =
+            b"a\x1b]9;one\x07b\x1b]777;notify;t;two\x1b\\c\x1b]7501;state=done\x07d\x1b]2;x\x07e";
+        let mut alone = OscNotificationScanner::default();
+        let all = alone.feed(whole);
+        for cut in 0..=whole.len() {
+            let mut first = OscNotificationScanner::default();
+            let before = first.feed(&whole[..cut]);
+            let mut second = OscNotificationScanner::default();
+            let mut rest = first.unread();
+            rest.extend_from_slice(&whole[cut..]);
+            let after = second.feed(&rest);
+            let bytes = [before.bytes, after.bytes].concat();
+            assert_eq!(bytes, all.bytes, "cut at {cut}");
+            assert_eq!(
+                [before.notifications, after.notifications].concat(),
+                all.notifications,
+                "cut at {cut}"
+            );
+            assert_eq!(
+                before.program_status.len() + after.program_status.len(),
+                all.program_status.len(),
+                "cut at {cut}"
+            );
+        }
     }
 
     #[test]

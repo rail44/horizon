@@ -34,8 +34,8 @@ pub use contract::{
 };
 pub use core::{DEFAULT_SCROLLBACK_LINES, KeyStroke, TerminalColorScheme, TerminalCore};
 pub use session_loop::{
-    CoreReceivers, CoreSenders, StreamCommand, TerminalCoreOptions, core_channels,
-    run_terminal_core,
+    CoreReceivers, CoreSenders, HandedCore, StreamCommand, TerminalCoreOptions, core_channels,
+    run_handed_terminal_core, run_terminal_core,
 };
 pub use types::{
     KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,

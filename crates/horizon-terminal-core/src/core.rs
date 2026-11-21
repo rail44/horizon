@@ -108,6 +108,23 @@ impl TerminalCore {
         Some(Self::around(terminal, size))
     }
 
+    /// The bytes taken in that the engine has not had yet: the start of a
+    /// sequence the core holds back until it sees whether it is one of its
+    /// own. A core made from [`Self::state`] takes these in first.
+    pub fn unread(&self) -> Vec<u8> {
+        self.osc_notifications.unread()
+    }
+
+    /// How many lines of history the terminal keeps.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        let _ = self.terminal.set_scrollback_max_bytes(Some(usize::MAX));
+        let _ = self.terminal.set_scrollback_max_lines(Some(lines));
+    }
+
+    pub fn size(&self) -> TerminalSize {
+        self.size.get()
+    }
+
     /// The terminal's whole state, for [`Self::from_state`].
     pub fn state(&mut self) -> Vec<u8> {
         let mut state = Vec::new();
