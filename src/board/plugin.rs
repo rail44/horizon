@@ -1,7 +1,7 @@
 //! The board's two views as plugins: the commands each carries out for
 //! the pane it is in, and the state a pane of each keeps.
 
-use crate::board::model::{ListCommand, ThreadCommand};
+use crate::board::model::{Keyed, LIST_KEYS, ListCommand, THREAD_KEYS, ThreadCommand};
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Activity, Sessions, Source, list, thread};
 use crate::background::Background;
-use crate::plugin::{Command, Mounted, Plugin};
+use crate::plugin::{Command, Hint, Mounted, Plugin};
 
 /// The sessions a view's tasks are bound to, said through `ask` whenever
 /// they change.
@@ -56,12 +56,23 @@ pub enum BoardListCommand {
     OpenOrganizer,
 }
 
+/// A key table as the bar says it.
+fn hinted<C>(keys: &[Keyed<C>]) -> Vec<Hint> {
+    (keys.iter())
+        .map(|keyed| Hint::new(keyed.spelled, keyed.label))
+        .collect()
+}
+
 impl Plugin for BoardListPlugin {
     const NAME: &'static str = "board-list";
     const TITLE: &'static str = "Board";
     type State = ();
     type Command = BoardListCommand;
     type Asked = ListAsked;
+
+    fn hints() -> Vec<Hint> {
+        hinted(LIST_KEYS)
+    }
 
     fn commands() -> Vec<Command<BoardListCommand>> {
         use BoardListCommand::*;
@@ -200,6 +211,10 @@ impl Plugin for BoardThreadPlugin {
     type State = ThreadState;
     type Command = BoardThreadCommand;
     type Asked = ThreadAsked;
+
+    fn hints() -> Vec<Hint> {
+        hinted(THREAD_KEYS)
+    }
 
     fn commands() -> Vec<Command<BoardThreadCommand>> {
         use BoardThreadCommand::*;
