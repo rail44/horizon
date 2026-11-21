@@ -9,12 +9,11 @@ use std::rc::Rc;
 
 use crate::board::chrome;
 use crate::board::model::{
-    self, DropHalf, ListCommand, Row, drop_position_from_half, finished_summary,
-    list_command_for_key, parse_new_task, sibling_move, status_text, step_selection, tree_rows,
-    visible_rows,
+    self, DropHalf, Keyed, LIST_KEYS, ListCommand, Row, drop_position_from_half, finished_summary,
+    parse_new_task, sibling_move, status_text, step_selection, tree_rows, visible_rows,
 };
 use horizon_board::{Item, Position};
-use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
+use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
@@ -377,17 +376,22 @@ impl BoardList {
 }
 
 /// A key as the board's key maps name it.
-pub(super) fn key_name(key: &BlitzKeyEvent) -> Option<String> {
-    Some(match &key.key {
-        Key::Character(character) => character.to_lowercase(),
-        Key::Named(NamedKey::ArrowDown) => "down".to_string(),
-        Key::Named(NamedKey::ArrowUp) => "up".to_string(),
-        Key::Named(NamedKey::ArrowLeft) => "left".to_string(),
-        Key::Named(NamedKey::ArrowRight) => "right".to_string(),
-        Key::Named(NamedKey::Enter) => "enter".to_string(),
-        Key::Named(NamedKey::Escape) => "escape".to_string(),
-        _ => return None,
-    })
+/// A view's key table as the keys its element takes, each doing its
+/// command by `run`.
+pub(super) fn keyed<C: Clone + 'static>(
+    table: &[Keyed<C>],
+    run: impl Fn(C) + Clone + 'static,
+) -> Vec<horizon_ui::keys::Key> {
+    (table.iter())
+        .map(|keyed| {
+            let group = horizon_ui::keys::Key::group(keyed.spelled, keyed.label);
+            (keyed.bound.iter()).fold(group, |key, bound| {
+                let (name, command) = bound.clone();
+                let run = run.clone();
+                key.bind(name, move || run(command.clone()))
+            })
+        })
+        .collect()
 }
 
 /// What a row shows of its task, as text: a row is built again when any
@@ -651,143 +655,133 @@ pub fn view(
     });
 
     let dragged = held.clone();
-    root.on("keydown", move |event| {
-        let DomEventData::KeyDown(key) = &event.data else {
-            return;
-        };
-        if key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
-            return;
-        }
-        if let Some(command) = key_name(key).and_then(|name| list_command_for_key(&name)) {
-            state.execute(command);
-            prevent_default();
-        }
-    })
-    .on("pointermove", move |event| {
-        let DomEventData::PointerMove(pointer) = &event.data else {
-            return;
-        };
-        let Some((id, from_x, from_y)) = pressed.get_untracked() else {
-            return;
-        };
-        let (x, y) = (pointer.page_x(), pointer.page_y());
-        if state.carried.get_untracked().is_none() {
-            if (x - from_x).abs().max((y - from_y).abs()) < SLOP {
+    root.keys(keyed(LIST_KEYS, move |command| state.execute(command)))
+        .on("pointermove", move |event| {
+            let DomEventData::PointerMove(pointer) = &event.data else {
+                return;
+            };
+            let Some((id, from_x, from_y)) = pressed.get_untracked() else {
+                return;
+            };
+            let (x, y) = (pointer.page_x(), pointer.page_y());
+            if state.carried.get_untracked().is_none() {
+                if (x - from_x).abs().max((y - from_y).abs()) < SLOP {
+                    return;
+                }
+                state.carried.set(Some(id));
+            }
+            let dragged = dragged.clone();
+            // What is under the pointer and where its box is, asked of the
+            // page once the event is done with.
+            dispatched(move |page| {
+                if let Some(origin) = page.bounds(root) {
+                    ghost_at.set((x - origin.x as f32 + 12., y - origin.y as f32 + 12.));
+                }
+                let rows = dragged.rows.borrow();
+                let over = page.under(x, y).into_iter().find_map(|element| {
+                    let (target, _) = rows.iter().find(|(_, row)| **row == element)?;
+                    Some((element, *target))
+                });
+                // A row lands among its own siblings only.
+                let next = over.and_then(|(row, target)| {
+                    let bounds = page.bounds(row)?;
+                    let half = match (y as f64) < bounds.y + bounds.height / 2. {
+                        true => DropHalf::Above,
+                        false => DropHalf::Below,
+                    };
+                    (state.items)
+                        .with_untracked(|items| drop_position_from_half(id, items, target, half))
+                        .map(|_| (target, half))
+                });
+                if state.indicator.get_untracked() != next {
+                    state.indicator.set(next);
+                }
+            });
+        })
+        .on("pointerup", move |_| {
+            let Some((id, ..)) = pressed.get_untracked() else {
+                return;
+            };
+            pressed.set(None);
+            if state.carried.get_untracked().is_none() {
+                // A press and a release in place: a click on the row.
+                state.execute(ListCommand::SelectTask(id));
                 return;
             }
-            state.carried.set(Some(id));
-        }
-        let dragged = dragged.clone();
-        // What is under the pointer and where its box is, asked of the
-        // page once the event is done with.
-        dispatched(move |page| {
-            if let Some(origin) = page.bounds(root) {
-                ghost_at.set((x - origin.x as f32 + 12., y - origin.y as f32 + 12.));
-            }
-            let rows = dragged.rows.borrow();
-            let over = page.under(x, y).into_iter().find_map(|element| {
-                let (target, _) = rows.iter().find(|(_, row)| **row == element)?;
-                Some((element, *target))
-            });
-            // A row lands among its own siblings only.
-            let next = over.and_then(|(row, target)| {
-                let bounds = page.bounds(row)?;
-                let half = match (y as f64) < bounds.y + bounds.height / 2. {
-                    true => DropHalf::Above,
-                    false => DropHalf::Below,
-                };
+            let indicator = state.indicator.get_untracked();
+            state.carried.set(None);
+            state.indicator.set(None);
+            let position = indicator.and_then(|(target, half)| {
                 (state.items)
                     .with_untracked(|items| drop_position_from_half(id, items, target, half))
-                    .map(|_| (target, half))
             });
-            if state.indicator.get_untracked() != next {
-                state.indicator.set(next);
+            if let Some(position) = position {
+                state.move_task(id, position);
             }
-        });
-    })
-    .on("pointerup", move |_| {
-        let Some((id, ..)) = pressed.get_untracked() else {
-            return;
-        };
-        pressed.set(None);
-        if state.carried.get_untracked().is_none() {
-            // A press and a release in place: a click on the row.
-            state.execute(ListCommand::SelectTask(id));
-            return;
-        }
-        let indicator = state.indicator.get_untracked();
-        state.carried.set(None);
-        state.indicator.set(None);
-        let position = indicator.and_then(|(target, half)| {
-            (state.items).with_untracked(|items| drop_position_from_half(id, items, target, half))
-        });
-        if let Some(position) = position {
-            state.move_task(id, position);
-        }
-    })
-    .child(el("div").class(styles::HEAD).text_dyn(move || {
-        state.rows.with(|rows| {
-            let unread = rows.iter().map(|row| row.unread).sum();
-            chrome::list_header_text(rows.len(), unread)
         })
-    }))
-    .child(scroll)
-    .when(
-        move || state.notice.with(Option::is_some),
-        move || {
-            el("div")
-                .class(styles::NOTICE)
-                .text_dyn(move || state.notice.get().unwrap_or_default())
-        },
-    )
-    .child(
-        el("div").class(styles::ADD).child(Field {
-            input: field
-                .on("input", move |event| {
-                    if let DomEventData::Input(input) = &event.data {
-                        state.typed.set(input.value.clone());
-                    }
-                })
-                // The field's keys are its own: Enter adds the task,
-                // Escape goes back to the rows.
-                .on("keydown", move |event| {
-                    let DomEventData::KeyDown(key) = &event.data else {
-                        return;
-                    };
-                    match &key.key {
-                        Key::Named(NamedKey::Enter) => {
-                            state.execute(ListCommand::AddTask);
-                            prevent_default();
+        .child(el("div").class(styles::HEAD).text_dyn(move || {
+            state.rows.with(|rows| {
+                let unread = rows.iter().map(|row| row.unread).sum();
+                chrome::list_header_text(rows.len(), unread)
+            })
+        }))
+        .child(scroll)
+        .when(
+            move || state.notice.with(Option::is_some),
+            move || {
+                el("div")
+                    .class(styles::NOTICE)
+                    .text_dyn(move || state.notice.get().unwrap_or_default())
+            },
+        )
+        .child(
+            el("div").class(styles::ADD).child(Field {
+                input: field
+                    .on("input", move |event| {
+                        if let DomEventData::Input(input) = &event.data {
+                            state.typed.set(input.value.clone());
                         }
-                        Key::Named(NamedKey::Escape) => {
-                            root.focus();
-                        }
-                        _ => {}
-                    }
-                    stop_propagation();
-                }),
-            prompt: Some(Prompt {
-                text: chrome::ADD_TASK.into(),
-                shown: Signal::derive(move || state.typed.with(String::is_empty)),
-            }),
-        }),
-    )
-    .when(
-        move || state.carried.get().is_some(),
-        move || {
-            el("div")
-                .class(styles::GHOST)
-                .style_dyn("left", move || format!("{}px", ghost_at.get().0))
-                .style_dyn("top", move || format!("{}px", ghost_at.get().1))
-                .text_dyn(move || {
-                    let carried = state.carried.get();
-                    state.items.with(|items| {
-                        (items.iter().find(|item| Some(item.id) == carried))
-                            .map(|item| item.title.clone())
-                            .unwrap_or_default()
                     })
-                })
-        },
-    );
+                    // The field's keys are its own: Enter adds the task,
+                    // Escape goes back to the rows.
+                    .on("keydown", move |event| {
+                        let DomEventData::KeyDown(key) = &event.data else {
+                            return;
+                        };
+                        match &key.key {
+                            Key::Named(NamedKey::Enter) => {
+                                state.execute(ListCommand::AddTask);
+                                prevent_default();
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                root.focus();
+                            }
+                            _ => {}
+                        }
+                        stop_propagation();
+                    }),
+                prompt: Some(Prompt {
+                    text: chrome::ADD_TASK.into(),
+                    shown: Signal::derive(move || state.typed.with(String::is_empty)),
+                }),
+            }),
+        )
+        .when(
+            move || state.carried.get().is_some(),
+            move || {
+                el("div")
+                    .class(styles::GHOST)
+                    .style_dyn("left", move || format!("{}px", ghost_at.get().0))
+                    .style_dyn("top", move || format!("{}px", ghost_at.get().1))
+                    .text_dyn(move || {
+                        let carried = state.carried.get();
+                        state.items.with(|items| {
+                            (items.iter().find(|item| Some(item.id) == carried))
+                                .map(|item| item.title.clone())
+                                .unwrap_or_default()
+                        })
+                    })
+            },
+        );
     (root, state)
 }

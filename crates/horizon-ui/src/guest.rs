@@ -92,6 +92,9 @@ struct Kept {
     owner: RefCell<Option<Owner>>,
     /// What the view last put over the workspace was made under.
     over: RefCell<Option<Owner>>,
+    /// The fields text is typed into among the nodes the plugin made: the
+    /// document that knows what a node is is the host's.
+    text_fields: RefCell<HashSet<NodeId>>,
 }
 
 thread_local! {
@@ -124,7 +127,17 @@ fn node(number: u64) -> NodeId {
 }
 
 pub fn el(tag: &str) -> El {
-    El(node(host::create_element(tag)))
+    let made = node(host::create_element(tag));
+    if matches!(tag, "input" | "textarea") {
+        KEPT.with(|kept| kept.text_fields.borrow_mut().insert(made));
+    }
+    El(made)
+}
+
+/// Whether `node` is a field text is typed into, where a key that is a
+/// character is typed rather than pressed.
+pub fn is_text_field(node: NodeId) -> bool {
+    KEPT.with(|kept| kept.text_fields.borrow().contains(&node))
 }
 
 /// Takes a node out for good, and with it the handlers kept for what
@@ -133,9 +146,11 @@ fn drop_node(dropped: NodeId) {
     let gone = host::remove(dropped.as_u64());
     KEPT.with(|kept| {
         let mut handlers = kept.handlers.borrow_mut();
+        let mut text_fields = kept.text_fields.borrow_mut();
         for gone in gone {
             handlers.remove(&(node(gone), false));
             handlers.remove(&(node(gone), true));
+            text_fields.remove(&node(gone));
         }
     });
 }

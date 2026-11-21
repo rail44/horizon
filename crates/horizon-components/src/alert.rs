@@ -11,11 +11,10 @@
 //! It is what is in the dialog: what placed it puts it where it is seen
 //! (over the workspace, or over a view), and takes it away once answered.
 
-use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::keys::Key;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
-use horizon_ui::{Callable, Callback, Component, El, el, prevent_default, stop_propagation};
-use keyboard_types::{Key, NamedKey};
+use horizon_ui::{Callable, Callback, Component, El, el};
 
 use super::{Button, ButtonKind};
 
@@ -97,41 +96,34 @@ impl Component for AlertDialog<'_> {
             true => ButtonKind::Danger,
             false => ButtonKind::Primary,
         };
+        let answered = move || match at.get_untracked() {
+            At::Cancel => on_cancel.run(()),
+            At::Action => on_action.run(()),
+        };
+        let mut keys = Vec::new();
+        if let Some(typed) = &typed {
+            keys.push(Key::new(typed, &action.to_lowercase(), move || {
+                on_action.run(())
+            }));
+        }
+        keys.extend([
+            Key::group("enter", "answer")
+                .bind("enter", answered)
+                .bind("space", answered),
+            Key::new("tab", "switch", move || {
+                at.set(match at.get_untracked() {
+                    At::Cancel => At::Action,
+                    At::Action => At::Cancel,
+                })
+            }),
+            Key::new("esc", &cancel.to_lowercase(), move || on_cancel.run(())),
+        ]);
         el("div")
             .class(styles::ALERT)
             .attr("tabindex", "0")
             .attr("role", "alertdialog")
-            .on("keydown", move |event| {
-                let DomEventData::KeyDown(key) = &event.data else {
-                    return;
-                };
-                let character = match &key.key {
-                    Key::Character(character) => Some(character.as_str()),
-                    _ => None,
-                };
-                match &key.key {
-                    Key::Named(NamedKey::Escape) => on_cancel.run(()),
-                    Key::Named(NamedKey::Tab) => at.set(match at.get_untracked() {
-                        At::Cancel => At::Action,
-                        At::Action => At::Cancel,
-                    }),
-                    Key::Named(NamedKey::Enter) => match at.get_untracked() {
-                        At::Cancel => on_cancel.run(()),
-                        At::Action => on_action.run(()),
-                    },
-                    _ if character == Some(" ") => match at.get_untracked() {
-                        At::Cancel => on_cancel.run(()),
-                        At::Action => on_action.run(()),
-                    },
-                    _ if character.is_some() && character == typed.as_deref() => {
-                        on_action.run(());
-                    }
-                    _ => {}
-                }
-                // (Every key is the dialog's: what is behind it hears none.)
-                prevent_default();
-                stop_propagation();
-            })
+            // (Every key is the dialog's: what is behind it hears none.)
+            .keys_alone(keys)
             .child(el("div").class(styles::TITLE).text(title))
             .child(el("div").class(styles::DESCRIPTION).text(description))
             .child(

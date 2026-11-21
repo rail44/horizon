@@ -588,8 +588,6 @@ pub struct Shell {
     /// The extensions' views that hold workspace mode's cursor, and the
     /// cursor of the one with the focus, shown (`lent_cursor`).
     held: RwSignal<Vec<lent_cursor::Held>>,
-    /// The keys extensions' views said, for the bar (`hints`).
-    hinted: RwSignal<Vec<hints::Hinted>>,
     lent: RwSignal<Option<lent_cursor::Lent>>,
     /// The boundary being dragged.
     resizing: RwSignal<Option<arrangement::Resize>>,
@@ -1313,7 +1311,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         modal: RwSignal::new(None),
         search: picker::Search::new(),
         held: RwSignal::new(Vec::new()),
-        hinted: RwSignal::new(Vec::new()),
         lent: RwSignal::new(None),
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),

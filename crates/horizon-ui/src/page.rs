@@ -131,6 +131,48 @@ impl Page<'_> {
         Some(layout.text.clone())
     }
 
+    /// The keys the elements the focus is in take ([`El::keys`]), from the
+    /// one with the focus outwards, each element's in its order, up to one
+    /// that takes every key. In a text field, those that are typed there
+    /// are left out; of keys spelled the same, the first is kept.
+    pub fn focused_keys(&self) -> Vec<crate::keys::Kept> {
+        let focused = self.0.get_focussed_node_id();
+        // (The document is lent here already: what the focused node is is
+        // read from it, not borrowed again.)
+        let typing = (focused.and_then(|id| self.0.get_node(id)))
+            .and_then(|node| node.element_data())
+            .is_some_and(|element| matches!(&*element.name.local, "input" | "textarea"));
+        let mut keys = Vec::new();
+        let mut node = focused;
+        while let Some(id) = node {
+            let Some(found) = self.0.get_node(id) else {
+                break;
+            };
+            let attribute = (found.element_data()).and_then(|element| {
+                element.attr(blitz_dom::LocalName::from(crate::keys::ATTRIBUTE))
+            });
+            if let Some(attribute) = attribute {
+                for key in crate::keys::kept(attribute) {
+                    let said =
+                        (keys.iter()).any(|was: &crate::keys::Kept| was.spelled == key.spelled);
+                    if !(typing && key.typed) && !said {
+                        keys.push(key);
+                    }
+                }
+            }
+            let alone = (found.element_data()).is_some_and(|element| {
+                element
+                    .attr(blitz_dom::LocalName::from(crate::keys::ALONE))
+                    .is_some()
+            });
+            if alone {
+                break;
+            }
+            node = found.parent;
+        }
+        keys
+    }
+
     /// Whether the keys go to this element or to something inside it.
     pub fn has_focus_within(&self, element: El) -> bool {
         let mut node = self.0.get_focussed_node_id();

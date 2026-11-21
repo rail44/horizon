@@ -98,5 +98,5 @@ pub(super) fn view(shell: Shell, search: Search, placement: Placement) -> El {
             }
         }
     };
-    picker::view(search, rows, picked)
+    picker::view(search, rows, picked, "open")
 }

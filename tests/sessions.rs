@@ -96,11 +96,16 @@ impl Opened {
             Key::Character(text) => Some(text.as_str().into()),
             _ => None,
         };
+        // (A capital is typed with Shift, as a keyboard has it.)
+        let shifted = matches!(&key, Key::Character(text) if text.chars().any(char::is_uppercase));
         self.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
             text,
             key,
             code: keyboard_types::Code::Unidentified,
-            modifiers: Modifiers::default(),
+            modifiers: match shifted {
+                true => Modifiers::SHIFT,
+                false => Modifiers::default(),
+            },
             location: keyboard_types::Location::Standard,
             is_auto_repeating: false,
             is_composing: false,
@@ -167,6 +172,15 @@ impl Opened {
     }
 
     /// The elements of a class within the list, in document order.
+    /// What the bar at the bottom of the window says.
+    fn bar(&self) -> String {
+        let document = self.app.document();
+        let document = document.borrow();
+        (horizon_ui::testing::find(&self.app, self.root, "bar").into_iter())
+            .map(|node| document.get_node(node).unwrap().text_content())
+            .collect()
+    }
+
     fn nodes(&self, class: &str) -> Vec<NodeId> {
         let lists = horizon_ui::testing::find(&self.app, self.root, "sessions");
         (lists.into_iter())
@@ -841,7 +855,10 @@ fn the_chosen_session_is_ended_once_the_list_is_told_so() {
         asked()
     );
     assert!(!opened.asked_over_the_list());
-    assert!(opened.texts("foot").join(" ").contains("Go to"));
+    // Its keys, and none of the list's behind it, are in the bar.
+    opened.until("the dialog's keys in the bar", || {
+        opened.bar() == "yterminateenteranswertabswitchesckeep"
+    });
     opened.key(Key::Named(NamedKey::Escape));
     opened.until("the question gone", || opened.asked().is_none());
     assert!(has(made.waiting) && has(made.derived));
@@ -922,7 +939,7 @@ fn the_chosen_session_is_gone_to_and_a_terminal_opened_where_it_works() {
 }
 
 #[test]
-fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
+fn what_the_keys_do_the_pointer_does_on_the_rows_and_their_menus() {
     let opened = open();
     let places = Places::made("pointer");
     let made = make(&opened, &places);
@@ -974,10 +991,10 @@ fn what_the_keys_do_the_pointer_does_on_the_rows_their_menus_and_the_band() {
     opened.until("the session ended", || !has(made.derived));
     opened.until("the rows", || opened.titles().len() == 4);
 
-    // The band's keys are pressed too: the next that waits, round the
-    // list from what took the ended one's place.
+    // The next that waits, round the list from what took the ended
+    // one's place.
     assert_eq!(opened.chosen().as_deref(), Some("measure"));
-    opened.press("hint", "nNext waiting", false);
+    opened.character("n");
     assert_eq!(opened.chosen().as_deref(), Some("build"));
 
     // A click on a row goes to its session.
@@ -1028,15 +1045,17 @@ fn the_session_manager_is_the_list_over_the_workspace() {
     let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
     let panes = || opened.model(|model| model.all_pane_ids().len());
 
-    // The list, with the keys, and what leaves it in its band. A session
-    // ended, the list stays.
+    // The list, with the keys, and what leaves it in the window's bar. A
+    // session ended, the list stays.
     manage();
     assert_eq!(
         opened.titles(),
         ["build", "tests", "measure", "shell", "wiki"]
     );
-    let foot = opened.texts("foot").join(" ");
-    assert!(foot.ends_with("EscClose"), "{foot}");
+    opened.until("the list's keys in the bar", || {
+        let bar = opened.bar();
+        bar.starts_with("j/kmove") && bar.ends_with("escclose")
+    });
     // Its cursor starts on the session the focus was on.
     assert_eq!(opened.chosen().as_deref(), Some("shell"));
     // Asked over the list itself, which is over the workspace already.

@@ -64,6 +64,16 @@ pub(crate) fn append(document: &mut BaseDocument, parent: NodeId, child: NodeId)
     }
 }
 
+/// Whether `node` is a field text is typed into, where a key that is a
+/// character is typed rather than pressed.
+pub fn is_text_field(node: NodeId) -> bool {
+    with_document(|document| {
+        (document.get_node(node))
+            .and_then(|node| node.element_data())
+            .is_some_and(|element| matches!(&*element.name.local, "input" | "textarea"))
+    })
+}
+
 impl El {
     pub fn attr(self, attribute: &str, value: &str) -> Self {
         with_document(|document| {

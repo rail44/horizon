@@ -62,5 +62,5 @@ pub(super) fn view(shell: Shell) -> El {
             }
         });
     };
-    picker::view(shell.search, rows, picked)
+    picker::view(shell.search, rows, picked, "move")
 }

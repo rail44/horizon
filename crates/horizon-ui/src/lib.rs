@@ -18,6 +18,7 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod app;
+mod chord;
 mod class;
 mod component;
 #[cfg(not(target_family = "wasm"))]
@@ -36,6 +37,7 @@ pub mod guest;
 pub mod host;
 #[cfg(not(target_family = "wasm"))]
 mod input_method;
+pub mod keys;
 mod one_of;
 #[cfg(not(target_family = "wasm"))]
 mod page;
@@ -53,18 +55,20 @@ pub use app::{App, Live};
 #[cfg(not(target_family = "wasm"))]
 pub use dispatch::{prevent_default, stop_propagation};
 #[cfg(not(target_family = "wasm"))]
-pub use el::{El, copy, el, request_paste};
+pub use el::{El, copy, el, is_text_field, request_paste};
 #[cfg(not(target_family = "wasm"))]
 pub use frame::{each_effects, frame, relayout};
 #[cfg(target_family = "wasm")]
 pub use guest::{
-    Bounds, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+    Bounds, El, Page, dispatched, each_layout, el, is_text_field, prevent_default, relayout,
+    stop_propagation,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use input_method::{InputPurpose, input_purpose};
 #[cfg(not(target_family = "wasm"))]
 pub use page::{Bounds, Page, dispatched, each_layout};
 
+pub use chord::Chord;
 pub use class::{Class, Classes, Sheet};
 pub use component::{Callable, Callback, Component};
 pub use horizon_ui_macros::{css_module, plugin};
