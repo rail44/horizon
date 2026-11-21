@@ -140,7 +140,31 @@ writes its whole target. They cannot be moved within one texture either:
 wgpu rejects any copy between regions of the same mip level and layer
 (`wgpu-core`, `validate_copy_within_same_texture`).
 
-Ink a glyph draws outside its row is clipped at the row's bounds.
+How rows are drawn:
+
+- **Spacing.** In the scratch texture, rows are a whole number of Vello's
+  16-pixel tiles apart. A row then lies the same way across the tiles
+  wherever it is drawn, and comes out the same pixels. At 23 pixels apart,
+  a row drawn at another place differed by a shade at a few edges.
+- **Anti-aliasing.** Rows are anti-aliased as the window's renderer draws the
+  rest of the page: `anyrender_vello`'s default, MSAA 16, which
+  `src/application.rs` keeps.
+- **One Vello renderer.** The stores on one device share one Vello renderer,
+  since making one compiles its pipelines. The stores hold it, and a
+  thread-local only refers to it. What wgpu keeps is then let go of with
+  the stores, never while the thread's locals are being destroyed.
+- **Clipping.** Ink a glyph draws outside its row is clipped at the row's
+  bounds.
+
+The store goes with the renderer it was registered with. Blitz calls a
+custom widget's `destroy_surfaces` before it takes another renderer
+(`blitz-shell`'s suspend), and the store is dropped there. wgpu's device
+equality compares ids that two wgpu instances can share, so it cannot tell
+that the renderer changed.
+
+A document holding a store has to be dropped while wgpu can still let go
+of what the store holds. `horizon-ui`'s `App` leaves the thread's current
+app when it is dropped, so its document goes with it.
 
 ## 4. A frame
 
@@ -225,20 +249,41 @@ device for them.
 
 What the tests are:
 
-- **GPU path.** Pixel tests of the terminal paint through
-  `VelloImageRenderer`. Among them is
-  `block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale`.
+- **GPU path.** The terminal's pixel tests of what it draws paint through
+  `VelloImageRenderer`: the blocks with no seam, in one view, in a view
+  off whole pixels, and in both panes of a split; the lines under and
+  through text. `Terminal::painted_from_kept_rows` says whether a paint
+  came from the store.
+- **No device.** `the_screen_is_painted_and_not_only_held` paints through
+  `VelloCpuImageRenderer`, and the screen is drawn whole.
 - **Unit tests.** The store's logic has unit tests without any renderer:
-  keys, slot assignment and reuse, the row-to-slot mapping, and the
-  quantized scroll offset.
-- **Pixel comparisons.** A pixel test paints the same grid twice in one
-  renderer: drawn directly, and through the store. The two must match. The
-  cases are:
+  row height, the quantized scroll offset, keys, slot assignment and
+  reuse, and the slots' layout.
+- **Pixel comparisons.** The cases are:
   - output that scrolls;
   - a partial-screen scroll;
   - a fractional scroll back through history;
   - a selection change;
   - scales 1.25 and 1.5.
+
+  How each case runs:
+
+  1. The screen before the change is painted through the store.
+  2. The screen after the change is painted through the same store, so
+     rows are reused.
+  3. The document's `destroy_surfaces` is called and a new renderer paints
+     the same screen, every row drawn afresh.
+  4. The two paints are compared.
+
+  The comparison is between paints through the store, not against the
+  screen drawn whole, for two reasons:
+
+  - The offscreen renderer anti-aliases with `Area` and the rows with
+    MSAA 16, so text drawn whole and text from the store differ.
+  - Two renderers can differ by a shade at a few glyph edges: with the
+    glyphs' hinting off the two paints are the same pixels. So a pixel may
+    differ by up to 32 in a channel, and fewer than 50 may differ at all.
+    A row in the wrong slot differs by a whole row's text.
 
 ## 7. Measuring
 

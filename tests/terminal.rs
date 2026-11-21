@@ -753,7 +753,7 @@ fn block_characters_fill_their_cells_with_no_seam_between_them() {
     opened.wait("the blocks", |text| text.contains("▘▘ ▝▝"));
     let row = opened.row_of("███");
     let (width, height) = (900, 540);
-    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut renderer = anyrender_vello::VelloImageRenderer::new(width, height);
     let mut pixels = Vec::new();
     let document = opened.app.document();
     renderer.render_to_vec(
@@ -820,7 +820,7 @@ fn blocks_have_no_seam_in_a_view_that_is_not_on_whole_pixels() {
     opened.wait("the blocks", |text| text.contains("▘▘ ▝▝"));
     opened.app.resolve();
     let (width, height) = (900, 540);
-    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut renderer = anyrender_vello::VelloImageRenderer::new(width, height);
     let mut pixels = Vec::new();
     let document = opened.app.document();
     renderer.render_to_vec(
@@ -873,7 +873,7 @@ fn painted(opened: &Opened) -> Vec<[u8; 3]> {
     use anyrender::ImageRenderer as _;
 
     let (width, height) = (900, 540);
-    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut renderer = anyrender_vello::VelloImageRenderer::new(width, height);
     let mut pixels = Vec::new();
     let document = opened.app.document();
     renderer.render_to_vec(

@@ -1294,7 +1294,10 @@ fn block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale() {
         opened.app.resolve();
 
         let (width, height) = (1200u32, 800u32);
-        let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+        // Painted on the GPU, as the window paints: each terminal's rows
+        // come from the texture it keeps them in, a strip each, and the
+        // strips meet with nothing between them.
+        let mut renderer = anyrender_vello::VelloImageRenderer::new(width, height);
         let mut pixels = Vec::new();
         let document = opened.app.document();
         renderer.render_to_vec(
