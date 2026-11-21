@@ -654,29 +654,68 @@ fn hold_silently(stream: tokio::net::UnixStream) -> tokio::task::JoinHandle<()> 
     })
 }
 
-/// The terminal runtime's own recovery: a terminald whose hub rejects the
-/// range is drained over the version-stable rtc surface and the respawn is
-/// adopted. Terminald was born at v17, so this one path has always covered
-/// every stale terminald.
+/// The terminal runtime's own recovery, first step: a terminald whose hub
+/// rejects the range is asked, over the version-stable rtc surface, to
+/// hand its terminals to its next image, and the reconnect that reaches
+/// one it can talk to goes on with it -- no drain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted() {
+async fn a_range_rejecting_terminald_is_asked_to_hand_over_and_its_next_image_adopted() {
+    let (socket_path, control_socket) = stub_socket_paths("thov");
+    let listener = bind_stub_listener(&socket_path);
+    let handle = TerminaldHandle::start(&socket_path, &control_socket);
+
+    let rejecting = || FakeBehavior {
+        reject_hello: true,
+        ..FakeBehavior::default()
+    };
+    let (stream, _) = listener.accept().await.unwrap();
+    let (_calls_1, _conn_1, _serve_1) = serve_fake_terminal_hub(stream, rejecting()).await;
+
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut asked, _conn_2, _serve_2) = serve_fake_terminal_hub(stream, rejecting()).await;
+    let hand_over = next_terminal_call(&mut asked).await;
+    std::assert_matches!(hand_over, TerminalCall::HandOver, "got {hand_over:?}");
+
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut calls, _conn_3, _serve_3) =
+        serve_fake_terminal_hub(stream, FakeBehavior::default()).await;
+    expect_terminald_handshake(&mut calls).await;
+
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// The second step: a terminald the runtime still cannot talk to after
+/// asking it to hand over is drained, and the respawn is adopted.
+/// Terminald was born at v17, so these steps have always covered every
+/// stale terminald.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_terminald_still_rejecting_after_the_handover_is_drained_and_the_respawn_adopted() {
     let (socket_path, control_socket) = stub_socket_paths("trej");
     let listener = bind_stub_listener(&socket_path);
     let handle = TerminaldHandle::start(&socket_path, &control_socket);
 
-    let (stream, _) = listener.accept().await.unwrap();
-    let behavior = FakeBehavior {
+    let rejecting = || FakeBehavior {
         reject_hello: true,
         ..FakeBehavior::default()
     };
-    let (_calls_1, _conn_1, _serve_1) = serve_fake_terminal_hub(stream, behavior).await;
+    let (stream, _) = listener.accept().await.unwrap();
+    let (_calls_1, _conn_1, _serve_1) = serve_fake_terminal_hub(stream, rejecting()).await;
 
     let (stream, _) = listener.accept().await.unwrap();
-    let behavior = FakeBehavior {
-        reject_hello: true,
-        ..FakeBehavior::default()
-    };
-    let (mut drain_calls, _conn_2, _serve_2) = serve_fake_terminal_hub(stream, behavior).await;
+    let (mut asked, _conn_2, _serve_2) = serve_fake_terminal_hub(stream, rejecting()).await;
+    let hand_over = next_terminal_call(&mut asked).await;
+    std::assert_matches!(hand_over, TerminalCall::HandOver, "got {hand_over:?}");
+
+    let (stream, _) = listener.accept().await.unwrap();
+    let (_calls_3, _conn_3, _serve_3) = serve_fake_terminal_hub(stream, rejecting()).await;
+
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut drain_calls, _conn_4, _serve_4) = serve_fake_terminal_hub(stream, rejecting()).await;
     let drain = next_terminal_call(&mut drain_calls).await;
     std::assert_matches!(drain, TerminalCall::Drain, "got {drain:?}");
 
@@ -684,7 +723,7 @@ async fn a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted(
     tokio::time::sleep(Duration::from_millis(300)).await;
     let listener = bind_stub_listener(&socket_path);
     let (stream, _) = listener.accept().await.unwrap();
-    let (mut calls, _conn_3, _serve_3) =
+    let (mut calls, _conn_5, _serve_5) =
         serve_fake_terminal_hub(stream, FakeBehavior::default()).await;
     expect_terminald_handshake(&mut calls).await;
 

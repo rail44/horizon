@@ -42,7 +42,8 @@ fn stub_recovery_never_launches_inherited_daemon_binaries() {
     for case in [
         "agent::a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping",
         "agent::a_version_mismatched_daemon_is_drained_on_the_same_connection_and_the_respawn_adopted",
-        "a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted",
+        "a_range_rejecting_terminald_is_asked_to_hand_over_and_its_next_image_adopted",
+        "a_terminald_still_rejecting_after_the_handover_is_drained_and_the_respawn_adopted",
     ] {
         let output_path = scratch.0.join("test-output.txt");
         let output = fs::File::create(&output_path).unwrap();
