@@ -38,7 +38,7 @@ use horizon_theme_css::TerminalLook;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Component, El, copy, each_layout, el, prevent_default};
+use horizon_ui::{Component, El, InputPurpose, copy, each_layout, el, prevent_default};
 
 pub mod plugin;
 mod session;
@@ -669,7 +669,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             prevent_default();
         })
         // The input method's candidates go by the cursor's cell.
-        .takes_text(move || {
+        .takes_text(InputPurpose::Terminal, move || {
             let (width, ..) = area.cells.get();
             let frame = area.frame.borrow();
             let cursor = frame.as_ref()?.cursor?;

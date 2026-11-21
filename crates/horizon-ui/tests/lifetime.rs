@@ -33,7 +33,7 @@ fn a_dropped_rows_handlers_and_layout_work_go_with_it() {
                     .on("click", |_| {})
                     .on_capture("keydown", |_| {})
                     .on_paste(|_| {})
-                    .takes_text(|| None)
+                    .takes_text(horizon_ui::InputPurpose::Normal, || None)
             },
         )
     });

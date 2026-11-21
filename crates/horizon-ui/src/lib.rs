@@ -61,6 +61,8 @@ pub use guest::{
     Bounds, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
 #[cfg(not(target_family = "wasm"))]
+pub use input_method::{InputPurpose, input_purpose};
+#[cfg(not(target_family = "wasm"))]
 pub use page::{Bounds, Page, dispatched, each_layout};
 
 pub use class::{Class, Classes, Sheet};
