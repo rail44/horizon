@@ -16,7 +16,7 @@ use crate::el::{El, el};
 use crate::files::Files;
 use crate::frame::{frame_of, run_effects};
 use crate::input_method::ime_cursor_area;
-use crate::shared::{Shared, enter, with_document};
+use crate::shared::{Shared, enter, leave, with_document};
 
 /// A document, the view built into it, and the signals' effects.
 pub struct App {
@@ -32,6 +32,7 @@ impl Drop for App {
     fn drop(&mut self) {
         self.owner.cleanup();
         self.owner.clone().unset();
+        leave(&self.shared);
     }
 }
 

@@ -473,6 +473,8 @@ fn the_screen_is_painted_and_not_only_held() {
         },
         &mut pixels,
     );
+    // A renderer with no GPU device keeps no rows: the screen is drawn whole.
+    assert!(!opened.terminal.painted_from_kept_rows());
     // The screen's own background fills the page, and the text on it is
     // pixels of its foreground.
     let look = Theme::built_in().terminal();
@@ -1182,4 +1184,187 @@ fn an_update_held_and_never_let_go_is_shown_when_the_daemon_lets_it_go() {
     opened.wait("the held text", |text| text.contains("held-text"));
     // Long before `sleep` ends and the prompt comes.
     assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// The page painted on the GPU with Vello, the way the window paints it:
+/// a terminal keeps its rows as pixels on that renderer's device.
+fn paint_on_gpu(
+    opened: &Opened,
+    renderer: &mut anyrender_vello::VelloImageRenderer,
+    scale: f32,
+    (width, height): (u32, u32),
+) -> Vec<u8> {
+    use anyrender::ImageRenderer as _;
+    opened.app.resolve();
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            let mut document = document.borrow_mut();
+            blitz_paint::paint_scene(scene, &mut document, scale as f64, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    pixels
+}
+
+/// The screen after `change`, painted from the rows a renderer kept of it
+/// before (`setup`'s screen painted first), and painted anew on another
+/// renderer, at `scale`: the two must be the same pixels.
+fn kept_rows_paint_what_painting_anew_paints(
+    what: &str,
+    scale: f32,
+    setup: impl Fn(&Opened),
+    change: impl Fn(&Opened),
+) {
+    use anyrender::ImageRenderer as _;
+
+    let opened = open();
+    let size = ((900. * scale).round() as u32, (540. * scale).round() as u32);
+    (opened.app.document().borrow_mut()).set_viewport(Viewport::new(
+        size.0,
+        size.1,
+        scale,
+        ColorScheme::Light,
+    ));
+    opened.app.resolve();
+    setup(&opened);
+    let mut kept = anyrender_vello::VelloImageRenderer::new(size.0, size.1);
+    paint_on_gpu(&opened, &mut kept, scale, size);
+    change(&opened);
+    let from_kept = paint_on_gpu(&opened, &mut kept, scale, size);
+    // The window lets go of its renderer this way before it takes another
+    // (`blitz-shell`'s suspend): what was kept on the one before is gone.
+    assert!(
+        opened.terminal.painted_from_kept_rows(),
+        "{what} at {scale}"
+    );
+    opened.app.document().borrow_mut().destroy_surfaces();
+    let mut another = anyrender_vello::VelloImageRenderer::new(size.0, size.1);
+    let anew = paint_on_gpu(&opened, &mut another, scale, size);
+    assert!(
+        opened.terminal.painted_from_kept_rows(),
+        "{what} at {scale}"
+    );
+    let (kept, anew) = (from_kept.as_chunks::<4>().0, anew.as_chunks::<4>().0);
+    let differing: Vec<usize> = (0..kept.len())
+        .filter(|at| kept[*at] != anew[*at])
+        .collect();
+    let first = (differing.first()).map(|at| {
+        let place = (at % size.0 as usize, at / size.0 as usize);
+        (place, kept[*at], anew[*at])
+    });
+    // The two renderers may differ by a little at a few edges of glyphs:
+    // with the glyphs' hinting off they are the same pixels, so what is
+    // left is Vello's hinted glyphs, which a renderer that drew other text
+    // before draws a shade apart. A row in the wrong slot, or a slot not
+    // drawn, is a whole row's text apart.
+    let far = (differing.iter()).find(|at| {
+        let (kept, anew) = (kept[**at], anew[**at]);
+        (0..3).any(|channel| kept[channel].abs_diff(anew[channel]) > 32)
+    });
+    assert!(
+        far.is_none() && differing.len() < 50,
+        "{what} at {scale}: {} pixels differ, the first (place, kept, anew) {first:?}",
+        differing.len()
+    );
+    // Something was painted: the screen's text.
+    let look = Theme::built_in().terminal();
+    let lit = (anew.iter())
+        .filter(|pixel| [pixel[0], pixel[1], pixel[2]] == look.foreground)
+        .count();
+    assert!(lit > 20, "{what} at {scale}: {lit} pixels of text");
+}
+
+/// Waits for a screen of the numbers 1 to `last`, at the prompt.
+fn numbers(opened: &Opened, last: usize) {
+    opened.run(&format!("seq 1 {last}"));
+    opened.done("the last number", |text| {
+        text.lines().any(|line| line == last.to_string())
+    });
+}
+
+#[test]
+fn rows_kept_after_output_scrolls_paint_the_screen_painted_anew() {
+    for scale in [1.25, 1.5] {
+        kept_rows_paint_what_painting_anew_paints(
+            "output that scrolls",
+            scale,
+            |opened| numbers(opened, 30),
+            |opened| {
+                opened.run("seq 31 33");
+                opened.done("the new numbers", |text| {
+                    text.lines().any(|line| line == "33")
+                });
+            },
+        );
+    }
+}
+
+#[test]
+fn rows_kept_after_part_of_the_screen_scrolls_paint_the_screen_painted_anew() {
+    for scale in [1.25, 1.5] {
+        kept_rows_paint_what_painting_anew_paints(
+            "a scroll of part of the screen",
+            scale,
+            |opened| numbers(opened, 30),
+            |opened| {
+                // Rows 3 to 12 scroll up by three, the rest stay.
+                opened.run(
+                    r"printf '\033[3;12r\033[12;1H\n\n\n\033[r\033[99;1H'; echo scrolled-part",
+                );
+                opened.done("the scroll", |text| {
+                    text.lines().any(|line| line == "scrolled-part")
+                });
+            },
+        );
+    }
+}
+
+#[test]
+fn rows_kept_while_scrolled_back_into_a_row_paint_the_history_painted_anew() {
+    for scale in [1.25, 1.5] {
+        kept_rows_paint_what_painting_anew_paints(
+            "history scrolled back",
+            scale,
+            |opened| numbers(opened, 100),
+            |opened| {
+                opened.wheel(40. * 18. + 9.);
+                opened.until("the history", || {
+                    opened
+                        .terminal
+                        .scrolled_into()
+                        .is_some_and(|into| into > 0.)
+                });
+            },
+        );
+    }
+}
+
+#[test]
+fn rows_kept_after_a_selection_paint_the_screen_painted_anew() {
+    for scale in [1.25, 1.5] {
+        kept_rows_paint_what_painting_anew_paints(
+            "a selection",
+            scale,
+            |opened| {
+                opened.run("echo select-me-please");
+                opened.done("the line", |text| {
+                    text.lines().any(|line| line == "select-me-please")
+                });
+            },
+            |opened| {
+                let row = opened.row_of("select-me-please");
+                let (x, y) = opened.cell(row, 0);
+                pointer(&opened.app, x, y, Pointer::Move);
+                pointer(&opened.app, x, y, Pointer::Down);
+                let (x, y) = opened.cell(row, 5);
+                pointer(&opened.app, x, y, Pointer::Drag);
+                pointer(&opened.app, x, y, Pointer::Up);
+                opened.until("the selection", || {
+                    (opened.terminal.frame()).is_some_and(|frame| frame.selection.is_some())
+                });
+            },
+        );
+    }
 }
