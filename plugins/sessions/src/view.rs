@@ -60,8 +60,8 @@ mod styles {
         .row:hover { background: var(--band); }
         .actions { flex: none; margin-left: var(--u8); opacity: 0; }
         .row:hover .actions, .row.selected .actions { opacity: 1; }
-        /* The cursor: a line, in the accent while the list has the keys. */
-        .row.selected { border-color: var(--border); }
+        /* The cursor: a line, in the accent. */
+        .row.selected { border-color: var(--accent); }
         .state { flex: none; font-size: var(--micro-size); line-height: var(--micro-line); }
         .state.warning { color: var(--chip-warning-text); }
         .state.accent { color: var(--chip-accent-text); }
@@ -96,7 +96,6 @@ mod styles {
         .hint:hover { background: var(--hover); }
         .key { font-weight: 600; color: var(--text); }
     }
-    .sessions:focus .row.selected { border-color: var(--accent); }
     .over { width: 720px; height: 480px; display: flex; }
     .over > .sessions { flex: 1; }
     "}

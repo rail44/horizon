@@ -250,8 +250,7 @@ session as it did; the view's pane, put back in the boxes made again for
 a tab shown, is given the keys again. An extension hears of no focus
 going and coming, so the shell looks where the focus is after each
 layout; the mode itself, entered, takes the place of it. The list of
-sessions marks its own cursor, the chosen row, by a line: in the accent
-while it has the keys.
+sessions marks its own cursor, the chosen row, by a line in the accent.
 
 ## What an empty workspace shows (2026-11-20)
 
