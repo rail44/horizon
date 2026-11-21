@@ -41,9 +41,11 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Component, El, InputPurpose, copy, each_layout, el, prevent_default};
 
 pub mod plugin;
+mod rows;
 mod session;
 mod shaping;
 
+use rows::{row_height, row_px};
 pub use session::{Input, Session};
 use shaping::{Ink, Row, Shaper};
 
@@ -137,6 +139,10 @@ struct State {
     seen: Cell<u64>,
     /// A cell's width in CSS pixels, and how many columns and rows fit.
     cells: Cell<(f64, usize, usize)>,
+    /// A row's height in CSS pixels as the rows are laid out and drawn
+    /// ([`row_height`]): the look's line height made a whole number of
+    /// device pixels at the display's scale.
+    row: Cell<f64>,
     /// Where the box is on the page, in CSS pixels: on a display that is
     /// not at one device pixel to the CSS pixel, the box may start part of
     /// a device pixel in, which what is drawn to whole device pixels
@@ -179,10 +185,12 @@ impl State {
             open_link,
             drags,
         } = given;
+        let look = look.get_untracked();
         Self {
             session,
             off_the_page: Cell::new(false),
-            look: RefCell::new(look.get_untracked()),
+            row: Cell::new(row_height(look.line_height, 1.)),
+            look: RefCell::new(look),
             restyled: Cell::new(0),
             frame: RefCell::new(None),
             seen: Cell::new(0),
@@ -466,8 +474,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
         move |x: f32, y: f32| {
             let (width, columns, rows) = state.cells.get();
             TerminalSelectionPoint {
-                row: ((y as f64 / state.look.borrow().line_height).max(0.) as usize)
-                    .min(rows.saturating_sub(1)),
+                row: ((y as f64 / state.row.get()).max(0.) as usize).min(rows.saturating_sub(1)),
                 col: ((x as f64 / width).max(0.) as usize).min(columns.saturating_sub(1)),
             }
         }
@@ -616,7 +623,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             let DomEventData::Wheel(wheel) = &event.data else {
                 return;
             };
-            let line_height = wheeled.look.borrow().line_height;
+            let line_height = wheeled.row.get();
             let local =
                 (wheeled.frame.borrow().as_ref()).is_some_and(|frame| frame.scrollback_available);
             if local {
@@ -673,11 +680,12 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             let (width, ..) = area.cells.get();
             let frame = area.frame.borrow();
             let cursor = frame.as_ref()?.cursor?;
+            let row = area.row.get();
             Some((
                 (cursor.col as f64 * width) as f32,
-                (cursor.row as f64 * area.look.borrow().line_height) as f32,
+                (cursor.row as f64 * row) as f32,
                 width as f32,
-                area.look.borrow().line_height as f32,
+                row as f32,
             ))
         })
         .widget({
@@ -732,8 +740,10 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             return;
         };
         let size = kurbo::Size::new(size.0, size.1);
+        let row = row_height(sized.look.borrow().line_height, page.scale());
+        sized.row.set(row);
         let columns = (size.width / cell_width) as usize;
-        let rows = (size.height / sized.look.borrow().line_height) as usize;
+        let rows = (size.height / row) as usize;
         if (columns, rows) != (sized.cells.get().1, sized.cells.get().2) && columns * rows > 0 {
             sized.cells.set((cell_width, columns, rows));
             // A window of history was served for the old size.
@@ -754,7 +764,7 @@ fn cell_on_page(state: &State, x: f32, y: f32) -> TerminalSelectionPoint {
     let (left, top) = state.origin.get();
     let (x, y) = (x as f64 - left, y as f64 - top);
     TerminalSelectionPoint {
-        row: ((y / state.look.borrow().line_height).max(0.) as usize).min(rows.saturating_sub(1)),
+        row: ((y / state.row.get()).max(0.) as usize).min(rows.saturating_sub(1)),
         col: ((x / width).max(0.) as usize).min(columns.saturating_sub(1)),
     }
 }
@@ -811,9 +821,8 @@ pub fn color_scheme(look: &TerminalLook) -> TerminalColorScheme {
 /// live screen's, or the history's while it is scrolled back.
 fn link_at(state: &State, x: f32, y: f32) -> Option<String> {
     let (cell_width, ..) = state.cells.get();
-    let line_height = state.look.borrow().line_height;
     let column = (x as f64 / cell_width).max(0.) as usize;
-    let row = y as f64 / line_height;
+    let row = y as f64 / state.row.get();
     let scrolled = (state.scrollback.borrow()).visible_lines(state.cells.get().2);
     if let Some((window, range, into)) = scrolled {
         let row = (row + into as f64).max(0.) as usize;
@@ -1228,7 +1237,10 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             self.set = frame.palette_overrides.clone();
             self.shaped_at = 0.;
         }
-        let (cell, line) = (self.state.cells.get().0 * scale, look.line_height * scale);
+        let (cell, line) = (
+            self.state.cells.get().0 * scale,
+            row_px(look.line_height, scale),
+        );
         let font_px = look.font_size * scale as f32;
         // How thick a line under or through text is.
         let thick = (font_px as f64 / 14.).round().max(1.);
@@ -1245,7 +1257,8 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             if self.shaped_at != scale {
                 self.shaped_at = scale;
                 self.rows.clear();
-                self.baseline = (self.shaper).baseline(scale as f32, look.line_height);
+                self.baseline =
+                    (self.shaper).baseline(scale as f32, row_height(look.line_height, scale));
             }
             // The rows shaped are this window's, by their place in it.
             let held = std::sync::Arc::as_ptr(&window) as usize;
@@ -1290,7 +1303,8 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         if self.shaped_at != scale {
             self.rows.clear();
             self.shaped_at = scale;
-            self.baseline = (self.shaper).baseline(scale as f32, look.line_height);
+            self.baseline =
+                (self.shaper).baseline(scale as f32, row_height(look.line_height, scale));
         }
         // A row drawn before is not shaped again, at whatever place it is
         // now: output that scrolls moves every row and changes one.
