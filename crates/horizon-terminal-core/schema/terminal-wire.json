@@ -363,6 +363,11 @@
         "binary_id": {
           "type": "string"
         },
+        "hands_over": {
+          "default": false,
+          "description": "The daemon answers [`TerminalHub::hand_over`]. An image without it\ncloses the connection on the call, as it would on a handover, so a\nclient asks only a daemon that says this.",
+          "type": "boolean"
+        },
         "negotiated": {
           "description": "The highest mutually supported version.",
           "format": "uint32",
