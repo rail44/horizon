@@ -1,7 +1,7 @@
 # Terminal Row Textures
 
-Status: designed 2026-11-22; not implemented. The first step is an
-investigation (§6) whose outcome picks one of two test strategies.
+Status: designed 2026-11-22; being implemented on the branch
+`worktree-terminal-row-texture-design`.
 
 The terminal view keeps each row it has drawn as pixels in a texture of its
 own, and a frame that does not change the terminal's contents costs one image
@@ -183,64 +183,51 @@ Ink a glyph draws outside its row is clipped at the row's bounds.
 ## 5. Without a GPU device
 
 `paint()` sees whether `renderer_specific_context()` yields a `DeviceHandle`.
-Without one (the CPU renderer the windowless tests paint with), the terminal
-is drawn without the GPU store. How depends on §6.
+Without one, it draws every row at its place with the one-row function and
+keeps no slots. The CPU renderer the windowless tests paint with is such a
+renderer.
 
-## 6. Tests, and the first step
+## 6. Tests
 
 What the renderers available to a test can do:
 
-- `anyrender_vello_cpu::VelloCpuImageRenderer` (0.18) registers no resources:
-  `Paint::Resource` paints transparent. It does draw `Paint::Image`, with the
-  fill's brush transform (`set_paint_transform`).
-- `anyrender_vello::VelloImageRenderer`, the GPU offscreen renderer, keeps
-  the default `RenderContext`: it lends no device and registers no resources.
-  The resource-resolving form of `VelloScenePainter` has `pub(crate)` fields
-  and is built only by the window renderer.
-- `vello::Renderer::register_texture` returns the texture as an `ImageData`,
-  and `VelloScenePainter::new` is public. So a test-side GPU renderer is
-  possible:
-  1. make a device;
-  2. lend its `DeviceHandle` through `renderer_specific_context`;
-  3. register textures with Vello;
-  4. paint `Paint::Resource(id)` as an image fill of the registered
-     `ImageData`;
-  5. render offscreen and read the pixels back.
+- **`anyrender_vello::VelloImageRenderer`**, the GPU offscreen renderer:
+  - Each `render` builds the resource-resolving `VelloScenePainter` (with its
+    Vello renderer, device handle and texture table) and paints into it.
+  - `blitz_paint::paint_scene` passes the scene it paints into to every
+    custom widget as `render_ctx` (`PaintScene: RenderContext`).
+  - So a widget painted through it receives the `DeviceHandle`, registers
+    textures, and has its `Paint::Resource` fills drawn: the path the window
+    takes.
+- **`anyrender_vello_cpu::VelloCpuImageRenderer`** (0.18): its painter keeps
+  the default `RenderContext`. It lends no device, and `Paint::Resource`
+  paints transparent.
 
-**Step 0: lavapipe.** Find out whether Mesa's software Vulkan driver gives
-the tests a device without a surface:
+`VelloImageRenderer` makes its device through `wgpu_context::WGPUContext`,
+which takes whichever adapter wgpu offers first.
 
-- whether it installs on this machine (today its Vulkan ICDs are radeon and
-  virtio only);
-- whether Vello runs on it at test sizes in an acceptable time;
-- whether it is usable inside a sandboxed agent session. If not, the tests
-  that need it go into the `sandboxed` nextest profile's skip set
-  (`.config/nextest.toml`).
+Measured 2026-11-22 painting a terminal of 60 lines, 900×540:
 
-**If lavapipe is usable:**
+| adapter | renderer made | first frame | later frames |
+| --- | --- | --- | --- |
+| Radeon 890M (radv) | 0.26 s | 0.37 s | 4–12 ms |
+| llvmpipe (lavapipe; `VK_ICD_FILENAMES` naming its ICD alone) | 0.24 s | 2.4 s | 3–4 ms |
 
-- The store has the GPU implementation only.
-- Without a device, `paint()` draws every row at its place with the one-row
-  function, keeping no slots.
-- The test-side GPU renderer joins the test support. Terminal pixel tests
-  move to it, among them
+The two drew the same text pixels. So a machine with either a GPU's Vulkan
+driver or Mesa's lavapipe (`mesa-vulkan-lavapipe` on Void) runs these tests.
+Without any Vulkan device, `WGPUContext` finds no adapter and the renderer
+panics.
+
+The tests that paint a terminal live in binaries that open a real PTY
+(`horizon::terminal`, `horizon::workspace`). These are outside the
+`sandboxed` nextest profile already, so a sandboxed session never needs a
+device for them.
+
+What the tests are:
+
+- **GPU path.** Pixel tests of the terminal paint through
+  `VelloImageRenderer`. Among them is
   `block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale`.
-- The machines that run the gate need lavapipe installed (AGENTS.md's Build
-  setup).
-
-**If it is not:**
-
-- The store gets a second implementation over a CPU pixel buffer: rows drawn
-  with `vello_cpu`, the buffer painted with `Paint::Image`.
-- Each time the buffer changes it is handed over as new image data, since
-  `vello_cpu`'s image cache is keyed by the data's id.
-- Which implementation a frame uses follows §5.
-- Everything except the GPU implementation's own calls (making and
-  registering the texture, `render_to_texture`, the copies) is then tested
-  through `VelloCpuImageRenderer`.
-
-In both cases:
-
 - **Unit tests.** The store's logic has unit tests without any renderer:
   keys, slot assignment and reuse, the row-to-slot mapping, and the
   quantized scroll offset.
