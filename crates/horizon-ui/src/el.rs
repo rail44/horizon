@@ -12,6 +12,7 @@ use reactive_graph::owner::Owner;
 
 use crate::class::Classes;
 use crate::component::Component;
+use crate::input_method::InputPurpose;
 use crate::shared::{drop_node, name, shared, with_document, write};
 
 /// An element being built: a node of the document already.
@@ -213,13 +214,17 @@ impl El {
         write(move |document| drop_node(&shared(), document, self.0));
     }
 
-    /// Has the input method on while this element has the focus, with its
-    /// candidates by `area`: for an element that takes text and is not a
-    /// text field (a terminal). blitz-dom turns the input method on for its
-    /// own text fields only. What is composed arrives as `composition`
-    /// events.
-    pub fn takes_text(self, area: impl Fn() -> Option<(f32, f32, f32, f32)> + 'static) -> Self {
-        (shared().text_targets.borrow_mut()).insert(self.0, Box::new(area));
+    /// Has the input method on while this element has the focus, told that
+    /// the text is of the kind `purpose`, with its candidates by `area`:
+    /// for an element that takes text and is not a text field (a
+    /// terminal). blitz-dom turns the input method on for its own text
+    /// fields only. What is composed arrives as `composition` events.
+    pub fn takes_text(
+        self,
+        purpose: InputPurpose,
+        area: impl Fn() -> Option<(f32, f32, f32, f32)> + 'static,
+    ) -> Self {
+        (shared().text_targets.borrow_mut()).insert(self.0, (purpose, Box::new(area)));
         self
     }
 

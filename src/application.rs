@@ -13,9 +13,9 @@
 //!   just before they paint: the work that follows a layout would come too late, and the
 //!   layout `horizon-ui` rounds to the display's pixels would be rounded
 //!   to whole CSS pixels again.
-//! - The input method is enabled with its cursor area declared as a
-//!   capability ([`InputMethodShell`]), without which winit discards every
-//!   cursor area it is told later.
+//! - The input method is enabled with its cursor area and the kind of text
+//!   declared as capabilities ([`InputMethodShell`]), without which winit
+//!   discards every cursor area it is told later and never tells the kind.
 //! - The window's taking and losing the desktop's focus reaches
 //!   [`crate::window`].
 //! - The primary selection is set and pasted from ([`crate::primary`]).
@@ -39,7 +39,9 @@ use winit::data_transfer::{DataTransferSendBuilder, TypeHint};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial};
-use winit::window::{ImeCapabilities, ImeEnableRequest, ImeRequest, ImeRequestData, WindowId};
+use winit::window::{
+    ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequest, ImeRequestData, WindowId,
+};
 
 type Renderer = VelloWindowRenderer;
 
@@ -339,11 +341,25 @@ fn redraw(view: &mut View<Renderer>) {
 /// with its cursor area declared as a capability, with a first value.
 /// Without the capability winit discards every later cursor area, and the
 /// input method's candidates are placed without regard to the caret.
-/// Upstream's own fix for this is DioxusLabs/blitz#844; once a Blitz with
-/// it is in, blitz-shell's shell can be given as it is.
+/// Upstream's own fix for this is DioxusLabs/blitz#844.
+///
+/// The kind of text ([`horizon_ui::input_purpose`]) is declared and told
+/// the same way, with every cursor area. Over Wayland, winit sends the
+/// compositor a kind only when it is declared; GNOME's input method
+/// otherwise goes on with the kind the last window that sent one gave it,
+/// and a password field's takes its IBus input sources away from the
+/// switcher while this window has the focus.
 struct InputMethodShell {
     window: Arc<dyn winit::window::Window>,
     inner: BlitzShellProvider,
+}
+
+/// The kind of text what has the focus takes, in winit's words.
+fn purpose() -> ImePurpose {
+    match horizon_ui::input_purpose() {
+        horizon_ui::InputPurpose::Normal => ImePurpose::Normal,
+        horizon_ui::InputPurpose::Terminal => ImePurpose::Terminal,
+    }
 }
 
 impl ShellProvider for InputMethodShell {
@@ -351,14 +367,28 @@ impl ShellProvider for InputMethodShell {
         if !is_enabled {
             return self.inner.set_ime_enabled(false);
         }
-        let capabilities = ImeCapabilities::new().with_cursor_area();
-        let data = ImeRequestData::default().with_cursor_area(
-            LogicalPosition::new(0.0, 0.0).into(),
-            LogicalSize::new(1.0, 1.0).into(),
-        );
+        let capabilities = ImeCapabilities::new()
+            .with_cursor_area()
+            .with_hint_and_purpose();
+        let data = ImeRequestData::default()
+            .with_cursor_area(
+                LogicalPosition::new(0.0, 0.0).into(),
+                LogicalSize::new(1.0, 1.0).into(),
+            )
+            .with_hint_and_purpose(ImeHint::NONE, purpose());
         if let Some(request) = ImeEnableRequest::new(capabilities, data) {
             let _ = self.window.request_ime_update(ImeRequest::Enable(request));
         }
+    }
+
+    fn set_ime_cursor_area(&self, x: f32, y: f32, width: f32, height: f32) {
+        let data = ImeRequestData::default()
+            .with_cursor_area(
+                LogicalPosition::new(x, y).into(),
+                LogicalSize::new(width, height).into(),
+            )
+            .with_hint_and_purpose(ImeHint::NONE, purpose());
+        let _ = self.window.request_ime_update(ImeRequest::Update(data));
     }
 
     // The rest is blitz-shell's.
@@ -370,9 +400,6 @@ impl ShellProvider for InputMethodShell {
     }
     fn set_window_title(&self, title: String) {
         self.inner.set_window_title(title);
-    }
-    fn set_ime_cursor_area(&self, x: f32, y: f32, width: f32, height: f32) {
-        self.inner.set_ime_cursor_area(x, y, width, height);
     }
     fn request_clipboard_text(&self) -> Result<(), ClipboardError> {
         self.inner.request_clipboard_text()

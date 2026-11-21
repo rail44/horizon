@@ -113,6 +113,77 @@ impl horizon_ui::blitz_traits::shell::ShellProvider for Areas {
     }
 }
 
+/// A shell that only remembers, of each time it was told to turn the input
+/// method on or where the text is, the kind of text it could read then.
+#[derive(Default)]
+struct Purposes(std::sync::Mutex<Vec<horizon_ui::InputPurpose>>);
+
+impl horizon_ui::blitz_traits::shell::ShellProvider for Purposes {
+    fn set_ime_enabled(&self, is_enabled: bool) {
+        if is_enabled {
+            self.0.lock().unwrap().push(horizon_ui::input_purpose());
+        }
+    }
+    fn set_ime_cursor_area(&self, _: f32, _: f32, _: f32, _: f32) {
+        self.0.lock().unwrap().push(horizon_ui::input_purpose());
+    }
+}
+
+#[test]
+fn the_shell_reads_the_kind_of_text_of_what_has_the_focus() {
+    use horizon_ui::InputPurpose;
+
+    const TAKES_TEXT: &str = "
+        body { margin: 0; font-size: 16px; }
+        .column { display: flex; flex-direction: column; gap: 4px; padding: 8px; }
+        .screen { height: 80px; }
+    ";
+    let screen = std::rc::Rc::new(std::cell::Cell::new(None));
+    let built = screen.clone();
+    let app = App::new(800, 600, "Test", TAKES_TEXT, move || {
+        let element = el("div")
+            .class("screen")
+            .attr("tabindex", "0")
+            .takes_text(InputPurpose::Terminal, || Some((0., 0., 8., 16.)));
+        built.set(Some(element));
+        el("div")
+            .class("column")
+            .child(el("input").attr("type", "text"))
+            .child(element)
+    });
+    let purposes = std::sync::Arc::new(Purposes::default());
+    (app.document().borrow_mut()).set_shell_provider(purposes.clone());
+    app.resolve();
+    let told = |purposes: &Purposes| std::mem::take(&mut *purposes.0.lock().unwrap());
+
+    // The element that takes a terminal's text: the input method is
+    // turned on for it, and told where its text is, as a terminal's.
+    screen.get().expect("the screen").focus();
+    app.resolve();
+    let terminal = told(&purposes);
+    assert!(terminal.len() >= 2, "{terminal:?}");
+    assert!(
+        terminal
+            .iter()
+            .all(|purpose| *purpose == InputPurpose::Terminal),
+        "{terminal:?}"
+    );
+
+    // A text field of the document's own: text to read, from the last
+    // word the shell is told on.
+    click_at(&app, 40., 20.);
+    app.resolve();
+    let field = told(&purposes);
+    assert_eq!(field.last(), Some(&InputPurpose::Normal), "{field:?}");
+    app.resolve();
+    let field = told(&purposes);
+    assert!(!field.is_empty(), "{field:?}");
+    assert!(
+        field.iter().all(|purpose| *purpose == InputPurpose::Normal),
+        "{field:?}"
+    );
+}
+
 #[test]
 fn the_input_methods_area_follows_what_is_typed() {
     use horizon_ui::blitz_traits::events::{BlitzImeEvent, UiEvent};

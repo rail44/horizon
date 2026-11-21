@@ -10,12 +10,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use blitz_dom::{BaseDocument, LocalName, NodeId, QualName, ns};
 use blitz_traits::events::DomEvent;
 
+use crate::input_method::InputPurpose;
+
 pub(crate) type Handler = Rc<dyn Fn(&DomEvent)>;
 pub(crate) type Handlers = RefCell<HashMap<NodeId, Vec<(&'static str, Handler)>>>;
 pub(crate) type Deferred = Box<dyn FnOnce(&mut BaseDocument)>;
 /// Where an element's text is being written: x, y, width and height in
 /// the element's own box, or nowhere to show.
 pub(crate) type TextArea = Box<dyn Fn() -> Option<(f32, f32, f32, f32)>>;
+/// An element that takes text without being a text field: the kind of
+/// text it takes, and where it is being written.
+pub(crate) type TextTarget = (InputPurpose, TextArea);
 pub(crate) type PasteTaker = Rc<dyn Fn(&str)>;
 /// Makes the widget that paints an element.
 pub(crate) type WidgetMaker = Rc<dyn Fn() -> Box<dyn blitz_dom::Widget>>;
@@ -47,9 +52,12 @@ pub(crate) struct Shared {
     /// Whether work done after a layout asked for another.
     pub(crate) relayout: Cell<bool>,
     /// The elements that take text without being text fields.
-    pub(crate) text_targets: RefCell<HashMap<NodeId, TextArea>>,
+    pub(crate) text_targets: RefCell<HashMap<NodeId, TextTarget>>,
     /// The element the input method was last turned on for from here.
     pub(crate) composing_for: Cell<Option<NodeId>>,
+    /// The kind of text what has the focus takes, as last told to the
+    /// shell ([`crate::input_purpose`]).
+    pub(crate) purpose: Cell<InputPurpose>,
     /// What takes a paste when the focus is on an element that is not a
     /// text field.
     pub(crate) pastes: RefCell<HashMap<NodeId, PasteTaker>>,
@@ -97,6 +105,7 @@ impl Shared {
             relayout: Cell::new(false),
             text_targets: RefCell::default(),
             composing_for: Cell::new(None),
+            purpose: Cell::new(InputPurpose::Normal),
             pastes: RefCell::default(),
             widgets: RefCell::default(),
             laid_out: RefCell::default(),

@@ -4,7 +4,25 @@
 
 use blitz_dom::BaseDocument;
 
-use crate::shared::Shared;
+use crate::shared::{Shared, current};
+
+/// The kind of text an element takes, as the input method is told it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputPurpose {
+    /// Text to read: a text field's.
+    #[default]
+    Normal,
+    /// Keys and text for a program in a terminal.
+    Terminal,
+}
+
+/// The kind of text what has the focus takes, as it was when the shell was
+/// last told to turn the input method on or where the text is: what a
+/// shell tells the input method with those, since blitz-dom's shell has no
+/// word for it. [`InputPurpose::Normal`] off the page's thread.
+pub fn input_purpose() -> InputPurpose {
+    current().map_or_else(InputPurpose::default, |shared| shared.purpose.get())
+}
 
 /// [`App::ime_cursor_area`], of a document just laid out.
 pub(crate) fn ime_cursor_area(document: &BaseDocument) -> Option<(f32, f32, f32, f32)> {
@@ -41,19 +59,23 @@ pub(crate) fn ime_cursor_area(document: &BaseDocument) -> Option<(f32, f32, f32,
 /// is.
 pub(crate) fn place_input_method(shared: &Shared, document: &BaseDocument) {
     if let Some((x, y, width, height)) = ime_cursor_area(document) {
+        shared.purpose.set(InputPurpose::Normal);
         (document.shell_provider).set_ime_cursor_area(x, y, width, height);
         shared.composing_for.set(None);
         return;
     }
     // An element that takes text without being a text field.
     let focused = document.get_focussed_node_id();
-    let area = focused.and_then(|id| {
-        let area = shared.text_targets.borrow().get(&id)?();
+    let target = focused.and_then(|id| {
+        let targets = shared.text_targets.borrow();
+        let (purpose, area) = targets.get(&id)?;
         let origin = document.get_node(id)?.absolute_position(0., 0.);
-        Some(area.map(|(x, y, width, height)| (origin.x + x, origin.y + y, width, height)))
+        let area = area().map(|(x, y, width, height)| (origin.x + x, origin.y + y, width, height));
+        Some((*purpose, area))
     });
-    match area {
-        Some(area) => {
+    match target {
+        Some((purpose, area)) => {
+            shared.purpose.set(purpose);
             if shared.composing_for.get() != focused {
                 document.shell_provider.set_ime_enabled(true);
                 shared.composing_for.set(focused);
@@ -63,6 +85,7 @@ pub(crate) fn place_input_method(shared: &Shared, document: &BaseDocument) {
             }
         }
         None if shared.composing_for.take().is_some() => {
+            shared.purpose.set(InputPurpose::Normal);
             document.shell_provider.set_ime_enabled(false);
         }
         None => {}
