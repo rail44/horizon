@@ -44,6 +44,7 @@ pub mod plugin;
 mod rows;
 mod session;
 mod shaping;
+mod slots;
 
 use rows::{row_height, row_px, scroll_shift};
 pub use session::{Input, Session};

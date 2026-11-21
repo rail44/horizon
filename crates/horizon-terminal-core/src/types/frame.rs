@@ -64,7 +64,7 @@ pub struct TerminalScrollWindow {
 /// the runs of one style that tile the row. A blank cell (a space, nothing
 /// written, a control character such as a tab, a hidden character) puts
 /// no character in `text`: its run counts its column.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct TerminalLine {
     /// The row's characters as a font draws them; a character drawn as
     /// shapes (`shapes`) is a space here.
@@ -82,7 +82,7 @@ pub struct TerminalLine {
 
 /// Cells of one style: their bytes in [`TerminalLine::text`] (empty for a
 /// run of blank cells) and their columns.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct TerminalRun {
     pub bytes: std::ops::Range<usize>,
     pub columns: std::ops::Range<usize>,
@@ -90,7 +90,7 @@ pub struct TerminalRun {
 }
 
 /// How a run of cells is drawn.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct TerminalStyle {
     pub fg: TerminalColor,
     pub bg: TerminalColor,
@@ -260,7 +260,7 @@ impl TerminalLine {
 /// The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),
 /// Horizon-owned like every frame type (`TerminalColor`'s doc has the
 /// rationale). Maps 1:1 from the engine's underline styles.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalUnderline {
     #[default]
     None,
