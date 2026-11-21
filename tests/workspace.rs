@@ -2086,3 +2086,96 @@ fn paint_a_view_moving() {
     }
     std::fs::write(out, picture).expect("the picture written");
 }
+
+#[test]
+fn a_focused_panes_line_stays_one_display_pixel_while_the_pointer_is_over_a_pane() {
+    use anyrender::ImageRenderer as _;
+    use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+    use horizon_workspace::commands::CommandId;
+
+    // The pointer over a pane shows its tag. blitz-dom follows the pointer
+    // with a hit test at the end of its resolve, and keeps where it found a
+    // box over others (the focused pane is one) from the layout before it
+    // is rounded to the display's pixels: that focused pane's line was then
+    // painted half a pixel off, blurred across two.
+    let settle = |opened: &Opened| {
+        for _ in 0..3 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    for scale in [1.25f32, 1.5] {
+        let (width, height) = (1200u32, 800u32);
+        let opened = open();
+        (opened.app.document().borrow_mut()).set_viewport(Viewport::new(
+            width,
+            height,
+            scale,
+            ColorScheme::Light,
+        ));
+        opened.app.resolve();
+        opened.shell.execute(CommandId::SplitRight);
+        settle(&opened);
+        let panes = opened.all("pane");
+        let focused = *(panes.iter())
+            .find(|pane| opened.all("focused").contains(pane))
+            .expect("a focused pane");
+        let over = opened.middle(panes[0]);
+        pointer(&opened.app, over.0, over.1, Pointer::Move);
+        settle(&opened);
+
+        let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+        let mut pixels = Vec::new();
+        let document = opened.app.document();
+        renderer.render_to_vec(
+            |scene| {
+                let mut document = document.borrow_mut();
+                blitz_paint::paint_scene(scene, &mut document, scale as f64, width, height, 0, 0)
+            },
+            &mut pixels,
+        );
+        let at = |x: i64, y: i64| {
+            let pixel = (y as usize * width as usize + x as usize) * 4;
+            [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+        };
+        let (x, y, wide, tall) = opened.bounds(focused);
+        let (left, top) = ((x * scale) as i64, (y * scale) as i64);
+        let (right, bottom) = (((x + wide) * scale) as i64, ((y + tall) * scale) as i64);
+        let (along_x, along_y) = (left + (right - left) / 3, top + (bottom - top) / 3);
+        let sides: [(&str, Vec<[u8; 3]>); 4] = [
+            ("top", (top - 4..top + 4).map(|r| at(along_x, r)).collect()),
+            (
+                "bottom",
+                (bottom - 4..bottom + 4).map(|r| at(along_x, r)).collect(),
+            ),
+            (
+                "left",
+                (left - 4..left + 4).map(|c| at(c, along_y)).collect(),
+            ),
+            (
+                "right",
+                (right - 4..right + 4).map(|c| at(c, along_y)).collect(),
+            ),
+        ];
+        let mut lines = Vec::new();
+        for (side, across) in sides {
+            let mut runs: Vec<([u8; 3], usize)> = Vec::new();
+            for pixel in across {
+                match runs.last_mut() {
+                    Some((color, length)) if *color == pixel => *length += 1,
+                    _ => runs.push((pixel, 1)),
+                }
+            }
+            // The ground, the line one display pixel wide, the ground.
+            assert!(
+                runs.len() == 3 && runs[0].0 == runs[2].0 && runs[1].1 == 1,
+                "the {side} side at {scale}: {runs:?}"
+            );
+            lines.push(runs[1].0);
+        }
+        assert!(
+            lines.iter().all(|line| *line == lines[0]),
+            "the sides at {scale}: {lines:?}"
+        );
+    }
+}

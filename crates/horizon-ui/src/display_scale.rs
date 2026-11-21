@@ -70,6 +70,14 @@ pub(crate) fn round_to_device_pixels(document: &mut BaseDocument) {
     }
     let root = taffy_node_id(document.root_element().id);
     taffy::round_layout(&mut DevicePixels { document, scale }, root);
+    // What blitz-dom worked out from the layout it rounded is kept for as
+    // long as its geometry generation lasts: where a box over others (one
+    // with a `z-index`) is, worked out by the hit test that follows the
+    // pointer at the end of its resolve, and painted there. A scroll write
+    // is the one way to start another generation from outside; the scroll
+    // is left as it is.
+    let scroll = document.viewport_scroll();
+    document.set_viewport_scroll(scroll);
 }
 
 /// The document's layout tree as taffy rounds it: the tree blitz-dom lays
