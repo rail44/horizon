@@ -28,7 +28,7 @@ use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use horizon_terminal_core::wire::{
-    TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHub, TerminalHubClient,
+    HandOverRefused, TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHub, TerminalHubClient,
     TerminalHubHello, TerminalHubServerShared,
 };
 use horizon_terminal_core::{ClipboardDestination, TerminalColorScheme, TerminalSize};
@@ -80,6 +80,7 @@ enum TerminalCall {
     },
     ListTerminals,
     Drain,
+    HandOver,
 }
 
 impl std::fmt::Debug for TerminalCall {
@@ -90,6 +91,7 @@ impl std::fmt::Debug for TerminalCall {
             TerminalCall::AttachTerminal { .. } => "AttachTerminal",
             TerminalCall::ListTerminals => "ListTerminals",
             TerminalCall::Drain => "Drain",
+            TerminalCall::HandOver => "HandOver",
         };
         f.write_str(name)
     }
@@ -221,6 +223,13 @@ impl TerminalHub for FakeTerminalHub {
     async fn drain(&self) -> Result<(), HubError> {
         let _ = self.calls.send(TerminalCall::Drain);
         Ok(())
+    }
+
+    async fn hand_over(&self) -> Result<HandOverRefused, HubError> {
+        let _ = self.calls.send(TerminalCall::HandOver);
+        Ok(HandOverRefused {
+            reason: "a fake hub has no next image".into(),
+        })
     }
 }
 

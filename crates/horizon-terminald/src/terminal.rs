@@ -1,22 +1,25 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalProgramStatus,
-    TerminalSpawnSpec, TerminalSummary, TerminalUpdate, core_channels, run_terminal_core,
+    CoreSenders, HandedCore, StreamCommand, TerminalCommand, TerminalCoreOptions,
+    TerminalProgramStatus, TerminalSize, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    core_channels, run_handed_terminal_core, run_terminal_core,
 };
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
-use crate::pty::{self, Program, Pty};
+use crate::handover::{Handed, Taken};
+use crate::pty::{self, Program, Pty, PtyReader, ReadStop, Reading};
 
 /// How long [`TerminalHost::create`] waits for a PTY spawn before reporting
 /// an error instead of blocking forever -- see that method's doc comment.
@@ -28,6 +31,10 @@ const TERMINAL_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// writes nothing is never sampled.
 const CWD_SETTLE: Duration = Duration::from_millis(200);
 
+/// How long [`TerminalHost::hand_over`] waits for one session's core to
+/// answer, and for its writer to write what the core left it.
+const HAND_OVER_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone)]
 pub(crate) struct TerminalHost {
     sessions: Arc<Mutex<HashMap<Uuid, HostedTerminal>>>,
@@ -37,6 +44,9 @@ pub(crate) struct TerminalHost {
     /// bridge dies. A client that attaches asks for the terminal's state
     /// itself (`TerminalCommand::WantState`).
     subscribers: Arc<Mutex<HashMap<Uuid, Subscriber>>>,
+    /// Set while the sessions are given to the next image: a session whose
+    /// loop ends then has not exited, and is not torn down.
+    handing_over: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -53,6 +63,18 @@ struct HostedTerminal {
     /// the change filter for [`TerminalHost::publish_program_status`] and
     /// what a newly installed subscriber is sent with the cwd.
     program_status: Option<TerminalProgramStatus>,
+    /// What the session gives the next image; none for a test's session.
+    handing: Option<Handing>,
+}
+
+/// What [`TerminalHost::hand_over`] needs of a session.
+#[derive(Clone)]
+struct Handing {
+    pty: Arc<Pty>,
+    stop_reading: Arc<ReadStop>,
+    hand_over_tx: Sender<Sender<HandedCore>>,
+    /// Told once the writer has written everything the core gave it.
+    written: Receiver<()>,
 }
 
 /// What ends a session's program: a hang-up, as a terminal that closes
@@ -90,6 +112,7 @@ impl TerminalHost {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             subscribers: Arc::new(Mutex::new(HashMap::new())),
+            handing_over: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -205,6 +228,82 @@ impl TerminalHost {
             .map(|session| session.command_tx.clone());
         if let Some(sender) = sender {
             let _ = sender.send(command);
+        }
+    }
+
+    /// Gives every session to the daemon's next image
+    /// (`docs/terminald-handover-design.md`): each core is asked for its
+    /// terminal, then its reader stopped, so the core takes in all the
+    /// reader read; the writer writes what the core left it. The sessions
+    /// are no longer served here: the caller starts the next image with
+    /// them, or takes them back ([`Self::take`]).
+    pub(crate) fn hand_over(&self) -> Vec<Handed> {
+        self.handing_over.store(true, Ordering::SeqCst);
+        let sessions: Vec<(Uuid, HostedTerminal)> = self.sessions.lock().unwrap().drain().collect();
+        self.subscribers.lock().unwrap().clear();
+        let mut asked = Vec::new();
+        for (session_id, session) in sessions {
+            let (Some(handing), Some(pid)) = (session.handing.clone(), session.pid) else {
+                continue;
+            };
+            handing.pty.mark_handed_over();
+            let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+            if handing.hand_over_tx.send(reply_tx).is_err() {
+                // Its loop has ended: the program is gone.
+                continue;
+            }
+            handing.stop_reading.stop();
+            asked.push((session_id, session, handing, pid, reply_rx));
+        }
+        let mut handed = Vec::new();
+        for (session_id, session, handing, pid, reply_rx) in asked {
+            let Ok(core) = reply_rx.recv_timeout(HAND_OVER_TIMEOUT) else {
+                eprintln!("horizon-terminald: terminal {session_id} did not hand its state over");
+                continue;
+            };
+            if handing.written.recv_timeout(HAND_OVER_TIMEOUT).is_err() {
+                eprintln!(
+                    "horizon-terminald: terminal {session_id}'s writer did not finish; \
+                     what it had left is not written"
+                );
+            }
+            handed.push(Handed {
+                session_id,
+                pty: handing.pty,
+                pid,
+                cwd: session.cwd,
+                program_status: session.program_status,
+                core,
+            });
+        }
+        handed
+    }
+
+    /// Serves sessions handed over: from the previous image, or back from
+    /// a [`Self::hand_over`] whose next image did not start.
+    pub(crate) fn take(&self, taken: Vec<Taken>) {
+        self.handing_over.store(false, Ordering::SeqCst);
+        for taken in taken {
+            let session_id = taken.session_id;
+            let pty = match Pty::adopt(taken.master) {
+                Ok(pty) => pty,
+                Err(error) => {
+                    eprintln!("horizon-terminald: terminal {session_id} not taken: {error}");
+                    continue;
+                }
+            };
+            match start_session(pty, taken.pid, Start::Handed(taken.core)) {
+                Ok((mut session, activity_rx, update_rx)) => {
+                    session.cwd = taken.cwd;
+                    session.program_status = taken.program_status;
+                    if self.install_if_vacant(session_id, session) {
+                        self.forward_updates(session_id, activity_rx, update_rx);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("horizon-terminald: terminal {session_id} not taken: {error}");
+                }
+            }
         }
     }
 
@@ -472,6 +571,10 @@ impl TerminalHost {
                     },
                     recv(update_rx) -> update => {
                         let Ok(update) = update else {
+                            // Given to the next image: not an exit.
+                            if host.handing_over.load(Ordering::SeqCst) {
+                                return;
+                            }
                             // `update_rx` closed with no `Exited` — every
                             // `update_tx` is gone (the reader thread dropped
                             // its clone, the core thread dropped its own).
@@ -532,11 +635,35 @@ fn spawn_terminal(
         env,
         cwd,
     };
-    let (master, pid) = Pty::spawn(size, program)?;
-    let killer: Arc<dyn HangUp> = Arc::new(Process(pid));
+    let (pty, pid) = Pty::spawn(size, program)?;
+    let options = TerminalCoreOptions {
+        scrollback_lines: spec.scrollback_lines,
+        color_scheme: spec.color_scheme,
+    };
+    start_session(pty, pid, Start::New { size, options })
+}
 
-    let mut reader = master.reader()?;
-    let mut writer = master.writer()?;
+/// How a session's core starts.
+enum Start {
+    New {
+        size: TerminalSize,
+        options: TerminalCoreOptions,
+    },
+    /// From a terminal the previous image handed over.
+    Handed(HandedCore),
+}
+
+/// The threads a session runs on around its PTY: the reader, the core
+/// loop, the writer.
+fn start_session(
+    pty: Pty,
+    pid: u32,
+    start: Start,
+) -> anyhow::Result<(HostedTerminal, Receiver<()>, Receiver<TerminalUpdate>)> {
+    let pty = Arc::new(pty);
+    let killer: Arc<dyn HangUp> = Arc::new(Process(pid));
+    let (mut reader, stop_reading) = pty.reader()?;
+    let mut writer = pty.writer()?;
 
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
     // That the PTY wrote: at most one waits, the rest are the same news.
@@ -544,27 +671,40 @@ fn spawn_terminal(
     let (update_tx, update_rx) = crossbeam_channel::unbounded();
     let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
     let (senders, receivers) = core_channels();
+    let hand_over_tx = senders.hand_over_tx.clone();
+    let (written_tx, written) = crossbeam_channel::bounded(1);
 
     // What the loop writes to the PTY: its answers, and a client's bytes.
-    let (written_tx, written_rx) = crossbeam_channel::unbounded();
+    let (to_pty_tx, to_pty_rx) = crossbeam_channel::unbounded();
     let read_update_tx = update_tx.clone();
     thread::spawn(move || read_pty(&mut reader, pty_tx, activity_tx, read_update_tx));
-    let options = TerminalCoreOptions {
-        scrollback_lines: spec.scrollback_lines,
-        color_scheme: spec.color_scheme,
-    };
-    thread::spawn(move || {
-        run_terminal_core(size, options, pty_rx, receivers, written_tx, update_tx);
+    let core_pty = pty.clone();
+    thread::spawn(move || match start {
+        Start::New { size, options } => {
+            run_terminal_core(size, options, pty_rx, receivers, to_pty_tx, update_tx);
+        }
+        Start::Handed(handed) => {
+            // A state this build cannot read leaves an empty screen: the
+            // program in front is asked to draw itself again.
+            let came_across = move |read: bool| {
+                if !read {
+                    core_pty.ask_to_redraw();
+                }
+            };
+            run_handed_terminal_core(handed, came_across, pty_rx, receivers, to_pty_tx, update_tx);
+        }
     });
     let writer_killer = killer.clone();
+    let writer_pty = pty.clone();
     thread::spawn(move || {
         run_writer(
-            master,
+            writer_pty,
             &mut writer,
             writer_killer,
             command_rx,
-            written_rx,
+            to_pty_rx,
             senders,
+            written_tx,
         );
     });
 
@@ -575,6 +715,12 @@ fn spawn_terminal(
             killer,
             cwd: None,
             program_status: None,
+            handing: Some(Handing {
+                pty,
+                stop_reading: Arc::new(stop_reading),
+                hand_over_tx,
+                written,
+            }),
         },
         activity_rx,
         update_rx,
@@ -597,20 +743,33 @@ fn spawn_terminal(
 /// [`TerminalHost::forward_updates`] mirrors the same teardown on its
 /// channel-close arm, so even a missed `Exited` still reaps the session
 /// and subscriber — hence both fixes.
+/// What [`read_pty`] reads: a PTY, or a test's bytes.
+trait Source {
+    fn next(&mut self, buf: &mut [u8]) -> io::Result<Reading>;
+}
+
+impl Source for PtyReader {
+    fn next(&mut self, buf: &mut [u8]) -> io::Result<Reading> {
+        self.read(buf)
+    }
+}
+
 fn read_pty(
-    reader: &mut dyn Read,
+    reader: &mut impl Source,
     pty_tx: Sender<Vec<u8>>,
     activity_tx: Sender<()>,
     update_tx: Sender<TerminalUpdate>,
 ) {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => {
+        match reader.next(&mut buffer) {
+            Ok(Reading::End) => {
                 let _ = update_tx.send(TerminalUpdate::Exited);
                 return;
             }
-            Ok(read) => {
+            // Handed to the next image: the session goes on there.
+            Ok(Reading::Stopped) => return,
+            Ok(Reading::Bytes(read)) => {
                 if pty_tx.send(buffer[..read].to_vec()).is_err() {
                     // The core loop (which owns `pty_rx`) is gone — the
                     // session is tearing down. Emit `Exited` like the EOF
@@ -632,18 +791,20 @@ fn read_pty(
 }
 
 fn run_writer(
-    master: Pty,
+    master: Arc<Pty>,
     writer: &mut dyn Write,
     killer: Arc<dyn HangUp>,
     command_rx: Receiver<TerminalCommand>,
     written: Receiver<Vec<u8>>,
     senders: CoreSenders,
+    all_written: Sender<()>,
 ) {
     let CoreSenders {
         resize_tx,
         input_tx,
         color_scheme_tx,
         stream_tx,
+        hand_over_tx: _,
     } = senders;
     let mut last_size = None;
     // (Once the loop is gone, nothing more is written; a command is still
@@ -656,7 +817,11 @@ fn run_writer(
                     let _ = writer.write_all(&bytes);
                     let _ = writer.flush();
                 }
-                Err(_) => written = crossbeam_channel::never(),
+                Err(_) => {
+                    // The loop has ended, and all it gave is written.
+                    let _ = all_written.try_send(());
+                    written = crossbeam_channel::never();
+                }
             },
             recv(command_rx) -> command => {
                 let Ok(command) = command else {
@@ -751,6 +916,7 @@ mod tests {
             killer: Arc::new(killer),
             cwd: None,
             program_status: None,
+            handing: None,
         };
         (session, command_rx, killed)
     }
@@ -924,7 +1090,17 @@ mod tests {
 
         // One buffered byte makes the first `read` return `Ok(1)` (not the
         // `Ok(0)` EOF arm), so the send-failure path is the one exercised.
-        let mut reader = std::io::Cursor::new(vec![b'x'; 1]);
+        struct Bytes(std::io::Cursor<Vec<u8>>);
+        impl Source for Bytes {
+            fn next(&mut self, buf: &mut [u8]) -> io::Result<Reading> {
+                use std::io::Read;
+                Ok(match self.0.read(buf)? {
+                    0 => Reading::End,
+                    read => Reading::Bytes(read),
+                })
+            }
+        }
+        let mut reader = Bytes(std::io::Cursor::new(vec![b'x'; 1]));
         let (activity_tx, _activity_rx) = crossbeam_channel::bounded(1);
         read_pty(&mut reader, pty_tx, activity_tx, update_tx);
 

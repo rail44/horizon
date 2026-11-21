@@ -16,8 +16,11 @@ horizon-terminal-core = { path = "../horizon-terminal-core" }
 # `horizon-agent` -- which is why no agent crate is named here (see this
 # crate's `main` module doc's dependency-graph note).
 horizon-wire = { path = "../horizon-wire" }
+base64 = "0.23"
 libc = "0.2"
 remoc = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
 uuid = { version = "1.18", features = ["v4"] }

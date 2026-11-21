@@ -182,6 +182,21 @@ pub trait TerminalHub {
     /// typically errors because the process is gone before a reply can
     /// travel.
     async fn drain(&self) -> Result<(), HubError>;
+
+    /// Gives every terminal to the daemon's next build: the daemon
+    /// executes its executable again, keeping its PTYs, the programs in
+    /// them and its listening socket, and hands each terminal's state to
+    /// the new image (`docs/terminald-handover-design.md`). Like
+    /// [`drain`](Self::drain) it is answered whatever version the client
+    /// negotiated. Done, it is never answered: the connection closes with
+    /// the old image. A reply means the terminals go on in this daemon.
+    async fn hand_over(&self) -> Result<HandOverRefused, HubError>;
+}
+
+/// Why [`TerminalHub::hand_over`] left the terminals where they were.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HandOverRefused {
+    pub reason: String,
 }
 
 #[cfg(test)]
@@ -305,7 +320,7 @@ mod tests {
         assert_eq!(
             variants,
             "unknown variant `__bogus`, expected one of `Hello`, `ListTerminals`, \
-             `CreateTerminal`, `AttachTerminal`, `Drain` at line 1 column 10",
+             `CreateTerminal`, `AttachTerminal`, `Drain`, `HandOver` at line 1 column 10",
         );
 
         // Each method's arguments, by name and in order, after the reply
@@ -318,5 +333,6 @@ mod tests {
         );
         assert_eq!(fields_of("AttachTerminal"), ["__reply_tx", "session_id"]);
         assert_eq!(fields_of("Drain"), ["__reply_tx"]);
+        assert_eq!(fields_of("HandOver"), ["__reply_tx"]);
     }
 }

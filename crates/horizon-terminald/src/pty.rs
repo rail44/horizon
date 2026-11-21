@@ -11,6 +11,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use horizon_terminal_core::TerminalSize;
 
@@ -29,6 +31,9 @@ pub(crate) struct Program<'a> {
 /// The master side of a PTY.
 pub(crate) struct Pty {
     master: OwnedFd,
+    /// Set once the PTY is given to the daemon's next image: its writers
+    /// then end without an end-of-file.
+    handed_over: Arc<AtomicBool>,
 }
 
 impl Pty {
@@ -58,7 +63,7 @@ impl Pty {
             command.pre_exec(move || prepare_child(highest));
         }
         let child = command.spawn()?;
-        Ok((Self { master }, child.id()))
+        Ok((Self::around(master), child.id()))
     }
 
     /// Tells the PTY, and through it the program, its new size.
@@ -73,15 +78,64 @@ impl Pty {
         Ok(())
     }
 
-    /// What the program writes to the PTY.
-    pub(crate) fn reader(&self) -> io::Result<PtyReader> {
-        Ok(PtyReader(File::from(self.master.try_clone()?)))
+    fn around(master: OwnedFd) -> Self {
+        Self {
+            master,
+            handed_over: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// A PTY whose master side another daemon handed over.
+    pub(crate) fn adopt(master: OwnedFd) -> io::Result<Self> {
+        close_on_exec(master.as_raw_fd())?;
+        Ok(Self::around(master))
+    }
+
+    /// Another descriptor for the master side, for a PTY taken back after
+    /// a handover that did not happen.
+    pub(crate) fn master(&self) -> io::Result<OwnedFd> {
+        self.master.try_clone()
+    }
+
+    /// The PTY is given to the next image: its writers end quietly.
+    pub(crate) fn mark_handed_over(&self) {
+        self.handed_over.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn master_fd(&self) -> RawFd {
+        self.master.as_raw_fd()
+    }
+
+    /// Sends `SIGWINCH` to the PTY's foreground process group, which has a
+    /// full-screen program draw itself again; setting the same size again
+    /// would not, since the kernel signals only a change.
+    pub(crate) fn ask_to_redraw(&self) {
+        // SAFETY: `tcgetpgrp` and `kill` take no pointers.
+        unsafe {
+            let group = libc::tcgetpgrp(self.master.as_raw_fd());
+            if group > 0 {
+                libc::kill(-group, libc::SIGWINCH);
+            }
+        }
+    }
+
+    /// What the program writes to the PTY, and what stops the reading.
+    pub(crate) fn reader(&self) -> io::Result<(PtyReader, ReadStop)> {
+        let (wake, stop) = pipe()?;
+        let reader = PtyReader {
+            master: File::from(self.master.try_clone()?),
+            wake,
+        };
+        Ok((reader, ReadStop(stop)))
     }
 
     /// What is written to the program. Dropping it ends the program's
     /// input with an end-of-file.
     pub(crate) fn writer(&self) -> io::Result<PtyWriter> {
-        Ok(PtyWriter(File::from(self.master.try_clone()?)))
+        Ok(PtyWriter {
+            master: File::from(self.master.try_clone()?),
+            handed_over: self.handed_over.clone(),
+        })
     }
 }
 
@@ -96,42 +150,106 @@ pub(crate) fn hang_up(pid: u32) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) struct PtyReader(File);
+/// What a read of the PTY came to.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Reading {
+    Bytes(usize),
+    /// The program and all it started are gone.
+    End,
+    /// [`ReadStop::stop`]: nothing more is read here, and what the program
+    /// writes waits in the PTY.
+    Stopped,
+}
 
-impl Read for PtyReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.0.read(buf) {
-            // Linux reads EIO once no process holds the slave side open:
-            // the program and all it started are gone.
-            Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
-            other => other,
+pub(crate) struct PtyReader {
+    master: File,
+    wake: OwnedFd,
+}
+
+impl PtyReader {
+    pub(crate) fn read(&mut self, buf: &mut [u8]) -> io::Result<Reading> {
+        loop {
+            let mut fds = [
+                libc::pollfd {
+                    fd: self.wake.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: self.master.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: `poll` reads and writes the two entries of the array
+            // for the length of the call.
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+            if ready == -1 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            // The stop is looked at first: a program that keeps writing
+            // must not keep the reader from stopping.
+            if fds[0].revents != 0 {
+                return Ok(Reading::Stopped);
+            }
+            return match self.master.read(buf) {
+                Ok(0) => Ok(Reading::End),
+                Ok(read) => Ok(Reading::Bytes(read)),
+                // Linux reads EIO once no process holds the slave side open.
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(Reading::End),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => Err(error),
+            };
         }
     }
 }
 
-pub(crate) struct PtyWriter(File);
+/// Stops a [`PtyReader`] before its next read.
+pub(crate) struct ReadStop(OwnedFd);
+
+impl ReadStop {
+    pub(crate) fn stop(&self) {
+        // SAFETY: `write` reads one byte from the pointer.
+        unsafe {
+            libc::write(self.0.as_raw_fd(), [0u8].as_ptr().cast(), 1);
+        }
+    }
+}
+
+pub(crate) struct PtyWriter {
+    master: File,
+    handed_over: Arc<AtomicBool>,
+}
 
 impl Write for PtyWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.write(buf)
+        self.master.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
+        self.master.flush()
     }
 }
 
 impl Drop for PtyWriter {
     fn drop(&mut self) {
+        // The program goes on with the next image.
+        if self.handed_over.load(Ordering::SeqCst) {
+            return;
+        }
         // SAFETY: an all-zero `termios` is a valid value of the plain C
         // struct, and `tcgetattr` writes one through the pointer.
         let mut termios: libc::termios = unsafe { std::mem::zeroed() };
-        if unsafe { libc::tcgetattr(self.0.as_raw_fd(), &mut termios) } == 0 {
+        if unsafe { libc::tcgetattr(self.master.as_raw_fd(), &mut termios) } == 0 {
             // A canonical-mode reader takes EOF only at the start of a
             // line.
             let eof = termios.c_cc[libc::VEOF];
             if eof != 0 {
-                let _ = self.0.write_all(&[b'\n', eof]);
+                let _ = self.master.write_all(&[b'\n', eof]);
             }
         }
     }
@@ -164,6 +282,30 @@ fn open(size: TerminalSize) -> io::Result<(OwnedFd, OwnedFd)> {
     close_on_exec(master.as_raw_fd())?;
     close_on_exec(slave.as_raw_fd())?;
     Ok((master, slave))
+}
+
+/// A pipe's read and write ends, each closed on `exec`.
+fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut ends = [0; 2];
+    // SAFETY: `pipe` writes two descriptors into the array.
+    if unsafe { libc::pipe(ends.as_mut_ptr()) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: both are open descriptors that nothing else owns.
+    let (read, write) = unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) };
+    close_on_exec(read.as_raw_fd())?;
+    close_on_exec(write.as_raw_fd())?;
+    Ok((read, write))
+}
+
+/// Clears close-on-exec, so `exec` leaves the descriptor open.
+pub(crate) fn keep_across_exec(fd: RawFd) -> io::Result<()> {
+    // SAFETY: `fcntl` with these commands takes no pointers.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn close_on_exec(fd: RawFd) -> io::Result<()> {

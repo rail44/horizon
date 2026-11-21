@@ -3258,12 +3258,15 @@ name = "horizon-terminald"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "crossbeam-channel",
  "horizon-daemon-testkit",
  "horizon-terminal-core",
  "horizon-wire",
  "libc",
  "remoc",
+ "serde",
+ "serde_json",
  "sysinfo",
  "termwiz",
  "tokio",

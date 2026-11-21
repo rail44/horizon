@@ -16,8 +16,10 @@
 //! their break conditions genuinely differ (a latching mpsc send error, a
 //! watch whose send fails only once every receiver is gone).
 
+use std::sync::Arc;
+
 use horizon_terminal_core::wire::{
-    TerminalAttachment, TerminalHub, TerminalHubHello, terminal_version_range,
+    HandOverRefused, TerminalAttachment, TerminalHub, TerminalHubHello, terminal_version_range,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use horizon_wire::{
@@ -28,6 +30,7 @@ use remoc::rch;
 use uuid::Uuid;
 
 use crate::DAEMON_NAME;
+use crate::next_image::{self, NextImage};
 use crate::terminal::{SubscriberChannels, TerminalHost};
 
 pub(crate) struct Hub {
@@ -38,14 +41,20 @@ pub(crate) struct Hub {
     /// (`docs/remoc-adoption-design.md` §3), shared with `horizon-agentd`'s
     /// hub so the invariant has one definition.
     hello: HelloGate,
+    next: Arc<NextImage>,
 }
 
 impl Hub {
-    pub(crate) fn new(terminals: TerminalHost, binary_id: &'static str) -> Self {
+    pub(crate) fn new(
+        terminals: TerminalHost,
+        binary_id: &'static str,
+        next: Arc<NextImage>,
+    ) -> Self {
         Self {
             terminals,
             binary_id,
             hello: HelloGate::new(),
+            next,
         }
     }
 
@@ -170,6 +179,18 @@ impl TerminalHub for Hub {
         eprintln!("horizon-terminald: drained, exiting");
         std::process::exit(0);
     }
+
+    /// Asks no `hello`, as `drain` does: a shell built after a terminal
+    /// wire bump is refused by this image's `hello` and still hands over.
+    async fn hand_over(&self) -> Result<HandOverRefused, HubError> {
+        eprintln!("horizon-terminald: handing the terminals to the next image");
+        let terminals = self.terminals.clone();
+        let next = self.next.clone();
+        let reason = tokio::task::spawn_blocking(move || next_image::hand_over(&terminals, &next))
+            .await
+            .unwrap_or_else(|error| format!("the handover stopped: {error}"));
+        Ok(HandOverRefused { reason })
+    }
 }
 
 #[cfg(test)]
@@ -179,7 +200,12 @@ mod tests {
     use horizon_wire::VersionRange;
 
     fn test_hub() -> Hub {
-        Hub::new(TerminalHost::new(), "test-terminald")
+        let next = Arc::new(NextImage {
+            executable: "/nonexistent/horizon-terminald".into(),
+            socket: "/nonexistent/terminald.sock".into(),
+            listener: -1,
+        });
+        Hub::new(TerminalHost::new(), "test-terminald", next)
     }
 
     /// The hello gate: a method called before `hello` — or after a

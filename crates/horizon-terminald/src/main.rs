@@ -39,10 +39,13 @@
 //! acceptance property is that draining a *real* agentd leaves this
 //! daemon's PTYs alive.)
 
+mod handover;
 mod hub;
+mod next_image;
 mod pty;
 mod terminal;
 
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 
 use horizon_terminal_core::wire::TerminalHubServerShared;
@@ -50,8 +53,9 @@ use horizon_wire::WireCodec;
 use horizon_wire::daemon;
 use horizon_wire::socket::default_terminald_socket_path;
 use hub::Hub;
+use next_image::NextImage;
 use terminal::TerminalHost;
-use tokio::net::UnixStream;
+use tokio::net::{UnixListener, UnixStream};
 
 /// This daemon's name in every log line and diagnostic, including the ones
 /// `horizon-wire`'s shared daemon plumbing emits on its behalf.
@@ -64,12 +68,49 @@ const BINARY_ID: &str = concat!("horizon-terminald/", env!("CARGO_PKG_VERSION"))
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let socket_path = daemon::socket_path_from_args(std::env::args().skip(1))
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let socket_path = daemon::socket_path_from_args(args.iter().cloned())
         .unwrap_or_else(default_terminald_socket_path);
-    eprintln!("horizon-terminald: starting on {}", socket_path.display());
+    // Read before a build can replace the file (`NextImage::executable`).
+    let executable = NextImage::executable_now()?;
+    let handed_listener = descriptor_arg(&args, "--listener");
+    let handover = descriptor_arg(&args, "--adopt");
 
-    let listener = daemon::bind_listener(&socket_path, DAEMON_NAME).await?;
+    let listener = match handed_listener {
+        Some(fd) => {
+            eprintln!(
+                "horizon-terminald: taking over on {}",
+                socket_path.display()
+            );
+            // SAFETY: the previous image kept this descriptor, its
+            // listening socket, open for this one, which takes it once.
+            let listener =
+                std::os::unix::net::UnixListener::from(unsafe { OwnedFd::from_raw_fd(fd) });
+            listener.set_nonblocking(true)?;
+            UnixListener::from_std(listener)?
+        }
+        None => {
+            eprintln!("horizon-terminald: starting on {}", socket_path.display());
+            daemon::bind_listener(&socket_path, DAEMON_NAME).await?
+        }
+    };
     let terminals = TerminalHost::new();
+    if let Some(fd) = handover {
+        // SAFETY: the previous image wrote the handover to this
+        // descriptor and kept it open for this one, which takes it once.
+        match handover::read(unsafe { OwnedFd::from_raw_fd(fd) }) {
+            Ok(taken) => {
+                eprintln!("horizon-terminald: took {} terminals over", taken.len());
+                terminals.take(taken);
+            }
+            Err(error) => eprintln!("horizon-terminald: the handover was not read: {error}"),
+        }
+    }
+    let next = Arc::new(NextImage {
+        executable,
+        socket: socket_path.clone(),
+        listener: listener.as_raw_fd(),
+    });
     // The accept loop is `horizon-wire`'s ("bind, accept, serve, unlink" is
     // the same in both daemons); the SIGTERM hook is not, and this is the
     // destructive half of the terminald split: stopping this process means
@@ -79,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
         listener,
         &socket_path,
         DAEMON_NAME,
-        |stream| handle_connection(stream, terminals.clone()),
+        |stream| handle_connection(stream, terminals.clone(), next.clone()),
         || terminals.shutdown_all(),
     )
     .await
@@ -94,8 +135,12 @@ async fn main() -> anyhow::Result<()> {
 /// or a `Reload Agent Runtime` that happens to reconnect everything, finds
 /// them alive and re-attaches. Only their subscriber bridges to the departed
 /// client are cleared.
-async fn handle_connection(stream: UnixStream, terminals: TerminalHost) -> anyhow::Result<()> {
-    let hub = Hub::new(terminals.clone(), BINARY_ID);
+async fn handle_connection(
+    stream: UnixStream,
+    terminals: TerminalHost,
+    next: Arc<NextImage>,
+) -> anyhow::Result<()> {
+    let hub = Hub::new(terminals.clone(), BINARY_ID, next);
     daemon::serve_connection::<_, TerminalHubServerShared<_, WireCodec>>(
         stream,
         DAEMON_NAME,
@@ -103,4 +148,10 @@ async fn handle_connection(stream: UnixStream, terminals: TerminalHost) -> anyho
         || terminals.clear_subscribers(),
     )
     .await
+}
+
+/// A descriptor number given as `<name> <number>`.
+fn descriptor_arg(args: &[String], name: &str) -> Option<RawFd> {
+    let at = args.iter().position(|arg| arg == name)?;
+    args.get(at + 1)?.parse().ok()
 }

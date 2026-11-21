@@ -25,6 +25,18 @@
       ],
       "type": "string"
     },
+    "HandOverRefused": {
+      "description": "Why [`TerminalHub::hand_over`] left the terminals where they were.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
     "HubError": {
       "description": "The hub's error vocabulary. One enum for every method: domain errors\nand transport errors share it, per remoc's own rtc pattern (the\n`From<rtc::CallError>` impl is what lets a lost connection surface as\nan `Err` from any pending call).",
       "oneOf": [
@@ -756,6 +768,14 @@
     "drain": {
       "reply": {
         "type": "null"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "hand_over": {
+      "reply": {
+        "$ref": "#/$defs/HandOverRefused"
       },
       "request": {
         "type": "null"

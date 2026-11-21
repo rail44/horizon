@@ -41,7 +41,7 @@ use schemars::generate::SchemaSettings;
 use serde_json::{Value, json};
 
 use horizon_terminal_core::wire::{
-    TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHubHello,
+    HandOverRefused, TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHubHello,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use horizon_wire::schema_check::{PROTOCOL_VERSION_KEY, sort_object_keys};
@@ -84,6 +84,10 @@ fn generate_wire_schema() -> Value {
         "drain": {
             "request": unit,
             "reply": unit,
+        },
+        "hand_over": {
+            "request": unit,
+            "reply": generator.subschema_for::<HandOverRefused>().to_value(),
         },
     });
 

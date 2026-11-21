@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -34,17 +34,40 @@ fn spawn(size: TerminalSize, args: &[String], cwd: &Path) -> (Pty, u32) {
     .expect("a program in a PTY")
 }
 
-/// All the PTY reads until the program and what it started are gone.
-fn read_to_end(pty: &Pty) -> String {
-    let mut reader = pty.reader().unwrap();
+/// Reads until `until` says the bytes are enough, or the PTY ends or is
+/// stopped.
+fn read_until(
+    mut reader: PtyReader,
+    until: impl Fn(&[u8]) -> bool + Send + 'static,
+) -> (String, Reading) {
     let (sent, read) = mpsc::channel();
     thread::spawn(move || {
         let mut all = Vec::new();
-        let _ = reader.read_to_end(&mut all);
-        let _ = sent.send(all);
+        let mut buffer = [0u8; 4096];
+        let last = loop {
+            match reader.read(&mut buffer) {
+                Ok(Reading::Bytes(read)) => {
+                    all.extend_from_slice(&buffer[..read]);
+                    if until(&all) {
+                        break Reading::Bytes(all.len());
+                    }
+                }
+                Ok(other) => break other,
+                Err(error) => panic!("{error}"),
+            }
+        };
+        let _ = sent.send((all, last));
     });
-    let all = read.recv_timeout(PATIENCE).expect("the program ends");
-    String::from_utf8_lossy(&all).into_owned()
+    let (all, last) = read.recv_timeout(PATIENCE).expect("the reading ends");
+    (String::from_utf8_lossy(&all).into_owned(), last)
+}
+
+/// All the PTY reads until the program and what it started are gone.
+fn read_to_end(pty: &Pty) -> String {
+    let (reader, _stop) = pty.reader().unwrap();
+    let (said, last) = read_until(reader, |_| false);
+    assert_eq!(last, Reading::End);
+    said
 }
 
 #[test]
@@ -110,10 +133,9 @@ fn a_program_that_cannot_be_started_is_an_error() {
 #[test]
 fn a_hang_up_ends_the_program() {
     let (pty, pid) = spawn(size(24, 80), &sh("echo ready; exec cat"), Path::new("/"));
-    let mut reader = pty.reader().unwrap();
-    let mut ready = [0u8; 64];
-    let read = reader.read(&mut ready).unwrap();
-    assert!(String::from_utf8_lossy(&ready[..read]).contains("ready"));
+    let (reader, _stop) = pty.reader().unwrap();
+    let (said, _) = read_until(reader, |all| String::from_utf8_lossy(all).contains("ready"));
+    assert!(said.contains("ready"));
     hang_up(pid).unwrap();
     read_to_end(&pty);
 }
@@ -147,4 +169,27 @@ fn a_directory_that_is_not_there_is_the_home_directory() {
     let said = read_to_end(&pty);
     let home = std::fs::canonicalize(home).unwrap();
     assert!(said.contains(home.to_str().unwrap()), "{said:?}");
+}
+
+#[test]
+fn a_stopped_reader_leaves_what_comes_after_in_the_pty() {
+    let (pty, _) = spawn(
+        size(24, 80),
+        &sh("echo one; read line; echo two"),
+        Path::new("/"),
+    );
+    let (reader, stop) = pty.reader().unwrap();
+    let (said, _) = read_until(reader, |all| String::from_utf8_lossy(all).contains("one"));
+    assert!(said.contains("one"));
+    // A stop already asked for is seen before the next read.
+    let (reader, stop_second) = pty.reader().unwrap();
+    stop_second.stop();
+    let (_, last) = read_until(reader, |_| false);
+    assert_eq!(last, Reading::Stopped);
+    drop(stop);
+    // The program goes on, and what it writes waits for the next reader.
+    pty.writer().unwrap().write_all(b"go\n").unwrap();
+    thread::sleep(Duration::from_millis(200));
+    let said = read_to_end(&pty);
+    assert!(said.contains("two"), "{said:?}");
 }

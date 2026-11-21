@@ -25,6 +25,10 @@
 //!   provided new enum values and variants are **appended** (declaration
 //!   order is wire-meaningful under index-based codecs like Postbag, the
 //!   remoc target), and a new property is not also newly `required`;
+//! - a new method in a hub's table (a top-level `*_hub` key: §4 rule 2's
+//!   "new method"). The table is sorted, so it cannot show where in the
+//!   rtc trait the method was declared: that it goes on the end, as an
+//!   index-encoded request needs, is the trait's own rule;
 //! - a dropped `required` entry (a field gaining `#[serde(default)]` is a
 //!   pure receive-side loosening);
 //! - annotation-only changes (`description`, `title`, `default`,
@@ -212,6 +216,10 @@ fn diff_object(
             "properties" | "$defs" | "definitions" => {
                 diff_named_map(&child, old_value, new_value, out)
             }
+            // A hub's methods: one may be added, never removed.
+            key if path == "#" && key.ends_with("_hub") => {
+                diff_named_map(&child, old_value, new_value, out)
+            }
             "required" => diff_required(&child, old_value, new_value, out),
             "enum" => diff_appended_values(&child, old_value, new_value, out),
             "anyOf" | "oneOf" => diff_appended_subschemas(&child, old_value, new_value, out),
@@ -347,6 +355,17 @@ mod tests {
             "expected a reshape violation, got additive: {:?}",
             result.additive
         );
+    }
+
+    #[test]
+    fn a_new_hub_method_is_additive_and_a_removed_one_a_reshape() {
+        let old = json!({"terminal_hub": {"drain": {"request": {"type": "null"}}}});
+        let new = json!({"terminal_hub": {
+            "drain": {"request": {"type": "null"}},
+            "hand_over": {"request": {"type": "null"}},
+        }});
+        assert_additive(old.clone(), new.clone());
+        assert_reshape(new, old);
     }
 
     #[test]

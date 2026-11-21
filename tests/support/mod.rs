@@ -94,6 +94,7 @@ fn run_writer(
         input_tx,
         color_scheme_tx,
         stream_tx,
+        hand_over_tx: _,
     } = senders;
     // (Once the loop is gone, nothing more is written; a command is still
     // heard, a shutdown above all.)

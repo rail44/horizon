@@ -117,8 +117,11 @@ are still there for it.
 ## Wire
 
 `hand_over` is appended to `TerminalHub` (append-only, decision 5 of
-`docs/terminald-split-design.md`); `check-wire-schema.sh` decides whether
-the terminal wire version moves with it.
+`docs/terminald-split-design.md`), and the terminal wire version does not
+move: a new method is additive (`docs/remoc-adoption-design.md` §4 rule
+2), which `check-wire-schema.sh` now classifies as such (a top-level
+`*_hub` table is a named map, like `$defs`). An image that does not have
+`hand_over` answers the call with a decode error and keeps its terminals.
 
 `hand_over` is answered whatever version the client negotiated, as `drain`
 is (`an_incompatible_version_range_is_rejected_but_drain_still_works`): a
