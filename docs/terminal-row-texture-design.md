@@ -1,0 +1,284 @@
+# Terminal Row Textures
+
+Status: designed 2026-11-22; not implemented. The first step is an
+investigation (§6) whose outcome picks one of two test strategies.
+
+The terminal view keeps each row it has drawn as pixels in a texture of its
+own, and a frame that does not change the terminal's contents costs one image
+fill per visible row instead of a full repaint of the grid.
+
+## 1. What prompted this
+
+On 2026-11-22 the shell's UI thread used 60–70 % of a core on the owner's
+machine with nothing being typed (debug build, three terminals visible in a
+split, the session list pane beside them). Sampled with gdb:
+
+- `blitz_dom::BaseDocument::is_animating()` returned true on every frame,
+  and of its terms only `has_active_animations` was set. The one CSS
+  animation in the document was the session list's turning icon for a session
+  at work (`plugins/sessions/src/view.rs`, `.turning`). So `redraw` in
+  `src/application.rs` asked for the next frame at every display refresh.
+- Every one of those frames repainted every visible terminal from nothing.
+  Of the stack samples that were on the CPU (rather than waiting on the GPU
+  fence), about two thirds were in `horizon::terminal::glyphs`: turning
+  parley clusters into glyph runs for every row. Most of the rest was in
+  Vello's encoding of the whole scene.
+
+The animation is only the trigger. Anything that redraws the window without
+changing a terminal pays for the terminal anyway: an update in another pane,
+a pointer moving over the chrome, any future animation.
+
+## 2. What the layers below offer
+
+No layer between the view and the GPU keeps anything drawn from one frame to
+the next (Blitz at the revision pinned in the root `Cargo.toml`, anyrender
+0.15, Vello 0.11, wgpu 30):
+
+- `blitz_paint::paint_scene` walks the whole document every frame. It calls
+  every custom widget's `paint()` and appends a clone of the returned scene
+  (`blitz-paint/src/render.rs`, `draw_custom_widget`).
+- blitz-dom's paint tree (`blitz-dom/src/layout/paint_tree.rs`) caches which
+  nodes paint in which order, and the positions of hoisted boxes per geometry
+  generation. It does not keep commands or pixels.
+- `anyrender::Scene` is a plain list of commands. Vello encodes, resolves and
+  rasterizes the whole scene on every render. It has no damage regions.
+
+What survives frames is a texture registered through the custom widget's
+resource path. Blitz's own `examples/wgpu_texture` uses this path:
+
+- `RenderContext::renderer_specific_context()` downcasts to
+  `wgpu_context::DeviceHandle` (the device and queue) under
+  `anyrender_vello`'s window renderer.
+- `RenderContext::try_register_custom_resource(Box<wgpu::Texture>)` returns
+  a `ResourceId`.
+- A fill with `Paint::Resource(ImageBrush { image: id, .. })` draws the
+  texture.
+
+## 3. Rows
+
+### 3.1 A row's height is a whole number of display pixels
+
+`row_px = round(line_height × scale)`, where `line_height` is the terminal's
+CSS line height (`crates/horizon-theme-css`, `TerminalLook::line_height`) and
+`scale` is the display's. Every use of the row height in `src/terminal/` goes
+through `row_px`:
+
+- the number of rows that fit;
+- a pointer position turned into a row, and the wheel's rows;
+- the IME cursor area;
+- the baseline (`Shaper::baseline`);
+- painting.
+
+`horizon-ui` already rounds the layout to display pixels
+(`crates/horizon-ui/src/display_scale.rs`), so the grid's top is on a pixel.
+With `row_px` whole, every row boundary is on one too.
+
+At scale 1.5 and the default 18 CSS px, `row_px` is 27, which is what the
+owner's machine shows today. At 1.25 it is 22 or 23 (18 × 1.25 = 22.5). Today
+such a row's height alternates between 22 and 23 display pixels; with `row_px`
+every row is the same, and its height in CSS pixels differs slightly from 18.
+
+Columns are not affected: a row's pixels span the grid's whole width.
+
+### 3.2 What a row's pixels depend on
+
+A row's pixels are a function of:
+
+1. its content (`TerminalLine`: text, cell columns, characters drawn as
+   shapes, styled runs);
+2. the part of the selection on that row;
+3. what applies to the whole grid: the font, the program's palette overrides,
+   the theme's terminal look, `scale`, and the grid's width in pixels.
+
+The cursor is not among them: it is drawn over the rows (§4.2). Neither is
+the row's position: positions are whole pixels (§3.1).
+
+### 3.3 The row store
+
+The store keys rows by (1) and (2): a hash looks a row up, and a hit is
+checked against the stored `TerminalLine`. A change to anything in (3) empties
+the store.
+
+- The key is computed in the shell from what it decoded. Under the snapshot
+  wire (`docs/remoc-adoption-design.md` §5), the store holds nothing that the
+  daemon also believes the shell holds: a row decoded the same way draws the
+  same pixels, whether drawn now or reused.
+- Live rows and rows of a scrollback window (`TerminalScrollWindow`) are keyed
+  the same way. A row that scrolled into history and is scrolled back to is
+  still found. Rows with the same content (blank rows) share one slot.
+- Hashing runs when a new frame or scrollback window arrives, not on a redraw
+  that changes neither. Its cost is of the same order as the row equality
+  checks `Screen::paint` already does to reuse shaping.
+- libghostty-vt's row ids are not used. They do not cross the snapshot wire.
+  They vanish when a program scrolls part of the screen. Scrollback windows
+  carry none.
+
+### 3.4 Slots
+
+The store's pixels are one texture of fixed-size slots, each `row_px` tall and
+the grid's width wide. It holds at least the visible rows plus one (the part
+row of a fractional scroll), with a margin for rows just scrolled away. A slot
+not used in the current frame can be taken, least recently used first. The
+texture is made again when the grid's width, `row_px` or `scale` changes. When
+slots would exceed `max_texture_dimension_2d` in one column, they are arranged
+in several.
+
+### 3.5 Drawing rows into slots
+
+The rows of a frame that are not in the store are drawn together:
+
+1. Each row is painted opaque, its background first. It is painted by the
+   function that paints one row today (backgrounds, selection, glyph runs,
+   shapes, rules), into a `vello::Scene` through
+   `anyrender_vello::VelloScenePainter::new`, the rows stacked.
+2. One `vello::Renderer::render_to_texture` draws that scene into a scratch
+   texture.
+3. `copy_texture_to_texture` moves each row into its slot.
+
+Rows cannot be drawn into the slot texture directly: `render_to_texture`
+writes its whole target. They cannot be moved within one texture either:
+wgpu rejects any copy between regions of the same mip level and layer
+(`wgpu-core`, `validate_copy_within_same_texture`).
+
+Ink a glyph draws outside its row is clipped at the row's bounds.
+
+## 4. A frame
+
+### 4.1 What `paint()` returns
+
+1. For each visible row, one fill:
+   - the shape is the row's rectangle on the grid, intersected with the
+     grid's box (rather than a clip layer);
+   - the brush is `Paint::Resource(ImageBrush { image: store, .. })`;
+   - the brush transform translates the row's slot to the row's place.
+
+   Every coordinate is a whole display pixel, so the texture is sampled one
+   to one.
+2. The cursor, drawn as today: a translucent block, an outline, or a bar.
+3. The IME preedit while one is open, drawn as today.
+
+### 4.2 Over the rows, and in them
+
+- The cursor is drawn over the rows, so moving it or blinking it changes no
+  row.
+- The selection is painted under the text, so it is part of the rows it
+  touches. A selection change redraws those rows.
+
+### 4.3 Scrolling
+
+- **Output that scrolls the screen.** The rows that remain keep their slots,
+  and only the rows that are new are drawn. `paint()` places the same slots
+  one row higher.
+- **A program scrolling part of the screen.** Handled the same way, since
+  rows are found by content.
+- **Scrolling back through history.** The rows are drawn shifted by
+  `round(fractional_row × row_px)` display pixels:
+  - The retained scroll position stays exact, as
+    `docs/terminal-scrollback-design.md` has it, and the shift still moves
+    by less than a row. Only its drawn amount is rounded, by under one
+    display pixel.
+  - The rows at the top and bottom edges are clipped by the rectangle
+    intersection.
+
+## 5. Without a GPU device
+
+`paint()` sees whether `renderer_specific_context()` yields a `DeviceHandle`.
+Without one (the CPU renderer the windowless tests paint with), the terminal
+is drawn without the GPU store. How depends on §6.
+
+## 6. Tests, and the first step
+
+What the renderers available to a test can do:
+
+- `anyrender_vello_cpu::VelloCpuImageRenderer` (0.18) registers no resources:
+  `Paint::Resource` paints transparent. It does draw `Paint::Image`, with the
+  fill's brush transform (`set_paint_transform`).
+- `anyrender_vello::VelloImageRenderer`, the GPU offscreen renderer, keeps
+  the default `RenderContext`: it lends no device and registers no resources.
+  The resource-resolving form of `VelloScenePainter` has `pub(crate)` fields
+  and is built only by the window renderer.
+- `vello::Renderer::register_texture` returns the texture as an `ImageData`,
+  and `VelloScenePainter::new` is public. So a test-side GPU renderer is
+  possible:
+  1. make a device;
+  2. lend its `DeviceHandle` through `renderer_specific_context`;
+  3. register textures with Vello;
+  4. paint `Paint::Resource(id)` as an image fill of the registered
+     `ImageData`;
+  5. render offscreen and read the pixels back.
+
+**Step 0: lavapipe.** Find out whether Mesa's software Vulkan driver gives
+the tests a device without a surface:
+
+- whether it installs on this machine (today its Vulkan ICDs are radeon and
+  virtio only);
+- whether Vello runs on it at test sizes in an acceptable time;
+- whether it is usable inside a sandboxed agent session. If not, the tests
+  that need it go into the `sandboxed` nextest profile's skip set
+  (`.config/nextest.toml`).
+
+**If lavapipe is usable:**
+
+- The store has the GPU implementation only.
+- Without a device, `paint()` draws every row at its place with the one-row
+  function, keeping no slots.
+- The test-side GPU renderer joins the test support. Terminal pixel tests
+  move to it, among them
+  `block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale`.
+- The machines that run the gate need lavapipe installed (AGENTS.md's Build
+  setup).
+
+**If it is not:**
+
+- The store gets a second implementation over a CPU pixel buffer: rows drawn
+  with `vello_cpu`, the buffer painted with `Paint::Image`.
+- Each time the buffer changes it is handed over as new image data, since
+  `vello_cpu`'s image cache is keyed by the data's id.
+- Which implementation a frame uses follows §5.
+- Everything except the GPU implementation's own calls (making and
+  registering the texture, `render_to_texture`, the copies) is then tested
+  through `VelloCpuImageRenderer`.
+
+In both cases:
+
+- **Unit tests.** The store's logic has unit tests without any renderer:
+  keys, slot assignment and reuse, the row-to-slot mapping, and the
+  quantized scroll offset.
+- **Pixel comparisons.** A pixel test paints the same grid twice in one
+  renderer: drawn directly, and through the store. The two must match. The
+  cases are:
+  - output that scrolls;
+  - a partial-screen scroll;
+  - a fractional scroll back through history;
+  - a selection change;
+  - scales 1.25 and 1.5.
+
+## 7. Measuring
+
+`cargo bench --bench scenarios -- terminal/` (`docs/performance-scenarios.md`)
+before and after, in a debug and a release build, comparing the `scene`
+column.
+
+Add a scenario for the case in §1: frames that change nothing in a visible
+terminal. `--window` (the `render` column, GPU included) opens a real window
+on the desktop and is run only with the owner's consent each time.
+
+## 8. Scope
+
+This covers the terminal view.
+
+It does not change how the redraw itself is triggered: an animation anywhere
+still makes every frame lay out and encode the whole document, whose
+non-terminal part is not covered here. `round_to_device_pixels`
+(`crates/horizon-ui/src/display_scale.rs`) starts a new geometry generation
+every frame, which also discards the paint tree's position cache every frame.
+That cost is not measured.
+
+## References
+
+- `docs/remoc-adoption-design.md` §5 — the snapshot-valued frame wire.
+- `docs/terminal-protocol-goals.md` — the terminal frame path's goals.
+- `docs/terminal-row-metrics-design.md` — one baseline per row (written for
+  the GPUI shell; the principle carries over).
+- Blitz `examples/wgpu_texture/src/demo_renderer.rs` — a custom widget
+  drawing into its own registered texture.

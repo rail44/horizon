@@ -706,6 +706,15 @@ lands:
   Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
+- **Terminal row textures** (designed 2026-11-22,
+  `docs/terminal-row-texture-design.md`). Every redraw that does not change
+  a terminal still repaints its whole grid. That cost a core's 60–70 % while
+  the session list's turning icon animated beside three terminals. The view
+  keeps drawn rows as pixels in its own texture (the custom widget's resource
+  path), keyed by row content in the shell. A frame is one image fill per
+  row. Rows are a whole number of display pixels tall. The first step is a
+  lavapipe investigation, which picks the test strategy (§6).
+
 ### Knowledge layer (v1 shipped 2026-08-05)
 
 The dynamic tier between session logs and repository skills:
