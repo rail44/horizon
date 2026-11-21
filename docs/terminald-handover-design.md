@@ -91,12 +91,12 @@ handover's own format is the daemon's. They are read separately:
 
 ## The commands
 
-- `Reload Terminal Runtime` hands over (board #99): the terminal sessions
-  stay, with their screens.
-- The destructive form stays under another name (board #99), for a
-  handover that does not work and for ending every terminal on purpose.
-  Proposed: `Restart Terminal Runtime, Ending Terminals`
-  (`restart-terminal-runtime`), the present behavior unchanged.
+`Reload Terminal Runtime` hands over: the terminal sessions stay, with
+their screens. No command ends every terminal (board #99). The present
+reload's drain needs the daemon to answer too, so it is no way out of a
+daemon that does not; a failed `execve` falls back to the old build; and a
+session that came across wrong is ended alone with `Terminate Active
+Session`.
 
 ## The shell's side
 
@@ -119,6 +119,12 @@ are still there for it.
 `hand_over` is appended to `TerminalHub` (append-only, decision 5 of
 `docs/terminald-split-design.md`); `check-wire-schema.sh` decides whether
 the terminal wire version moves with it.
+
+`hand_over` is answered whatever version the client negotiated, as `drain`
+is (`an_incompatible_version_range_is_rejected_but_drain_still_works`): a
+shell built after a terminal wire bump is refused by the running daemon's
+`hello`, and still has to be able to ask it to hand over, or every wire
+bump would end the terminals again (board #99).
 
 ## Checks
 
