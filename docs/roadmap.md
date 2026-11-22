@@ -671,40 +671,14 @@ lands:
   fallback for v11/v12 peers. It intentionally does not absorb the matrix's
   keypad, physical-layout, extended-modifier, or alacritty stack defects.
 
-- **Terminal scrollback — windowed overscan** (implemented through phase 3
-  on 2026-07-22,
-  `docs/terminal-scrollback-design.md`). History scrolling judders: it is a
-  daemon round-trip with no local paint, worsened by v11's latest-value
-  frame watch dropping intermediate scroll positions. Direction (owner):
-  delete the round-trip from the gesture — on scroll-back the daemon returns
-  one **self-contained window** (a few screens tall, centred on the user),
-  the client scrolls *within it* locally and prefetches the next window near
-  an edge. Feasibility settled: alacritty 0.26 has **no stable absolute line
-  id** (screen-relative coordinates) — which is precisely why the design is
-  windowed rather than a persistent cache: a window needs no stable id, so
-  absolute-id synthesis, epochs, and reflow cache-invalidation are all
-  dropped. Retrieval via `iter_from` needs no engine change; alt-screen has
-  no scrollback (primary-screen-only, passthrough elsewhere). Additive wire
-  (v12; the negotiation gate this shipped with was later deleted as dead
-  code once the lockstep floor rose past it — see
-  `docs/terminal-scrollback-design.md` §7 phase 4).
-  Tradeoffs accepted: scrollbar jump beyond the window is a round-trip; no
-  instant revisit of already-seen history. Delivery rides the existing
-  `events` channel; the initial policy is a three-viewport immutable window
-  with a one-viewport directional prefetch margin. Painting shares that
-  window by `Arc`, caches shaping by stable window-row index, and preserves
-  the latest local anchor when a prefetch lands. The 2026-07-23 presentation
-  follow-up keeps that address/wire row-based but treats rows as grid data, not
-  GPUI list items: live and history share one fixed-bounds terminal canvas,
-  precise input retains its pixel remainder, and the painter translates one
-  clipped context row without snapping. Arbitrary TUI updates bump only the
-  affected live-row generations; scrolling changes paint origins while reusing
-  shaped rows. Replacement windows preserve the continuous anchor. The generic
-  GPUI scroll handle is not a second authority because its child-layout range
-  would require an oversized synthetic canvas; alt/mouse modes keep the
-  terminal-protocol passthrough path.
-  Margin sizing remains intentionally tuneable;
-  interim "smooth the reply cadence" fix assessed as symptomatic, skip.
+- **Terminal scrollback** (redesigned 2026-11-22,
+  `docs/terminal-scrollback-design.md`). Scrolling back moves the viewport
+  of the view's own terminal; the view keeps only the part of a row it is
+  into, and a frame reads only the rows that came into view, by the
+  engine's row ids. This replaced the windowed design of 2026-07-22, whose
+  windows were sized and prefetched for a daemon round trip that ended when
+  the view got a terminal of its own; a 400-column pane fetched one every
+  wheel tick (7.8 ms of input handling at 48000 cells, 0.03 ms after).
 
 - **Terminal row textures** (designed 2026-11-22,
   `docs/terminal-row-texture-design.md`). Every redraw that does not change
