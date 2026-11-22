@@ -366,11 +366,22 @@ impl Workspace {
     /// was chosen from (`docs/workspace-layout-design.md`). With no group,
     /// beside the focused pane. `None` if the workspace does not know
     /// `session_id`.
+    ///
+    /// A session a pane shows already gets no second pane: that pane is
+    /// the answer, shown and focused when `activate`. A session's views
+    /// share its terminal, and so where it is scrolled in its history
+    /// (`docs/terminal-scrollback-design.md` §3.6).
     pub fn attach_existing_session_to_split_activated(
         &mut self,
         session_id: SessionId,
         activate: bool,
     ) -> Option<PaneId> {
+        if let Some(shown) = self.pane_of_session(session_id) {
+            if activate {
+                self.reveal_pane(shown);
+            }
+            return Some(shown);
+        }
         let kind = self.session_kind(session_id)?;
         let target = (self.last_group())
             .and_then(|group| self.root.group(group))

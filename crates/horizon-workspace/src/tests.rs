@@ -691,6 +691,22 @@ fn attach_existing_session_to_split_reuses_session_kind() {
 }
 
 #[test]
+fn attaching_a_session_a_pane_shows_adds_no_pane_and_shows_that_one() {
+    let mut workspace = Workspace::mvp();
+    let session_id = SessionId::new();
+    workspace.open_tab(Content::Session(SessionKind::Terminal, session_id));
+    let shown = workspace.pane_of_session(session_id).expect("its pane");
+    workspace.activate_tab_index(0);
+    let panes = workspace.root.pane_ids().len();
+
+    let attached = workspace.attach_existing_session_to_split_activated(session_id, true);
+
+    assert_eq!(attached, Some(shown));
+    assert_eq!(workspace.root.pane_ids().len(), panes);
+    assert_eq!(workspace.focus, Some(shown));
+}
+
+#[test]
 fn open_tab_with_new_session_attaches_requested_kind() {
     let mut workspace = Workspace::mvp();
 
