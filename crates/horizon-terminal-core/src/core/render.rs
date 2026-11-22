@@ -1,22 +1,24 @@
-//! The frame and the scrollback window read out of libghostty-vt: rows
-//! built once from the engine's cells as they are drawn
-//! (`TerminalLine`). The live screen's rows are read through the engine's
-//! render state, which says which rows changed; a window of the history
-//! is read a cell at a time through grid references.
+//! The frame read out of libghostty-vt: rows built once from the engine's
+//! cells as they are drawn (`TerminalLine`). The viewport's rows are read
+//! through the engine's render state, which says which rows changed, and
+//! kept by the engine's row ids so that a row read before is not read
+//! again (`docs/terminal-scrollback-design.md` §3.3).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use libghostty_vt::mode::Mode;
 use libghostty_vt::point::{Coordinate, Point, Space};
-use libghostty_vt::render::{CellIterator, CursorVisualStyle, Dirty, RenderState, RowIterator};
+use libghostty_vt::render::{
+    CellIterator, CursorVisualStyle, Dirty, Overscan, RenderState, RowId, RowIterator,
+};
 use libghostty_vt::screen::{CellContentTag, CellWide, Screen};
 use libghostty_vt::style::{Style, StyleColor, Underline};
 use libghostty_vt::{Error, Terminal};
 
 use crate::types::{
     NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine,
-    TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalStyle,
-    TerminalUnderline,
+    TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalStyle, TerminalUnderline,
 };
 
 pub(super) type Engine = Terminal<'static, 'static>;
@@ -57,18 +59,28 @@ pub(super) fn display_offset(terminal: &Engine) -> usize {
 
 /// The engine's render state and what is kept from one frame to the next:
 /// the iterators it reads rows and cells through, and the rows read
-/// before, of which only those the engine marks changed are read again.
+/// before, by the engine's row id.
 pub(super) struct Draw {
     state: RenderState<'static>,
     rows: RowIterator<'static>,
     cells: CellIterator<'static>,
-    lines: Vec<TerminalLine>,
+    read: HashMap<RowId, TerminalLine>,
+    /// Whether the engine's content may have changed since the last frame
+    /// (bytes taken in, a resize, the colors set): until then, a row whose
+    /// id was read before is that row, whatever the engine marks.
+    written: bool,
 }
 
 impl Draw {
     /// Forgets the rows kept: the next frame reads every row.
     pub(super) fn forget(&mut self) {
-        self.lines.clear();
+        self.read.clear();
+    }
+
+    /// The engine's content may have changed: the engine's marks decide
+    /// what is read again at the next frame.
+    pub(super) fn written(&mut self) {
+        self.written = true;
     }
 
     pub(super) fn new() -> Self {
@@ -76,7 +88,8 @@ impl Draw {
             state: RenderState::new().expect("a render state"),
             rows: RowIterator::new().expect("a row iterator"),
             cells: CellIterator::new().expect("a cell iterator"),
-            lines: Vec::new(),
+            read: HashMap::new(),
+            written: true,
         }
     }
 }
@@ -89,17 +102,25 @@ pub(super) fn snapshot_frame(
 ) -> TerminalFrame {
     let rows = size.rows as usize;
     let history = history_rows(terminal);
-    let offset = display_offset(terminal).min(history);
+    let back = display_offset(terminal).min(history);
     // The viewport's top row, counted from the top of the whole buffer.
-    let top = history - offset;
-    let (lines, cursor) = match drawn(terminal, &mut draw.borrow_mut(), rows, shaped) {
-        Some(read) => read,
-        // (The render state refused: the rows the slow way, and no cursor.)
-        None => (
-            styled_rows(terminal, top, rows, size.cols as usize, shaped),
-            None,
-        ),
-    };
+    let top = history - back;
+    let (lines, below, cursor) =
+        match drawn(terminal, &mut draw.borrow_mut(), rows, top, back, shaped) {
+            Some(read) => read,
+            // (The render state refused: the rows the slow way, and no cursor.)
+            None => {
+                let mut lines = styled_rows(
+                    terminal,
+                    top,
+                    rows + usize::from(back > 0),
+                    size.cols as usize,
+                    shaped,
+                );
+                let below = (lines.len() > rows).then(|| lines.pop()).flatten();
+                (lines, below, None)
+            }
+        };
 
     TerminalFrame {
         lines,
@@ -108,29 +129,53 @@ pub(super) fn snapshot_frame(
         mouse_reporting: mouse_mode(terminal) && mode(terminal, Mode::SGR_MOUSE),
         palette_overrides: palette_overrides(terminal),
         scrollback_available: !(alternate_screen(terminal) || mouse_mode(terminal)),
+        back,
+        below,
     }
 }
 
-/// The viewport's rows and its cursor through the render state: the rows
-/// the engine marks changed since the last call are read, and the others
-/// are the ones kept.
+/// The viewport's rows, the row under them while the viewport is `back`
+/// rows into the history, and the cursor, through the render state. A row
+/// is read from the engine's cells only when it is new to the view: one
+/// the engine does not mark changed, or one only the viewport moved to
+/// with nothing written since, is the row read before under its id.
 fn drawn(
     terminal: &Engine,
     draw: &mut Draw,
     rows: usize,
+    top: usize,
+    back: usize,
     shaped: Shaped,
-) -> Option<(Vec<TerminalLine>, Option<TerminalCursor>)> {
+) -> Option<(
+    Vec<TerminalLine>,
+    Option<TerminalLine>,
+    Option<TerminalCursor>,
+)> {
     let Draw {
         state,
         rows: row_iterator,
         cells: cell_iterator,
-        lines,
+        read,
+        written,
     } = draw;
-    let snapshot = state.update(terminal).ok()?;
-    let all = lines.len() != rows || !matches!(snapshot.dirty(), Ok(Dirty::Clean | Dirty::Partial));
-    if all {
-        *lines = vec![TerminalLine::default(); rows];
+    let below_wanted = u16::from(back > 0);
+    if state
+        .overscan_request()
+        .ok()
+        .is_none_or(|asked| asked.below != below_wanted)
+    {
+        state
+            .set_overscan(Overscan {
+                above: 0,
+                below: below_wanted,
+            })
+            .ok()?;
     }
+    let snapshot = state.update(terminal).ok()?;
+    let whole = !matches!(snapshot.dirty(), Ok(Dirty::Clean | Dirty::Partial));
+    // Nothing written since the last frame: what the engine marks is the
+    // viewport moving, and every row it shows is as it was.
+    let only_moved = !std::mem::take(written);
     let cursor = snapshot.cursor().ok().and_then(|cursor| {
         let at = cursor.viewport.filter(|_| cursor.visible)?;
         Some(TerminalCursor {
@@ -145,58 +190,74 @@ fn drawn(
         })
     });
 
+    let mut lines = vec![TerminalLine::default(); rows];
+    let mut below = None;
+    let mut kept = HashMap::with_capacity(rows + 1);
     let mut graphemes = Vec::new();
     let mut uri = vec![0u8; 2048];
     let mut row_iteration = row_iterator.update(&snapshot).ok()?;
-    let mut y = 0usize;
     while let Some(row) = row_iteration.next() {
-        let at = y;
-        y += 1;
-        if at >= rows {
+        let Ok(place) = usize::try_from(row.viewport_y().unwrap_or(-1)) else {
+            continue;
+        };
+        if place > rows {
             break;
         }
-        if !all && !row.dirty().unwrap_or(true) {
-            continue;
-        }
-        let mut line = TerminalLine::default();
-        let mut cell_iteration = cell_iterator.update(row).ok()?;
-        let mut x = 0u16;
-        while let Some(cell) = cell_iteration.next() {
-            let column = x;
-            x += 1;
-            let Ok(raw) = cell.raw_cell() else {
-                continue;
-            };
-            let length = cell.graphemes_len().unwrap_or(0) as usize;
-            graphemes.clear();
-            graphemes.resize(length, '\0');
-            if cell.graphemes_buf(&mut graphemes).is_err() {
-                graphemes.clear();
-            }
-            let url = match raw.has_hyperlink() {
-                Ok(true) => {
-                    let place = Point::Viewport(Coordinate {
-                        x: column,
-                        y: at as u32,
-                    });
-                    (terminal.grid_ref(place).ok()).and_then(|place| link(&place, &mut uri))
+        let id = row.id().ok();
+        let unchanged = (!whole && !row.dirty().unwrap_or(true)) || only_moved;
+        let held = id.filter(|_| unchanged).and_then(|id| read.get(&id));
+        let line = match held {
+            Some(line) => line.clone(),
+            None => {
+                let mut line = TerminalLine::default();
+                let mut cell_iteration = cell_iterator.update(row).ok()?;
+                let mut x = 0u16;
+                while let Some(cell) = cell_iteration.next() {
+                    let column = x;
+                    x += 1;
+                    let Ok(raw) = cell.raw_cell() else {
+                        continue;
+                    };
+                    let length = cell.graphemes_len().unwrap_or(0) as usize;
+                    graphemes.clear();
+                    graphemes.resize(length, '\0');
+                    if cell.graphemes_buf(&mut graphemes).is_err() {
+                        graphemes.clear();
+                    }
+                    let url = match raw.has_hyperlink() {
+                        Ok(true) => {
+                            let place = Point::Screen(Coordinate {
+                                x: column,
+                                y: (top + place) as u32,
+                            });
+                            (terminal.grid_ref(place).ok()).and_then(|place| link(&place, &mut uri))
+                        }
+                        _ => None,
+                    };
+                    push_cell(
+                        &mut line,
+                        raw,
+                        cell.style().unwrap_or_default(),
+                        url.as_deref(),
+                        &graphemes,
+                        shaped,
+                    );
                 }
-                _ => None,
-            };
-            push_cell(
-                &mut line,
-                raw,
-                cell.style().unwrap_or_default(),
-                url.as_deref(),
-                &graphemes,
-                shaped,
-            );
+                line
+            }
+        };
+        if let Some(id) = id {
+            kept.insert(id, line.clone());
         }
-        lines[at] = line;
+        match place < rows {
+            true => lines[place] = line,
+            false => below = Some(line),
+        }
         let _ = row.set_dirty(false);
     }
     let _ = snapshot.set_dirty(Dirty::Clean);
-    Some((lines.clone(), cursor))
+    *read = kept;
+    Some((lines, below.filter(|_| back > 0), cursor))
 }
 
 /// The selection as the rows from `top` down show it: clamped to them, and
@@ -272,99 +333,6 @@ fn palette_overrides(terminal: &Engine) -> Vec<(u16, [u8; 3])> {
         }
     }
     set
-}
-
-/// A window's size is bounded in bytes as well as rows, so that a wide
-/// terminal's window holds fewer rows: at most this many bytes, at the
-/// worst-case bytes a cell costs below. The two values were set when a
-/// window crossed the daemon's events channel (whose item cap is 4 MiB,
-/// and where a fully styled cell measured about 107 bytes); a window is
-/// read from the view's own terminal now, and the bound is kept as it was,
-/// so a window holds what it did.
-const EVENTS_ITEM_CAP_BYTES: usize = 4 * 1024 * 1024;
-
-/// See [`EVENTS_ITEM_CAP_BYTES`].
-const WORST_CASE_BYTES_PER_CELL: usize = 128;
-
-/// How many rows of overscan [`max_window_rows`] guarantees above and below
-/// the viewport, independent of pane height. Smooth scrolling needs a few
-/// rows of look-ahead on each side so a wheel tick moves locally instead of
-/// re-fetching a fresh window every tick (issue 007: the old
-/// `.max(screen_lines)` floor collapsed this margin to zero for tall panes,
-/// regressing smooth scroll to line steps; issue 008: the resulting
-/// zero-overscan window snapped to the top of each re-fetched block on
-/// upward scroll). The viewport is centered in the block, so each side
-/// gets `OVERSCAN_ROWS / 2` rows of margin.
-const OVERSCAN_ROWS: usize = 64;
-
-/// The largest window, in rows, [`snapshot_window`] will read, within the
-/// byte bound ([`EVENTS_ITEM_CAP_BYTES`]). Byte-budget-derived rather than a
-/// fixed row multiple because it must also bound *wide* terminals, where one
-/// row is many more cells. The formula guarantees the viewport plus
-/// [`OVERSCAN_ROWS`] rows of overscan when the byte budget allows it, clips
-/// the overscan to whatever the budget permits when the viewport is tall,
-/// and collapses to the viewport alone (zero overscan) only when a single
-/// screen already strains the bound. That extreme is the
-/// documented fallback where scrolling regresses to line steps (issue 007);
-/// for realistic pane heights the overscan is always present.
-fn max_window_rows(columns: usize, screen_lines: usize) -> usize {
-    let bytes_per_row = columns.max(1) * WORST_CASE_BYTES_PER_CELL;
-    let budget_rows = EVENTS_ITEM_CAP_BYTES / bytes_per_row;
-    // Viewport + fixed overscan, clipped to the byte-budget ceiling, then
-    // floored at the viewport so the visible screen always fits. When
-    // `screen_lines + OVERSCAN_ROWS` fits the budget the first term wins
-    // (full overscan); when it doesn't but the viewport alone fits, the
-    // `min` clips to `budget_rows` (partial overscan); when the viewport
-    // alone exceeds the budget the `max` lifts to `screen_lines` (zero
-    // overscan, the extreme-pane fallback — no less safe than the live
-    // frame, which carries one screen at the same cap).
-    (screen_lines + OVERSCAN_ROWS)
-        .min(budget_rows)
-        .max(screen_lines)
-}
-
-/// Read a `height`-row scrollback window positioned `anchor` rows above the
-/// live bottom, without moving the viewport, in rows counted from the top
-/// of the live screen (negative in the history).
-pub(super) fn snapshot_window(
-    terminal: &Engine,
-    size: TerminalSize,
-    anchor: usize,
-    height: usize,
-    shaped: Shaped,
-) -> TerminalScrollWindow {
-    let screen_lines = size.rows as i32;
-    let history_size = i32::try_from(history_rows(terminal)).unwrap_or(i32::MAX);
-    let anchor = i32::try_from(anchor)
-        .unwrap_or(i32::MAX)
-        .clamp(0, history_size);
-    let max_rows = max_window_rows(size.cols as usize, size.rows as usize);
-    let height = i32::try_from(height.min(max_rows)).unwrap_or(i32::MAX);
-
-    let viewport_top = -anchor;
-    let viewport_bottom = viewport_top + screen_lines - 1;
-    let margin = height.saturating_sub(screen_lines).max(0);
-    let margin_above = margin / 2;
-    let margin_below = margin - margin_above;
-
-    let topmost = -history_size;
-    let bottommost = screen_lines - 1;
-    let block_top = (viewport_top - margin_above).max(topmost);
-    let block_bottom = (viewport_bottom + margin_below).min(bottommost);
-
-    let above = (block_top - topmost) as usize;
-    let below = (bottommost - block_bottom) as usize;
-    let viewport_offset = (viewport_top - block_top) as usize;
-    let row_count = (block_bottom - block_top + 1) as usize;
-
-    // From the top of the whole buffer, the block's top row.
-    let top = (history_size + block_top) as usize;
-    TerminalScrollWindow {
-        lines: styled_rows(terminal, top, row_count, size.cols as usize, shaped),
-        viewport_offset,
-        above,
-        below,
-    }
 }
 
 /// The styled spans of `row_count` rows from `top` down, `top` counted from

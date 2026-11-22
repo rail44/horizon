@@ -30,7 +30,7 @@ use self::osc_notify::OscNotificationScanner;
 use self::render::{Engine, alternate_screen, mode, mouse_mode};
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
-    TerminalScrollWindow, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
 };
 
 mod color;
@@ -221,6 +221,7 @@ impl TerminalCore {
     /// The host's colors: what the engine answers a program that asks
     /// (OSC 4/10/11/12) with, where the program has set none of its own.
     pub fn set_color_scheme(&mut self, scheme: TerminalColorScheme) {
+        self.render.borrow_mut().written();
         let rgb = |color: color::Rgb| engine_color::Rgb {
             r: color.r,
             g: color.g,
@@ -251,6 +252,7 @@ impl TerminalCore {
     }
 
     pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
+        self.render.borrow_mut().written();
         let scanned = self.osc_notifications.feed(bytes);
         let bytes = scanned.bytes;
         // A program tells whether OSC 7501 is read by which answer comes
@@ -270,6 +272,9 @@ impl TerminalCore {
             }
         }
         self.terminal.vt_write(&bytes[fed..]);
+        // (Again: a synchronized update's hold reads a frame partway through
+        // the bytes, and what followed it changed the rows again.)
+        self.render.borrow_mut().written();
 
         let mut events = self.events.drain();
         events.output = bytes;
@@ -295,6 +300,7 @@ impl TerminalCore {
     }
 
     pub fn resize(&mut self, size: TerminalSize) {
+        self.render.borrow_mut().written();
         let size = size.normalized();
         self.size.set(size);
         let (cell_width, cell_height) = cell_pixels(size);
@@ -304,6 +310,27 @@ impl TerminalCore {
     pub fn scroll_display(&mut self, lines: i32) {
         // (The engine counts down the screen: back into history is up.)
         (self.terminal).scroll_viewport(ScrollViewport::Delta(-(lines as isize)));
+    }
+
+    /// Puts the viewport `rows` rows above the live bottom, or as far as
+    /// the history goes, and says how far that is
+    /// (`docs/terminal-scrollback-design.md` §3.1).
+    pub fn scroll_back_to(&mut self, rows: usize) -> usize {
+        let history = self.terminal.scrollback_rows().unwrap_or(0);
+        let wanted = rows.min(history);
+        let now = render::display_offset(&self.terminal).min(history);
+        if wanted == 0 {
+            (self.terminal).scroll_viewport(ScrollViewport::Bottom);
+        } else if wanted != now {
+            let moved = now as isize - wanted as isize;
+            (self.terminal).scroll_viewport(ScrollViewport::Delta(moved));
+        }
+        wanted
+    }
+
+    /// How many rows above the live bottom the viewport is.
+    pub fn back(&self) -> usize {
+        render::display_offset(&self.terminal)
     }
 
     pub fn handle_scroll(&mut self, scroll: TerminalScroll) -> Option<Vec<u8>> {
@@ -389,13 +416,6 @@ impl TerminalCore {
         // Rows kept from before were built without it.
         let mut draw = self.render.borrow_mut();
         draw.forget();
-    }
-
-    /// A scrollback window `height` rows tall, `anchor` rows above the live
-    /// bottom, read without moving the viewport.
-    pub fn snapshot_window(&self, anchor: usize, height: usize) -> TerminalScrollWindow {
-        let shaped = self.shaped.get();
-        render::snapshot_window(&self.terminal, self.size.get(), anchor, height, shaped)
     }
 
     /// The bytes a key writes, in the modes the program has asked for:

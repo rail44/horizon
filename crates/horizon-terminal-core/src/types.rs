@@ -7,7 +7,7 @@ mod size;
 pub use color::{NamedColor, TerminalColor, fixed_palette_rgb};
 pub use frame::{
     TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine, TerminalRun,
-    TerminalScrollWindow, TerminalSelection, TerminalSpan, TerminalStyle, TerminalUnderline,
+    TerminalSelection, TerminalSpan, TerminalStyle, TerminalUnderline,
 };
 pub use key_event::KeyEventKind;
 pub use mouse::{
