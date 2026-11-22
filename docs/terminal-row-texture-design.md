@@ -296,46 +296,50 @@ the owner's consent each time.
 
 ### Measured 2026-11-22
 
-Debug build, `--gpu`, the median in milliseconds:
+Debug build, `--gpu` on the machine's own GPU (radv), the median in
+milliseconds.
 
-- before: the source as of the commit that added this document;
-- after: the store;
-- the machine was heavily loaded throughout (its swap full), so
-  differences of a few milliseconds are within the noise.
+**On the CPU.** `paint_scene`, the commands built for a frame, at 48000
+cells:
 
-`render`, the whole frame:
-
-| scenario | 1920 cells | 12000 cells | 48000 cells |
-| --- | --- | --- | --- |
-| idle | 5.4 → 4.7 | 20.9 → 18.5 | 80.4 → 53.5 |
-| lines | 5.1 → 5.1 | 31.4 → 22.8 | 108 → 85 |
-| typing | 3.7 → 3.4 | 16.1 → 18.2 | 42.8 → 56.5 |
-| scrollback | 3.2 → 3.5 | 14.3 → 18.3 | 45.0 → 56.6 |
-
-The frame split, at 48000 cells:
-
-| scenario | `paint_scene` (commands, on the CPU) | the rest (Vello's encoding, the GPU, the read back) |
+| scenario | before | after |
 | --- | --- | --- |
-| idle, before | 25.3 | 55.1 |
-| idle, after | 0.2 | 56.6 |
-| typing, before (an almost empty screen) | 0.4 | 42.7 |
-| typing, after | 1.3 | 57.6 |
+| idle, a full screen | 25.3 | 0.2 |
+| typing, an almost empty screen | 0.4 | 1.3 |
 
-What the numbers show:
+**The whole frame.** This includes Vello's encoding, the GPU and the read
+back, and could not be measured to a few milliseconds here, for two reasons:
 
-- A frame that changes nothing in the terminal no longer costs its grid on
-  the CPU: 25 ms became 0.2 ms.
-- The rest of a frame gained a cost of its own that does not depend on what
-  the screen shows: about 15 ms at 48000 cells on an almost empty screen.
+- The GPU is shared with the desktop, where a running Horizon draws every
+  frame.
+- The machine was low on memory (its swap full), and its CPU slowed as it
+  heated.
 
-**Open.** `anyrender_vello` marks every registered texture dirty before
-each render (`window_renderer.rs`, and the offscreen renderer alike), so
-Vello copies the whole store into its image atlas every frame. That copy
-is the likeliest part of the added cost, but it is not confirmed:
+How the measurements went:
 
-- A store of the visible rows plus five, instead of twice the rows, did
-  not lower it measurably.
-- Neither the copy's share nor a remedy is established yet.
+- **Separate runs.** Runs of the before and after binaries minutes apart
+  differed by more than any effect: the same before binary took 43, 64 and
+  69 ms a typing frame at 48000 cells.
+- **Alternated.** To compare under the same conditions, temporary code
+  switched the way of drawing every frame within one run:
+  - the rows from the store;
+  - the store's strips filled with one color;
+  - no strips at all;
+  - the screen drawn whole, with and without a clip per row.
+- **What the alternated runs showed.**
+  - A full screen (`lines`) was faster from the store: 100 → 91 at 48000
+    cells, 28.4 → 24.5 at 12000.
+  - On an almost empty screen (`typing`) the order changed from one run to
+    the next: from the store 7 ms slower in one, 22 ms faster in another.
+  - The store, one-color strips and no strips came out the same within the
+    noise. So copying the store into Vello's atlas, which `anyrender_vello`
+    asks for every frame, and filling from it, are not a cost these runs
+    can see.
+
+**Open.** Whether painting an almost empty screen from the store costs a
+few milliseconds more on the GPU than drawing it whole is not settled.
+Settling it needs a quiet GPU (no other Horizon drawing) or `--window`, a
+real window on the desktop.
 
 ## 8. Scope
 
