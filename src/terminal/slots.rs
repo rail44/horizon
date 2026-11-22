@@ -57,6 +57,19 @@ impl<T> Slots<T> {
         self.frame += 1;
     }
 
+    /// The slot holding the row hashing to `hash` for which `same` holds,
+    /// used by this frame from now on; `None` when no slot holds it.
+    pub(super) fn find(&mut self, hash: u64, same: impl Fn(&T) -> bool) -> Option<usize> {
+        let frame = self.frame;
+        let held = (self.by_hash.get(&hash).into_iter().flatten())
+            .copied()
+            .find(|slot| (self.entries[*slot].as_ref()).is_some_and(|entry| same(&entry.row)))?;
+        if let Some(entry) = &mut self.entries[held] {
+            entry.used = frame;
+        }
+        Some(held)
+    }
+
     /// The slot of the row hashing to `hash` for which `same` holds, or a
     /// slot for it that `make` fills; either way used by this frame. `None`
     /// when every slot is used by this frame already.
@@ -67,13 +80,7 @@ impl<T> Slots<T> {
         make: impl FnOnce() -> T,
     ) -> Option<Placed> {
         let frame = self.frame;
-        let held = (self.by_hash.get(&hash).into_iter().flatten())
-            .copied()
-            .find(|slot| (self.entries[*slot].as_ref()).is_some_and(|entry| same(&entry.row)));
-        if let Some(slot) = held {
-            if let Some(entry) = &mut self.entries[slot] {
-                entry.used = frame;
-            }
+        if let Some(slot) = self.find(hash, same) {
             return Some(Placed::Kept(slot));
         }
         let slot = self.free().or_else(|| self.least_recent())?;

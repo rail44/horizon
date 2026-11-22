@@ -219,6 +219,35 @@ app when it is dropped, so its document goes with it.
   - The rows at the top and bottom edges are clipped by the rectangle
     intersection.
 
+### 4.4 Rows new to a frame
+
+Drawing rows into the store is a Vello render of its own, and it costs about
+the same for one row as for three. So a frame does not draw its new rows
+into the store when they are few. It paints them into its own scene with the
+one-row function, beside the fills of the rows the store holds, and they
+take no slot.
+
+- **How few.** The new rows are painted into the frame while they have at
+  most 1024 cells with something drawn in them (`PAINTED_IN_THE_FRAME` in
+  `src/terminal/store.rs`). A row painted into the frame is drawn again
+  each time the page is, until it is put in the store, so a frame does so
+  only while that costs less than one render of the store. Measured in a
+  window at 48000 cells, the render took about 1 ms, and rows of text took
+  about as long at a little over 1000 cells.
+- **When they are put in the store.** The next time the page is drawn with
+  nothing about the screen changed, the screen does not reuse its last
+  scene. It draws the rows painted into the frame into the store, and
+  composes every row from the store. Without anything else drawing the page
+  again, that time never comes, and the scene with them painted in stays
+  as it is.
+- **While the screen keeps changing.** A row painted into one frame and
+  still shown in the next is new to that one too: it is counted again,
+  with the rows new to that frame. Once they are over the limit, all of
+  them are drawn into the store, as before.
+- **The same pixels.** The rows are painted with the same function either
+  way, and the store anti-aliases as the window does (16 samples a pixel),
+  so a row looks the same painted into the frame and from the store.
+
 ## 5. Without a GPU device
 
 `paint()` sees whether `renderer_specific_context()` yields a `DeviceHandle`.
@@ -447,6 +476,61 @@ blank, so leaving blank rows to the ground does not help there. Its frames
 are late because the wheel's own handling takes 9–11 ms at that size,
 before and after alike, and the added `render` takes the frame past a
 refresh. Where the 2.6 ms goes is not measured yet.
+
+### Measured 2026-11-23
+
+Temporary timers in `paint()` (offscreen GPU renderer, debug build, 48000
+cells) split scrollback's frame:
+
+- **Shaping every row again: 1.5 ms.** The view looked for a row it had
+  shaped only at its own place and a few rows below, and stopped looking
+  after two rows it did not find. Scrolling back moves rows down and brings
+  new ones in at the top, so all 120 rows were shaped again for three new
+  ones. The rows are now found by their line's hash wherever they moved
+  (`Screen::shape_rows`), and shaping takes 0.17 ms.
+- **Drawing the new rows into the store: 0.7–1.0 ms**, about the same for
+  one row as for three. This is what led to §4.4.
+- **Hashing, placing and composing: 0.15 ms.**
+
+Window runs alternating ways of drawing within one run put the store's
+remaining cost over drawing an almost empty screen whole at 0.5–0.8 ms.
+That cost is filling the grid from the store image, after the copy of the
+whole store into the atlas.
+
+After §4.4, measured in a window, three binaries in turn, twice each:
+
+- before the store;
+- the store with the shaping fix;
+- the store with §4.4 as well.
+
+Medians in milliseconds:
+
+| scenario | before | shaping fix | with §4.4 |
+| --- | --- | --- | --- |
+| typing, 12000 cells | 1.1 | 1.8–2.2 | 1.8 |
+| typing, 48000 cells | 2.3–3.2 | 5.0–5.2 | 4.2–4.3 |
+| scrollback, a wheel step, 12000 cells | | 2.6–2.7 | 2.2 |
+| scrollback, a wheel step, 48000 cells | | 6.4–6.5 | 5.7–5.9 |
+| scrollback, the page drawn again unchanged, 48000 cells | | 5.1–5.3 | 6.0–6.3 |
+| lines, 48000 cells | 38.3–39.1 | 8.0 | 8.0–8.1 |
+
+Notes on the table:
+
+- **Scrollback.** In the scrollback scenario, a frame with nothing changed
+  follows each wheel step. It is where the new rows are put in the store,
+  so it costs about 1 ms more than reusing the last scene did. In a window
+  where nothing else draws the page, that frame does not come. The
+  scenario's median over both kinds of frame was 5.9–6.2 ms with §4.4 and
+  6.0 with the shaping fix, against 3.7–4.2 before the store.
+- **Lines.** Each frame brings two or three long rows, over §4.4's limit,
+  so they are drawn into the store as before.
+
+**Open.** A frame that paints the screen from the store is still about
+1.5 ms over drawing a screen of short rows whole at 48000 cells. That
+is the case of the shaping fix's frames with nothing changed (5.1–5.3 ms)
+against before. The cost is filling from the store image, after
+`anyrender_vello`'s copy of every registered texture into Vello's atlas each
+frame. Neither is code of this repository's.
 
 ## 8. Scope
 

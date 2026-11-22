@@ -1264,8 +1264,10 @@ fn paint_on_gpu(
 }
 
 /// The screen after `change`, painted from the rows a renderer kept of it
-/// before (`setup`'s screen painted first), and painted anew on another
-/// renderer, at `scale`: the two must be the same pixels.
+/// before (`setup`'s screen painted first) with the rows new to it painted
+/// themselves, painted again with nothing changed (those rows kept too),
+/// and painted anew on another renderer, at `scale`: all must be the same
+/// pixels.
 fn kept_rows_paint_what_painting_anew_paints(
     what: &str,
     scale: f32,
@@ -1287,48 +1289,83 @@ fn kept_rows_paint_what_painting_anew_paints(
     let mut kept = anyrender_vello::VelloImageRenderer::new(size.0, size.1);
     paint_on_gpu(&opened, &mut kept, scale, size);
     change(&opened);
-    let from_kept = paint_on_gpu(&opened, &mut kept, scale, size);
+    let terminal = &opened.terminal;
+    let with_new = paint_on_gpu(&opened, &mut kept, scale, size);
+    assert!(
+        terminal.painted_from_kept_rows() && terminal.rows_painted_beside_kept() > 0,
+        "{what} at {scale}: the rows new to the screen painted themselves"
+    );
+    let all_kept = paint_on_gpu(&opened, &mut kept, scale, size);
+    assert!(
+        terminal.painted_from_kept_rows() && terminal.rows_painted_beside_kept() == 0,
+        "{what} at {scale}: painted again, every row from those kept"
+    );
     // The window lets go of its renderer this way before it takes another
     // (`blitz-shell`'s suspend): what was kept on the one before is gone.
-    assert!(
-        opened.terminal.painted_from_kept_rows(),
-        "{what} at {scale}"
-    );
     opened.app.document().borrow_mut().destroy_surfaces();
     let mut another = anyrender_vello::VelloImageRenderer::new(size.0, size.1);
+    paint_on_gpu(&opened, &mut another, scale, size);
     let anew = paint_on_gpu(&opened, &mut another, scale, size);
     assert!(
-        opened.terminal.painted_from_kept_rows(),
-        "{what} at {scale}"
+        terminal.painted_from_kept_rows() && terminal.rows_painted_beside_kept() == 0,
+        "{what} at {scale}: painted anew, then from the rows kept"
     );
-    let (kept, anew) = (from_kept.as_chunks::<4>().0, anew.as_chunks::<4>().0);
-    let differing: Vec<usize> = (0..kept.len())
-        .filter(|at| kept[*at] != anew[*at])
-        .collect();
-    let first = (differing.first()).map(|at| {
-        let place = (at % size.0 as usize, at / size.0 as usize);
-        (place, kept[*at], anew[*at])
-    });
-    // The two renderers may differ by a little at a few edges of glyphs:
-    // with the glyphs' hinting off they are the same pixels, so what is
-    // left is Vello's hinted glyphs, which a renderer that drew other text
-    // before draws a shade apart. A row in the wrong slot, or a slot not
-    // drawn, is a whole row's text apart.
-    let far = (differing.iter()).find(|at| {
-        let (kept, anew) = (kept[**at], anew[**at]);
-        (0..3).any(|channel| kept[channel].abs_diff(anew[channel]) > 32)
-    });
-    assert!(
-        far.is_none() && differing.len() < 50,
-        "{what} at {scale}: {} pixels differ, the first (place, kept, anew) {first:?}",
-        differing.len()
+    // The rows new to the screen are painted by the page's renderer, which
+    // anti-aliases by area here and by 16 samples a pixel in a window, as
+    // the store does (`src/terminal/store.rs`): every edge of them is a few
+    // shades apart (29 at most, measured), a row in the wrong place or not
+    // painted is a whole row's text apart.
+    same_pixels(
+        &format!("{what} at {scale}, with the new rows"),
+        size,
+        (&with_new, &anew),
+        (48, usize::MAX),
+    );
+    // Two renderers may differ by a little at a few edges of glyphs: with
+    // the glyphs' hinting off they are the same pixels, so what is left is
+    // Vello's hinted glyphs, which a renderer that drew other text before
+    // draws a shade apart. A row in the wrong slot, or a slot not drawn, is
+    // a whole row's text apart.
+    same_pixels(
+        &format!("{what} at {scale}, all kept"),
+        size,
+        (&all_kept, &anew),
+        (32, 50),
     );
     // Something was painted: the screen's text.
     let look = Theme::built_in().terminal();
-    let lit = (anew.iter())
+    let lit = (anew.as_chunks::<4>().0.iter())
         .filter(|pixel| [pixel[0], pixel[1], pixel[2]] == look.foreground)
         .count();
     assert!(lit > 20, "{what} at {scale}: {lit} pixels of text");
+}
+
+/// Asserts `painted` is the pixels of `anew` but for fewer than `fewer`
+/// pixels, none of whose channels is more than `apart` from `anew`'s.
+fn same_pixels(
+    what: &str,
+    size: (u32, u32),
+    (painted, anew): (&[u8], &[u8]),
+    (apart, fewer): (u8, usize),
+) {
+    let (painted, anew) = (painted.as_chunks::<4>().0, anew.as_chunks::<4>().0);
+    let differing: Vec<usize> = (0..painted.len())
+        .filter(|at| painted[*at] != anew[*at])
+        .collect();
+    let first = (differing.first()).map(|at| {
+        let place = (at % size.0 as usize, at / size.0 as usize);
+        (place, painted[*at], anew[*at])
+    });
+    let far = (differing.iter()).find(|at| {
+        let (painted, anew) = (painted[**at], anew[**at]);
+        (0..3).any(|channel| painted[channel].abs_diff(anew[channel]) > apart)
+    });
+    assert!(
+        far.is_none() && differing.len() < fewer,
+        "{what}: {} pixels differ, the first (place, painted, anew) {first:?}, one far apart {:?}",
+        differing.len(),
+        far.map(|at| (painted[*at], anew[*at]))
+    );
 }
 
 /// Waits for a screen of the numbers 1 to `last`, at the prompt.

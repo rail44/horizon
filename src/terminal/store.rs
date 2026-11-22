@@ -8,6 +8,11 @@
 //! Vello into a scratch texture and copied into their slots: Vello writes
 //! the whole of the texture it renders to, and wgpu copies nothing within
 //! one texture.
+//!
+//! Drawing rows into the store is a render of its own, which costs about
+//! the same for one row as for many. A few rows new to a frame are
+//! painted into the frame itself instead, and put in the store when the
+//! page is drawn again with nothing changed (§4.4).
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -44,6 +49,27 @@ pub(super) struct Ground {
     pub scale: u64,
     pub cell: u64,
     pub inset: (u64, u64),
+}
+
+/// How many cells with something drawn in them (not blank) a frame paints
+/// itself rather than putting them in the store. Painted that way, they are
+/// drawn again with the page each time until they are put in the store, so
+/// a frame does so only while that costs less than one render of the store:
+/// measured in a window at 48000 cells, the render took about 1 ms, and
+/// rows of text took about as long at a little over 1000 cells
+/// (`docs/terminal-row-texture-design.md` §4.4).
+const PAINTED_IN_THE_FRAME: usize = 1024;
+
+/// What a row of a frame is found by in the store: the hash of what it is
+/// drawn from, and whether what a slot holds is it.
+fn key<'a>(row: &Wanted<'a>) -> (u64, impl Fn(&Held) -> bool + 'a) {
+    let shaped = row.shaped;
+    let hash = hash_of(&(shaped.hash, &row.selected));
+    let selected = row.selected.clone();
+    let same = move |held: &Held| {
+        held.selected == selected && (held.shaping == shaped.shaping || held.line == shaped.line)
+    };
+    (hash, same)
 }
 
 /// A row of a frame as the store paints it.
@@ -124,9 +150,12 @@ impl RowStore {
         context.unregister_resource(self.resource);
     }
 
-    /// Paints `rows` into `scene` from their slots, drawing those not held
-    /// first, all with `pen` on `ground`, the grid `height` device pixels
-    /// tall. False when they could not be, and nothing was painted.
+    /// Paints `rows` into `scene`, all with `pen` on `ground`, the grid
+    /// `height` device pixels tall: those held from their slots, and those
+    /// not held either drawn into the store first or, when there are few
+    /// and `store_all` is false, painted into `scene` themselves. How many
+    /// rows were painted themselves, or `None` when the rows could not be
+    /// painted, and nothing was.
     pub(super) fn paint(
         &mut self,
         scene: &mut impl PaintScene,
@@ -134,45 +163,86 @@ impl RowStore {
         ground: &Ground,
         rows: &[Wanted<'_>],
         height: f64,
-    ) -> bool {
+        store_all: bool,
+    ) -> Option<usize> {
         if self.ground.as_ref() != Some(ground) {
             self.slots.clear();
             self.ground = Some(ground.clone());
         }
         self.slots.next_frame();
         let mut placed = Vec::with_capacity(rows.len());
-        let mut fresh = Vec::new();
+        let mut missing = Vec::new();
         for (index, row) in rows.iter().enumerate() {
             // A blank row is the ground the screen is filled with already.
             if row.shaped.blank && row.selected.is_none() {
                 placed.push(None);
                 continue;
             }
-            let shaped = row.shaped;
-            let hash = hash_of(&(shaped.hash, &row.selected));
-            let same = |held: &Held| {
-                held.selected == row.selected
-                    && (held.shaping == shaped.shaping || held.line == shaped.line)
-            };
+            let (hash, same) = key(row);
+            let slot = self.slots.find(hash, same);
+            if slot.is_none() {
+                missing.push(index);
+            }
+            placed.push(slot);
+        }
+        let drawn = |index: &usize| {
+            let line = &rows[*index].shaped.line;
+            let glyphs = line.text.chars().filter(|c| !c.is_whitespace());
+            glyphs.count() + line.shapes.len()
+        };
+        let in_the_frame =
+            !store_all && missing.iter().map(drawn).sum::<usize>() <= PAINTED_IN_THE_FRAME;
+        if in_the_frame {
+            self.compose(scene, pen, rows, &placed, height);
+            scene.push_clip_layer(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                &Rect::new(0., 0., pen.width, height),
+            );
+            for index in &missing {
+                let row = &rows[*index];
+                paint_row(scene, pen, row.shaped, row.selected.clone(), row.top);
+            }
+            scene.pop_layer();
+            return Some(missing.len());
+        }
+        let mut fresh = Vec::with_capacity(missing.len());
+        for index in missing {
+            let row = &rows[index];
+            let (hash, same) = key(row);
             let make = || Held {
-                line: shaped.line.clone(),
+                line: row.shaped.line.clone(),
                 selected: row.selected.clone(),
-                shaping: shaped.shaping,
+                shaping: row.shaped.shaping,
             };
             match self.slots.place(hash, same, make) {
-                Some(Placed::Kept(slot)) => placed.push(Some(slot)),
+                // (A row alike placed just before it.)
+                Some(Placed::Kept(slot)) => placed[index] = Some(slot),
                 Some(Placed::Fresh(slot)) => {
-                    placed.push(Some(slot));
+                    placed[index] = Some(slot);
                     fresh.push((slot, index));
                 }
-                None => return false,
+                None => return None,
             }
         }
         if !fresh.is_empty() && !self.draw(pen, rows, &fresh) {
             // What the slots were said to hold was not drawn.
             self.slots.clear();
-            return false;
+            return None;
         }
+        self.compose(scene, pen, rows, &placed, height);
+        Some(0)
+    }
+
+    /// Paints the rows of `rows` that `placed` gives a slot from it.
+    fn compose(
+        &self,
+        scene: &mut impl PaintScene,
+        pen: &Pen,
+        rows: &[Wanted<'_>],
+        placed: &[Option<usize>],
+        height: f64,
+    ) {
         let image = Paint::Resource(ImageBrush {
             image: self.resource,
             sampler: ImageSampler {
@@ -182,7 +252,7 @@ impl RowStore {
             },
         });
         for (row, slot) in rows.iter().zip(placed) {
-            let Some(slot) = slot else {
+            let Some(slot) = *slot else {
                 continue;
             };
             let (x, y) = self.layout.origin(slot);
@@ -200,7 +270,6 @@ impl RowStore {
                 &strip,
             );
         }
-        true
     }
 
     /// Draws the rows of `rows` that `fresh` names into the slots it names.

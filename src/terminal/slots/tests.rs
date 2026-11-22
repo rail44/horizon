@@ -88,6 +88,20 @@ fn rows_whose_hashes_meet_are_told_apart_by_what_they_hold() {
 }
 
 #[test]
+fn finding_a_row_gives_it_no_slot_and_keeps_the_one_it_has_from_being_taken() {
+    let mut slots = Slots::new(2);
+    frame(&mut slots, &["a", "b"]);
+    slots.next_frame();
+    assert_eq!(slots.find(hash_of(&"c"), |held| *held == "c"), None);
+    let a = slots.find(hash_of(&"a"), |held| *held == "a");
+    assert!(a.is_some());
+    // "b" is the only slot this frame has not used.
+    let c = slots.place(hash_of(&"c"), |held| *held == "c", || "c");
+    assert!(matches!(c, Some(Placed::Fresh(_))));
+    assert_ne!(c.unwrap().slot(), a.unwrap());
+}
+
+#[test]
 fn cleared_slots_hold_nothing() {
     let mut slots = Slots::new(2);
     frame(&mut slots, &["a", "b"]);

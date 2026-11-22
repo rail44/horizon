@@ -168,10 +168,17 @@ Debug build, the median in milliseconds:
   late. Typing, idle frames and lines of output came out as before this
   design.
 
-**Open.** `render` while scrolling back is still about 3 ms over what it
-was before the row store at 48000 cells, and about 1 ms at 12000. That
-cost is in painting from the row store (`docs/terminal-row-texture-design.md`
-§7), not in scrolling.
+**Open.** `render` while scrolling back was about 3 ms over what it was
+before the row store at 48000 cells, and about 1 ms at 12000. That cost
+was in painting from the row store, not in scrolling. Since 2026-11-23,
+two things have cut a wheel step's `render` at 48000 cells from about
+6.5 ms to 5.7–5.9:
+
+- rows shaped before are found wherever scrolling back moved them;
+- the rows new to a frame are painted into it.
+
+What is left is filling from the store image
+(`docs/terminal-row-texture-design.md` §7, "Measured 2026-11-23").
 
 ## References
 

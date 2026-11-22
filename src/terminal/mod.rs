@@ -148,6 +148,10 @@ struct State {
     /// Whether the screen was last painted from the rows kept as pixels on
     /// the renderer's device, rather than drawn whole.
     painted_from_kept: Cell<bool>,
+    /// How many rows of it were painted into it themselves rather than from
+    /// the rows kept: painted again with nothing changed, they are put with
+    /// those (`store.rs`).
+    painted_beside_kept: Cell<usize>,
     /// Where the box is on the page, in CSS pixels: on a display that is
     /// not at one device pixel to the CSS pixel, the box may start part of
     /// a device pixel in, which what is drawn to whole device pixels
@@ -196,6 +200,7 @@ impl State {
             off_the_page: Cell::new(false),
             row: Cell::new(row_height(look.line_height, 1.)),
             painted_from_kept: Cell::new(false),
+            painted_beside_kept: Cell::new(0),
             look: RefCell::new(look),
             restyled: Cell::new(0),
             frame: RefCell::new(None),
@@ -314,6 +319,12 @@ impl Terminal {
     /// a renderer on a GPU paints it, rather than drawn whole.
     pub fn painted_from_kept_rows(&self) -> bool {
         self.state.painted_from_kept.get()
+    }
+
+    /// How many rows of the screen painted from the rows it keeps were
+    /// painted themselves, being new to it.
+    pub fn rows_painted_beside_kept(&self) -> usize {
+        self.state.painted_beside_kept.get()
     }
 
     /// Asks the session to copy what is selected.
@@ -1403,8 +1414,10 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             preedit: self.state.preedit.borrow().clone(),
             device: device.as_ref().map(|handle| handle.device.clone()),
         };
-        if let Some((before, scene)) = &self.last
-            && *before == painted
+        let unchanged = (self.last.as_ref()).is_some_and(|(before, _)| *before == painted);
+        if unchanged
+            && self.state.painted_beside_kept.get() == 0
+            && let Some((_, scene)) = &self.last
         {
             return scene.clone();
         }
@@ -1455,7 +1468,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             cell: cell.to_bits(),
             inset: (inset.0.to_bits(), inset.1.to_bits()),
         };
-        let stored = device.is_some_and(|device| {
+        let stored = device.and_then(|device| {
             let wanted: Vec<Wanted<'_>> = (shown.iter())
                 .map(|row| Wanted {
                     shaped: &self.rows[row.index],
@@ -1469,19 +1482,18 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             let rows = cells.2 as u32;
             let capacity = rows + 1 + rows / 4 + 1;
             let greatest = device.device.limits().max_texture_dimension_2d;
-            let Some(layout) = slots::Layout::for_rows(capacity, width, line as u32, greatest)
-            else {
-                return false;
-            };
+            let layout = slots::Layout::for_rows(capacity, width, line as u32, greatest)?;
             if !(self.store.as_ref()).is_some_and(|store| store.is(&device, &layout)) {
                 if let Some(store) = self.store.take() {
                     store.release(context);
                 }
                 self.store = RowStore::new(context, &device, layout);
             }
-            (self.store.as_mut())
-                .is_some_and(|store| store.paint(&mut scene, &pen, &ground, &wanted, height as f64))
+            let store = self.store.as_mut()?;
+            store.paint(&mut scene, &pen, &ground, &wanted, height as f64, unchanged)
         });
+        (self.state.painted_beside_kept).set(stored.unwrap_or(0));
+        let stored = stored.is_some();
         self.state.painted_from_kept.set(stored);
         if !stored {
             scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &whole);
@@ -1505,6 +1517,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
     fn destroy_surfaces(&mut self) {
         self.store = None;
         self.last = None;
+        self.state.painted_beside_kept.set(0);
     }
 }
 
