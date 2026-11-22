@@ -154,6 +154,24 @@ Debug build, the median in milliseconds:
   `how_long_a_frame_takes_as_the_viewport_scrolls`):
   - 400×120: 9.0 → 1.3, and in release 3.6 → 0.25;
   - 200×60: 2.6 → 0.46, and in release 0.95 → 0.10.
+- **In a window** (`--window`, with the owner's consent), three binaries in
+  turn, twice each: before the row store, the row store with the windowed
+  scrollback, and this design. `terminal/scrollback` at 48000 cells:
+
+  | | the whole frame | `render` | late of 200 |
+  | --- | --- | --- | --- |
+  | before the row store | 11.3–14.5 | 3.7–4.2 | 1–50 |
+  | the row store, windowed scrollback | 14.2–16.5 | 6.3–6.6 | 35–99 |
+  | this design | 7.4–7.8 | 6.7–7.3 | 0 |
+
+  At 12000 cells the whole frame was 2.3–2.4, 2.5–2.6 and 3.4–3.7, never
+  late. Typing, idle frames and lines of output came out as before this
+  design.
+
+**Open.** `render` while scrolling back is still about 3 ms over what it
+was before the row store at 48000 cells, and about 1 ms at 12000. That
+cost is in painting from the row store (`docs/terminal-row-texture-design.md`
+§7), not in scrolling.
 
 ## References
 
