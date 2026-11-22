@@ -532,3 +532,160 @@ fn how_a_scrolling_frame_s_time_divides() {
         );
     }
 }
+
+#[test]
+#[ignore = "an observation for the record, not a check"]
+fn what_the_engine_says_of_rows_as_the_viewport_scrolls() {
+    use libghostty_vt::Terminal;
+    use libghostty_vt::render::{Dirty, Overscan, RenderState, RowId, RowIterator};
+    use libghostty_vt::terminal::ScrollViewport;
+
+    /// Each row captured, top to bottom: its id, whether it is marked
+    /// changed, and its place against the viewport.
+    type Seen = Vec<(RowId, bool, i32)>;
+    struct Read {
+        whole: Dirty,
+        rows: Seen,
+        overscan: (u16, u16),
+        /// The scrollbar's total, offset and length, and whether the
+        /// viewport is at the bottom.
+        bar: (u64, u64, u64),
+        at_bottom: bool,
+    }
+
+    let mut terminal: Terminal<'static, 'static> = Terminal::new(40, 10).unwrap();
+    terminal.set_scrollback_max_lines(Some(1000)).unwrap();
+    let mut state: RenderState<'static> = RenderState::new().unwrap();
+    let mut row_it: RowIterator<'static> = RowIterator::new().unwrap();
+    let mut read = |terminal: &Terminal<'static, 'static>, state: &mut RenderState<'static>| {
+        let snapshot = state.update(terminal).unwrap();
+        let whole = snapshot.dirty().unwrap();
+        let overscan = snapshot.overscan().unwrap();
+        let mut rows: Seen = Vec::new();
+        let mut iteration = row_it.update(&snapshot).unwrap();
+        while let Some(row) = iteration.next() {
+            rows.push((
+                row.id().unwrap(),
+                row.dirty().unwrap(),
+                row.viewport_y().unwrap(),
+            ));
+            row.set_dirty(false).unwrap();
+        }
+        snapshot.set_dirty(Dirty::Clean).unwrap();
+        let bar = terminal.scrollbar().unwrap();
+        Read {
+            whole,
+            rows,
+            overscan: (overscan.above, overscan.below),
+            bar: (bar.total, bar.offset, bar.len),
+            at_bottom: terminal.viewport_active().unwrap(),
+        }
+    };
+    let describe = |what: &str, before: &Seen, after: &Read| {
+        let rows = &after.rows;
+        let seen_before = |id: &RowId| before.iter().find(|(old, ..)| old == id);
+        let changed = rows.iter().filter(|(_, changed, _)| *changed).count();
+        let kept = rows
+            .iter()
+            .filter(|(id, ..)| seen_before(id).is_some())
+            .count();
+        let changed_kept = (rows.iter())
+            .filter(|(id, changed, _)| *changed && seen_before(id).is_some())
+            .count();
+        // How far the rows seen before moved, in places.
+        let shifts: std::collections::BTreeSet<i32> = (rows.iter())
+            .filter_map(|(id, _, place)| Some(place - seen_before(id)?.2))
+            .collect();
+        println!(
+            "{what}: whole {:?}; {} rows captured (overscan {:?}); {changed} marked changed, {changed_kept} of them seen before; {kept} ids seen before, moved by {shifts:?}; scrollbar (total, offset, len) {:?}; at the bottom {}",
+            after.whole,
+            rows.len(),
+            after.overscan,
+            after.bar,
+            after.at_bottom,
+        );
+    };
+
+    for line in 0..100 {
+        terminal.vt_write(format!("line {line}\r\n").as_bytes());
+    }
+    let first = read(&terminal, &mut state);
+    describe("at the bottom", &Vec::new(), &first);
+    let nothing = read(&terminal, &mut state);
+    describe("nothing done", &first.rows, &nothing);
+
+    terminal.scroll_viewport(ScrollViewport::Delta(-3));
+    let up = read(&terminal, &mut state);
+    describe("the viewport three rows up", &nothing.rows, &up);
+    terminal.scroll_viewport(ScrollViewport::Delta(-3));
+    let further = read(&terminal, &mut state);
+    describe("three rows further up", &up.rows, &further);
+    let still = read(&terminal, &mut state);
+    describe("nothing done while scrolled back", &further.rows, &still);
+
+    terminal.vt_write(b"output while scrolled back\r\n");
+    let output = read(&terminal, &mut state);
+    describe("a line of output while scrolled back", &still.rows, &output);
+    for line in 0..5 {
+        terminal.vt_write(format!("burst {line}\r\n").as_bytes());
+    }
+    let burst = read(&terminal, &mut state);
+    describe(
+        "five lines of output while scrolled back",
+        &output.rows,
+        &burst,
+    );
+
+    state.set_overscan(Overscan { above: 1, below: 1 }).unwrap();
+    let overscanned = read(&terminal, &mut state);
+    describe("one row of overscan asked for", &burst.rows, &overscanned);
+    terminal.scroll_viewport(ScrollViewport::Delta(-3));
+    let overscanned_up = read(&terminal, &mut state);
+    describe(
+        "with overscan, three rows up",
+        &overscanned.rows,
+        &overscanned_up,
+    );
+
+    terminal.scroll_viewport(ScrollViewport::Bottom);
+    let bottom = read(&terminal, &mut state);
+    describe("back at the bottom", &overscanned_up.rows, &bottom);
+}
+
+/// What a frame costs when the wheel moves the terminal's own viewport
+/// three rows through its history, against a window of one screen cut out
+/// of the history (what a pane too wide for overscan fetches every tick).
+#[test]
+#[ignore = "a timing for the record, not a check"]
+fn how_long_a_frame_takes_as_the_viewport_scrolls() {
+    for (columns, rows) in [(200u16, 60u16), (400, 120)] {
+        let mut core = TerminalCore::new(TerminalSize::new(columns, rows));
+        let mut text = String::new();
+        for line in 0..5000usize {
+            text += &format!("{line:06} ");
+            for word in 0..(columns as usize / 8) {
+                text += &format!("\x1b[3{}m{word:06} ", word % 7 + 1);
+            }
+            text += "\x1b[0m\r\n";
+        }
+        core.write_vt(text.as_bytes());
+        let _ = core.snapshot_frame();
+        let rounds = 100;
+        let started = Instant::now();
+        for _ in 0..rounds {
+            core.scroll_display(3);
+            std::hint::black_box(core.snapshot_frame());
+        }
+        let scrolled = started.elapsed();
+        let started = Instant::now();
+        for round in 0..rounds {
+            std::hint::black_box(core.snapshot_window(1000 + round * 3, rows as usize));
+        }
+        let windows = started.elapsed();
+        println!(
+            "{columns}x{rows}: the viewport three rows up and a frame {:.3} ms; a window of one screen {:.3} ms (per tick)",
+            scrolled.as_secs_f64() * 1000.0 / rounds as f64,
+            windows.as_secs_f64() * 1000.0 / rounds as f64,
+        );
+    }
+}
