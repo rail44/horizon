@@ -108,6 +108,11 @@ the store.
   still found. Rows with the same content (blank rows) share one slot.
 - **Hashing.** A row's hash is taken once, when the row is shaped. A frame
   combines it with the row's selection.
+- **The hash function.** foldhash's fast variant, seeded at random once for
+  the process. Hashes are compared only within the process. A hit is
+  checked against the slot, so a collision costs a comparison and draws
+  nothing wrong, and the random seed keeps a program from aiming for
+  collisions.
 - **Matching.** Each shaping has a number of its own, kept with the slot.
   A row shaped once and shown again is matched by that number, not by
   comparing its whole content. A row found only by its hash is compared
