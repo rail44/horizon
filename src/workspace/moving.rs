@@ -1,8 +1,6 @@
 //! A view moved with the pointer (`docs/workspace-layout-design.md`,
-//! boards #94, #95): taken by its tab's label, or, where the label does
-//! not name the pane alone, by the pane's tag -- its name and a grip, in
-//! its top right corner, shown while the pointer is over the pane or in
-//! workspace mode. Dropped on the middle of another view, the two swap
+//! boards #94, #95): taken by its tab's label, or by the pane's tag
+//! (`super::tag`), by its grip and name. Dropped on the middle of another view, the two swap
 //! places; on an edge of it, it goes beside it on that side; on a tab's
 //! label, into that tab, beside its active pane; on the rest of a tab
 //! group's strip, it is a new tab of that group. A tab whose label the
@@ -156,38 +154,6 @@ impl Shell {
                 .map(|(group, _)| Target::Strip(*group))
         })
     }
-}
-
-/// `pane`'s tag: its name and the grip it is taken by, in its top right
-/// corner, clear of a terminal's text, which begins at the left. Every
-/// pane has one, a pane that is all of its tab too, and it shows while the
-/// pointer is over the pane or in workspace mode.
-pub(super) fn tag(shell: Shell, pane: PaneId) -> El {
-    el("div")
-        .class(styles::TAG)
-        // (What it shows by is on the tag itself, not on the pane or the
-        // page: a class an element around it gains is not taken into its
-        // style in every case.)
-        .class_dyn(move || {
-            (
-                shell.mode.get().then_some(styles::IN_MODE),
-                shell.moving_any().then_some(styles::AWAY),
-            )
-        })
-        .attr("title", "Drag to move this view")
-        .child(Icon::DotsSixVertical)
-        .child(el("span").class(styles::TAG_NAME).text_dyn(move || {
-            (shell.model.with(|model| model.pane_label(pane))).unwrap_or_default()
-        }))
-        .on("pointerdown", move |event| {
-            if let DomEventData::PointerDown(pointer) = &event.data {
-                shell.begin_moving(pane, pointer.page_x(), pointer.page_y());
-            }
-            // (Not a press in the pane: its view keeps the focus as it
-            // was, and nothing is selected.)
-            prevent_default();
-            stop_propagation();
-        })
 }
 
 /// The pointer moved over the workspace: a view being moved goes on, and

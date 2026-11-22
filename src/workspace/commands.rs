@@ -9,7 +9,7 @@ use horizon_ui::reactive_graph::owner::Owner;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_workspace::commands::{CommandCategory, CommandId, CommandState, command_entries};
-use horizon_workspace::{CloseCursorOutcome, Side, Workspace};
+use horizon_workspace::{CloseCursorOutcome, PaneId, Side, Workspace};
 
 use super::{Modal, Placement, Shell, plugins};
 use crate::extension::{Extension, Running};
@@ -307,5 +307,15 @@ impl Shell {
                 model.exit_workspace_mode();
             }
         });
+    }
+
+    /// [`close_pane`](Self::close_pane) on `pane`: the cursor is brought
+    /// to it first, out of workspace mode if it is on.
+    pub(super) fn close_pane_of(&self, pane: PaneId) {
+        self.model.update(|model| {
+            model.exit_workspace_mode();
+            model.activate_pane(pane);
+        });
+        self.close_pane();
     }
 }
