@@ -99,13 +99,12 @@ The store keys rows by (1) and (2): a hash looks a row up, and a hit is
 checked against the stored `TerminalLine`. A change to anything in (3) empties
 the store.
 
-- The key is computed in the shell from what it decoded. Under the snapshot
-  wire (`docs/remoc-adoption-design.md` §5), the store holds nothing that the
-  daemon also believes the shell holds: a row decoded the same way draws the
-  same pixels, whether drawn now or reused.
-- Live rows and rows of a scrollback window (`TerminalScrollWindow`) are keyed
-  the same way. A row that scrolled into history and is scrolled back to is
-  still found. Rows with the same content (blank rows) share one slot.
+- The key is what the row's pixels are drawn from, so a row found by it
+  draws the same pixels whether drawn now or reused.
+- Wherever a row moved, it is found: output scrolling it up, scrolling back
+  moving it down (`docs/terminal-scrollback-design.md`), a program
+  scrolling part of the screen. Rows with the same content (blank rows)
+  share one slot.
 - **Hashing.** A row's hash is taken once, when the row is shaped. A frame
   combines it with the row's selection.
 - **The hash function.** foldhash's fast variant, seeded at random once for
@@ -117,9 +116,12 @@ the store.
   A row shaped once and shown again is matched by that number, not by
   comparing its whole content. A row found only by its hash is compared
   with what the slot holds.
-- libghostty-vt's row ids are not used. They do not cross the snapshot wire.
-  They vanish when a program scrolls part of the screen. Scrollback windows
-  carry none.
+- libghostty-vt's row ids are not the key. An id stays with a row whose
+  content is written over in place, and a program scrolling part of the
+  screen gives the rows it moves new ids
+  (`engine_observations.rs::what_the_engine_says_of_rows_as_output_scrolls`).
+  The view's shaped rows are found the same way, by their line's hash
+  (`Screen::shape_rows`).
 
 ### 3.4 Slots
 

@@ -1510,40 +1510,28 @@ impl horizon_ui::blitz_dom::Widget for Screen {
 
 impl Screen {
     /// Shapes the frame's `lines` into `self.rows`, a row drawn before not
-    /// again, at whatever place it is now: output that scrolls moves every
-    /// row and changes one, and so does scrolling back.
+    /// again, wherever it is now: output that scrolls moves every row up,
+    /// scrolling back moves them down, and a program can scroll part of the
+    /// screen. A row is found among those shaped before by its line's hash
+    /// (`Shaped::hash`) and checked against the line.
     fn shape_rows<'a>(
         &mut self,
         lines: impl Iterator<Item = &'a TerminalLine>,
         scale: f64,
         palette: Palette,
     ) {
-        let mut before: Vec<Option<Shaped>> = (std::mem::take(&mut self.rows).into_iter())
-            .map(Some)
-            .collect();
-        // How far below its new place the last row found was, and how many
-        // rows were looked for among all of those drawn before and not
-        // found: after a couple, the screen is taken to be all new (output
-        // faster than the frames), and the rest are not looked for.
-        let (mut below, mut missed) = (0, 0);
-        for (index, wanted) in lines.enumerate() {
-            let same = |shaped: &Option<Shaped>| {
-                (shaped.as_ref()).is_some_and(|shaped| shaped.line == *wanted)
-            };
-            let mut found = [index + below, index]
-                .into_iter()
-                .find(|at| before.get(*at).is_some_and(same));
-            if found.is_none() && missed < 2 {
-                found = before.iter().position(same);
-                missed += usize::from(found.is_none());
-            }
-            let shaped = match found.and_then(|at| Some((at, before[at].take()?))) {
-                Some((at, shaped)) => {
-                    below = at.saturating_sub(index);
-                    shaped
-                }
-                None => shape(wanted, &mut self.shaper, scale as f32, palette),
-            };
+        let mut before: std::collections::HashMap<u64, Vec<Shaped>> =
+            std::collections::HashMap::new();
+        for shaped in std::mem::take(&mut self.rows) {
+            before.entry(shaped.hash).or_default().push(shaped);
+        }
+        for wanted in lines {
+            let found = before.get_mut(&slots::hash_of(wanted)).and_then(|alike| {
+                let at = alike.iter().position(|shaped| shaped.line == *wanted)?;
+                Some(alike.swap_remove(at))
+            });
+            let shaped =
+                found.unwrap_or_else(|| shape(wanted, &mut self.shaper, scale as f32, palette));
             self.rows.push(shaped);
         }
     }
