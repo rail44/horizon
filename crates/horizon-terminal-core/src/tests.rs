@@ -654,16 +654,9 @@ fn cursor_is_hidden_while_scrolled_and_correct_at_the_live_edge() {
     );
 }
 
-/// Seeds `count` numbered `lineNN` rows through a `rows`-tall viewport, so
-/// the bottom `rows` are the live screen and the rest is scrollback history
-/// (`history_size == count - rows`). Shared by the `snapshot_window` tests.
-fn numbered_history_core(rows: u16, count: usize) -> TerminalCore {
-    numbered_history_core_sized(20, rows, count)
-}
-
-/// [`numbered_history_core`] with an explicit column width — the height-clamp
-/// tests need a realistic width (the clamp is byte-budget-derived from the
-/// column count).
+/// Seeds `count` numbered `lineNN` rows through a `cols` by `rows` viewport,
+/// so the bottom `rows` are the live screen and the rest is scrollback
+/// history (`history_size == count - rows`).
 fn numbered_history_core_sized(cols: u16, rows: u16, count: usize) -> TerminalCore {
     let mut core = TerminalCore::new(TerminalSize::new(cols, rows));
     let mut script = String::new();
@@ -677,219 +670,75 @@ fn numbered_history_core_sized(cols: u16, rows: u16, count: usize) -> TerminalCo
     core
 }
 
-/// The visible text of one window/frame row (spans concatenated; blank runs
+/// The visible text of one frame row (spans concatenated; blank runs
 /// contribute their empty text).
 fn window_row_text(line: &TerminalLine) -> String {
     line.spans().map(|span| span.text).collect()
 }
 
-/// Phase 1 headline: `snapshot_window(anchor, height)` returns the correct
-/// contiguous block for the requested position, with `viewport_offset`
-/// locating the viewport inside it and `above`/`below` reporting the rows
-/// that remain outside (`docs/terminal-scrollback-design.md` §3.2, §8). With
-/// 40 numbered lines through a 5-row viewport there are 35 history rows;
-/// anchoring at the live bottom (`anchor == 0`) with a 15-row height centers
-/// the 5-row viewport in a 10-row block clamped at the live edge.
+/// A frame after the viewport moved, with only the rows new to the view
+/// read from the engine, is the frame a terminal that never drew reads in
+/// full (`docs/terminal-scrollback-design.md` §3.3).
 #[test]
-fn snapshot_window_returns_the_anchored_block_with_metadata() {
-    let core = numbered_history_core(5, 40); // history_size == 35
-
-    let window = core.snapshot_window(0, 15);
-
-    // margin = 15 - 5 = 10 (5 above, 5 below); the block clamps at the live
-    // edge below (below == 0), so it spans line30..=line39 (10 rows) with the
-    // live viewport (line35..) starting at offset 5.
-    assert_eq!(window.lines.len(), 10);
-    assert_eq!(window.viewport_offset, 5);
-    assert_eq!(window.above, 30, "line00..line29 remain above the block");
-    assert_eq!(window.below, 0, "the block's bottom is the live tail");
-    assert_eq!(window_row_text(&window.lines[0]), "line30");
-    assert_eq!(
-        window_row_text(&window.lines[window.viewport_offset]),
-        "line35",
-        "viewport_offset must point at the live viewport's top row"
-    );
-    assert_eq!(window_row_text(&window.lines[9]), "line39");
+fn a_frame_after_the_viewport_moved_is_the_frame_read_in_full() {
+    let mut core = numbered_history_core_sized(40, 5, 60);
+    let _ = core.snapshot_frame();
+    for back in [3, 6, 2, 10, 55, 0, 7] {
+        core.scroll_back_to(back);
+        let kept = core.snapshot_frame();
+        let mut fresh = numbered_history_core_sized(40, 5, 60);
+        fresh.scroll_back_to(back);
+        assert_eq!(kept, fresh.snapshot_frame(), "{back} rows back");
+    }
 }
 
-/// The invariant the whole design rests on: reading a window must **not**
-/// move the live `display_offset` (`docs/terminal-scrollback-design.md`
-/// §2.2, §8) — unlike the `scroll_display` round-trip, `snapshot_window` is a
-/// pure `iter_from` read. The live frame keeps showing the tail before and
-/// after, even when the window is anchored deep in history.
+/// Output while the viewport is back in the history leaves it on the rows
+/// it shows, and the history grows under it.
 #[test]
-fn snapshot_window_does_not_move_the_live_display_offset() {
-    let core = numbered_history_core(5, 40);
-    assert_eq!(core.display_offset(), 0);
-    let live_before = core.snapshot_frame();
-    assert!(live_before.text().contains("line39"));
-
-    // Anchor 20 rows above the live bottom: the returned block is centered on
-    // line15, nowhere near the live tail.
-    let window = core.snapshot_window(20, 15);
-    assert_eq!(
-        window_row_text(&window.lines[window.viewport_offset]),
-        "line15",
-        "the window must read history at the requested anchor"
-    );
-
-    // The read left the live viewport exactly where it was.
-    assert_eq!(
-        core.display_offset(),
-        0,
-        "snapshot_window must not move the live display_offset"
-    );
-    assert_eq!(
-        core.snapshot_frame(),
-        live_before,
-        "the live frame must be byte-identical after a window read"
-    );
+fn output_while_scrolled_back_leaves_the_rows_shown_as_they_were() {
+    let mut core = numbered_history_core_sized(40, 5, 60);
+    assert_eq!(core.scroll_back_to(10), 10);
+    let before = core.snapshot_frame();
+    let _ = core.write_vt(b"\r\nmore\r\nand more");
+    let after = core.snapshot_frame();
+    assert_eq!(after.lines, before.lines);
+    assert_eq!(after.back, 12);
+    assert_eq!(after.below, before.below);
 }
 
-/// `above == 0` is the true-top signal and `below == 0` the live-edge signal
-/// (`docs/terminal-scrollback-design.md` §3.2, §5, §8). Anchoring at the very
-/// top (`anchor == history_size`) clamps the block's top to the oldest row,
-/// so `above == 0` and `viewport_offset == 0`.
+/// Back in the history, the frame carries the row under the viewport: the
+/// one the view shows part of when it is into part of a row. On the live
+/// screen there is none.
 #[test]
-fn snapshot_window_clamps_at_the_true_top() {
-    let core = numbered_history_core(5, 40); // history_size == 35
-
-    let window = core.snapshot_window(35, 15);
-
-    assert_eq!(window.above, 0, "the block's top is the oldest history row");
-    assert_eq!(window.viewport_offset, 0);
-    assert_eq!(window_row_text(&window.lines[0]), "line00");
-    // margin_below = 5 below the 5-row viewport (rows line00..line09).
-    assert_eq!(window.lines.len(), 10);
-    assert_eq!(window.below, 30);
+fn the_row_under_a_viewport_back_in_the_history_comes_with_its_frame() {
+    let mut core = numbered_history_core_sized(40, 5, 60);
+    core.scroll_back_to(10);
+    let frame = core.snapshot_frame();
+    let below = frame.below.as_ref().map(window_row_text);
+    core.scroll_back_to(9);
+    let next = core.snapshot_frame();
+    assert_eq!(below, next.lines.last().map(window_row_text));
+    assert_eq!(below.as_deref(), Some("line50"));
+    core.scroll_back_to(0);
+    assert_eq!(core.snapshot_frame().below, None);
 }
 
-/// When the scrollback is shorter than the requested height the window
-/// clamps at *both* edges and returns the whole buffer (`above == below ==
-/// 0`) — the boundary the design's §8 "true edges" and hard-case §5 call for.
+/// The viewport goes back as far as the history goes and no further, and
+/// back to the bottom.
 #[test]
-fn snapshot_window_smaller_than_height_returns_the_whole_buffer() {
-    // 6 lines through a 4-row viewport: history_size == 2, total == 6 rows.
-    let core = numbered_history_core(4, 6);
-
-    let window = core.snapshot_window(0, 40);
-
-    assert_eq!(window.above, 0);
-    assert_eq!(window.below, 0);
-    assert_eq!(window.lines.len(), 6, "the whole buffer, clamped both ends");
+fn scrolling_back_stops_at_the_top_of_the_history_and_at_the_bottom() {
+    let mut core = numbered_history_core_sized(40, 5, 60);
+    let top = core.scroll_back_to(usize::MAX);
+    assert_eq!(top, 55);
+    assert_eq!(core.back(), 55);
+    let frame = core.snapshot_frame();
+    assert_eq!(frame.back, 55);
     assert_eq!(
-        window.viewport_offset, 2,
-        "2 history rows above the viewport"
+        frame.lines.first().map(window_row_text).as_deref(),
+        Some("line00")
     );
-    assert_eq!(window_row_text(&window.lines[0]), "line00");
-    assert_eq!(window_row_text(&window.lines[5]), "line05");
-}
-
-/// Review fix (High): `snapshot_window` **hard-clamps** the requested height
-/// to a safe row count, so a served window can never serialize past the
-/// events-channel item cap (`TERMINAL_EVENT_MAX_ITEM_BYTES`). An unbounded
-/// height would let a decorated full-scrollback window balloon to many
-/// megabytes as one `TerminalUpdate::ScrollWindow`, trip remoc's over-cap
-/// latch, tear down the shared events channel, and orphan the pane. Even
-/// `height == usize::MAX` yields a bounded block.
-#[test]
-fn snapshot_window_clamps_an_oversized_height() {
-    // 2000 lines through an 80x5 viewport: 1995 history rows, so a window
-    // requested mid-history is bounded by the height clamp, not the grid
-    // edges. max_window_rows(80, 5) = (5 + 64).min(409).max(5) = 69.
-    let core = numbered_history_core_sized(80, 5, 2000);
-
-    let window = core.snapshot_window(1000, usize::MAX);
-
-    assert_eq!(
-        window.lines.len(),
-        69,
-        "an oversized height must clamp to the safe row cap, not the buffer"
-    );
-    assert!(
-        window.lines.len() < 2000,
-        "the clamp must bite well below the full 2000-row buffer"
-    );
-}
-
-/// Review fix: the clamp keeps `above`/`below`/`viewport_offset` exact for the
-/// *clamped* block — `above + row_count + below` still accounts for every grid
-/// row, and the viewport still fits inside the returned block. The identity
-/// closes on the window actually served, not on the (larger) requested height.
-#[test]
-fn snapshot_window_metadata_identity_holds_under_clamp() {
-    let rows = 5usize;
-    let total = 2000usize; // history_size (1995) + screen_lines (5)
-    let core = numbered_history_core_sized(80, rows as u16, total);
-
-    let window = core.snapshot_window(1000, usize::MAX);
-
-    assert_eq!(
-        window.above + window.lines.len() + window.below,
-        total,
-        "above + row_count + below must still account for every grid row"
-    );
-    assert!(
-        window.viewport_offset + rows <= window.lines.len(),
-        "the viewport must fit inside the returned block after clamping"
-    );
-    assert!(
-        window.above > 0 && window.below > 0,
-        "an interior clamped window has real history on both sides"
-    );
-}
-
-/// Issue 007: a tall single-pane viewport (screen_lines at or above the
-/// byte-budget threshold where the old `.max(screen_lines)` floor collapsed
-/// the overscan to zero) still gets a fixed overscan margin, so smooth
-/// scrolling doesn't regress to line steps. The window is `screen_lines +
-/// OVERSCAN_ROWS` rows tall (when the byte budget allows), with the viewport
-/// centered by `viewport_offset = OVERSCAN_ROWS / 2`.
-#[test]
-fn snapshot_window_serves_overscan_for_a_tall_single_pane() {
-    // 120 cols × 200 rows, with enough history that neither edge clamps.
-    // max_window_rows(120, 200) = (200 + 64).min(273).max(200) = 264.
-    let core = numbered_history_core_sized(120, 200, 2000);
-
-    let window = core.snapshot_window(500, usize::MAX);
-
-    assert_eq!(
-        window.lines.len(),
-        264,
-        "a tall viewport gets viewport + OVERSCAN_ROWS, not the viewport alone"
-    );
-    assert_eq!(
-        window.viewport_offset, 32,
-        "the viewport is centered in the overscan (half above, half below)"
-    );
-    assert!(
-        window.lines.len() > 200,
-        "the window is taller than the viewport — overscan exists"
-    );
-}
-
-/// Issue 007 fallback: in the extreme case where a single viewport alone
-/// consumes the byte budget (screen_lines >= budget_rows), the overscan
-/// collapses to zero and the window is exactly the viewport — the same
-/// envelope the live-frame watch runs under. Scrolling then falls back to
-/// line-step edge fetches, the documented fallback for extreme pane heights.
-#[test]
-fn snapshot_window_drops_overscan_when_the_viewport_fills_the_byte_budget() {
-    // 120 cols: budget_rows = 4 MiB / (120 * 128) = 273. A 280-row viewport
-    // exceeds it, so the floor collapses to screen_lines (280, no overscan).
-    let core = numbered_history_core_sized(120, 280, 2000);
-
-    let window = core.snapshot_window(500, usize::MAX);
-
-    assert_eq!(
-        window.lines.len(),
-        280,
-        "when the viewport alone fills the budget, the window is exactly the viewport"
-    );
-    assert_eq!(
-        window.viewport_offset, 0,
-        "no overscan margin — the viewport is pinned to the block top"
-    );
+    assert_eq!(core.scroll_back_to(0), 0);
+    assert_eq!(core.snapshot_frame().back, 0);
 }
 
 /// The additive scrollback-availability flag (`docs/terminal-scrollback-design.md`
@@ -1634,22 +1483,21 @@ fn url_is_part_of_the_span_merge_key() {
     );
 }
 
-/// The scrollback window path shares `styled_rows`, so history rows carry
-/// their URIs too — links stay openable in scrolled-back output.
+/// History rows carry their URIs too: links stay openable in output
+/// scrolled back to, and in the row under the viewport.
 #[test]
-fn scrollback_window_spans_carry_osc8_uris() {
+fn history_rows_carry_osc8_uris() {
     let mut core = TerminalCore::with_scrollback(TerminalSize::new(40, 2), 10);
     core.write_vt(b"top\r\n");
     core.write_vt(b"\x1b]8;;https://example.com/h\x1b\\history\x1b]8;;\x1b\\\r\n");
     core.write_vt(b"tail");
 
-    // `history` scrolled off the 2-row screen; anchor 1 looks back one line.
-    let window = core.snapshot_window(1, 2);
-    let line = window
-        .lines
-        .iter()
+    // `history` scrolled off the 2-row screen; one row back shows it.
+    core.scroll_back_to(1);
+    let frame = core.snapshot_frame();
+    let line = (frame.lines.iter().chain(&frame.below))
         .find(|line| line.spans().any(|span| span.text.contains("history")))
-        .expect("the linked history row is inside the served window");
+        .expect("the linked history row is in the frame");
     let span = line
         .spans()
         .find(|span| span.text.contains("history"))

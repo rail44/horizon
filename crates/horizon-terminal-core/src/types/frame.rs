@@ -29,33 +29,14 @@ pub struct TerminalFrame {
     /// Whether the view scrolls the history: `true` on the primary screen
     /// with no application-scroll mode active, `false` on the alternate
     /// screen (which has no history) or while the program takes the mouse
-    /// (its wheel is the program's input). The view moves over windows of
-    /// the history (`TerminalScrollWindow`) only while this is set.
+    /// (its wheel is the program's input).
     pub scrollback_available: bool,
-}
-
-/// A window of the history: a contiguous block of rows read at an arbitrary
-/// position **without moving the viewport** (`TerminalCore::snapshot_window`,
-/// `docs/terminal-scrollback-design.md` §2.2, §3.2). The window is
-/// self-describing: `viewport_offset`/`above`/`below` locate it against the
-/// buffer as it was read. The view draws its rows as it draws the screen's.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TerminalScrollWindow {
-    /// The contiguous block of history rows, top to bottom. Clamped by
-    /// `above`/`below`, so it may be shorter than the requested height near
-    /// the true top or the live edge.
-    pub lines: Vec<TerminalLine>,
-    /// Index into [`lines`](Self::lines) of the row that is the top of the
-    /// viewport at the requested anchor — where the client places the
-    /// visible window inside the block.
-    pub viewport_offset: usize,
-    /// How many history rows remain above the block's top. `0` is the
-    /// true-top signal (upward scrolling and prefetch clamp here).
-    pub above: usize,
-    /// How many rows remain below the block's bottom, down to the live tail.
-    /// `0` is the live-edge signal (scrolling past it drops the window and
-    /// goes back to the live screen).
-    pub below: usize,
+    /// How many rows above the live bottom the viewport is: `0` on the live
+    /// screen (`docs/terminal-scrollback-design.md` §3.2).
+    pub back: usize,
+    /// While the viewport is back in the history, the row under its last:
+    /// a view into part of a row shows part of it.
+    pub below: Option<TerminalLine>,
 }
 
 /// One row as it is drawn, built from the engine's cells in one pass
@@ -314,6 +295,8 @@ impl TerminalFrame {
             mouse_reporting: false,
             palette_overrides: Vec::new(),
             scrollback_available: false,
+            back: 0,
+            below: None,
         }
     }
 
@@ -336,6 +319,8 @@ impl TerminalFrame {
             mouse_reporting: false,
             palette_overrides: Vec::new(),
             scrollback_available: false,
+            back: 0,
+            below: None,
         }
     }
 }

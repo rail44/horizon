@@ -60,23 +60,11 @@ fn how_long_a_frame_takes_to_read_out_of_the_engine() {
             core.write_vt(screen.as_bytes());
         });
         let times = [unchanged; 21];
-        let mut window = Vec::new();
-        for _ in 0..41 {
-            let started = Instant::now();
-            let served = core.snapshot_window(rows as usize, rows as usize * 3);
-            window.push(started.elapsed());
-            assert!(served.lines.len() >= rows as usize);
-        }
-        window.sort();
         println!(
-            "{columns}x{rows}: writing {} bytes {:?}; a frame with nothing changed {:?}, one row {one_row:?}, every row {every_row:?} (medians of 41); a window of {} rows {:?}",
+            "{columns}x{rows}: writing {} bytes {:?}; a frame with nothing changed {:?}, one row {one_row:?}, every row {every_row:?} (medians of 41)",
             text.len(),
             written,
             times[20],
-            core.snapshot_window(rows as usize, rows as usize * 3)
-                .lines
-                .len(),
-            window[20],
         );
     }
 }
@@ -653,8 +641,8 @@ fn what_the_engine_says_of_rows_as_the_viewport_scrolls() {
 }
 
 /// What a frame costs when the wheel moves the terminal's own viewport
-/// three rows through its history, against a window of one screen cut out
-/// of the history (what a pane too wide for overscan fetches every tick).
+/// three rows through its history (`docs/terminal-scrollback-design.md`
+/// §3.3: only the rows new to the view are read).
 #[test]
 #[ignore = "a timing for the record, not a check"]
 fn how_long_a_frame_takes_as_the_viewport_scrolls() {
@@ -677,15 +665,9 @@ fn how_long_a_frame_takes_as_the_viewport_scrolls() {
             std::hint::black_box(core.snapshot_frame());
         }
         let scrolled = started.elapsed();
-        let started = Instant::now();
-        for round in 0..rounds {
-            std::hint::black_box(core.snapshot_window(1000 + round * 3, rows as usize));
-        }
-        let windows = started.elapsed();
         println!(
-            "{columns}x{rows}: the viewport three rows up and a frame {:.3} ms; a window of one screen {:.3} ms (per tick)",
+            "{columns}x{rows}: the viewport three rows up and a frame {:.3} ms (per tick)",
             scrolled.as_secs_f64() * 1000.0 / rounds as f64,
-            windows.as_secs_f64() * 1000.0 / rounds as f64,
         );
     }
 }

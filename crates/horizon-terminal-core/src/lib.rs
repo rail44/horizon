@@ -40,9 +40,9 @@ pub use session_loop::{
 pub use types::{
     KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,
     TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
-    TerminalMouseReport, TerminalRun, TerminalScroll, TerminalScrollWindow, TerminalSelection,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalStyle,
-    TerminalUnderline, fixed_palette_rgb,
+    TerminalMouseReport, TerminalRun, TerminalScroll, TerminalSelection, TerminalSelectionKind,
+    TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalStyle, TerminalUnderline,
+    fixed_palette_rgb,
 };
 
 #[cfg(test)]
