@@ -39,7 +39,6 @@ mod request;
 mod routing;
 pub mod terminal_glyphs;
 pub mod terminal_links;
-pub mod terminal_scrollback;
 pub use agent::SessionSummary;
 pub use attachment::{AgentCommand, AgentUpdate, AttachmentState};
 pub use routing::WorkspaceRootUpdate;

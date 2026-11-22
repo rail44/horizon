@@ -24,8 +24,8 @@ use horizon_shell_runtime::TerminalSessionHandle;
 use horizon_shell_runtime::terminal_glyphs as drawn_glyphs;
 use horizon_terminal_core::{
     ClipboardDestination, KeyStroke, TerminalCommand, TerminalCore, TerminalFrame,
-    TerminalKeyInput, TerminalMouseReport, TerminalScroll, TerminalScrollWindow,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalUpdate,
+    TerminalKeyInput, TerminalMouseReport, TerminalScroll, TerminalSelectionKind,
+    TerminalSelectionPoint, TerminalUpdate,
 };
 
 type Wake = Arc<Mutex<Option<Waker>>>;
@@ -214,11 +214,23 @@ impl Session {
         }
     }
 
-    /// A window of the history `height` rows tall, `anchor` rows above the
-    /// live bottom, read from the session's terminal.
-    pub fn window(&self, anchor: usize, height: usize) -> Option<TerminalScrollWindow> {
-        let mirror = self.mirror.borrow();
-        Some(mirror.as_ref()?.snapshot_window(anchor, height))
+    /// Puts the session's terminal's viewport `rows` rows above the live
+    /// bottom, or as far as its history goes, and says how far that is:
+    /// `0` with no terminal yet.
+    pub fn scroll_back_to(&self, rows: usize) -> usize {
+        let mut mirror = self.mirror.borrow_mut();
+        let Some(terminal) = mirror.as_mut() else {
+            return 0;
+        };
+        let reached = terminal.scroll_back_to(rows);
+        self.changed.set(true);
+        reached
+    }
+
+    /// How many rows above the live bottom the session's terminal's
+    /// viewport is.
+    pub fn back(&self) -> usize {
+        (self.mirror.borrow().as_ref()).map_or(0, TerminalCore::back)
     }
 
     fn on_the_terminal(&self, act: impl FnOnce(&mut TerminalCore)) {
