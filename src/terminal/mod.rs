@@ -33,7 +33,6 @@ use termwiz::input::{KeyCode, Modifiers};
 use horizon_components::Drags;
 use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
 use horizon_shell_runtime::terminal_links::url_from_lines;
-use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked};
@@ -161,11 +160,11 @@ struct State {
     /// and what it copied that the clipboard has not been given yet.
     copied: RefCell<Option<String>>,
     outgoing: RefCell<Option<String>>,
-    /// The history being scrolled through, when the wheel is the
-    /// terminal's own and not the program's: a window of it held here and
-    /// moved over row by row and part of a row, with no word to the
-    /// daemon until its edge is near (`docs/terminal-scrollback-design.md`).
-    scrollback: RefCell<Scrollback>,
+    /// While the view is back in the history, the part of a row it is into
+    /// the top row of its terminal's viewport: the view's place is that
+    /// many rows back, less this (`docs/terminal-scrollback-design.md`
+    /// §3.1).
+    into: Cell<f32>,
     /// The part of a wheel's turn not yet a whole row, for a wheel that
     /// is the program's.
     wheel: Cell<f64>,
@@ -207,7 +206,7 @@ impl State {
             focused: Cell::new(false),
             copied: RefCell::new(None),
             outgoing: RefCell::new(None),
-            scrollback: RefCell::default(),
+            into: Cell::new(0.),
             wheel: Cell::new(0.),
             clicked: Cell::new(None),
             reporting: Cell::new(None),
@@ -273,11 +272,8 @@ impl Terminal {
     /// is scrolled back the rows of history it is over.
     pub fn text(&self) -> String {
         let frame = self.state.frame.borrow();
-        let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
-        let history = (scrolled.as_ref()).map(|(window, range, _)| &window.lines[range.clone()]);
-        let live = frame.as_ref().map(|frame| &frame.lines[..]);
-        let lines = history.or(live).into_iter().flatten();
-        lines
+        let lines = frame.as_ref().map(|frame| &frame.lines[..]);
+        (lines.into_iter().flatten())
             .map(TerminalLine::plain)
             .collect::<Vec<_>>()
             .join("\n")
@@ -286,9 +282,10 @@ impl Terminal {
     /// How far into its top row the view is scrolled, as a part of a row,
     /// while it is scrolled back.
     pub fn scrolled_into(&self) -> Option<f32> {
-        (self.state.scrollback.borrow())
-            .visible_lines(self.state.cells.get().2)
-            .map(|(.., into)| into)
+        let frame = self.state.frame.borrow();
+        (frame.as_ref())
+            .filter(|frame| frame.back > 0)
+            .map(|_| self.state.into.get())
     }
 
     pub fn frame(&self) -> Option<TerminalFrame> {
@@ -350,7 +347,10 @@ fn pump(state: &State) -> bool {
     let mut came = false;
     if let Some((number, frame)) = state.session.frame_after(state.seen.get()) {
         // A program that takes the screen takes it from the history too.
-        (state.scrollback.borrow_mut()).on_live_frame(frame.scrollback_available);
+        if !frame.scrollback_available && frame.back > 0 {
+            state.session.scroll_back_to(0);
+            state.into.set(0.);
+        }
         *state.frame.borrow_mut() = Some(frame);
         state.seen.set(number);
         came = true;
@@ -373,22 +373,6 @@ fn pump(state: &State) -> bool {
         }
     }
     came
-}
-
-/// Serves the history's windows the scrollback asks for, read from the
-/// session's terminal there and then: one window can ask for the next
-/// (a few at most).
-fn serve_windows(state: &State, mut request: Option<(usize, usize)>) {
-    for _ in 0..4 {
-        let Some((anchor, height)) = request else {
-            return;
-        };
-        let Some(window) = state.session.window(anchor, height) else {
-            state.scrollback.borrow_mut().abandon();
-            return;
-        };
-        request = state.scrollback.borrow_mut().install_window(window).request;
-    }
 }
 
 fn modifiers(key: &BlitzKeyEvent) -> Modifiers {
@@ -488,7 +472,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
         move |x: f32, y: f32| {
             let (width, columns, rows) = state.cells.get();
             TerminalSelectionPoint {
-                row: ((y as f64 / state.row.get()).max(0.) as usize).min(rows.saturating_sub(1)),
+                row: (row_at(&state, y as f64).max(0.) as usize).min(rows.saturating_sub(1)),
                 col: ((x as f64 / width).max(0.) as usize).min(columns.saturating_sub(1)),
             }
         }
@@ -621,8 +605,6 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 _ => 1,
             };
             pressed.clicked.set(Some((now, point, presses)));
-            // A selection is of the live screen.
-            pressed.scrollback.borrow_mut().abandon();
             pressed.session.select(
                 point,
                 match presses {
@@ -648,23 +630,12 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                     BlitzWheelDelta::Lines(_, lines) => lines * WHEEL_LINE / line_height,
                     BlitzWheelDelta::Pixels(_, pixels) => pixels / line_height,
                 };
-                let viewport = wheeled.cells.get().2;
-                let decision = (wheeled.scrollback.borrow_mut()).on_wheel(rows as f32, viewport);
-                if let ScrollIpc::Request { anchor, height } = decision.ipc {
-                    serve_windows(&wheeled, Some((anchor, height)));
-                }
-                // The view moved over the window it holds: nothing comes
-                // from the daemon for that, and nothing of the document
-                // changed.
-                if decision.repaint {
-                    wheeled.session.redraw();
-                }
+                scroll_back(&wheeled, rows as f32);
                 prevent_default();
                 return;
             }
             // The wheel is the program's (or the peer's): whole rows, told
             // to it.
-            wheeled.scrollback.borrow_mut().abandon();
             // A program that asked for the mouse is told of each notch
             // once, and moves by what it chooses to; one that is sent arrow
             // keys for the wheel moves a row for each, three to the notch.
@@ -711,7 +682,6 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                     state.look.borrow().font_size,
                 ),
                 rows: Vec::new(),
-                history: (0, std::collections::HashMap::new()),
                 shaped_at: 0.,
                 baseline: 0.,
                 // (The first paint takes the look as it is then.)
@@ -762,8 +732,6 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
         let rows = (size.height / row) as usize;
         if (columns, rows) != (sized.cells.get().1, sized.cells.get().2) && columns * rows > 0 {
             sized.cells.set((cell_width, columns, rows));
-            // A window of history was served for the old size.
-            sized.scrollback.borrow_mut().abandon();
             (sized.session).send(TerminalCommand::Resize(TerminalSize::new(
                 columns as u16,
                 rows as u16,
@@ -780,9 +748,36 @@ fn cell_on_page(state: &State, x: f32, y: f32) -> TerminalSelectionPoint {
     let (left, top) = state.origin.get();
     let (x, y) = (x as f64 - left, y as f64 - top);
     TerminalSelectionPoint {
-        row: ((y / state.row.get()).max(0.) as usize).min(rows.saturating_sub(1)),
+        row: (row_at(state, y).max(0.) as usize).min(rows.saturating_sub(1)),
         col: ((x / width).max(0.) as usize).min(columns.saturating_sub(1)),
     }
+}
+
+/// The row of the frame a point `y` CSS pixels down the box is in, as a
+/// part of a row: the view back in the history is into its top row
+/// (`docs/terminal-scrollback-design.md` §3.4).
+fn row_at(state: &State, y: f64) -> f64 {
+    let back = (state.frame.borrow().as_ref()).is_some_and(|frame| frame.back > 0);
+    let into = if back { state.into.get() as f64 } else { 0. };
+    y / state.row.get() + into
+}
+
+/// Moves the view `rows` rows further back into the history, or fewer for
+/// a negative count, part of a row too: the session's terminal's viewport
+/// goes back the whole rows, and the part of a row is kept here
+/// (`docs/terminal-scrollback-design.md` §3.1).
+fn scroll_back(state: &State, rows: f32) {
+    let now = state.session.back() as f32 - state.into.get();
+    let wanted = (now + rows).max(0.);
+    let whole = wanted.ceil();
+    let reached = state.session.scroll_back_to(whole as usize) as f32;
+    // At the top of the history there is no part of a row further.
+    state.into.set(match reached < whole {
+        true => 0.,
+        false => whole - wanted,
+    });
+    // The view moved: nothing comes from the daemon for it.
+    state.session.redraw();
 }
 
 /// Follows the pointer from a press in the view until its button comes
@@ -796,7 +791,6 @@ fn drag(state: &Rc<State>, modifiers: TerminalMouseModifiers) {
             let point = cell_on_page(&moved, x, y);
             match moved.dragging.get() {
                 Some(true) => {
-                    moved.scrollback.borrow_mut().abandon();
                     moved.session.extend_selection(point);
                 }
                 Some(false) => {
@@ -838,14 +832,14 @@ pub fn color_scheme(look: &TerminalLook) -> TerminalColorScheme {
 fn link_at(state: &State, x: f32, y: f32) -> Option<String> {
     let (cell_width, ..) = state.cells.get();
     let column = (x as f64 / cell_width).max(0.) as usize;
-    let row = y as f64 / state.row.get();
-    let scrolled = (state.scrollback.borrow()).visible_lines(state.cells.get().2);
-    if let Some((window, range, into)) = scrolled {
-        let row = (row + into as f64).max(0.) as usize;
-        return url_from_lines(&window.lines[range], row, column);
-    }
+    let row = row_at(state, y as f64).max(0.) as usize;
     let frame = state.frame.borrow();
-    url_from_lines(&frame.as_ref()?.lines, row.max(0.) as usize, column)
+    let frame = frame.as_ref()?;
+    match (row.checked_sub(frame.lines.len()), &frame.below) {
+        // The row under the viewport, part of which shows at the bottom.
+        (Some(0), Some(below)) => url_from_lines(std::slice::from_ref(below), 0, column),
+        _ => url_from_lines(&frame.lines, row, column),
+    }
 }
 
 /// How far one line of a wheel that turns in lines moves the history, in
@@ -1159,10 +1153,9 @@ fn shapes(
 struct Screen {
     state: Rc<State>,
     shaper: Shaper,
+    /// The frame's rows shaped, and the row under them while the view is
+    /// back in the history.
     rows: Vec<Shaped>,
-    /// The rows shaped of the window of history last drawn from: which
-    /// window, and each row by its place in it.
-    history: (usize, std::collections::HashMap<usize, Shaped>),
     /// The scale the rows were shaped at.
     shaped_at: f64,
     /// A row's baseline below its top, at that scale.
@@ -1184,9 +1177,9 @@ struct Screen {
 struct Painted {
     /// The frame's number among the session's.
     seen: u64,
-    /// The window of history shown, its rows, and how far into its top row
-    /// the view is, while scrolled back.
-    scrolled: Option<(usize, std::ops::Range<usize>, u32)>,
+    /// How far into the viewport's top row the view is, while it is back
+    /// in the history.
+    into: u32,
     size: (u32, u32),
     scale: u64,
     styled: u64,
@@ -1354,31 +1347,13 @@ fn selected_columns(
     Some(from..to)
 }
 
-/// A row of the frame being painted: where it was shaped, the columns of
-/// the selection on it, and its top in the grid in device pixels.
+/// A row of the frame being painted: its place among the rows shaped, the
+/// columns of the selection on it, and its top in the grid in device
+/// pixels.
 struct Shown {
-    from: ShownFrom,
+    index: usize,
     selected: Option<std::ops::Range<usize>>,
     top: f64,
-}
-
-#[derive(Clone, Copy)]
-enum ShownFrom {
-    /// The live screen's row of this index.
-    Live(usize),
-    /// The row of the window of history held, by its place in it.
-    History(usize),
-}
-
-fn shaped_row<'a>(
-    rows: &'a [Shaped],
-    history: &'a std::collections::HashMap<usize, Shaped>,
-    from: ShownFrom,
-) -> &'a Shaped {
-    match from {
-        ShownFrom::Live(index) => &rows[index],
-        ShownFrom::History(row) => &history[&row],
-    }
 }
 
 impl horizon_ui::blitz_dom::Widget for Screen {
@@ -1408,14 +1383,17 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         };
         let device = (context.renderer_specific_context())
             .and_then(|context| context.downcast::<anyrender_vello::DeviceHandle>().ok());
-        let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
+        // Back in the history: the rows moved up by the part of a row the
+        // view is into the viewport's top one, and the row under them in
+        // view; no cursor (`docs/terminal-scrollback-design.md` §3.2).
+        let into = match frame.back > 0 {
+            true => self.state.into.get(),
+            false => 0.,
+        };
         let (cells, origin) = (self.state.cells.get(), self.state.origin.get());
         let painted = Painted {
             seen: self.state.seen.get(),
-            scrolled: (scrolled.as_ref()).map(|(window, range, into)| {
-                let held = std::sync::Arc::as_ptr(window) as usize;
-                (held, range.clone(), into.to_bits())
-            }),
+            into: into.to_bits(),
             size: (width, height),
             scale: scale.to_bits(),
             styled: self.styled,
@@ -1444,52 +1422,22 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         let font_px = look.font_size * scale as f32;
         let inset = ((origin.0 * scale).fract(), (origin.1 * scale).fract());
         if self.shaped_at != scale {
-            self.history.1.clear();
             self.rows.clear();
             self.shaped_at = scale;
             self.baseline =
                 (self.shaper).baseline(scale as f32, row_height(look.line_height, scale));
         }
-        let shown = match &scrolled {
-            // Scrolled back: rows of the window of history held, moved up
-            // by the part of a row the view is into its top one, in whole
-            // device pixels. No cursor and no selection: those are of the
-            // live screen.
-            Some((window, range, into)) => {
-                // The rows shaped are this window's, by their place in it.
-                let held = std::sync::Arc::as_ptr(window) as usize;
-                if self.history.0 != held {
-                    self.history = (held, std::collections::HashMap::new());
-                }
-                let near = range.start.saturating_sub(range.len())..range.end + range.len();
-                self.history.1.retain(|row, _| near.contains(row));
-                let shift = scroll_shift(*into, line);
-                (range.clone().enumerate())
-                    .map(|(place, row)| {
-                        let shaper = &mut self.shaper;
-                        (self.history.1.entry(row)).or_insert_with(|| {
-                            shape(&window.lines[row], shaper, scale as f32, palette)
-                        });
-                        Shown {
-                            from: ShownFrom::History(row),
-                            selected: None,
-                            top: place as f64 * line - shift,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            }
-            None => {
-                self.shape_live(&frame.lines, scale, palette);
-                (0..self.rows.len())
-                    .map(|index| Shown {
-                        from: ShownFrom::Live(index),
-                        selected: (frame.selection.as_ref())
-                            .and_then(|selection| selected_columns(selection, index, cells.1)),
-                        top: index as f64 * line,
-                    })
-                    .collect()
-            }
-        };
+        let below = frame.below.as_ref().filter(|_| into > 0.);
+        self.shape_rows(frame.lines.iter().chain(below), scale, palette);
+        let shift = scroll_shift(into, line);
+        let shown: Vec<Shown> = (0..self.rows.len())
+            .map(|index| Shown {
+                index,
+                selected: (frame.selection.as_ref())
+                    .and_then(|selection| selected_columns(selection, index, cells.1)),
+                top: index as f64 * line - shift,
+            })
+            .collect();
         let pen = Pen {
             width: width as f64,
             cell,
@@ -1510,7 +1458,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         let stored = device.is_some_and(|device| {
             let wanted: Vec<Wanted<'_>> = (shown.iter())
                 .map(|row| Wanted {
-                    shaped: shaped_row(&self.rows, &self.history.1, row.from),
+                    shaped: &self.rows[row.index],
                     selected: row.selected.clone(),
                     top: row.top,
                 })
@@ -1538,12 +1486,12 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         if !stored {
             scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &whole);
             for row in &shown {
-                let shaped = shaped_row(&self.rows, &self.history.1, row.from);
+                let shaped = &self.rows[row.index];
                 paint_row(&mut scene, &pen, shaped, row.selected.clone(), row.top);
             }
             scene.pop_layer();
         }
-        if scrolled.is_none()
+        if frame.back == 0
             && let Some(cursor) = frame.cursor
         {
             self.paint_cursor(&mut scene, &pen, cursor, palette, scale);
@@ -1561,10 +1509,15 @@ impl horizon_ui::blitz_dom::Widget for Screen {
 }
 
 impl Screen {
-    /// Shapes the live screen's `lines` into `self.rows`, a row drawn before
-    /// not again, at whatever place it is now: output that scrolls moves
-    /// every row and changes one.
-    fn shape_live(&mut self, lines: &[TerminalLine], scale: f64, palette: Palette) {
+    /// Shapes the frame's `lines` into `self.rows`, a row drawn before not
+    /// again, at whatever place it is now: output that scrolls moves every
+    /// row and changes one, and so does scrolling back.
+    fn shape_rows<'a>(
+        &mut self,
+        lines: impl Iterator<Item = &'a TerminalLine>,
+        scale: f64,
+        palette: Palette,
+    ) {
         let mut before: Vec<Option<Shaped>> = (std::mem::take(&mut self.rows).into_iter())
             .map(Some)
             .collect();
@@ -1573,7 +1526,7 @@ impl Screen {
         // found: after a couple, the screen is taken to be all new (output
         // faster than the frames), and the rest are not looked for.
         let (mut below, mut missed) = (0, 0);
-        for (index, wanted) in lines.iter().enumerate() {
+        for (index, wanted) in lines.enumerate() {
             let same = |shaped: &Option<Shaped>| {
                 (shaped.as_ref()).is_some_and(|shaped| shaped.line == *wanted)
             };

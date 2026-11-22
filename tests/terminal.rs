@@ -380,8 +380,8 @@ fn the_wheel_goes_back_through_what_scrolled_off() {
     opened.wait("what scrolled off", |text| {
         text.lines().any(|line| line == "150") && !text.lines().any(|line| line == "200")
     });
-    // The history is scrolled here, over a window of it the view holds:
-    // by a part of a row too, with the rows the same.
+    // The history is scrolled by a part of a row too, with the rows the
+    // same.
     assert_eq!(opened.terminal.scrolled_into(), Some(0.));
     let before = opened.terminal.text();
     opened.wheel(9.);
@@ -396,9 +396,7 @@ fn the_wheel_goes_back_through_what_scrolled_off() {
     opened.wheel(-9.);
     opened.app.resolve();
     assert_eq!(opened.terminal.text(), before);
-    // Far up, past the window held: more of the history is asked for.
-    // (A turn ends at the edge of the window held; the next goes on in
-    // the one that arrives.)
+    // Far up, to the top of the history.
     let started = Instant::now();
     while !opened.terminal.text().lines().any(|line| line == "1") {
         assert!(
@@ -423,6 +421,63 @@ fn the_wheel_goes_back_through_what_scrolled_off() {
         text.lines().any(|line| line == "200")
     });
     assert_eq!(opened.terminal.scrolled_into(), None);
+}
+
+/// A program that takes the screen (the alternate screen) takes it from
+/// the history too: the view back in the history goes to the bottom.
+#[test]
+fn a_program_taking_the_screen_puts_the_view_back_at_the_bottom() {
+    let opened = open();
+    opened.run("seq 1 100");
+    opened.done("the last number", |text| {
+        text.lines().any(|line| line == "100")
+    });
+    opened.wheel(30. * 18. + 9.);
+    opened.until("the history", || opened.terminal.scrolled_into().is_some());
+    opened.run(r"printf '\033[?1049htaken'; sleep 1");
+    opened.until("the program's screen", || {
+        opened.terminal.scrolled_into().is_none() && opened.terminal.text().contains("taken")
+    });
+}
+
+/// A selection made back in the history is of the rows shown there.
+#[test]
+fn a_selection_in_the_history_is_of_the_rows_shown() {
+    let opened = open();
+    opened.run("seq 1 100");
+    opened.done("the last number", |text| {
+        text.lines().any(|line| line == "100")
+    });
+    opened.wheel(40. * 18.);
+    opened.until("the history", || {
+        opened.terminal.text().lines().any(|line| line == "50")
+    });
+    let row = opened.row_of("50");
+    let (x, y) = opened.cell(row, 0);
+    pointer(&opened.app, x, y, Pointer::Move);
+    pointer(&opened.app, x, y, Pointer::Down);
+    let (x, y) = opened.cell(row, 1);
+    pointer(&opened.app, x, y, Pointer::Drag);
+    pointer(&opened.app, x, y, Pointer::Up);
+    opened.until("the selection", || {
+        (opened.terminal.frame()).is_some_and(|frame| frame.selection.is_some())
+    });
+    // Still back in the history, and what is copied is the row shown.
+    assert!(opened.terminal.scrolled_into().is_some());
+    opened.terminal.copy_selection();
+    let started = Instant::now();
+    let copied = loop {
+        opened.app.resolve();
+        if let Some(copied) = opened.terminal.take_copied() {
+            break copied;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "nothing copied"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(copied, "50");
 }
 
 #[test]
@@ -1089,7 +1144,7 @@ impl std::task::Wake for Woken {
 }
 
 #[test]
-fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
+fn the_wheel_in_the_history_has_the_page_drawn_again() {
     use std::sync::atomic::Ordering;
 
     let opened = open();
@@ -1097,7 +1152,7 @@ fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
     opened.wait("the last number", |text| {
         text.lines().any(|line| line == "100")
     });
-    // Back into the history: a window of it is held from here on.
+    // Back into the history.
     opened.wheel(10. * 18.);
     let started = Instant::now();
     while opened.terminal.scrolled_into().is_none() {
@@ -1107,8 +1162,8 @@ fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
     }
 
     // The shell is quiet: nothing arrives to wake the page. A turn of the
-    // wheel moves the view over the window it holds, and the page is asked
-    // to draw that.
+    // wheel moves the view through the history, and the page is asked to
+    // draw that.
     let woken = std::sync::Arc::new(Woken(Default::default()));
     opened.terminal.set_waker(woken.clone().into());
     std::thread::sleep(Duration::from_millis(100));
