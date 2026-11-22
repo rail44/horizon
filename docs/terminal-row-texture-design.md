@@ -418,14 +418,33 @@ Two things found on the way:
 
 #### What followed
 
-Three changes followed these measurements, and have not been measured in a
-window yet:
+Three changes followed these measurements:
 
 - a blank row is left to the ground and takes no slot (§4.1);
 - the store holds the visible rows and a quarter of a screen, not twice the
   rows (§3.4);
-- a row's hash is taken when it is shaped, and a row shown again is matched
-  by its shaping (§3.3).
+- a row's hash is taken when it is shaped, with foldhash, and a row shown
+  again is matched by its shaping (§3.3).
+
+Measured again in a window, three binaries in turn, twice each: before the
+store, the store before these changes, and the store with them. `render` is
+the median in milliseconds, and *late* counts frames over a refresh.
+
+| scenario | before | the store | with the changes |
+| --- | --- | --- | --- |
+| idle, 48000 cells | 39.3–39.9, all late | 5.8–6.3 | 5.4–5.7 |
+| typing, 12000 cells | 1.5–1.6 | 3.0 | 2.5–2.9 |
+| typing, 48000 cells | 3.1–3.5 | 6.5–6.6 | 4.2–4.3 |
+| lines, 48000 cells | 38.9–39.0, 39–43 frames taken in | 13.1–13.3, 76–80 | 7.9, 98–100 |
+| scrollback, 12000 cells | 1.8–2.2 | 3.1 | 2.9 |
+| scrollback, 48000 cells | 3.9, 3–4 late of 200 | 7.3–7.4, 100 late | 6.5–6.6, 100 late |
+
+**Open.** Typing on an almost empty screen is still about 1 ms over before,
+and scrollback at 48000 cells about 2.6 ms. In scrollback the rows are not
+blank, so leaving blank rows to the ground does not help there. Its frames
+are late because the wheel's own handling takes 9–11 ms at that size,
+before and after alike, and the added `render` takes the frame past a
+refresh. Where the 2.6 ms goes is not measured yet.
 
 ## 8. Scope
 
