@@ -106,9 +106,12 @@ the store.
 - Live rows and rows of a scrollback window (`TerminalScrollWindow`) are keyed
   the same way. A row that scrolled into history and is scrolled back to is
   still found. Rows with the same content (blank rows) share one slot.
-- Hashing runs when a new frame or scrollback window arrives, not on a redraw
-  that changes neither. Its cost is of the same order as the row equality
-  checks `Screen::paint` already does to reuse shaping.
+- **Hashing.** A row's hash is taken once, when the row is shaped. A frame
+  combines it with the row's selection.
+- **Matching.** Each shaping has a number of its own, kept with the slot.
+  A row shaped once and shown again is matched by that number, not by
+  comparing its whole content. A row found only by its hash is compared
+  with what the slot holds.
 - libghostty-vt's row ids are not used. They do not cross the snapshot wire.
   They vanish when a program scrolls part of the screen. Scrollback windows
   carry none.
@@ -116,8 +119,10 @@ the store.
 ### 3.4 Slots
 
 The store's pixels are one texture of fixed-size slots, each `row_px` tall and
-the grid's width wide. It holds at least the visible rows plus one (the part
-row of a fractional scroll), with a margin for rows just scrolled away. A slot
+the grid's width wide. It holds the visible rows, plus one (the part row of a
+fractional scroll), plus a quarter of a screen for rows just scrolled away and
+back. Every visible terminal's store has to fit in the renderer's one image
+atlas (§7). A slot
 not used in the current frame can be taken, least recently used first. The
 texture is made again when the grid's width, `row_px` or `scale` changes. When
 slots would exceed `max_texture_dimension_2d` in one column, they are arranged
@@ -170,7 +175,10 @@ app when it is dropped, so its document goes with it.
 
 ### 4.1 What `paint()` returns
 
-1. For each visible row, one fill:
+1. For each visible row that is not blank, one fill. A blank row draws
+   nothing but the ground: no background of its own, no ink, no shapes, no
+   lines, no selection. It is left to the ground the screen is filled with,
+   and takes no slot. The fill:
    - the shape is the row's rectangle on the grid, intersected with the
      grid's box (rather than a clip layer);
    - the brush is `Paint::Resource(ImageBrush { image: store, .. })`;
@@ -403,16 +411,16 @@ Two things found on the way:
   4356. Every visible terminal's store has to fit in the one atlas. An
   image that does not fit is not drawn.
 
-#### Open
+#### What followed
 
-- **Blank rows.** Painting a row that is blank (all ground) from the
-  store costs on the GPU what drawing it whole would not.
-- **Store size.** A store of the visible rows and a margin, rather than
-  twice the rows, would halve both the atlas footprint and the copy.
-- **Hashing.** Keeping each row's hash from when it was shaped would take
-  the hashing out of every frame.
+Three changes followed these measurements, and have not been measured in a
+window yet:
 
-These are not decided.
+- a blank row is left to the ground and takes no slot (§4.1);
+- the store holds the visible rows and a quarter of a screen, not twice the
+  rows (§3.4);
+- a row's hash is taken when it is shaped, and a row shown again is matched
+  by its shaping (§3.3).
 
 ## 8. Scope
 

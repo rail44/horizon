@@ -24,8 +24,12 @@ use super::slots::{Layout, Placed, Slots, hash_of};
 use super::{Pen, Shaped, paint_row};
 
 /// What a slot holds a row's pixels from: its content and the columns of
-/// the selection on it.
-type Held = (TerminalLine, Option<Range<usize>>);
+/// the selection on it, and the shaping of the row it was drawn from.
+struct Held {
+    line: TerminalLine,
+    selected: Option<Range<usize>>,
+    shaping: u64,
+}
 
 /// What every row of the store is drawn with: when it changes, no row
 /// held holds.
@@ -139,14 +143,26 @@ impl RowStore {
         let mut placed = Vec::with_capacity(rows.len());
         let mut fresh = Vec::new();
         for (index, row) in rows.iter().enumerate() {
-            let line = &row.shaped.line;
-            let hash = hash_of(&(line, &row.selected));
-            let same = |held: &Held| held.0 == *line && held.1 == row.selected;
-            let make = || (line.clone(), row.selected.clone());
+            // A blank row is the ground the screen is filled with already.
+            if row.shaped.blank && row.selected.is_none() {
+                placed.push(None);
+                continue;
+            }
+            let shaped = row.shaped;
+            let hash = hash_of(&(shaped.hash, &row.selected));
+            let same = |held: &Held| {
+                held.selected == row.selected
+                    && (held.shaping == shaped.shaping || held.line == shaped.line)
+            };
+            let make = || Held {
+                line: shaped.line.clone(),
+                selected: row.selected.clone(),
+                shaping: shaped.shaping,
+            };
             match self.slots.place(hash, same, make) {
-                Some(Placed::Kept(slot)) => placed.push(slot),
+                Some(Placed::Kept(slot)) => placed.push(Some(slot)),
                 Some(Placed::Fresh(slot)) => {
-                    placed.push(slot);
+                    placed.push(Some(slot));
                     fresh.push((slot, index));
                 }
                 None => return false,
@@ -166,6 +182,9 @@ impl RowStore {
             },
         });
         for (row, slot) in rows.iter().zip(placed) {
+            let Some(slot) = slot else {
+                continue;
+            };
             let (x, y) = self.layout.origin(slot);
             let strip = Rect::new(0., row.top, pen.width, row.top + pen.line)
                 .intersect(Rect::new(0., 0., pen.width, height));
