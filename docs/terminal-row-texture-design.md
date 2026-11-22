@@ -336,10 +336,83 @@ How the measurements went:
     asks for every frame, and filling from it, are not a cost these runs
     can see.
 
-**Open.** Whether painting an almost empty screen from the store costs a
-few milliseconds more on the GPU than drawing it whole is not settled.
-Settling it needs a quiet GPU (no other Horizon drawing) or `--window`, a
-real window on the desktop.
+### Measured in a window, 2026-11-22
+
+Debug build, `--window` (run with the owner's consent), the before and
+after binaries in turn, twice each. `render` is the median in milliseconds,
+for the scene, the GPU's work and the presentation. The display refreshes
+every 16.67 ms.
+
+| scenario | 1920 cells | 12000 cells | 48000 cells |
+| --- | --- | --- | --- |
+| idle | 2.8–3.2 → 1.2–1.3 | 9.5–9.8 → 2.3–3.9 | 35–36 → 5.9–7.3 |
+| lines | 2.4–2.5 → 2.4–2.7 | 11.3–11.9 → 3.7–3.9 | 37.6–39.4 → 13.2–13.7 |
+| typing | 1.3–2.2 → 2.5–2.6 | 1.3–1.5 → 2.9–3.3 | 2.4–3.6 → 6.2–6.9 |
+| scrollback | 1.4–1.6 → 2.4–3.0 | 2.3 → 3.1–3.5 | 3.9–4.0 → 7.3–7.4 |
+
+What changed:
+
+- **idle.** At 48000 cells every frame was over a refresh before; none was
+  after.
+- **lines.** Twice as many of the output's frames were taken in (42 → 82
+  at 48000 cells).
+- **scrollback at 48000 cells.** The wheel's own handling takes 9–11 ms.
+  With `render` up by 3.4 ms, the frames over a refresh went from 5–11 of
+  200 to 100.
+
+#### Where typing's and scrollback's added cost goes
+
+Temporary code switched the way of drawing every frame within one window
+run. The ways were:
+
+- the screen drawn whole without a clip per row, as before;
+- the rows from the store;
+- the store without drawing new rows;
+- the store's strips filled with one color.
+
+Typing at 48000 cells:
+
+| way | median ms |
+| --- | --- |
+| drawn whole | 4.1 |
+| the store's last scene reused | 5.1 |
+| the store, no new rows | 6.3 |
+| the store | 6.6 |
+
+At 12000 cells the same four were 2.2, 2.3, 2.9 and 3.4.
+
+- **Drawing the new rows** (one when typing, three per wheel step) costs
+  0.3–0.5 ms. It is not where the cost goes.
+- **Filling the grid from the store image on the GPU** costs about 1 ms at
+  48000 cells over drawing an almost empty screen whole. This is reading
+  from Vello's image atlas across the grid, after the copy of the whole
+  store into the atlas that `anyrender_vello` asks for every frame.
+- **The per-frame work on the CPU** in a debug build makes up the rest:
+  hashing and placing the rows, and the composition.
+
+Two things found on the way:
+
+- **Vello's image atlas is rebuilt after a frame without images.** In a
+  frame with no image, Vello's resolver reports an atlas of no size, and
+  `vello/src/render.rs` replaces the atlas it keeps with a 1×1 one. The
+  next frame that uses the store allocates the atlas again and copies the
+  whole store into it. Alternating the store with frames drawn without it
+  took 26 ms a frame at 48000 cells.
+- **The store lives in Vello's atlas, which is at most 8192 × 8192.** A
+  store is twice the grid's rows, and a 48000-cell grid's store is 3200 ×
+  4356. Every visible terminal's store has to fit in the one atlas. An
+  image that does not fit is not drawn.
+
+#### Open
+
+- **Blank rows.** Painting a row that is blank (all ground) from the
+  store costs on the GPU what drawing it whole would not.
+- **Store size.** A store of the visible rows and a margin, rather than
+  twice the rows, would halve both the atlas footprint and the copy.
+- **Hashing.** Keeping each row's hash from when it was shaped would take
+  the hashing out of every frame.
+
+These are not decided.
 
 ## 8. Scope
 
