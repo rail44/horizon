@@ -19,11 +19,16 @@
 //! - The window's taking and losing the desktop's focus reaches
 //!   [`crate::window`].
 //! - The primary selection is set and pasted from ([`crate::primary`]).
+//! - A frame drawn for nothing but a CSS animation is drawn on every
+//!   [`crate::window::animation_every_nth_refresh`]th refresh of the
+//!   display, not on every one: the whole window is drawn for it. A frame
+//!   for anything else is drawn as soon as it is asked for.
 
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::task::{Wake, Waker};
+use std::time::{Duration, Instant};
 
 use anyrender::{RenderContext, WindowRenderer};
 use anyrender_vello::VelloWindowRenderer;
@@ -38,7 +43,7 @@ use winit::cursor::CursorIcon;
 use winit::data_transfer::{DataTransferSendBuilder, TypeHint};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial};
+use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, ControlFlow};
 use winit::window::{
     ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequest, ImeRequestData, WindowId,
 };
@@ -56,6 +61,7 @@ pub fn run(document: Box<dyn Document>) {
         inner: BlitzApplication::new(proxy, events),
         pending: Some(WindowConfig::new(document, Renderer::new())),
         primary_reads: HashMap::new(),
+        animation_frames: HashMap::new(),
     };
     event_loop.run_app(application).expect("the event loop");
 }
@@ -94,6 +100,9 @@ struct Application {
     pending: Option<WindowConfig<Renderer>>,
     /// The primary selection asked for, by the window it is pasted into.
     primary_reads: HashMap<AsyncRequestSerial, WindowId>,
+    /// When each window whose page is animating draws its next frame for
+    /// the animation, if nothing has it drawn before then.
+    animation_frames: HashMap<WindowId, Instant>,
 }
 
 impl Application {
@@ -190,7 +199,13 @@ impl ApplicationHandler for Application {
         match &event {
             WindowEvent::RedrawRequested => {
                 if let Some(view) = self.inner.windows.get_mut(&window_id) {
-                    redraw(view);
+                    let started = Instant::now();
+                    if redraw(view) {
+                        let next = started + animation_interval(refresh_millihertz(view));
+                        self.animation_frames.insert(window_id, next);
+                    } else {
+                        self.animation_frames.remove(&window_id);
+                    }
                 }
                 (self.inner.proxy).send_event(BlitzShellEvent::Poll { window_id });
                 return;
@@ -201,6 +216,27 @@ impl ApplicationHandler for Application {
             _ => {}
         }
         self.inner.window_event(event_loop, window_id, event);
+    }
+
+    /// The windows whose animation's next frame is due are drawn; the event
+    /// loop sleeps until the next that is not.
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.inner.about_to_wait(event_loop);
+        let now = Instant::now();
+        let due: Vec<WindowId> = (self.animation_frames.iter())
+            .filter(|(_, at)| **at <= now)
+            .map(|(window, _)| *window)
+            .collect();
+        for window_id in due {
+            self.animation_frames.remove(&window_id);
+            if let Some(view) = self.inner.windows.get(&window_id) {
+                view.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(match self.animation_frames.values().min() {
+            Some(next) => ControlFlow::WaitUntil(*next),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -293,13 +329,16 @@ impl Wake for PollOnWake {
     }
 }
 
-/// Lays the document out with `horizon-ui` and paints it.
+/// Lays the document out with `horizon-ui` and paints it. Whether the page
+/// is animating, visible and not waiting on a resource: the frame its
+/// animation draws next is the caller's to ask for.
 ///
 /// A copy of blitz-shell's `View::redraw` at the revision `Cargo.toml`
-/// pins, with `horizon_ui::frame` where that resolves the document: when
-/// Blitz is moved to another revision, compare this with that revision's
-/// `View::redraw` and carry its changes over.
-fn redraw(view: &mut View<Renderer>) {
+/// pins, with `horizon_ui::frame` where that resolves the document, and
+/// with the next frame for an animation returned rather than asked for at
+/// once: when Blitz is moved to another revision, compare this with that
+/// revision's `View::redraw` and carry its changes over.
+fn redraw(view: &mut View<Renderer>) -> bool {
     let animation_time = view.current_animation_time();
     horizon_ui::frame(animation_time);
 
@@ -333,9 +372,26 @@ fn redraw(view: &mut View<Renderer>) {
 
     drop(inner);
 
-    if !is_blocked && is_visible && is_animating {
-        view.request_redraw();
-    }
+    !is_blocked && is_visible && is_animating
+}
+
+/// The display's refresh rate under the window, in millihertz, if the
+/// desktop says.
+fn refresh_millihertz(view: &View<Renderer>) -> Option<u32> {
+    let mode = view.window.current_monitor()?.current_video_mode()?;
+    Some(mode.refresh_rate_millihertz()?.get())
+}
+
+/// How long after a frame the next one an animation alone asks for is
+/// drawn: [`crate::window::animation_every_nth_refresh`] refreshes of a
+/// display refreshing at `millihertz` (60 Hz where that is not known).
+fn animation_interval(millihertz: Option<u32>) -> Duration {
+    every_nth_refresh(millihertz, crate::window::animation_every_nth_refresh())
+}
+
+fn every_nth_refresh(millihertz: Option<u32>, every: u32) -> Duration {
+    let millihertz = millihertz.filter(|rate| *rate > 0).unwrap_or(60_000);
+    Duration::from_secs_f64(f64::from(every.max(1)) * 1000. / f64::from(millihertz))
 }
 
 /// blitz-shell's shell for a window, but for the input method: enabled
@@ -486,5 +542,25 @@ mod tests {
         // Turned on again, the input method has an area of its own.
         told.forget();
         assert!(told.news(((18., 20., 8., 16.), ImePurpose::Normal)));
+    }
+
+    #[test]
+    fn an_animation_is_drawn_on_every_nth_refresh_of_the_display() {
+        use std::time::Duration;
+
+        use super::every_nth_refresh;
+
+        let close = |interval: Duration, milliseconds: f64| {
+            (interval.as_secs_f64() * 1000. - milliseconds).abs() < 1e-6
+        };
+        // Every third refresh of a 60 Hz display: 20 frames a second.
+        assert!(close(every_nth_refresh(Some(60_000), 3), 50.));
+        // Of a 120 Hz one: 40.
+        assert!(close(every_nth_refresh(Some(120_000), 3), 25.));
+        // A display that does not say is taken to refresh at 60 Hz.
+        assert!(close(every_nth_refresh(None, 3), 50.));
+        assert!(close(every_nth_refresh(Some(0), 3), 50.));
+        // Every refresh is the least.
+        assert!(close(every_nth_refresh(Some(60_000), 0), 1000. / 60.));
     }
 }

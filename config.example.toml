@@ -40,7 +40,7 @@
 # Provider changes affect new sessions and future title calls. Existing sessions
 # keep their conversation and decision connections; an explicit model switch can
 # select a newly configured conversation provider. [terminal]/[ui] need a restart,
-# except the runtime-only font zoom commands.
+# except the runtime-only font zoom commands and [ui] animation_every_nth_refresh.
 #
 # Secrets never go here. OPENAI_API_KEY and the web-search adapter's
 # EXA_API_KEY are environment-only; there is no field for either in this file.
@@ -160,6 +160,14 @@ font_size = 13.0
 # out: the built-in default is platform-specific ("Menlo" on macOS,
 # "DejaVu Sans Mono" elsewhere), not a single literal worth showing as live.
 # font_family = "Iosevka Nerd Font Mono, Noto Sans Mono CJK JP, monospace"
+
+# A CSS animation (the list of sessions' turning icon, an agent's
+# "thinking") is drawn on every this many refreshes of the display, when
+# nothing else changes the page: 3 is 20 frames a second on a 60 Hz display,
+# 40 on a 120 Hz one. Each such frame draws the whole window again, so fewer
+# cost less; input and output are drawn at once whatever this is. 0 is taken
+# as 1. Applied by Reload Config.
+# animation_every_nth_refresh = 3
 
 # ---------------------------------------------------------------------------
 # [keybindings] — key chord string -> command id, layered on top of

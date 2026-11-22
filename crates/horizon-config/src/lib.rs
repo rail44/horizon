@@ -537,6 +537,11 @@ pub struct RawThemeAnsiConfig {
 #[serde(default)]
 pub struct RawUiConfig {
     pub font_family: Option<String>,
+    /// On every how many refreshes of the display a CSS animation is drawn,
+    /// when nothing else changes the page (`src/application.rs`, the shell
+    /// crate). `None` takes the built-in 3; 0 is taken as 1. Applied by
+    /// `Reload Config`.
+    pub animation_every_nth_refresh: Option<u32>,
 }
 
 /// Loads and caches the config file for the lifetime of the process. Config

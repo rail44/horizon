@@ -31,7 +31,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         name: "ui",
-        known_keys: &["font_family"],
+        known_keys: &["font_family", "animation_every_nth_refresh"],
     },
     Section {
         name: "grants",

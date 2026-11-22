@@ -1258,6 +1258,7 @@ impl Shell {
     /// Takes a configuration in: its theme, its font and size, its
     /// chords, in place of the ones in use.
     pub fn apply_config(&self, config: &RawConfig) {
+        crate::window::set_animation_every_nth_refresh(config.ui.animation_every_nth_refresh);
         let theme = Theme::from_config(config);
         let kept = self.kept();
         *kept.config.borrow_mut() = config.clone();
@@ -1296,6 +1297,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     let configured = opening.config.extensions.clone();
     let model = RwSignal::new(opening.model);
     let theme = Theme::from_config(&opening.config);
+    crate::window::set_animation_every_nth_refresh(opening.config.ui.animation_every_nth_refresh);
     let configured_size = Cell::new(theme.font_size);
     let sessions = Held::default();
     (sessions.borrow_mut())
