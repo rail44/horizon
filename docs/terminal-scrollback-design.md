@@ -142,6 +142,19 @@ through it.
 - **Workspace.** Attaching a session a pane shows adds no pane.
 - **Measuring.** `terminal/scrollback` at 48000 cells, before and after.
 
+### Measured 2026-11-22
+
+Debug build, the median in milliseconds:
+
+- **`cargo bench --bench scenarios -- terminal/scrollback`** at 48000
+  cells, no window: input handling (`act`) 7.8 → 0.03; the whole frame
+  9.3 → 1.7. At 1920 and 12000 cells both were under a millisecond before
+  and after.
+- **A frame after moving the viewport three rows** (`engine_observations.rs`'s
+  `how_long_a_frame_takes_as_the_viewport_scrolls`):
+  - 400×120: 9.0 → 1.3, and in release 3.6 → 0.25;
+  - 200×60: 2.6 → 0.46, and in release 0.95 → 0.10.
+
 ## References
 
 - `docs/terminal-stream-design.md` — the daemon sends bytes and the view

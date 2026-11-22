@@ -150,8 +150,8 @@ libghostty-vt はクレートのビルドスクリプトが Zig 0.17 でソー�
 - デーモンのフレームの経路(`watch<TerminalFrame>`、フレームをまとめる間隔、
   `HORIZON_TERMINAL_FRAME_INTERVAL_MS`)。
 - デーモン側の選択・コピー・履歴の窓(`SelectionStart`、`SelectionUpdate`、`CopySelection`、
-  `RequestScrollWindow`、`ScrollWindow`)。`docs/terminal-scrollback-design.md` の「窓は
-  デーモンが返す」部分は、この形では手元の端末から読む。
+  `RequestScrollWindow`、`ScrollWindow`)。履歴は手元の端末のビューポートを動かして見る
+  (`docs/terminal-scrollback-design.md`、2026-11-22 に窓をやめた)。
 - Horizon 自前のキーエンコーダ(`protocol/kitty_keyboard.rs`)と、その kitty の適合表。
   `docs/terminal-kitty-associated-text-design.md` の、確定文字を `CSI 0;1;…u` で送る部分も
   無くなった(エンジンは文字をそのまま書く)。
