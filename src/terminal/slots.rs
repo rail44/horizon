@@ -8,7 +8,8 @@
 //! not used.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash};
+use std::sync::LazyLock;
 
 /// Where a frame's row is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,11 +106,15 @@ impl<T> Slots<T> {
     }
 }
 
-/// The hash a row is found by: of everything its pixels are drawn from.
+/// The seed rows are hashed with: one for the process, so that hashes taken
+/// at different times are of one kind, and random, so that rows a program
+/// writes cannot be made to meet on purpose.
+static ROWS: LazyLock<foldhash::fast::RandomState> = LazyLock::new(Default::default);
+
+/// The hash a row is found by: of everything its pixels are drawn from. A
+/// row found by it is then checked against what the slot holds.
 pub(super) fn hash_of(row: &impl Hash) -> u64 {
-    let mut hasher = std::hash::DefaultHasher::new();
-    row.hash(&mut hasher);
-    hasher.finish()
+    ROWS.hash_one(row)
 }
 
 /// How a store's slots lie in its texture: in columns as wide as the grid,

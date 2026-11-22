@@ -2927,6 +2927,7 @@ dependencies = [
  "blitz-shell",
  "blitz-traits",
  "crossbeam-channel",
+ "foldhash 0.2.0",
  "futures",
  "gethostname",
  "horizon-acp",
