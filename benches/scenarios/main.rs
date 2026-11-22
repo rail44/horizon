@@ -72,6 +72,9 @@ impl Frame {
 /// A view in a document of its own, and the frames timed on it.
 pub struct Stage {
     pub app: App,
+    /// When the stage began: the clock CSS animations run on in
+    /// [`Stage::frame_animated`].
+    clock: Instant,
     size: (u32, u32),
     scene: anyrender::Scene,
     /// With `--gpu`, the renderer the page is drawn with: Vello on the GPU,
@@ -103,6 +106,7 @@ impl Stage {
         let app = App::new(width, height, "Horizon", css, view);
         let mut stage = Self {
             app,
+            clock: Instant::now(),
             size: (width, height),
             scene: anyrender::Scene::new(),
             gpu: gpu_renderer(width, height),
@@ -154,6 +158,20 @@ impl Stage {
         let act = started.elapsed();
         let started = Instant::now();
         self.app.resolve();
+        let layout = started.elapsed();
+        let scene = self.paint();
+        self.frames.push(Frame { act, layout, scene });
+    }
+
+    /// As [`Stage::frame`], with the page laid out at the time since the
+    /// stage began, as a window lays it out: CSS animations move.
+    pub fn frame_animated(&mut self, act: impl FnOnce(&App)) {
+        let started = Instant::now();
+        act(&self.app);
+        self.app.run_effects();
+        let act = started.elapsed();
+        let started = Instant::now();
+        self.app.resolve_at(self.clock.elapsed().as_secs_f64());
         let layout = started.elapsed();
         let scene = self.paint();
         self.frames.push(Frame { act, layout, scene });

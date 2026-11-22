@@ -43,6 +43,18 @@ pub fn scenarios() -> Vec<Scenario> {
             sizes: PANES,
             run: split,
         },
+        Scenario {
+            name: "shell/spinner",
+            unit: "panes",
+            sizes: PANES,
+            run: spinner,
+        },
+        Scenario {
+            name: "shell/still",
+            unit: "panes",
+            sizes: PANES,
+            run: still,
+        },
     ]
 }
 
@@ -143,4 +155,105 @@ fn split(panes: usize) -> Vec<Frame> {
         frames.append(&mut stage.frames);
     }
     frames
+}
+
+/// A shell with the list of sessions on its left, as `startup_layout`
+/// puts it, and `panes` terminals beside it, each at its prompt.
+fn open_with_the_list(panes: usize) -> (Stage, Shell) {
+    let config = horizon_config::parse(
+        r#"
+        startup_layout = "sidebar"
+
+        [layouts.sidebar]
+        split = "horizontal"
+        children = [
+          { weight = 1, view = "sessions" },
+          { weight = 3, workspace = true },
+        ]
+        "#,
+    )
+    .expect("a configuration");
+    let extensions = horizon::extension::own_in(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"),
+    );
+    let mut shell = None;
+    let mut stage = Stage::new(SIZE.0, SIZE.1, css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let (root, built) = view(
+            spawn,
+            Opening {
+                config,
+                extensions,
+                ..Opening::default()
+            },
+        );
+        shell = Some(built);
+        root
+    });
+    let shell = shell.unwrap();
+    stage.until("the extensions", || shell.extensions_read());
+    let terminals = |shell: &Shell| {
+        shell.model.with_untracked(|model: &Workspace| {
+            (model.visible_panes().iter())
+                .map(|pane| pane.id)
+                .filter(|pane| shell.terminal(*pane).is_some())
+                .collect::<Vec<_>>()
+        })
+    };
+    stage.until("the list and a terminal", || {
+        let listed = shell.model.with_untracked(|model: &Workspace| {
+            (model.all_pane_ids().into_iter()).any(|pane| {
+                (model.pane_plugin(pane)).is_some_and(|plugin| plugin.name == "sessions")
+            })
+        });
+        listed && !terminals(&shell).is_empty()
+    });
+    for split in 1..panes {
+        shell.execute(match split % 2 {
+            1 => CommandId::SplitRight,
+            _ => CommandId::SplitDown,
+        });
+        stage.settle();
+        // With extensions the split asks what to open: a terminal.
+        for typed in "terminal".chars() {
+            character(&stage.app, typed);
+        }
+        named(&stage.app, NamedKey::Enter);
+        stage.settle();
+    }
+    stage.until("every prompt", || {
+        let shown = terminals(&shell);
+        shown.len() == panes
+            && shown.iter().all(|pane| {
+                (shell.terminal(*pane))
+                    .is_some_and(|terminal| terminal.text().trim_end().ends_with('$'))
+            })
+    });
+    (stage, shell)
+}
+
+/// The page drawn again and again with nothing typed, the list's icon of a
+/// session at work turning: what a window draws for that animation alone.
+fn spinner(panes: usize) -> Vec<Frame> {
+    let (mut stage, _shell) = open_with_the_list(panes);
+    // The program in the active terminal says it is at work.
+    for typed in r"printf '\033]7501;state=working:app=claude-code\033\\'".chars() {
+        character(&stage.app, typed);
+    }
+    named(&stage.app, NamedKey::Enter);
+    stage.until_text("the session at work", "working");
+    for _ in 0..120 {
+        stage.frame_animated(|_| {});
+    }
+    stage.frames
+}
+
+/// [`spinner`] with no session at work: the same page drawn again, nothing
+/// on it moving.
+fn still(panes: usize) -> Vec<Frame> {
+    let (mut stage, _shell) = open_with_the_list(panes);
+    for _ in 0..120 {
+        stage.frame_animated(|_| {});
+    }
+    stage.frames
 }
