@@ -896,6 +896,19 @@ struct Shaped {
     drawn: Vec<(usize, char, [u8; 3])>,
     /// The lines under and through runs of cells.
     lines: Vec<Ruled>,
+    /// The hash of `line` a row store finds the row by
+    /// (`slots::hash_of`), taken once, when the row is shaped.
+    hash: u64,
+    /// Whether the row draws nothing but the ground: no background of its
+    /// own, no ink, no shapes, no lines.
+    blank: bool,
+    /// Which shaping this is, of all on this thread: a row store that holds
+    /// the row it was shaped from knows it again without comparing lines.
+    shaping: u64,
+}
+
+thread_local! {
+    static SHAPINGS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// A run of cells with a line under it, through it, or both.
@@ -939,7 +952,7 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, palette: Palette)
         }
     }
     // What is drawn from shapes, in the color of the run it is in.
-    let drawn = (line.shapes.iter())
+    let drawn: Vec<(usize, char, [u8; 3])> = (line.shapes.iter())
         .map(|(place, character)| {
             let (byte, column) = line.cells[*place];
             let run = (line.runs.iter()).find(|run| run.bytes.contains(&byte));
@@ -955,12 +968,22 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, palette: Palette)
         italics,
         backgrounds,
     };
+    let blank = row.backgrounds.is_empty()
+        && drawn.is_empty()
+        && lines.is_empty()
+        && line.text.chars().all(char::is_whitespace);
     Shaped {
         layout: shaper.shape(&line.text, &row, scale),
         line: line.clone(),
         row,
         drawn,
         lines,
+        hash: slots::hash_of(line),
+        blank,
+        shaping: SHAPINGS.with(|shapings| {
+            shapings.set(shapings.get() + 1);
+            shapings.get()
+        }),
     }
 }
 
@@ -1493,8 +1516,10 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 })
                 .collect();
             // The visible rows, the one a part of which a scroll shows, and
-            // as many again for rows scrolled back to.
-            let capacity = 2 * (cells.2 as u32 + 1);
+            // a quarter of a screen for rows just scrolled away and back.
+            // Every terminal's store is in the renderer's one image atlas.
+            let rows = cells.2 as u32;
+            let capacity = rows + 1 + rows / 4 + 1;
             let greatest = device.device.limits().max_texture_dimension_2d;
             let Some(layout) = slots::Layout::for_rows(capacity, width, line as u32, greatest)
             else {
