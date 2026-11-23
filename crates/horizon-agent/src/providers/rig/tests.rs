@@ -508,18 +508,55 @@ async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
     assert_eq!(attempts.get(), PROVIDER_REQUEST_MAX_ATTEMPTS);
 }
 
+/// A turn's config on `vendor` running `model`, at `reasoning`.
+fn turn_on(
+    vendor: &str,
+    model: &str,
+    reasoning: crate::config::ReasoningLevel,
+) -> crate::config::RigAgentConfig {
+    crate::config::RigAgentConfig {
+        vendor: crate::config::Vendor::resolve(vendor).unwrap(),
+        model: model.into(),
+        reasoning,
+        ..Default::default()
+    }
+}
+
 #[test]
 fn openais_own_vendor_turns_explicitly_enable_parallel_tool_calls() {
-    use crate::config::Vendor;
+    use crate::config::ReasoningLevel::Medium;
     assert_eq!(
-        generation_options(Vendor::openai()).parallel_tool_calls,
+        generation_options(&turn_on("openai", "test-model", Medium)).parallel_tool_calls,
         Some(true)
     );
     // A vendor rig has a dialect for keeps that provider's own default:
     // Ollama's API takes no such flag, and Anthropic's nothing OpenAI's.
     for vendor in ["ollama", "anthropic"] {
-        assert!(generation_options(Vendor::resolve(vendor).unwrap()).is_default());
+        let options = generation_options(&turn_on(vendor, "test-model", Medium));
+        assert_eq!(options.parallel_tool_calls, None);
     }
+}
+
+#[test]
+fn the_wanted_effort_is_sent_fitted_to_the_levels_the_model_takes() {
+    use crate::config::ReasoningLevel::{High, Max};
+    use rig_core::completion::{Effort, Reasoning};
+    // A model the catalog does not list (a gateway's) is sent the level as
+    // wanted: the provider is the one to refuse it.
+    assert_eq!(
+        generation_options(&turn_on(
+            "openai",
+            "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            Max
+        ))
+        .reasoning,
+        Some(Reasoning::Effort(Effort::Max))
+    );
+    // A model that does not reason is sent no level at all.
+    assert_eq!(
+        generation_options(&turn_on("ollama", "llama3.3", High)).reasoning,
+        None
+    );
 }
 
 /// Exercises the same `rig_core` builder call

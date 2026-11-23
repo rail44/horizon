@@ -125,6 +125,7 @@ fn load_from_path_parses_a_well_formed_file() {
         Some(RawModelPair {
             provider: "default".into(),
             model: "gpt-test".into(),
+            effort: None,
         })
     );
     assert_eq!(loaded.resolved_small_model().unwrap().model, "small-test");
@@ -543,6 +544,7 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
         Some(ResolvedModelPair {
             provider: "claude".into(),
             model: "claude-opus-4-6".into(),
+            effort: None,
         })
     );
 }
@@ -647,6 +649,7 @@ fn small_model_is_independent_of_default_model() {
         invalid_config.small_model = invalid.map(|(provider, model)| RawModelPair {
             provider: provider.into(),
             model: model.into(),
+            effort: None,
         });
         assert!(invalid_config.resolved_small_model().is_err());
         assert!(
@@ -823,4 +826,17 @@ fn reload_refuses_legacy_configuration_without_partial_application() {
     let error = reload_from_path(Some(&path)).unwrap_err();
     assert!(error.contains("[provider] was removed"));
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn default_models_effort_is_read_as_written() {
+    let config = parse(
+        "default_model = { provider = \"x\", model = \"m\", effort = \"high\" }\n\
+         [[providers]]\nname = \"x\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        config.resolved_default_model().unwrap().effort.as_deref(),
+        Some("high")
+    );
 }

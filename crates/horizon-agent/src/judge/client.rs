@@ -11,8 +11,9 @@
 //! which is `#[serde(flatten)]`-merged directly into the OpenAI-shaped
 //! request JSON by the provider's own request struct. This module never
 //! uses `logit_bias` (Plan B throughout -- see `judge::parse`'s doc
-//! comment); it only ever sends `reasoning_effort`/`logprobs`/
-//! `top_logprobs` this way.
+//! comment); it only ever sends `logprobs`/`top_logprobs` this way.
+//! Reasoning is turned off on every call through rig's own option
+//! ([`crate::auxiliary::reasoning_off`]).
 
 use async_trait::async_trait;
 use rig_core::completion::{AssistantContent, CompletionRequest, Message};
@@ -55,37 +56,22 @@ pub(super) trait ModelClient: Send + Sync {
     ) -> anyhow::Result<RawCompletionResponse>;
 }
 
-/// Stage 1's `additional_params`: `reasoning_effort: "none"` (keeps the
-/// acting-model-class reasoning models like Kimi from spending their whole
-/// token budget on `reasoning_content` before ever emitting `Y`/`N` -- the
-/// research doc's provider-probe appendix), plus `logprobs`/`top_logprobs`
-/// for the confidence signal. Never `logit_bias` -- see the module doc.
+/// Stage 1's `additional_params`: `logprobs`/`top_logprobs` for the
+/// confidence signal. Never `logit_bias` -- see the module doc.
 pub(super) fn stage1_additional_params() -> serde_json::Value {
     serde_json::json!({
-        "reasoning_effort": "none",
         "logprobs": true,
         "top_logprobs": 5,
     })
 }
 
-/// Stage 2 sends the same `reasoning_effort: "none"` as stage 1, and no
-/// confidence signal (only stage 1 derives one).
-///
-/// It used to leave reasoning on, on the theory that provider-side
-/// reasoning *is* the chain-of-thought step. Measured against the chosen
-/// judge model that was wrong in the worst way: a reasoning-first model
-/// spent the whole stage-2 token budget inside its think block and never
-/// emitted the `VERDICT:` line, so every single stage-2 call parsed as
-/// unparseable and fell back to a human prompt (8/8 escalations in the
-/// 2026-07-28 event-log investigation). The chain of thought stage 2
-/// actually depends on is the one `prompt::STAGE2_SYSTEM_PROMPT` asks for
-/// in the *visible* reply ("think through this in 2-4 sentences, then end
-/// with VERDICT: ..."), which arrives with reasoning disabled -- exactly
-/// the shape stage 1 already proves parses reliably on this provider.
+/// Stage 2 sends no confidence signal (only stage 1 derives one). The chain
+/// of thought it depends on is the one `prompt::STAGE2_SYSTEM_PROMPT` asks
+/// for in the *visible* reply ("think through this in 2-4 sentences, then
+/// end with VERDICT: ..."), with provider-side reasoning off as on every
+/// call on this connection.
 pub(super) fn stage2_additional_params() -> serde_json::Value {
-    serde_json::json!({
-        "reasoning_effort": "none",
-    })
+    serde_json::json!({})
 }
 
 /// A pooled connection retained by this session's judge handle.
@@ -115,7 +101,8 @@ impl ModelClient for RigModelClient {
                 CompletionRequest::new(Message::user(request.user_content))
                     .preamble(request.system_prompt)
                     .max_tokens(request.max_tokens)
-                    .additional_params(request.additional_params),
+                    .additional_params(request.additional_params)
+                    .options(crate::auxiliary::reasoning_off()),
             )
             .await?;
 
@@ -145,7 +132,7 @@ mod tests {
     #[test]
     fn stage1_additional_params_never_uses_logit_bias() {
         let params = stage1_additional_params();
-        assert_eq!(params["reasoning_effort"], "none");
+        assert_eq!(params["logprobs"], true);
         assert_eq!(params["logprobs"], true);
         assert_eq!(params["top_logprobs"], 5);
         assert!(
@@ -159,7 +146,11 @@ mod tests {
         // Reasoning left on made stage 2 unparseable 100% of the time --
         // see this function's own doc comment.
         let params = stage2_additional_params();
-        assert_eq!(params["reasoning_effort"], "none");
+        assert!(params.get("logprobs").is_none());
+        assert_eq!(
+            crate::auxiliary::reasoning_off().reasoning,
+            Some(rig_core::completion::Reasoning::Off)
+        );
         assert!(params.get("logit_bias").is_none());
         assert!(
             params.get("logprobs").is_none(),
@@ -281,6 +272,11 @@ mod tests {
                 assert!(request.starts_with("post /v1/chat/completions "));
                 assert!(request.contains(&format!("authorization: bearer {key}")));
                 assert!(!request.contains("wrong-conversation-key"));
+                // Reasoning off, as rig spells it on OpenAI's dialect.
+                assert!(
+                    request.contains(r#""reasoning_effort":"none""#),
+                    "{request}"
+                );
             }
         }
     }

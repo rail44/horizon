@@ -288,6 +288,7 @@ mod tests {
                 default_model: Some(crate::config::ModelPair {
                     provider: "openai".to_string(),
                     model: "test-model".to_string(),
+                    effort: None,
                 }),
             },
             persistence: AgentPersistenceConfig {

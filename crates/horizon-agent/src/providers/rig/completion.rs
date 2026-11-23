@@ -443,7 +443,7 @@ async fn run_provider_stream(
         ))
         .preamble(system_prompt(environment, extra_sections))
         .max_tokens(config.max_output_tokens)
-        .options(generation_options(config.vendor));
+        .options(generation_options(config));
     let mut stream = match await_provider_phase(
         async { model.stream(request) },
         token,
@@ -494,6 +494,12 @@ pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancell
 /// the vendor's dialect -- or refuses, failing the request, when the
 /// dialect cannot honour one.
 ///
+/// The reasoning level is the session's wanted one fitted to the levels the
+/// model takes (`super::model_catalog::reasoning_choices`), and none at all
+/// for a model that does not reason. It is always stated for one that does:
+/// what a provider does when it is left out differs by model and provider
+/// (DeepInfra's DeepSeek does not reason at all then).
+///
 /// `parallel_tool_calls` is sent on OpenAI's own vendor only. OpenAI
 /// defaults it to true, and an entry on that vendor may be any
 /// OpenAI-compatible gateway rig has no dialect for, so the flag is stated
@@ -502,9 +508,13 @@ pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancell
 /// still waits for every result before the next completion. A vendor rig
 /// has a dialect for is left to that provider's own default, which is
 /// rig's to know: Ollama's API, for one, takes no such flag.
-pub(super) fn generation_options(vendor: Vendor) -> GenerationOptions {
-    let options = GenerationOptions::default();
-    if vendor == Vendor::openai() {
+pub(super) fn generation_options(config: &RigAgentConfig) -> GenerationOptions {
+    let choices = super::model_catalog::reasoning_choices(config.vendor, &config.model);
+    let options = match config.reasoning.fit(&choices) {
+        Some(level) => GenerationOptions::default().reasoning(level.to_rig()),
+        None => GenerationOptions::default(),
+    };
+    if config.vendor == Vendor::openai() {
         options.parallel_tool_calls(true)
     } else {
         options

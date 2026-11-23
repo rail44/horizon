@@ -71,6 +71,8 @@ const MODEL_PAIR_TOP_LEVEL_KEYS: &[&str] = &[
     super::DECISION_MODEL_KEY,
 ];
 const MODEL_PAIR_KEYS: &[&str] = &["provider", "model"];
+/// `default_model` also takes the effort a session starts with.
+const DEFAULT_MODEL_PAIR_KEYS: &[&str] = &["provider", "model", "effort"];
 
 /// Keys a single `[[providers]]` entry recognizes — checked the same way
 /// [`PROJECT_GRANT_KEYS`] is: `SECTIONS` can't see inside an array of
@@ -124,11 +126,15 @@ fn model_pair_warnings(root: &toml::Table) -> Vec<String> {
         match root.get(*key) {
             None => {}
             Some(toml::Value::Table(table)) => {
+                let known = match *key {
+                    super::DEFAULT_MODEL_KEY => DEFAULT_MODEL_PAIR_KEYS,
+                    _ => MODEL_PAIR_KEYS,
+                };
                 for inner in table.keys() {
-                    if !MODEL_PAIR_KEYS.contains(&inner.as_str()) {
+                    if !known.contains(&inner.as_str()) {
                         warnings.push(format!(
-                            "{key}: unrecognized key {inner:?}, ignoring (expected only \
-                             provider and model)"
+                            "{key}: unrecognized key {inner:?}, ignoring (expected only {})",
+                            known.join(", ")
                         ));
                     }
                 }
@@ -261,7 +267,7 @@ mod tests {
             ("top level", TOP_LEVEL_KEYS, accepted_fields::<RawConfig>()),
             (
                 "model pair",
-                MODEL_PAIR_KEYS,
+                DEFAULT_MODEL_PAIR_KEYS,
                 accepted_fields::<RawModelPair>(),
             ),
             (

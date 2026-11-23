@@ -157,6 +157,10 @@ pub struct RawNamedProviderConfig {
 pub struct RawModelPair {
     pub provider: String,
     pub model: String,
+    /// The reasoning effort a session starts with (`"none"`, `"minimal"`,
+    /// ... `"max"`), read on `default_model` only; `horizon-agent` reads the
+    /// word.
+    pub effort: Option<String>,
 }
 
 /// A `{ provider, model }` pair whose provider names a resolved entry.
@@ -164,6 +168,8 @@ pub struct RawModelPair {
 pub struct ResolvedModelPair {
     pub provider: String,
     pub model: String,
+    /// The pair's `effort`, as written.
+    pub effort: Option<String>,
 }
 
 /// [`RawConfig::resolved_small_model`]'s output: the entry the `small_model`
@@ -346,6 +352,7 @@ fn resolve_pair(
         ResolvedModelPair {
             provider: pair.provider.clone(),
             model: pair.model.clone(),
+            effort: pair.effort.clone(),
         },
     ))
 }

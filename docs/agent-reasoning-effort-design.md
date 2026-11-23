@@ -73,13 +73,15 @@ DeepInfra は rig の `Effort` の 6 段と `none` をそのまま受け付け�
 - **wire**: 切り替えの通知(`SessionSelection`)に effort が加わるので
   `HORIZON_ACP_EXT_VERSION` を上げる。
 
-## 未決: `max_tokens`
+## `max_tokens`
 
-いまは `DEFAULT_AGENT_MAX_OUTPUT_TOKENS`(32,768)を全ターンに送り、Tier 1 の
-有効窓を `context − 32,768` としている(`crates/horizon-agent/src/config.rs`)。
-catalog が知るモデルの最大出力を送る案は、catalog の最大出力が context と
-同じ値のモデルがあるため、そのままでは使えない。rig の組み込み catalog の
-Ollama の行(抜粋):
+全ターンに `DEFAULT_AGENT_MAX_OUTPUT_TOKENS`(32,768)を送り、Tier 1 の
+有効窓を `context − 32,768` とする(`crates/horizon-agent/src/config.rs`)。
+effort を入れた後、`max` のターンが上限で打ち切られるか(打ち切りは
+`Truncation` として検出され、画面に出る)を見て見直す。
+
+catalog が知るモデルの最大出力は送らない。catalog の最大出力が context と
+同じ値のモデルがあるためで、rig の組み込み catalog の Ollama の行(抜粋):
 
 | モデル | context | 最大出力 |
 |---|---|---|

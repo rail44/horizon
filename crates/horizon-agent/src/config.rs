@@ -35,8 +35,10 @@
 //! `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default remain the
 //! only override path.
 
+mod reasoning;
 mod selection;
 mod vendor;
+pub use reasoning::ReasoningLevel;
 pub use selection::{ResolvedModelSelection, resolve_model_selection};
 pub use vendor::{Vendor, Wire};
 
@@ -308,7 +310,7 @@ impl AgentConfig {
         };
         // No resolvable `default_model` leaves the model empty: sessions on
         // the default provider start without one (`RigAgentConfig::model_in_play`).
-        let rig = providers
+        let mut rig = providers
             .default_entry()
             .map(|(entry, model)| {
                 let mut config = entry.resolved();
@@ -316,6 +318,9 @@ impl AgentConfig {
                 config
             })
             .unwrap_or_default();
+        if let Some(effort) = (providers.default_model.as_ref()).and_then(|pair| pair.effort) {
+            rig.reasoning = effort;
+        }
         Self {
             auxiliary: None,
             decision: None,
@@ -372,6 +377,9 @@ impl Default for NamedProviderConfig {
 pub struct ModelPair {
     pub provider: String,
     pub model: String,
+    /// The reasoning effort a session starts with; `None` is
+    /// [`ReasoningLevel::default`].
+    pub effort: Option<ReasoningLevel>,
 }
 
 impl NamedProviderConfig {
@@ -488,6 +496,10 @@ pub struct RigAgentConfig {
     /// Completion model id passed to the provider client. Empty means no
     /// model is configured (see [`Self::model_in_play`]).
     pub model: String,
+    /// The reasoning effort the session wants. What a request sends is this
+    /// fitted to the levels the model takes ([`ReasoningLevel::fit`]), so
+    /// a model switch keeps the wanted level rather than the fitted one.
+    pub reasoning: ReasoningLevel,
     /// The entry's base URL, if any. `None` means the vendor's own endpoint
     /// ([`Vendor::connection`]).
     pub base_url: Option<String>,
@@ -573,6 +585,7 @@ impl Default for RigAgentConfig {
             vendor: Vendor::openai(),
             api_key_env: OPENAI_API_KEY_VAR.to_string(),
             model: String::new(),
+            reasoning: ReasoningLevel::default(),
             base_url: None,
             iteration_cap: Some(DEFAULT_ITERATION_CAP),
             doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
@@ -909,6 +922,7 @@ mod tests {
             Some(ModelPair {
                 provider: DEFAULT_PROVIDER_NAME.into(),
                 model: "provider-model".into(),
+                effort: None,
             }),
         );
 
@@ -926,6 +940,7 @@ mod tests {
             Some(ModelPair {
                 provider: "missing".into(),
                 model: "m".into(),
+                effort: None,
             }),
         );
         assert_eq!(config.rig.model, "");

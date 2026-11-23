@@ -30,7 +30,7 @@ use std::time::Duration;
 use rig_core::catalog::Catalog;
 
 use super::model_limits::ModelLimits;
-use crate::config::Vendor;
+use crate::config::{ReasoningLevel, Vendor};
 
 /// Environment variable naming where the catalog is fetched from.
 pub(super) const CATALOG_URL_VAR: &str = "HORIZON_MODEL_CATALOG_URL";
@@ -77,6 +77,13 @@ fn window(catalog: &Catalog, vendor: Vendor, model: &str) -> Option<ModelLimits>
     Some(ModelLimits {
         context_length: u64::from(context),
     })
+}
+
+/// The reasoning levels `vendor`'s `model` takes, by the catalog as loaded
+/// so far ([`ReasoningLevel::choices`]).
+pub(super) fn reasoning_choices(vendor: Vendor, model: &str) -> Vec<ReasoningLevel> {
+    let catalog = current();
+    ReasoningLevel::choices(catalog.get(vendor.id(), model).map(|found| found.spec))
 }
 
 /// The catalog's context window for `vendor`'s `model`, loading the

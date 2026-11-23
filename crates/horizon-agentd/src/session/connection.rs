@@ -516,6 +516,7 @@ mod tests {
                 default_model: Some(horizon_agent::config::ModelPair {
                     provider: "openai".to_string(),
                     model: "m-fast".to_string(),
+                    effort: None,
                 }),
             },
             persistence: horizon_agent::config::AgentPersistenceConfig {
