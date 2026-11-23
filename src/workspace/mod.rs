@@ -187,11 +187,12 @@ pub(crate) mod styles {
         .pane > .landing.to-top { bottom: 50%; }
         .pane > .landing.to-bottom { top: 50%; }
 
-        /* A pane's tag: its name and the mark it is taken by, in its
-           corner, while the pointer is over the pane or in workspace mode. */
+        /* A pane's tag: its name between the mark it is taken by and the
+           button it is closed with, in its corner, while the pointer is
+           over the pane or in workspace mode. */
         .pane > .tag { position: absolute; top: var(--u4); right: var(--u4); z-index: 56;
                        flex: none; display: flex; align-items: center; gap: var(--u4);
-                       max-width: 50%; padding: 0 var(--u8) 0 var(--u4);
+                       max-width: 50%; padding: 0 var(--u2) 0 var(--u4);
                        border: var(--line) solid var(--surface-chrome); border-radius: var(--radius);
                        background: var(--band); font-size: var(--meta-size);
                        line-height: var(--meta-line); color: var(--text-muted);
@@ -202,6 +203,9 @@ pub(crate) mod styles {
         .pane:hover > .tag.away, .pane > .tag.away { opacity: 0; pointer-events: none; }
         .tag > .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .tag:hover { color: var(--text); }
+        .tag > .tag-close { flex: none; width: var(--u16); text-align: center;
+                            border-radius: var(--radius); cursor: pointer; }
+        .tag > .tag-close:hover { background: var(--surface-selected); }
 
         .carried { position: absolute; z-index: 200; padding: var(--u4) var(--u8);
                    border: var(--line) solid var(--border); border-radius: var(--radius);

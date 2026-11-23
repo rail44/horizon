@@ -185,7 +185,10 @@ What is drawn is chosen so that what holds what reads from the drawing
   text, which begins at the left: its name and the grip it is taken by
   -- a pane that is all of its tab too, though its tab's label names it
   as well (owner decision 2026-11-21). The tag shows while the pointer is
-  over the pane or in workspace mode.
+  over the pane or in workspace mode. At its right end is a button that
+  closes the pane as `x` does -- its tab with it, when it is the tab's
+  last pane -- detaching the session in it (owner decision 2026-11-23); a
+  press on the button takes no view to move it.
 - The pane with the focus has its line in the accent. In workspace mode
   every pane is veiled and the cursor's is tinted with the accent; on a
   strip, its shown tab is. A tab that is one pane is that pane's card, so
