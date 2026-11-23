@@ -155,6 +155,11 @@ impl Shell {
         self.lent.get().is_some()
     }
 
+    /// Whether the view whose cursor is shown is in `pane`.
+    pub(super) fn lent_from(&self, pane: PaneId) -> bool {
+        self.lent.get().is_some_and(|lent| lent.from == Some(pane))
+    }
+
     /// Whether a view's cursor is on `pane`.
     pub(super) fn lent_cursor_on(&self, pane: PaneId) -> bool {
         self.lent.get().is_some_and(|lent| lent.on == Some(pane))

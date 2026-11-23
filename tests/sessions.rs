@@ -473,6 +473,7 @@ fn where_the_chosen_session_is_the_workspace_shows_as_workspace_mode_does() {
     assert_eq!(opened.chosen().as_deref(), Some("build"));
     assert!(veiled(terminal) && !veiled(list));
     assert!(!marked(terminal, "cursor"));
+    assert!(marked(list, "focused"));
     // On the terminal's session: its pane is the cursor's. The focus and
     // the keys stay the list's.
     for _ in 0..3 {
@@ -482,6 +483,7 @@ fn where_the_chosen_session_is_the_workspace_shows_as_workspace_mode_does() {
     assert_eq!(opened.chosen().as_deref(), Some("shell"));
     assert!(marked(terminal, "cursor"));
     assert!(!veiled(list));
+    assert!(marked(list, "focused") && !marked(terminal, "focused"));
 }
 
 #[test]

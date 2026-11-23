@@ -817,8 +817,13 @@ impl Shell {
                 })
                 .class_dyn(move || place.get().filter(|at| at.left).map(|_| styles::EDGE_LEFT))
                 .class_dyn(move || {
+                    // (While a view's cursor is shown, the pane the view
+                    // is in keeps the focus's line: the keys are its.)
                     if shell.lent_shown() {
-                        return shell.lent_cursor_on(id).then_some(styles::CURSOR);
+                        return match shell.lent_cursor_on(id) {
+                            true => Some(styles::CURSOR),
+                            false => shell.lent_from(id).then_some(styles::FOCUSED),
+                        };
                     }
                     match (shell.cursor.get() == Some(id), shell.mode.get()) {
                         (true, true) => Some(styles::CURSOR),
