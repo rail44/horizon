@@ -88,9 +88,15 @@ impl Shape {
     }
 }
 
-/// The weight of the child at `path` in the workspace's tree. A path
+/// The flex-grow of the child at `path` in the workspace's tree: its
+/// weight as a share of its split's, times the split's children. A path
 /// counts a split's children only: a tab group is passed through into the
 /// tab it shows.
+///
+/// The model's weights are relative, and summing under one once a child
+/// is gone from a split whose shares were set; flex-grow summing under
+/// one hands out that part of the free space only, and leaves the rest
+/// blank. Times the children, they sum to their count.
 fn weight(model: &Workspace, path: &[usize]) -> f32 {
     /// The node itself, or the tree of the tab it shows for a group.
     fn through(mut node: &LayoutNode) -> Option<&LayoutNode> {
@@ -113,7 +119,11 @@ fn weight(model: &Workspace, path: &[usize]) -> f32 {
     }
     match node.and_then(through) {
         Some(LayoutNode::Split { children, .. }) => {
-            children.get(*last).map_or(1., |child| child.weight)
+            let total: f32 = children.iter().map(|child| child.weight).sum();
+            match children.get(*last) {
+                Some(child) if total > 0. => child.weight / total * children.len() as f32,
+                _ => 1.,
+            }
         }
         _ => 1.,
     }
