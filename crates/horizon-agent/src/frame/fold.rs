@@ -1,44 +1,14 @@
-use std::time::Instant;
-
 use crate::contract::*;
 
 use super::types::{AgentFrame, AgentFrameItem};
 
-/// Reducer-side turn bookkeeping threaded through [`apply_agent_event_to_frame`]
-/// so an [`Event::TurnEnded`] fold can attach the turn's model id and
-/// elapsed wall-clock duration to its `AgentFrameItem::TurnEnded` -- see
-/// `docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum.
-///
-/// Not stored on `AgentFrame` itself, for the same reason [`StateEntry`]
-/// isn't: `AgentFrame` derives `Eq`/`PartialEq` and every caller (tests,
-/// `live::State`, the UI's revision-memoized diffing) relies on comparing
-/// frames deterministically -- an `Instant` field on the frame would make
-/// that comparison time-sensitive. This is the sidecar instead.
-///
-/// Trade-off: `started_at` is an `Instant` captured at *fold* time, not a
-/// timestamp carried on the wire `Event`. For a live fold (`live::State::
-/// extend_provider_events`, called as events actually arrive) this measures
-/// the turn's real wall-clock length. For a cold replay
-/// (`agent_frame_from_events`, used for persisted-log bootstrap and
-/// `duckdb`'s history queries) every historical event folds in one tight
-/// loop, so the resulting `elapsed` collapses to however long the replay
-/// itself took -- typically microseconds, not the turn's original duration.
-/// No per-event timestamp is threaded through `Event` today to reconstruct
-/// the original length exactly (`persistence::event_log::Record::
-/// created_at_unix_ms` exists, but it's a *persistence* concern stamped by
-/// `Appender` after the fact -- not visible to this crate's pure
-/// `Event`-level fold). Accepted for stage A of the turn-receipts work
-/// (`docs/tasks/backlog.md` item 16): a replayed old turn's receipt shows a
-/// near-zero duration rather than an error or a missing field, and never
-/// overstates elapsed. A precise persisted duration is a follow-up if it
-/// turns out to matter -- deriving it via `duckdb`'s existing
-/// `agent_events.created_at_unix_ms`, mirroring `agent_turns`'s own "no
-/// derived durations, join through `ended_event_id`" choice, or threading a
-/// timestamp onto `Event` itself.
+/// Reducer-side bookkeeping threaded through [`apply_agent_event_to_frame`]:
+/// where the current provider response's items start in the frame, so a
+/// retried request retires only its own live preview and a commit promotes
+/// only its own streamed deltas. Kept beside `AgentFrame` rather than on
+/// it, like [`StateEntry`], so frames compare without it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TurnClock {
-    started_at: Option<Instant>,
-    model: Option<String>,
     response_start: usize,
 }
 
@@ -118,26 +88,6 @@ pub(crate) fn apply_agent_event_to_frame(
                 .push(AgentFrameItem::AssistantTextDelta(delta.clone()));
         }
         Event::MessageCommitted(message) => {
-            // A fresh user message opens a new turn -- mirrors
-            // `persistence::event_log::turn::TurnTracker`'s own opening
-            // condition, so the reducer's notion of "current turn" for
-            // elapsed-time purposes lines up with the persisted turn_id
-            // grouping. Captured unconditionally (never gated on whether a
-            // turn was already open): the session loop never sends a new
-            // `UserMessage` until the previous turn settled
-            // (`WaitingForUser`), so every occurrence really does start a
-            // new turn. See `TurnClock`.
-            // A background-`task` notification only opens a turn when none
-            // is running -- the auto-turn wake case. Injected mid-turn it
-            // belongs to the turn already in flight, whose elapsed clock
-            // must keep running. Mirrors `TurnTracker`'s own condition, for
-            // the same reason.
-            let opens_turn = message.role == MessageRole::User
-                || (message.role == MessageRole::TaskNotification && turn.started_at.is_none());
-            if opens_turn {
-                turn.started_at = Some(Instant::now());
-                turn.model = None;
-            }
             // A single provider response persists as streaming
             // `AssistantTextDelta`(s) emitted during the stream, plus this
             // one `MessageCommitted` carrying the full accumulated text,
@@ -192,7 +142,7 @@ pub(crate) fn apply_agent_event_to_frame(
         }
         // Request markers bound live previews without adding transcript rows.
         // Remember the model for the turn receipt as well.
-        Event::ProviderRequestSent(sent) => {
+        Event::ProviderRequestSent(_) => {
             // Failed attempts never commit their text. Retire only their live
             // preview; completed messages and diagnostic reasoning remain.
             let mut index = 0;
@@ -207,7 +157,6 @@ pub(crate) fn apply_agent_event_to_frame(
                 keep
             });
             turn.response_start = frame.items.len();
-            turn.model = Some(sent.model.clone());
         }
         Event::ProviderRequestFinished => {
             frame
@@ -249,24 +198,11 @@ pub(crate) fn apply_agent_event_to_frame(
                 .push(AgentFrameItem::ApprovalResolved(resolved.clone()));
         }
         Event::ContinueTurnRequested(_) | Event::ContinuationVerdict(_) => {}
-        // The turn's receipt: see `Event::TurnEnded`'s doc comment and
-        // `TurnClock`'s. `turn` is reset afterward so a stray second
-        // `TurnEnded` with no intervening user message (shouldn't happen by
-        // contract, but this keeps the reducer defensive) reports a
-        // near-zero elapsed rather than reusing a stale start.
         Event::TurnEnded(reason) => {
             frame.turn_end_reason = Some(*reason);
-            let elapsed = turn
-                .started_at
-                .map(|started_at| started_at.elapsed())
-                .unwrap_or_default();
-            frame.items.push(AgentFrameItem::TurnEnded {
-                reason: *reason,
-                model: turn.model.clone(),
-                elapsed,
-            });
-            turn.started_at = None;
-            turn.model = None;
+            frame
+                .items
+                .push(AgentFrameItem::TurnEnded { reason: *reason });
         }
     }
 }

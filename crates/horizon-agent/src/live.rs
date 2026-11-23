@@ -19,23 +19,8 @@ pub(crate) struct State {
     /// comment. Seeded by replaying `events` once in [`Self::from_history`]
     /// so a resumed session's live fold picks up exactly where a
     /// continuously-running session would have been, rather than
-    /// forgetting the in-flight turn's start/model.
+    /// forgetting where the in-flight response started.
     turn: TurnClock,
-    /// The session's resolved model id, set once via a
-    /// [`ProviderEvent::session_model`]-carrying event -- see that field's
-    /// doc comment. A sidecar rather than an `AgentFrame` field, for the
-    /// same reason `turn` above is: it's session metadata, not a turn/
-    /// conversation item, and never replayed from persisted history (there
-    /// is nothing to seed it from in [`Self::from_history`] -- a resumed
-    /// session's model is re-sent fresh at attach time instead, see
-    /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum).
-    session_model: Option<String>,
-    /// The session's last applied selection (provider name + the model the
-    /// caller asked for) -- the display label the composer's model chip
-    /// prefers over `session_model` when present, shown as a `provider ·
-    /// model` label. Same sidecar rules as `session_model`: never replayed from persisted
-    /// history, re-sent fresh at attach time.
-    session_selection: Option<crate::hosting::ModelSelection>,
 }
 
 impl State {
@@ -55,15 +40,12 @@ impl State {
             events,
             frame,
             turn,
-            session_model: None,
-            session_selection: None,
         }
     }
 
     /// Fold conversation events through the reducer and retain their history.
-    /// Ephemeral tool progress updates the frame; model and selection update
-    /// sidecars. Task progress belongs to the view's live child rows. None of
-    /// these notifications enters conversation history.
+    /// Ephemeral tool progress updates the frame. None of the other
+    /// notifications enters conversation history.
     pub(crate) fn extend_provider_events(
         &mut self,
         events: impl IntoIterator<Item = ProviderEvent>,
@@ -82,13 +64,13 @@ impl State {
                         crate::frame::AgentFrameItem::ToolCallPreparing(progress) if progress.key == key));
                 }
                 ProviderEvent::SettleTools { .. } => {}
-                ProviderEvent::SessionModel(model) => self.session_model = Some(model),
-                ProviderEvent::SessionSelection(selection) => {
-                    self.session_selection = Some(selection)
-                }
                 // The view owns the live child rows; the daemon keeps the
-                // session's reasoning level for its attachments.
-                ProviderEvent::TaskProgress(_) | ProviderEvent::SessionReasoning(_) => {}
+                // session's model, selection and reasoning level for its
+                // attachments.
+                ProviderEvent::TaskProgress(_)
+                | ProviderEvent::SessionModel(_)
+                | ProviderEvent::SessionSelection(_)
+                | ProviderEvent::SessionReasoning(_) => {}
             }
         }
         self.frame.clone()
@@ -96,14 +78,6 @@ impl State {
 
     pub(crate) fn frame(&self) -> &AgentFrame {
         &self.frame
-    }
-
-    pub(crate) fn session_model(&self) -> Option<&str> {
-        self.session_model.as_deref()
-    }
-
-    pub(crate) fn session_selection(&self) -> Option<&crate::hosting::ModelSelection> {
-        self.session_selection.as_ref()
     }
 }
 
@@ -314,21 +288,6 @@ impl LiveState {
         frame
     }
 
-    /// The session's resolved model id, if a
-    /// [`ProviderEvent::session_model`]-carrying event has folded in yet --
-    /// see [`State::session_model`]'s doc comment.
-    pub fn session_model(&self) -> Option<String> {
-        self.inner.borrow().session_model().map(str::to_string)
-    }
-
-    /// The session's last applied selection (provider name + the model the
-    /// caller asked for), if a [`ProviderEvent::session_selection`]-carrying
-    /// event has folded in yet -- see [`State::session_selection`]'s doc
-    /// comment.
-    pub fn session_selection(&self) -> Option<crate::hosting::ModelSelection> {
-        self.inner.borrow().session_selection().cloned()
-    }
-
     /// Every fold-relevant event this session has accumulated so far
     /// (already-committed history plus everything folded in since) — the
     /// source `horizon-agentd`'s `session_load` handling re-emits to a
@@ -350,62 +309,16 @@ enum Persistence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::SessionState;
 
     #[test]
-    fn session_model_is_none_before_any_session_model_event_folds() {
-        let mut state = State::new();
-        state.extend_provider_events(std::iter::once(ProviderEvent::from(Event::StateChanged(
-            SessionState::Created,
-        ))));
-        assert_eq!(state.session_model(), None);
-    }
-
-    #[test]
-    fn session_model_folds_as_sidecar_state_not_a_frame_item_or_history() {
-        let mut state = State::new();
-        let frame = state.extend_provider_events(std::iter::once(ProviderEvent::session_model(
-            "gpt-5".to_string(),
-        )));
-
-        assert_eq!(state.session_model(), Some("gpt-5"));
-        assert!(
-            frame.items.is_empty(),
-            "a session-model announcement must not become a frame item"
-        );
-        assert!(
-            state.events.is_empty(),
-            "a session-model announcement must not join conversation history, \
-             the same exclusion tool_call_progress gets"
-        );
-    }
-
-    #[test]
-    fn a_later_session_model_event_overwrites_the_earlier_one() {
-        // Support for a future model switcher (unbuilt): whichever
-        // announcement folded most recently wins.
-        let mut state = State::new();
-        state.extend_provider_events(std::iter::once(ProviderEvent::session_model(
-            "gpt-5".to_string(),
-        )));
-        state.extend_provider_events(std::iter::once(ProviderEvent::session_model(
-            "claude-sonnet-4".to_string(),
-        )));
-
-        assert_eq!(state.session_model(), Some("claude-sonnet-4"));
-    }
-
-    #[test]
-    fn live_state_session_model_reads_through_the_shared_inner_state() {
+    fn a_session_model_announcement_joins_neither_the_frame_nor_history() {
         let live = LiveState::with_disabled_persistence();
-        assert_eq!(live.session_model(), None);
-
         live.extend_provider_events(std::iter::once(ProviderEvent::session_model(
             "gpt-5".to_string(),
         )))
         .unwrap();
 
-        assert_eq!(live.session_model(), Some("gpt-5".to_string()));
+        assert!(live.frame().items.is_empty());
         assert!(
             live.events().is_empty(),
             "a session-model announcement must not join the replayed conversation history"

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::contract::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,20 +42,8 @@ pub enum AgentFrameItem {
     ProviderRateLimited(ProviderRateLimited),
     Error(Error),
     Exited(Exit),
-    /// A turn's receipt: the end reason `Event::TurnEnded` carries, plus the
-    /// model id and elapsed duration folded in at reducer time -- see
-    /// `docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum (decision
-    /// 1's turn-receipt line, decision 2's running-card footer) and
-    /// [`TurnClock`]'s doc comment for the elapsed-time trade-off.
+    /// Where a turn ended, and why (`Event::TurnEnded`).
     TurnEnded {
         reason: TurnEndReason,
-        /// The model id reported by the turn's most recent
-        /// `Event::ProviderRequestSent`, if the turn made any provider
-        /// request at all (a turn that ends before one -- e.g. an
-        /// immediate cancel -- has none).
-        model: Option<String>,
-        /// Wall-clock time from the turn's opening `MessageCommitted`
-        /// (`MessageRole::User`) to this fold. See [`TurnClock`].
-        elapsed: Duration,
     },
 }

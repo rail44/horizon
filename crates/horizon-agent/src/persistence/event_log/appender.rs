@@ -208,10 +208,6 @@ mod tests {
                     report.records.len()
                 ));
             }
-            if mode != "appender" {
-                assert_eq!(live.session_model().as_deref(), Some("model"));
-                assert_eq!(live.session_selection().unwrap().provider, "provider");
-            }
             std::fs::remove_file(path).unwrap();
         }
         assert!(failures.is_empty(), "{}", failures.join("; "));

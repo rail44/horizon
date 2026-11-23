@@ -2,9 +2,6 @@ use crate::contract::*;
 
 use super::types::{AgentFrame, AgentFrameItem};
 
-#[cfg(test)]
-use std::time::Duration;
-
 impl AgentFrame {
     pub fn empty() -> Self {
         Self {
@@ -277,14 +274,14 @@ fn pending_approval_identities_in(items: &[AgentFrameItem]) -> Vec<ToolCallIdent
 /// advertise a ghost, since doing so blocks every later dispatch behind
 /// a call that can no longer resolve (the "one approval worked, then
 /// everything looked permanently stuck" report).
-pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
+pub(crate) fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
     actionable_pending_approval_identities_in(items)
         .into_iter()
         .map(|identity| identity.call_id)
         .collect()
 }
 
-pub fn actionable_pending_approval_identities_in(
+pub(crate) fn actionable_pending_approval_identities_in(
     items: &[AgentFrameItem],
 ) -> Vec<ToolCallIdentity> {
     let start = items
@@ -294,25 +291,7 @@ pub fn actionable_pending_approval_identities_in(
     pending_approval_identities_in(&items[start..])
 }
 
-/// Whether the frame's last item is a guard-halted `TurnEnded` -- i.e. the
-/// session is sitting on a paused turn `Command::ContinueTurn` can resume
-/// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
-/// decision 3). Only the *last* item counts: any later activity (a new user
-/// message, a fresh tool call) means the halt has already been superseded,
-/// even though the old `TurnEnded { reason: Halted*, .. }` item is still
-/// sitting earlier in the frame.
-pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
-    matches!(
-        items.last(),
-        Some(AgentFrameItem::TurnEnded {
-            reason: TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop,
-            ..
-        })
-    )
-}
-
-/// Historical counterpart of AgentFrame::status: find the last recorded
-/// receipt even if later work has superseded it. Used for audit context.
+/// The last recorded turn end, even if later work has superseded it. Used for audit context.
 pub(crate) fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEndReason> {
     items.iter().rev().find_map(|item| match item {
         AgentFrameItem::TurnEnded { reason, .. } => Some(*reason),
@@ -325,7 +304,7 @@ pub(crate) fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEn
 /// why this split exists. The shell's `src/agent/view/adapter.rs` is this
 /// kind of caller: it reads `frame.state` on its own, separately from
 /// `frame.items`, without going through [`AgentFrame::is_turn_in_flight`].
-pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
+pub(crate) fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
     matches!(
         state,
         Some(SessionState::Running | SessionState::WaitingForApproval | SessionState::ToolRunning)
@@ -380,8 +359,6 @@ mod field_scoped_reads_tests {
     fn turn_ended() -> AgentFrameItem {
         AgentFrameItem::TurnEnded {
             reason: TurnEndReason::Completed,
-            model: None,
-            elapsed: Duration::from_secs(1),
         }
     }
 
@@ -567,53 +544,5 @@ mod field_scoped_reads_tests {
         assert!(!state_indicates_turn_in_flight(Some(
             SessionState::Completed
         )));
-    }
-
-    fn turn_ended_with_reason(reason: TurnEndReason) -> AgentFrameItem {
-        AgentFrameItem::TurnEnded {
-            reason,
-            model: None,
-            elapsed: Duration::from_secs(1),
-        }
-    }
-
-    #[test]
-    fn halted_awaiting_continue_is_true_for_either_specific_guard_reason() {
-        assert!(halted_awaiting_continue(&[turn_ended_with_reason(
-            TurnEndReason::HaltedByIterationCap
-        )]));
-        assert!(halted_awaiting_continue(&[turn_ended_with_reason(
-            TurnEndReason::HaltedByDoomLoop
-        )]));
-    }
-
-    #[test]
-    fn halted_awaiting_continue_is_false_for_a_normal_end_reason() {
-        assert!(!halted_awaiting_continue(&[turn_ended()]));
-        assert!(!halted_awaiting_continue(&[turn_ended_with_reason(
-            TurnEndReason::Cancelled
-        )]));
-        assert!(!halted_awaiting_continue(&[turn_ended_with_reason(
-            TurnEndReason::Failed
-        )]));
-    }
-
-    #[test]
-    fn halted_awaiting_continue_is_false_once_superseded_by_later_activity() {
-        // A halt sitting earlier in the frame no longer counts once a new
-        // user message (or any other later item) has superseded it.
-        let items = vec![
-            turn_ended_with_reason(TurnEndReason::HaltedByIterationCap),
-            AgentFrameItem::Message(Message {
-                role: MessageRole::User,
-                text: "hello again".to_string(),
-            }),
-        ];
-        assert!(!halted_awaiting_continue(&items));
-    }
-
-    #[test]
-    fn halted_awaiting_continue_is_false_for_an_empty_frame() {
-        assert!(!halted_awaiting_continue(&[]));
     }
 }
