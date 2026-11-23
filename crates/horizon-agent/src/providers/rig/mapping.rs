@@ -2,10 +2,7 @@ use crate::contract::{
     Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
     ToolCallId, ToolCallRequest, ToolCallResult,
 };
-use rig_core::completion::{
-    AssistantContent, Message,
-    message::{ToolCall, ToolFunction},
-};
+use rig_core::completion::{AssistantContent, Message, message::ToolCall};
 
 #[cfg(test)]
 use rig_core::completion::ToolDefinition;
@@ -203,7 +200,7 @@ pub(super) fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall 
     super::completion::replay_safe_tool_arguments(&mut arguments);
     ToolCall::new(
         rig_core::message::CallId::from_wire(request.call_id.0.clone()),
-        ToolFunction::new(
+        rig_core::completion::message::ToolFunction::new(
             rig_core::message::ToolName::new(request.tool_id.clone())
                 .expect("horizon tool ids are never empty"),
             arguments,
@@ -236,20 +233,22 @@ pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) ->
 /// a real file read (an out-of-workspace one included) through the whole
 /// tool pipeline without a network provider. See
 /// `completion::deterministic_rig_response`.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) fn rig_fs_read_call(path: &str) -> ToolCall {
     ToolCall::new(
         rig_core::message::CallId::from_wire("rig-fs-read-1"),
-        ToolFunction::new(
+        rig_core::completion::message::ToolFunction::new(
             rig_core::message::ToolName::new("fs_read").expect("fs_read is a tool id"),
             serde_json::json!({ "path": path }),
         ),
     )
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
     ToolCall::new(
         rig_core::message::CallId::from_wire("rig-workspace-snapshot-1"),
-        ToolFunction::new(
+        rig_core::completion::message::ToolFunction::new(
             rig_core::message::ToolName::new("workspace_snapshot")
                 .expect("workspace_snapshot is a tool id"),
             serde_json::json!({}),
@@ -265,12 +264,13 @@ pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
 /// completion that requests several tool calls at once (the production
 /// incident this covers: a MiniMax completion routinely requesting 4
 /// parallel `fs_read`s).
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
     (1..=count)
         .map(|index| {
             ToolCall::new(
                 rig_core::message::CallId::from_wire(format!("rig-multi-snapshot-{index}")),
-                ToolFunction::new(
+                rig_core::completion::message::ToolFunction::new(
                     rig_core::message::ToolName::new("workspace_snapshot")
                         .expect("workspace_snapshot is a tool id"),
                     serde_json::json!({ "n": index }),

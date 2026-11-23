@@ -27,7 +27,6 @@ impl SessionHandle {
 }
 
 pub(crate) trait Provider: Send + Sync {
-    fn provider_id(&self) -> ProviderId;
     fn start_session(&self, request: StartSession) -> SessionHandle;
     /// The model id a session with this `role_id` would run with, resolved
     /// the same way [`Self::start_session`] resolves it (role override, else
@@ -88,7 +87,11 @@ impl ProviderRegistry {
     /// but unavailable", never a failed startup.
     pub fn builtin_with_config(config: AgentConfig) -> Self {
         let mut registry = Self::default();
-        registry.insert(Arc::new(crate::providers::mock::MockProvider::new()));
+        #[cfg(any(test, feature = "test-fixtures"))]
+        registry.insert_under(
+            crate::providers::mock::MockProvider::id(),
+            Arc::new(crate::providers::mock::MockProvider::new()),
+        );
         let table = config.providers.clone();
         let default_name = table.default_provider_name().map(str::to_string);
         for entry in &table.entries {
@@ -100,10 +103,7 @@ impl ProviderRegistry {
                 entry.resolved()
             };
             provider_config.decision = config.decision.clone();
-            let provider = Arc::new(crate::providers::rig::Provider::for_entry(
-                id.clone(),
-                provider_config,
-            ));
+            let provider = Arc::new(crate::providers::rig::Provider::for_entry(provider_config));
             registry.insert_under(id, provider.clone());
             if is_default {
                 registry.insert_under(ProviderId("builtin.agent.rig".to_string()), provider);
@@ -117,7 +117,6 @@ impl ProviderRegistry {
             registry.insert_under(
                 id.clone(),
                 Arc::new(crate::providers::rig::Provider::for_entry(
-                    id,
                     crate::config::RigAgentConfig {
                         decision: config.decision.clone(),
                         ..config.rig.clone()
@@ -134,20 +133,22 @@ impl ProviderRegistry {
     }
 
     /// Has the mock provider's slow turns wait on `hold` once their first
-    /// word is out: a test reattaches while a turn is surely streaming.
+    /// word is out: a test reattaches while a turn is surely streaming. A
+    /// build without test fixtures has no mock provider, and this does
+    /// nothing.
     pub fn hold_mock_streams(&mut self, hold: MockStreamHold) {
-        self.insert(Arc::new(crate::providers::mock::MockProvider::holding(
-            hold,
-        )));
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.insert_under(
+            crate::providers::mock::MockProvider::id(),
+            Arc::new(crate::providers::mock::MockProvider::holding(hold)),
+        );
+        #[cfg(not(any(test, feature = "test-fixtures")))]
+        drop(hold);
     }
 
-    pub(crate) fn insert(&mut self, provider: Arc<dyn Provider>) {
-        self.providers.insert(provider.provider_id(), provider);
-    }
-
-    /// Registers under an explicit id — [`Self::builtin_with_config`]'s
-    /// dual-registration of the default entry (its own named id AND the
-    /// standing shell-facing one) is the one caller.
+    /// Registers `provider` under `id`; the default entry is registered
+    /// twice, under its own named id and the shell-facing one
+    /// ([`Self::builtin_with_config`]).
     pub(crate) fn insert_under(&mut self, id: ProviderId, provider: Arc<dyn Provider>) {
         self.providers.insert(id, provider);
     }

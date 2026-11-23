@@ -115,8 +115,11 @@ const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENTD_TEST_MOCK_STREAM_GATE";
 /// The file the variable `var` names, when it is set: a test's gate
 /// ([`TEST_RESUME_GATE_VAR`], [`TEST_DUCKDB_REBUILD_GATE_VAR`]). The
 /// variable is how a test that spawns this daemon reaches it; inside, the
-/// gate is an argument.
+/// gate is an argument. A build without test fixtures never reads it.
 fn test_gate(var: &str) -> Option<PathBuf> {
+    if !horizon_agent::TEST_FIXTURES {
+        return None;
+    }
     std::env::var_os(var)
         .filter(|gate| !gate.is_empty())
         .map(PathBuf::from)

@@ -11,6 +11,11 @@
 //! config-file loading, the `workspace_snapshot` host tool) — see that
 //! module for the seam.
 
+/// Whether this build carries the test fixtures: the mock provider, the
+/// fallback responder's tool-calling prompts, and the gates a daemon a test
+/// spawns reads from its environment. On for tests and for the
+/// `test-fixtures` feature only.
+pub const TEST_FIXTURES: bool = cfg!(any(test, feature = "test-fixtures"));
 pub mod auxiliary;
 pub mod config;
 pub mod contract;

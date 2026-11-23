@@ -70,6 +70,7 @@ pub(crate) use explore::{notification_event, register_wake, take_notification, u
 // tier-1 dispatch path end to end (`docs/agent-approval-design.md`'s leg
 // 4a containment proof). Kept to exactly these two items: everything else
 // this module owns stays crate-local per the usual convention.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) use execution::tool_result_message;
 pub use execution::{
     Execution, HostTools, cancel_tool_execution, cancelled_tool_call_result, execute_agent_tool,

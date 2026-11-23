@@ -24,7 +24,7 @@ fn mock_agent_emits_initial_session_events() {
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: registry::Provider::provider_id(&provider),
+            provider_id: crate::providers::mock::MockProvider::id(),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -48,19 +48,23 @@ fn mock_agent_emits_initial_session_events() {
 
 #[test]
 fn provider_initialization_preserves_a_replayed_failed_turn() {
-    let providers: Vec<Box<dyn registry::Provider>> = vec![
-        Box::new(crate::providers::mock::MockProvider::new()),
-        Box::new(crate::providers::rig::Provider::for_entry(
-            crate::contract::ProviderId("builtin.agent.rig".to_string()),
-            crate::config::RigAgentConfig {
-                api_key_present: false,
-                ..Default::default()
-            },
-        )),
+    let providers: Vec<(agent::ProviderId, Box<dyn registry::Provider>)> = vec![
+        (
+            crate::providers::mock::MockProvider::id(),
+            Box::new(crate::providers::mock::MockProvider::new()),
+        ),
+        (
+            agent::ProviderId("builtin.agent.rig".to_string()),
+            Box::new(crate::providers::rig::Provider::for_entry(
+                crate::config::RigAgentConfig {
+                    api_key_present: false,
+                    ..Default::default()
+                },
+            )),
+        ),
     ];
-    for provider in providers {
+    for (provider_id, provider) in providers {
         let session_id = SessionId::new();
-        let provider_id = provider.provider_id();
         let mut events = vec![
             agent::Event::StateChanged(agent::SessionState::Running),
             agent::Event::TurnEnded(agent::TurnEndReason::Failed),
@@ -803,7 +807,7 @@ fn mock_agent_accepts_tool_call_result_command() {
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: registry::Provider::provider_id(&provider),
+            provider_id: crate::providers::mock::MockProvider::id(),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -845,7 +849,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: registry::Provider::provider_id(&provider),
+            provider_id: crate::providers::mock::MockProvider::id(),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -937,7 +941,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: registry::Provider::provider_id(&provider),
+            provider_id: crate::providers::mock::MockProvider::id(),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -992,7 +996,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: registry::Provider::provider_id(&provider),
+            provider_id: crate::providers::mock::MockProvider::id(),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),

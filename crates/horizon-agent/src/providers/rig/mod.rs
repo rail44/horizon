@@ -1,5 +1,7 @@
 mod clearing;
 mod completion;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod fixtures;
 #[cfg(test)]
 pub(crate) use completion::offered_tool_ids;
 pub(crate) mod conversation;
@@ -20,7 +22,6 @@ use clearing::ClearingState;
 use completion::{ToolCallDescriptor, TurnCompletion, complete_rig_turn};
 #[cfg(test)]
 use history::load_rig_session_history;
-use mapping::rig_workspace_snapshot_call;
 use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind};
 
@@ -32,10 +33,6 @@ use crate::{
 };
 
 pub(crate) struct Provider {
-    /// This entry's registry id (`builtin.agent.rig.<name>`; the default
-    /// entry is ALSO registered under the standing shell-facing id — see
-    /// `registry::ProviderRegistry::builtin_with_config`).
-    id: ProviderId,
     /// This entry's resolved config — what a session started on this entry
     /// runs with. For the default entry this is `AgentConfig::rig` itself
     /// (see `registry::builtin_with_config` for why the state's own view is
@@ -49,16 +46,12 @@ impl Provider {
     /// which id(s) the entry registers under and whether it passes the
     /// state's own `rig` view (the default entry) or this entry's own
     /// resolution.
-    pub(crate) fn for_entry(id: ProviderId, config: RigAgentConfig) -> Self {
-        Self { id, config }
+    pub(crate) fn for_entry(config: RigAgentConfig) -> Self {
+        Self { config }
     }
 }
 
 impl AgentProvider for Provider {
-    fn provider_id(&self) -> ProviderId {
-        self.id.clone()
-    }
-
     /// Resolves `request.role_id` (defensively -- an unresolvable role here
     /// silently has no effect on this session's config/prompt, but
     /// production sessions never reach this with one:

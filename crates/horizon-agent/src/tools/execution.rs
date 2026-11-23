@@ -1,7 +1,7 @@
 use super::input::{PreparedCall, ToolInput};
 use super::output::{Response, error as error_output};
 use super::transition::ToolUpdate;
-use crate::contract::{Event, Message, MessageRole, SessionId, ToolCallRequest, ToolCallResult};
+use crate::contract::{Event, SessionId, ToolCallRequest, ToolCallResult};
 use crate::judge::ApprovalCandidate;
 use crate::live::LiveState;
 use crate::policy::{AutomaticTool, ToolPlan, plan_prepared_call};
@@ -254,9 +254,11 @@ fn execute_synchronous(
         .into()
 }
 
+/// The mock provider's acknowledgement of a tool result.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
-    Event::MessageCommitted(Message {
-        role: MessageRole::Assistant,
+    Event::MessageCommitted(crate::contract::Message {
+        role: crate::contract::MessageRole::Assistant,
         text: format!("Tool result received for {}.", result.call_id.0),
     })
 }

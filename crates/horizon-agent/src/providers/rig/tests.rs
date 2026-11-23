@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use super::completion::{
-    MULTI_TOOL_TEST_BATCH_SIZE, ProviderRequestSpan, ProviderWait, TurnCompletion,
-    await_provider_phase, generation_options, output_cap_truncated, partial_assistant_message,
-    rig_tool_definitions,
+    ProviderRequestSpan, ProviderWait, TurnCompletion, await_provider_phase, generation_options,
+    output_cap_truncated, partial_assistant_message, rig_tool_definitions,
 };
+use super::fixtures::MULTI_TOOL_TEST_BATCH_SIZE;
 use super::guards::{GuardHalt, TurnLoopGuard, tool_result_fingerprint};
 use super::mapping::{
     RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION, horizon_events_from_rig_message,
@@ -1928,12 +1928,12 @@ fn start_fallback_rig_session_with_history(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
-    let provider = Provider::for_entry(ProviderId("builtin.agent.rig".to_string()), config);
+    let provider = Provider::for_entry(config);
     let handle = AgentProvider::start_session(
         &provider,
         StartSession {
             session_id,
-            provider_id: AgentProvider::provider_id(&provider),
+            provider_id: ProviderId("builtin.agent.rig".to_string()),
             role_id,
             workspace_root: None,
             history,
@@ -2665,19 +2665,16 @@ fn web_search_is_advertised_when_exa_api_key_is_set() {
 
 #[test]
 fn config_role_start_session_advertises_only_its_three_allowed_tools() {
-    let provider = Provider::for_entry(
-        ProviderId("builtin.agent.rig".to_string()),
-        RigAgentConfig {
-            api_key_present: false,
-            ..Default::default()
-        },
-    );
+    let provider = Provider::for_entry(RigAgentConfig {
+        api_key_present: false,
+        ..Default::default()
+    });
 
     let handle = AgentProvider::start_session(
         &provider,
         StartSession {
             session_id: SessionId::new(),
-            provider_id: AgentProvider::provider_id(&provider),
+            provider_id: ProviderId("builtin.agent.rig".to_string()),
             role_id: Some(RoleId("config".to_string())),
             workspace_root: None,
             history: Vec::new(),
@@ -2769,14 +2766,11 @@ fn role_adjusted_config_is_unchanged_for_a_role_less_session() {
 
 #[test]
 fn resolved_model_reports_the_base_model_for_a_role_less_session() {
-    let provider = Provider::for_entry(
-        ProviderId("builtin.agent.rig".to_string()),
-        RigAgentConfig {
-            api_key_present: true,
-            model: "test-model".to_string(),
-            ..Default::default()
-        },
-    );
+    let provider = Provider::for_entry(RigAgentConfig {
+        api_key_present: true,
+        model: "test-model".to_string(),
+        ..Default::default()
+    });
 
     assert_eq!(
         AgentProvider::resolved_model(&provider, None),
@@ -2790,14 +2784,11 @@ fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_ove
     // default_model` in `roles.rs`'s own tests) -- resolving a role that
     // doesn't override the model must fall back to the base config, not
     // report no model at all.
-    let provider = Provider::for_entry(
-        ProviderId("builtin.agent.rig".to_string()),
-        RigAgentConfig {
-            api_key_present: true,
-            model: "test-model".to_string(),
-            ..Default::default()
-        },
-    );
+    let provider = Provider::for_entry(RigAgentConfig {
+        api_key_present: true,
+        model: "test-model".to_string(),
+        ..Default::default()
+    });
 
     assert_eq!(
         AgentProvider::resolved_model(&provider, Some(&RoleId("config".to_string()))),
@@ -2811,14 +2802,11 @@ fn resolved_model_is_none_in_deterministic_fallback_mode() {
     // deterministic fallback responder and never emits
     // `Event::ProviderRequestSent` at all (`completion::complete_rig_turn`),
     // so reporting a model here would claim one is in play when none is.
-    let provider = Provider::for_entry(
-        ProviderId("builtin.agent.rig".to_string()),
-        RigAgentConfig {
-            api_key_present: false,
-            model: "test-model".to_string(),
-            ..Default::default()
-        },
-    );
+    let provider = Provider::for_entry(RigAgentConfig {
+        api_key_present: false,
+        model: "test-model".to_string(),
+        ..Default::default()
+    });
 
     assert_eq!(AgentProvider::resolved_model(&provider, None), None);
 }
