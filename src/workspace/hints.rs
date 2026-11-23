@@ -28,10 +28,10 @@ mod styles {
            color: var(--text-muted); background: var(--background);
            border-top: var(--line) solid var(--border); }
     .hint { display: flex; align-items: center; gap: var(--u4); }
-    .keys { padding: 0 var(--u4); border-radius: var(--radius-small);
-            font-weight: 600; color: var(--chip-muted-text);
-            background: var(--chip-muted-surface);
-            box-shadow: inset 0 0 0 var(--line) var(--border); }
+    /* As faint as a pane's tag. */
+    .keys { padding: 0 var(--u4); border-radius: var(--radius);
+            color: var(--text-muted); background: var(--band);
+            box-shadow: inset 0 0 0 var(--line) var(--surface-chrome); }
     "}
 }
 
