@@ -127,9 +127,11 @@ moved into a new tab.
   where it is wanted from there. Either way the tab is shown and the pane
   has the focus; the mode stays.
 
-With the pointer (`src/workspace/moving.rs`), a view is taken by its
-tab's label, which takes the tab's active pane, or by its tag (below).
-Dropped on another view, it goes beside it, in whatever tab it is, on
+With the pointer (`src/workspace/moving.rs`), a view and a tab are two
+moves apart (owner decision 2026-11-24): a view is taken by its tag
+(below), a tab by its label.
+
+A view dropped on another view goes beside it, in whatever tab it is, on
 the side of it the pointer is nearest (the view's width and height
 counted as one, so that its diagonals part the sides); there is no
 middle, and the pointer swaps nothing (owner decision 2026-11-23: a
@@ -141,10 +143,19 @@ alone in its tab moves that tab there, and beside its own label it
 stays. A tab's label the pointer comes over while a view moves shows
 that tab at once, so that its views are there to drop on (there is no
 timer to wait on the label with): that is how a view goes into another
-tab with the pointer. While it moves, where it would go is marked by a
-line alone -- on that side of the view, or between the labels -- and
-its title goes beside the pointer. A press that does not go a few
-pixels is no move, so a click on a tab's label is still the click.
+tab with the pointer.
+
+A tab taken by its label goes, with every view in it, only between the
+labels of a strip, as a view does there -- its own group's, to reorder
+the tabs, or another group's, a group it leaves with no tab going as a
+closed tab's does. It goes beside no view, and the tabs whose labels it
+passes over are not shown: that is for a view, to reach the views of a
+tab.
+
+While either moves, where it would go is marked by a line alone -- on
+that side of the view, or between the labels -- and its title goes
+beside the pointer. A press that does not go a few pixels is no move,
+so a click on a tab's label is still the click.
 
 ## Shares
 

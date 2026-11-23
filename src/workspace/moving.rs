@@ -1,24 +1,29 @@
-//! A view moved with the pointer (`docs/workspace-layout-design.md`,
-//! boards #94, #95): taken by its tab's label, or, where the label does
-//! not name the pane alone, by the pane's tag -- its name and a grip, in
-//! its top right corner, shown while the pointer is over the pane or in
-//! workspace mode. Dropped on another view, it goes beside it on the side
-//! of it the pointer is nearest; on a tab group's strip, it is a new tab
-//! of that group, before a tab's label the pointer is on the first half
-//! of and after one it is on the second half of (a view alone in its tab
-//! moves that tab there). A tab whose label the pointer comes over is
-//! shown, so that its views can be gone to. Where the view would go is
-//! marked by a line on that side of the view, or between the labels,
-//! while it moves, and the view's title goes along beside the pointer.
+//! A view or a tab moved with the pointer
+//! (`docs/workspace-layout-design.md`, boards #94, #95): two moves apart.
 //!
-//! A press that does not go far is no move: a click on a tab's label is
-//! still the click.
+//! A view is taken by its tag -- its name and a grip, in its top right
+//! corner, shown while the pointer is over the pane or in workspace mode.
+//! Dropped on another view, it goes beside it on the side of it the
+//! pointer is nearest; on a tab group's strip, it is a new tab of that
+//! group, before a tab's label the pointer is on the first half of and
+//! after one it is on the second half of (a view alone in its tab moves
+//! that tab there). A tab whose label the pointer comes over is shown, so
+//! that its views can be gone to.
+//!
+//! A tab is taken by its label, with every view in it, and goes only
+//! between the labels of a strip, its own group's or another's; the tabs
+//! it passes over stay as they are.
+//!
+//! Where it would go is marked by a line on that side of the view, or
+//! between the labels, while it moves, and its title goes along beside
+//! the pointer. A press that does not go far is no move: a click on a
+//! tab's label is still the click.
 
 use horizon_components::Icon;
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
 use horizon_ui::{Bounds, El, Page, dispatched, el, prevent_default, stop_propagation};
-use horizon_workspace::types::TabGroupId;
+use horizon_workspace::types::{TabGroupId, TabId};
 use horizon_workspace::{PaneId, Side};
 
 use super::{Shell, styles};
@@ -27,13 +32,21 @@ use super::{Shell, styles};
 /// a move, in pixels.
 const FAR_ENOUGH: f32 = 4.0;
 
-/// Where a view moved would go.
+/// What is moved: a view, by its tag, or a tab, by its label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Taken {
+    Pane(PaneId),
+    Tab(TabId),
+}
+
+/// Where a view or a tab moved would go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Target {
     /// Beside this pane, on this side of it.
     Pane(PaneId, Side),
-    /// A new tab of this group, at this place between its tabs (0 before
-    /// the first, their count after the last).
+    /// This group, at this place between its tabs (0 before the first,
+    /// their count after the last): a view as a new tab there, a tab
+    /// itself.
     Strip(TabGroupId, usize),
 }
 
@@ -54,10 +67,10 @@ fn side_at(bounds: Bounds, x: f32, y: f32) -> Side {
         .expect("four sides")
 }
 
-/// A view being moved.
+/// A view or a tab being moved.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Moving {
-    pane: PaneId,
+    taken: Taken,
     /// Where the pointer was pressed.
     from: (f32, f32),
     /// Where the pointer is.
@@ -70,11 +83,10 @@ pub(super) struct Moving {
 }
 
 impl Shell {
-    /// The pointer pressed on `pane`'s tag, or its tab's label, at `x`,
-    /// `y`.
-    pub(super) fn begin_moving(&self, pane: PaneId, x: f32, y: f32) {
+    /// The pointer pressed on a pane's tag, or a tab's label, at `x`, `y`.
+    pub(super) fn begin_moving(&self, taken: Taken, x: f32, y: f32) {
         self.moving.set(Some(Moving {
-            pane,
+            taken,
             from: (x, y),
             at: (x, y),
             going: false,
@@ -110,10 +122,11 @@ impl Shell {
         }
     }
 
-    /// Whether `pane` is the one moving.
+    /// Whether `pane` is the view moving.
     pub(super) fn is_moving(&self, pane: PaneId) -> bool {
-        self.moving
-            .with(|moving| moving.is_some_and(|moving| moving.going && moving.pane == pane))
+        self.moving.with(|moving| {
+            moving.is_some_and(|moving| moving.going && moving.taken == Taken::Pane(pane))
+        })
     }
 
     /// Whether a view is moving: the page's text is not selected meanwhile.
@@ -122,17 +135,17 @@ impl Shell {
             .with(|moving| moving.is_some_and(|moving| moving.going))
     }
 
-    /// What is at the point `x`, `y` of the page, as where a view would
-    /// go -- the innermost pane, tab's label or strip around the element
-    /// drawn there -- and the tab's label there, if one is. Where `moving`
-    /// would stay as it is, alone in a tab and dropped beside that tab's
-    /// label, it would go nowhere.
+    /// What is at the point `x`, `y` of the page, as where what is
+    /// `taken` would go -- the innermost pane (for a view), tab's label or
+    /// strip around the element drawn there -- and the tab's label there,
+    /// if one is. Where it would stay as it is -- a tab, or a view alone in
+    /// its tab, dropped beside that tab's label -- it would go nowhere.
     fn target_at(
         &self,
         page: &Page,
         x: f32,
         y: f32,
-        moving: PaneId,
+        taken: Taken,
     ) -> (Option<Target>, Option<(TabGroupId, usize)>) {
         let kept = self.kept();
         let panes = kept.panes.borrow();
@@ -148,8 +161,9 @@ impl Shell {
                     (page.bounds(element)).is_some_and(|b| f64::from(x) >= b.x + b.width / 2.);
                 return Some(Target::Strip(*group, index + usize::from(after)));
             }
+            // (A tab goes beside no view.)
             let pane = (panes.iter()).find(|(_, view)| view.element == element);
-            if let Some((id, _)) = pane {
+            if let (Some((id, _)), Taken::Pane(_)) = (pane, taken) {
                 let side = (page.bounds(element)).map_or(Side::Right, |b| side_at(b, x, y));
                 return Some(Target::Pane(*id, side));
             }
@@ -158,12 +172,17 @@ impl Shell {
                 (self.model).with_untracked(|model| model.group_tab_summaries(*group).len());
             Some(Target::Strip(*group, count))
         });
-        let stays = |target: &Target| match *target {
-            Target::Pane(pane, _) => pane == moving,
-            Target::Strip(group, at) => self
-                .model
-                .with_untracked(|model| model.alone_in_a_tab_of(moving, group))
-                .is_some_and(|own| at == own || at == own + 1),
+        let stays = |target: &Target| match (*target, taken) {
+            (Target::Pane(pane, _), taken) => taken == Taken::Pane(pane),
+            (Target::Strip(group, at), taken) => {
+                let own = self.model.with_untracked(|model| match taken {
+                    Taken::Pane(pane) => model.alone_in_a_tab_of(pane, group),
+                    Taken::Tab(tab) => (model.place_of_tab(tab))
+                        .filter(|(of, _)| *of == group)
+                        .map(|(_, place)| place),
+                });
+                own.is_some_and(|own| at == own || at == own + 1)
+            }
         };
         (target.filter(|target| !stays(target)), on_label)
     }
@@ -216,7 +235,7 @@ pub(super) fn tag(shell: Shell, pane: PaneId) -> El {
         )
         .on("pointerdown", move |event| {
             if let DomEventData::PointerDown(pointer) = &event.data {
-                shell.begin_moving(pane, pointer.page_x(), pointer.page_y());
+                shell.begin_moving(Taken::Pane(pane), pointer.page_x(), pointer.page_y());
             }
             // (Not a press in the pane: its view keeps the focus as it
             // was, and nothing is selected.)
@@ -243,7 +262,7 @@ pub(super) fn moved(shell: Shell, event: &DomEvent) {
         return;
     }
     dispatched(move |page| {
-        let (over, label) = shell.target_at(page, x, y, moving.pane);
+        let (over, label) = shell.target_at(page, x, y, moving.taken);
         let before = shell
             .moving
             .with_untracked(|now| now.and_then(|now| now.label));
@@ -253,8 +272,9 @@ pub(super) fn moved(shell: Shell, event: &DomEvent) {
                 now.label = label;
             }
         });
-        // A tab's label come over shows its tab, to go to its views.
-        if let Some((group, index)) = label
+        // A tab's label a view comes over shows its tab, to go to its
+        // views.
+        if let (Some((group, index)), Taken::Pane(_)) = (label, moving.taken)
             && before != label
         {
             shell.model_changed(|model| _ = model.activate_tab_in(group, index));
@@ -272,18 +292,21 @@ pub(super) fn released(shell: Shell) {
     if !moving.going {
         return;
     }
-    match moving.over {
-        Some(Target::Pane(pane, side)) => shell.change(|model| {
-            _ = model.move_pane_beside(moving.pane, pane, side);
+    match (moving.taken, moving.over) {
+        (Taken::Pane(taken), Some(Target::Pane(pane, side))) => shell.change(|model| {
+            _ = model.move_pane_beside(taken, pane, side);
         }),
-        Some(Target::Strip(group, at)) => shell.change(|model| {
-            _ = model.move_pane_to_new_tab_at(moving.pane, group, at);
+        (Taken::Pane(taken), Some(Target::Strip(group, at))) => shell.change(|model| {
+            _ = model.move_pane_to_new_tab_at(taken, group, at);
         }),
-        None => {}
+        (Taken::Tab(tab), Some(Target::Strip(group, at))) => shell.change(|model| {
+            _ = model.move_tab(tab, group, at);
+        }),
+        (Taken::Tab(_), Some(Target::Pane(..))) | (_, None) => {}
     }
 }
 
-/// The view's title beside the pointer, while it is moved.
+/// The view's or the tab's title beside the pointer, while it is moved.
 pub(super) fn carried(shell: Shell) -> El {
     el("div")
         .class(styles::CARRIED)
@@ -300,9 +323,14 @@ pub(super) fn carried(shell: Shell) -> El {
             format!("{}px", y + 14.)
         })
         .text_dyn(move || {
-            let pane = shell.moving.with(|moving| moving.map(|moving| moving.pane));
-            (pane.and_then(|pane| shell.model.with_untracked(|model| model.pane_label(pane))))
-                .unwrap_or_default()
+            let taken = shell
+                .moving
+                .with(|moving| moving.map(|moving| moving.taken));
+            (shell.model.with_untracked(|model| match taken? {
+                Taken::Pane(pane) => model.pane_label(pane),
+                Taken::Tab(tab) => model.tab_title_of(tab),
+            }))
+            .unwrap_or_default()
         })
         .class_dyn(move || {
             (!shell.moving.get().is_some_and(|moving| moving.going)).then_some(styles::HIDDEN)

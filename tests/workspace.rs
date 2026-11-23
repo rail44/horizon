@@ -380,13 +380,121 @@ fn a_view_dragged_by_its_tag_goes_beside_another_or_is_a_new_tab() {
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
     assert_eq!(opened.model(Workspace::active_tab_index), 1);
     assert_eq!(opened.panes(), vec![panes[1]]);
-
-    // A pane that is all of its tab has no tag: its tab's label takes it.
-    assert!(opened.all("titled").is_empty());
 }
 
 #[test]
-fn a_tab_dragged_between_labels_moves_there_and_one_shown_on_the_way_takes_a_view() {
+fn a_tab_dragged_by_its_label_moves_between_the_labels_with_its_views() {
+    use horizon_ui::testing::{Pointer, pointer};
+    let opened = open();
+    let settle = || {
+        for _ in 0..2 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    // A first tab of two panes, and a second of one, shown.
+    opened.chord();
+    opened.character("s");
+    let split = opened.panes();
+    assert_eq!(split.len(), 2);
+    opened.chord();
+    opened.character("t");
+    let second = opened.panes();
+    let on = |label, share: f32| {
+        let (x, y, width, height) = opened.bounds(label);
+        (x + width * share, y + height / 2.)
+    };
+
+    // The first tab by its label onto the second half of the second's: a
+    // line after that label, and the tabs on the way stay as they are.
+    let labels = opened.all("tab-label");
+    let (from, to) = (opened.middle(labels[0]), on(labels[1], 0.75));
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    settle();
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert_eq!(opened.panes(), second);
+    assert_eq!(opened.all("to-right").len(), 1);
+    assert_eq!(opened.all("hidden").len(), 0, "the tab's title goes along");
+    // Dropped there, the tab is last, shown, with both its views.
+    pointer(&opened.app, to.0, to.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert_eq!(opened.panes(), split);
+
+    // Beside its own place it would stay, and over a view it goes
+    // nowhere: no line, and nothing moves.
+    let labels = opened.all("tab-label");
+    let from = opened.middle(labels[1]);
+    let view = opened.middle(opened.all("pane")[0]);
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    let own = on(labels[0], 0.75);
+    pointer(&opened.app, own.0, own.1, Pointer::Drag);
+    settle();
+    assert!(opened.all("landing").is_empty());
+    pointer(&opened.app, view.0, view.1, Pointer::Drag);
+    settle();
+    assert!(opened.all("landing").is_empty());
+    pointer(&opened.app, view.0, view.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert_eq!(opened.panes(), split);
+}
+
+#[test]
+fn a_tab_dragged_onto_another_groups_strip_goes_into_it() {
+    use horizon_ui::testing::{Pointer, pointer};
+    let opened = open();
+    let settle = || {
+        for _ in 0..2 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+    let first = opened.panes()[0];
+    // A group of its own on the left: a pane beside the group, with a
+    // tab opened from it.
+    let left = left_of_the_group(&opened);
+    opened
+        .shell
+        .model
+        .update(|model| _ = model.activate_pane(left));
+    opened.app.run_effects();
+    opened.chord();
+    opened.character("t");
+    settle();
+    assert_eq!(opened.model(|model| model.tab_groups().len()), 2);
+    // (The left group's two labels, then the first group's one.)
+    let labels = opened.all("tab-label");
+    assert_eq!(labels.len(), 3);
+
+    // The first group's one tab onto the first half of the left group's
+    // second label: it goes between the two, and its group goes.
+    let from = opened.middle(labels[2]);
+    let (x, y, width, height) = opened.bounds(labels[1]);
+    let to = (x + width * 0.25, y + height / 2.);
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    settle();
+    assert_eq!(opened.all("to-left").len(), 1);
+    pointer(&opened.app, to.0, to.1, Pointer::Up);
+    settle();
+    let groups = opened.model(|model| {
+        (model.tab_groups().iter())
+            .map(|group| group.tabs.len())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(groups, vec![3]);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert_eq!(opened.panes(), vec![first]);
+}
+
+#[test]
+fn a_view_taken_by_its_tag_goes_into_a_tab_shown_on_the_way() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();
     let settle = || {
@@ -400,41 +508,20 @@ fn a_tab_dragged_between_labels_moves_there_and_one_shown_on_the_way_takes_a_vie
     opened.character("t");
     assert_eq!(opened.model(Workspace::tab_count), 2);
     let second = opened.panes()[0];
-    let on = |label, share: f32| {
-        let (x, y, width, height) = opened.bounds(label);
-        (x + width * share, y + height / 2.)
-    };
 
-    // The second tab's label, its pane taken by it, onto the first half
-    // of the first's: the first tab is shown on the way, a line is before
-    // its label, and the second tab goes there.
-    let labels = opened.all("tab-label");
-    let (from, to) = (opened.middle(labels[1]), on(labels[0], 0.25));
+    // The second tab's view by its tag over the first tab's label: the
+    // first tab is shown.
+    let from = opened.middle(opened.all("tag")[0]);
+    let label = opened.middle(opened.all("tab-label")[0]);
     pointer(&opened.app, from.0, from.1, Pointer::Move);
+    settle();
     pointer(&opened.app, from.0, from.1, Pointer::Down);
-    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    pointer(&opened.app, label.0, label.1, Pointer::Drag);
     settle();
     assert_eq!(opened.model(Workspace::active_tab_index), 0);
-    assert_eq!(opened.all("to-left").len(), 1);
-    pointer(&opened.app, to.0, to.1, Pointer::Up);
-    settle();
-    assert_eq!(opened.model(Workspace::tab_count), 2);
-    assert_eq!(opened.model(Workspace::active_tab_index), 0);
-    assert_eq!(opened.panes(), vec![second]);
 
-    // Beside its own place it would stay: no line.
-    let labels = opened.all("tab-label");
-    let (from, to) = (opened.middle(labels[0]), on(labels[1], 0.25));
-    pointer(&opened.app, from.0, from.1, Pointer::Move);
-    pointer(&opened.app, from.0, from.1, Pointer::Down);
-    pointer(&opened.app, to.0, to.1, Pointer::Drag);
-    settle();
-    // (The tab of the label come over is shown.)
-    assert_eq!(opened.model(Workspace::active_tab_index), 1);
-    assert!(opened.all("landing").is_empty());
-
-    // Still held, onto the lower edge of the first tab's view, shown now:
-    // the view goes below it, in that tab.
+    // Still held, onto the lower edge of the first tab's view: the view
+    // goes below it, in that tab.
     let (x, y, width, height) = opened.bounds(opened.all("pane")[0]);
     let edge = (x + width / 2., y + height * 0.9);
     pointer(&opened.app, edge.0, edge.1, Pointer::Drag);
