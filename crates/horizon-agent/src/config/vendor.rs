@@ -119,6 +119,22 @@ impl Vendor {
         })
     }
 
+    /// Whether a conversation on this vendor sends earlier turns' reasoning
+    /// back as it came: on Anthropic's wire, whose API drops it on its side,
+    /// and on OpenAI's Responses route, which pairs a call item with its
+    /// reasoning item. A chat-completions endpoint counts whatever is sent as
+    /// input, so there it is left out
+    /// (`docs/agent-compaction-design.md`).
+    pub(crate) fn sends_back_earlier_reasoning(&self, base_url: Option<&str>) -> bool {
+        match self.connection(String::new(), base_url) {
+            Ok(ProviderConfig::OpenAi(config)) => {
+                config.completion_route() == openai::Route::Responses
+            }
+            Ok(ProviderConfig::Anthropic(_)) => true,
+            _ => false,
+        }
+    }
+
     /// [`Self::connection`], always on chat completions for the OpenAI
     /// family: what the auxiliary calls read is a chat completion's shape
     /// (the judge reads its logprobs).
@@ -202,6 +218,21 @@ mod tests {
         };
         assert_eq!(config.completion_route(), openai::Route::Chat);
         assert_eq!(config.base_url, "https://gateway.invalid/v1");
+    }
+
+    #[test]
+    fn earlier_reasoning_goes_back_where_the_provider_handles_it() {
+        // OpenAI's Responses route and Anthropic's wire.
+        assert!(Vendor::openai().sends_back_earlier_reasoning(None));
+        assert!(
+            Vendor::resolve("anthropic")
+                .unwrap()
+                .sends_back_earlier_reasoning(None)
+        );
+        // A chat-completions endpoint counts it as input.
+        assert!(!Vendor::openai().sends_back_earlier_reasoning(Some("https://gateway.invalid/v1")));
+        let ollama = Vendor::resolve("ollama").unwrap();
+        assert!(!ollama.sends_back_earlier_reasoning(Some("https://ollama.com/v1")));
     }
 
     #[test]

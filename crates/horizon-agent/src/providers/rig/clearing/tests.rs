@@ -136,6 +136,7 @@ fn a_reused_id_keeps_the_original_calls_placeholder_description() {
         &history,
         &ClearedResults::from_occurrences([id("old")]),
         None,
+        crate::providers::rig::conversation::EarlierReasoning::Dropped,
     );
     assert!(body(&projected[1]).contains("old.rs"));
     assert!(!body(&projected[1]).contains("new.rs"));
@@ -174,7 +175,12 @@ fn projection_preserves_canonical_messages_and_freezes_exact_results_across_repl
     let mut state = ClearingState::new(Some(1), 1);
     state.record_input_tokens(1);
     let pass = state.run_pass(&history).unwrap();
-    let first = history_for_provider_request(&history, state.cleared(), None);
+    let first = history_for_provider_request(
+        &history,
+        state.cleared(),
+        None,
+        crate::providers::rig::conversation::EarlierReasoning::Dropped,
+    );
     assert_eq!(before, history.messages());
     assert_eq!(first[0], before[0]);
     let mut resumed = ClearingState::disabled();
@@ -184,7 +190,12 @@ fn projection_preserves_canonical_messages_and_freezes_exact_results_across_repl
     resumed.seed_cleared(pass.cleared_occurrence_ids);
     assert_eq!(
         first,
-        history_for_provider_request(&history, resumed.cleared(), None)
+        history_for_provider_request(
+            &history,
+            resumed.cleared(),
+            None,
+            crate::providers::rig::conversation::EarlierReasoning::Dropped
+        )
     );
 }
 #[test]
@@ -207,8 +218,12 @@ fn internal_inputs_do_not_move_the_memory_turn_boundary() {
         ConversationInputKind::Continuation,
         "continue after truncation",
     );
-    let projected =
-        history_for_provider_request(&history, &ClearedResults::default(), Some(&memory()));
+    let projected = history_for_provider_request(
+        &history,
+        &ClearedResults::default(),
+        Some(&memory()),
+        crate::providers::rig::conversation::EarlierReasoning::Dropped,
+    );
     let text = serde_json::to_string(&projected).unwrap();
     assert!(text.contains("Keep the task"));
     assert!(text.contains("current owner request"));
@@ -226,6 +241,7 @@ fn empty_memory_keeps_history_and_unicode_descriptions_remain_bounded() {
             &history,
             &ClearedResults::default(),
             Some(&MemoryDocument::default()),
+            crate::providers::rig::conversation::EarlierReasoning::Dropped,
         )
     );
     let argument = key_argument(&serde_json::json!({"path":"界".repeat(200)})).unwrap();
@@ -257,6 +273,7 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
         &history,
         &ClearedResults::from_occurrences([id("task-occurrence")]),
         None,
+        crate::providers::rig::conversation::EarlierReasoning::Dropped,
     );
     assert!(body(&projected[1]).contains("cleared old tool result"));
     let fetch = crate::tools::explore::output(

@@ -179,7 +179,15 @@ pub(super) async fn complete_rig_turn(
     if let Some(cleared) = clearing.run_pass(rig_history) {
         let _ = events_tx.send(Event::HistoryCleared(cleared).into());
     }
-    let mut projected = history_for_provider_request(rig_history, clearing.cleared(), memory);
+    let earlier = match config
+        .vendor
+        .sends_back_earlier_reasoning(config.base_url.as_deref())
+    {
+        true => super::conversation::EarlierReasoning::Kept,
+        false => super::conversation::EarlierReasoning::Dropped,
+    };
+    let mut projected =
+        history_for_provider_request(rig_history, clearing.cleared(), memory, earlier);
     let Some(prompt) = projected.pop() else {
         return TurnCompletion {
             stop: CompletionStop::Failed,

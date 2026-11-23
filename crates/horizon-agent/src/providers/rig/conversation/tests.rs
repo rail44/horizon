@@ -69,8 +69,18 @@ fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries()
         }),
     ] {
         assert_eq!(
-            history_for_provider_request(&live, clearing.cleared(), memory.as_ref()),
-            history_for_provider_request(&restored, restored_clearing.cleared(), memory.as_ref(),)
+            history_for_provider_request(
+                &live,
+                clearing.cleared(),
+                memory.as_ref(),
+                crate::providers::rig::conversation::EarlierReasoning::Dropped
+            ),
+            history_for_provider_request(
+                &restored,
+                restored_clearing.cleared(),
+                memory.as_ref(),
+                crate::providers::rig::conversation::EarlierReasoning::Dropped,
+            )
         );
     }
 }
@@ -233,6 +243,10 @@ fn reasoning_is_sent_back_only_for_the_turn_in_progress() {
         ["reasoning", "text"],
         "the turn in progress keeps its reasoning"
     );
+    // Where the provider handles it, every turn's reasoning goes back.
+    let kept = history.messages_with(super::EarlierReasoning::Kept);
+    assert_eq!(parts(&kept[1]), ["reasoning", "text"]);
+    assert_eq!(parts(&kept[3]), ["reasoning", "text"]);
 
     // A reply that was reasoning alone still stands as a turn.
     let history = super::test_support::fixture(vec![
