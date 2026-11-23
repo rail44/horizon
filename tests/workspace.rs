@@ -445,6 +445,32 @@ fn a_tab_dragged_by_its_label_moves_between_the_labels_with_its_views() {
 }
 
 #[test]
+fn a_tab_dragged_by_its_label_selects_no_text() {
+    use horizon_ui::testing::{Pointer, pointer};
+    let opened = open();
+    opened.chord();
+    opened.character("t");
+    let labels = opened.all("tab-label");
+    let (from, to) = (opened.middle(labels[0]), opened.middle(labels[1]));
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    opened.app.run_effects();
+    opened.app.resolve();
+    let selected = opened.app.document().borrow().get_text_selection_ranges();
+    assert!(selected.is_empty(), "{selected:?}");
+    pointer(&opened.app, to.0, to.1, Pointer::Up);
+    opened.app.run_effects();
+    opened.app.resolve();
+    // (A click on a label still shows its tab.)
+    let (x, y) = opened.middle(opened.all("tab-label")[0]);
+    click_at(&opened.app, x, y);
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+}
+
+#[test]
 fn a_tab_dragged_onto_another_groups_strip_goes_into_it() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();
@@ -2247,8 +2273,11 @@ fn split_left_from_a_strip_puts_a_terminal_beside_the_whole_group() {
 
 /// Paints a view being moved over another, near its right side -- or,
 /// with `HORIZON_MOVING_TO_STRIP` set, over the second half of the tab's
-/// label -- in this machine's theme, to the file `HORIZON_MOVING_OUT`
-/// names (a PPM): a picture for a person to look at. Run by hand.
+/// label; or, with `HORIZON_MOVING_TAB` set to a share of a label's width,
+/// the first of three tabs taken by its label to that point of the third's,
+/// the one shown -- in this machine's theme, to the file
+/// `HORIZON_MOVING_OUT` names (a PPM): a picture for a person to look at.
+/// Run by hand.
 #[test]
 #[ignore = "writes a picture for a person: set HORIZON_MOVING_OUT"]
 fn paint_a_view_moving() {
@@ -2279,7 +2308,20 @@ fn paint_a_view_moving() {
         let (x, y, width, height) = opened.bounds(over);
         (x + width * 0.75, y + height / 2.)
     };
-    if std::env::var_os("HORIZON_MOVING_HOVER").is_some() {
+    if let Ok(share) = std::env::var("HORIZON_MOVING_TAB") {
+        let share: f32 = share.parse().expect("a share of a label's width");
+        for _ in 0..2 {
+            opened.chord();
+            opened.character("t");
+        }
+        let labels = opened.all("tab-label");
+        let from = opened.middle(labels[0]);
+        let (x, y, width, height) = opened.bounds(labels[2]);
+        let to = (x + width * share, y + height / 2.);
+        pointer(&opened.app, from.0, from.1, Pointer::Move);
+        pointer(&opened.app, from.0, from.1, Pointer::Down);
+        pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    } else if std::env::var_os("HORIZON_MOVING_HOVER").is_some() {
         // The pointer near the top edge of the right pane.
         let (x, y, width, _) = opened.bounds(elements[1]);
         pointer(&opened.app, x + width - 60., y + 6., Pointer::Move);

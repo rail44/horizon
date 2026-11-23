@@ -482,6 +482,9 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
                             let taken = super::moving::Taken::Tab(tab);
                             shell.begin_moving(taken, pointer.page_x(), pointer.page_y());
                         }
+                        // (Not the start of a selection of its title; a
+                        // click on it still shows the tab.)
+                        prevent_default();
                     })
             },
         )
