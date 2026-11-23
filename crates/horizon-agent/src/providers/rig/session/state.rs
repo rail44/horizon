@@ -195,6 +195,10 @@ impl SessionLoopState {
                 Command::ApplySessionModel(selection) => {
                     self.handle_set_session_model(&selection).await;
                 }
+                Command::SetSessionReasoning { level } => {
+                    self.config.reasoning = level;
+                    self.announce_reasoning();
+                }
                 Command::SetSessionModel { .. } => {
                     let _ = self.events_tx.send(
                         crate::contract::Event::Error(crate::contract::Error {
@@ -295,6 +299,16 @@ impl SessionLoopState {
         let _ = self.events_tx.send(ProviderEvent::session_selection(
             selection.requested_provider().to_owned(),
             selection.requested_model().to_owned(),
+        ));
+        // The new model may take other levels.
+        self.announce_reasoning();
+    }
+
+    /// Says which level the session's requests now send, and which the
+    /// model takes.
+    pub(crate) fn announce_reasoning(&self) {
+        let _ = self.events_tx.send(ProviderEvent::SessionReasoning(
+            crate::providers::rig::reasoning_selection(&self.config),
         ));
     }
 
@@ -408,6 +422,16 @@ mod tests {
             events_rx.try_recv().unwrap(),
             ProviderEvent::session_selection("claude".into(), "m-opus".into())
         );
+        // The new model's levels, announced with the level the session
+        // keeps wanting.
+        let ProviderEvent::SessionReasoning(reasoning) = events_rx.try_recv().unwrap() else {
+            panic!("a switch announces the session's reasoning");
+        };
+        assert_eq!(
+            reasoning.choices,
+            crate::config::ReasoningLevel::ALL.to_vec()
+        );
+        assert_eq!(reasoning.level, Some(state.config.reasoning));
         assert!(events_rx.try_recv().is_err());
     }
 

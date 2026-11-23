@@ -25,7 +25,7 @@ use horizon_acp as acp;
 use horizon_agent::contract::{
     self, ApprovalRequest, Event, MessageRole, SessionId, SessionState, TurnEndReason,
 };
-use horizon_agent::hosting::{AgentWireEvent, ModelSelection};
+use horizon_agent::hosting::{AgentWireEvent, ModelSelection, ReasoningSelection};
 
 /// Everything one mapped event can put on the connection.
 #[derive(Debug)]
@@ -78,6 +78,7 @@ pub(super) struct Mapper {
     facts: SessionFacts,
     model: Option<String>,
     selection: Option<ModelSelection>,
+    reasoning: Option<ReasoningSelection>,
     message_seq: u64,
     /// The id of the assistant text stream not yet committed.
     open_stream: Option<v2::MessageId>,
@@ -116,19 +117,36 @@ pub(super) fn model_option(provider: &str, model: &str) -> v2::SessionConfigOpti
         .category(v2::SessionConfigOptionCategory::Model)
 }
 
-/// The config options for a session's applied model: the selection's
-/// vocabulary when there is one, the provider id and resolved model
-/// otherwise, nothing before a model is known.
+/// The `effort` config option for a session's reasoning: its current level
+/// among the levels the model takes. `None` when the model takes none.
+pub(super) fn effort_option(reasoning: &ReasoningSelection) -> Option<v2::SessionConfigOption> {
+    let level = reasoning.level?;
+    let options = (reasoning.choices.iter())
+        .map(|choice| v2::SessionConfigSelectOption::new(choice.as_str(), choice.as_str()))
+        .collect::<Vec<_>>();
+    Some(
+        v2::SessionConfigOption::select(acp::EFFORT_CONFIG_ID, "Effort", level.as_str(), options)
+            .category(v2::SessionConfigOptionCategory::ThoughtLevel),
+    )
+}
+
+/// The config options for a session's applied model and reasoning: the
+/// model's selection vocabulary when there is one, the provider id and
+/// resolved model otherwise, nothing before a model is known; then the
+/// effort, when the session's model takes one.
 pub(super) fn model_options(
     provider_id: &str,
     model: Option<&str>,
     selection: Option<&ModelSelection>,
+    reasoning: Option<&ReasoningSelection>,
 ) -> Vec<v2::SessionConfigOption> {
-    match (selection, model) {
+    let mut options = match (selection, model) {
         (Some(selection), _) => vec![model_option(&selection.provider, &selection.model)],
         (None, Some(model)) => vec![model_option(provider_id, model)],
         (None, None) => Vec::new(),
-    }
+    };
+    options.extend(reasoning.and_then(effort_option));
+    options
 }
 
 pub(super) fn horizon_meta<T: serde::Serialize>(value: &T) -> Option<v2::Meta> {
@@ -144,6 +162,7 @@ impl Mapper {
             facts,
             model: None,
             selection: None,
+            reasoning: None,
             message_seq: 0,
             open_stream: None,
             tool_ids: HashMap::new(),
@@ -168,6 +187,7 @@ impl Mapper {
             &self.facts.provider_id,
             self.model.as_deref(),
             self.selection.as_ref(),
+            self.reasoning.as_ref(),
         )
     }
 
@@ -192,6 +212,7 @@ impl Mapper {
         match event {
             AgentWireEvent::SessionModel(model) => self.model = Some(model.clone()),
             AgentWireEvent::SessionSelection(selection) => self.selection = Some(selection.clone()),
+            AgentWireEvent::SessionReasoning(reasoning) => self.reasoning = Some(reasoning.clone()),
             AgentWireEvent::WorkspaceRootResolved(resolved) => {
                 self.facts.workspace_root = Some(resolved.workspace_root.clone());
                 self.facts.parent_session_id = resolved.parent_session_id;
@@ -234,7 +255,9 @@ impl Mapper {
             AgentWireEvent::TaskProgress(progress) => {
                 vec![Outgoing::TaskProgress(task_progress(session_id, progress))]
             }
-            AgentWireEvent::SessionModel(_) | AgentWireEvent::SessionSelection(_) => {
+            AgentWireEvent::SessionModel(_)
+            | AgentWireEvent::SessionSelection(_)
+            | AgentWireEvent::SessionReasoning(_) => {
                 self.absorb_metadata(event);
                 self.config_option_update().into_iter().collect()
             }

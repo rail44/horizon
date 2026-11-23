@@ -138,6 +138,16 @@ fn role_adjusted_config(
     config
 }
 
+/// The level a session on `config` sends and the levels its model takes,
+/// by the catalog as loaded so far.
+pub(crate) fn reasoning_selection(config: &RigAgentConfig) -> crate::hosting::ReasoningSelection {
+    let choices = model_catalog::reasoning_choices(config.vendor, &config.model);
+    crate::hosting::ReasoningSelection {
+        level: config.reasoning.fit(&choices),
+        choices,
+    }
+}
+
 pub(super) fn rig_initialization_message(
     provider_id: &ProviderId,
     config: &RigAgentConfig,

@@ -683,6 +683,89 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sessions_effort_starts_from_the_config_and_switches_over_acp() {
+    /// The current value and the entries of the `effort` option an
+    /// inbound config-option update carries.
+    fn effort(inbound: &Inbound) -> Option<(String, usize)> {
+        let v2::SessionUpdate::ConfigOptionUpdate(update) = update(inbound)? else {
+            return None;
+        };
+        update.config_options.iter().find_map(|option| {
+            let v2::SessionConfigKind::Select(select) = &option.kind else {
+                return None;
+            };
+            let v2::SessionConfigSelectOptions::Ungrouped(entries) = &select.options else {
+                return None;
+            };
+            (&*option.config_id.0 == acp::EFFORT_CONFIG_ID)
+                .then(|| (select.current_value.0.to_string(), entries.len()))
+        })
+    }
+    async fn announced(client: &mut AcpClient, expected: &str) -> usize {
+        let collected = collect_until(client, |inbound| {
+            effort(inbound).is_some_and(|(current, _)| current == expected)
+        })
+        .await;
+        collected.iter().rev().find_map(effort).unwrap().1
+    }
+    fn set_effort(session_id: SessionId, value: &str) -> v2::SetSessionConfigOptionRequest {
+        v2::SetSessionConfigOptionRequest::new(
+            acp_id(session_id),
+            acp::EFFORT_CONFIG_ID,
+            v2::SessionConfigOptionValue::id(value.to_string()),
+        )
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"default_model = { provider = "gateway", model = "gateway-model", effort = "high" }
+[[providers]]
+name = "gateway"
+base_url = "http://127.0.0.1:1/v1"
+api_key_env = "HORIZON_EFFORT_TEST_KEY"
+"#,
+    )
+    .unwrap();
+    let agentd = agentd_spawn(AgentdPaths::scratch("agentd-effort"))
+        .env("HORIZON_CONFIG", &config_path)
+        .env_remove("HORIZON_EFFORT_TEST_KEY")
+        .spawn();
+    let mut client = connect(&agentd.socket_path).await;
+    let session_id = SessionId::new();
+    open_session(
+        &client,
+        new_session_request(
+            session_id,
+            &horizon_agent::registry::named_rig_provider_id("gateway").0,
+            None,
+            test_cwd(),
+        ),
+    )
+    .await;
+    // A model no catalog lists takes every level.
+    assert_eq!(announced(&mut client, "high").await, 7);
+
+    client.request(set_effort(session_id, "low")).await.unwrap();
+    announced(&mut client, "low").await;
+    assert!(
+        client
+            .request(set_effort(session_id, "bogus"))
+            .await
+            .is_err()
+    );
+
+    let replay = resume(&mut client, session_id).await.unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|inbound| effort(inbound).is_some_and(|(current, _)| current == "low")),
+        "a reattachment announces the applied effort: {replay:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initialize_lists_sessions_and_drains_over_the_real_socket() {
     let mut agentd = spawn_agentd();
     let client = connect_acp(connect_with_retry(&agentd.socket_path).await).await;

@@ -28,6 +28,12 @@ pub fn other_stop_reason(reason: &str) -> agent_client_protocol::v2::schema::Oth
 /// model (`category: model`, `select`).
 pub const MODEL_CONFIG_ID: &str = "model";
 
+/// `configId` of the session config option that selects the reasoning
+/// effort (`category: thought_level`, `select`): each entry's value id is
+/// the level's word (`"none"`, `"minimal"`, ... `"max"`), and the entries
+/// are the levels the session's current model takes.
+pub const EFFORT_CONFIG_ID: &str = "effort";
+
 /// `optionId` of the approving choice on every `session/request_permission`.
 pub const PERMISSION_OPTION_APPROVE: &str = "approve";
 /// `optionId` of the denying choice on every `session/request_permission`.

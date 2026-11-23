@@ -173,6 +173,9 @@ pub(super) fn spawn_rig_session(
                 .into(),
             );
             let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+            let _ = events_tx.send(crate::contract::ProviderEvent::SessionReasoning(
+                super::reasoning_selection(&config),
+            ));
 
             // Board #41 observation (4): emit an observable event when the
             // session was seeded from a prior keeper's MemoryDigest sequence,

@@ -242,6 +242,12 @@ pub enum Command {
         provider: String,
         model: String,
     },
+    /// Switch the session's reasoning effort. Like a model switch, the
+    /// running turn finishes on the previous level; the provider announces
+    /// the level it applied (`ProviderEvent::SessionReasoning`).
+    SetSessionReasoning {
+        level: crate::config::ReasoningLevel,
+    },
     Shutdown,
     /// Ends the session's thread but not the session: the persisted state is
     /// [`SessionState::Suspended`] rather than `Terminated`, startup does not

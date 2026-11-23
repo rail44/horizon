@@ -315,6 +315,7 @@ impl AgentdState {
                 role_id: None,
                 model: None,
                 selection: None,
+                reasoning: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -366,6 +367,11 @@ pub(super) struct SessionEntry {
     /// for beside the resolved id `model` above carries. `None` until the first switch, or when the
     /// spawn-time provider has no config entry (e.g. the mock provider).
     pub(super) selection: Option<horizon_agent::hosting::ModelSelection>,
+    /// The session's reasoning level and the levels its model takes, as the
+    /// provider last announced them (`AgentWireEvent::SessionReasoning`),
+    /// re-announced on a (re)attach. `None` for a provider that announces
+    /// none (the mock provider).
+    pub(super) reasoning: Option<horizon_agent::hosting::ReasoningSelection>,
     pub(super) inbound: Sender<Command>,
     /// Requests an atomic history/live handoff from the session owner.
     /// The reply owns the subscription, so abandoning it revokes delivery.
@@ -426,6 +432,7 @@ mod tests {
                 role_id: None,
                 model: None,
                 selection: None,
+                reasoning: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -458,6 +465,7 @@ mod tests {
                 role_id: None,
                 model: None,
                 selection: None,
+                reasoning: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,

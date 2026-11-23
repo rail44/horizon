@@ -86,8 +86,9 @@ impl State {
                 ProviderEvent::SessionSelection(selection) => {
                     self.session_selection = Some(selection)
                 }
-                // The view owns the live child rows.
-                ProviderEvent::TaskProgress(_) => {}
+                // The view owns the live child rows; the daemon keeps the
+                // session's reasoning level for its attachments.
+                ProviderEvent::TaskProgress(_) | ProviderEvent::SessionReasoning(_) => {}
             }
         }
         self.frame.clone()

@@ -181,6 +181,12 @@ pub(super) fn capture(
                     .clone()
                     .map(AgentWireEvent::SessionSelection),
             );
+            metadata.extend(
+                entry
+                    .reasoning
+                    .clone()
+                    .map(AgentWireEvent::SessionReasoning),
+            );
             metadata.extend(entry.workspace_root.clone().map(|workspace_root| {
                 AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
                     workspace_root,

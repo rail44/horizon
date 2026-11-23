@@ -199,6 +199,7 @@ mod tests {
                 role_id: None,
                 model: None,
                 selection: None,
+                reasoning: None,
                 inbound,
                 replay,
                 parent_session_id: None,

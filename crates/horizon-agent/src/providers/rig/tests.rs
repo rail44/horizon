@@ -42,9 +42,17 @@ use rig_core::completion::{
     message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
 };
 
+/// The next provider event, past the reasoning announcements a session
+/// makes beside its conversation (`ProviderEvent::SessionReasoning`).
 fn recv_provider(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
-    rx.recv_timeout(std::time::Duration::from_secs(1))
-        .expect("expected a provider event within timeout")
+    loop {
+        let event = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("expected a provider event within timeout");
+        if !matches!(event, ProviderEvent::SessionReasoning(_)) {
+            return event;
+        }
+    }
 }
 
 fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> Event {
@@ -2078,8 +2086,10 @@ fn start_fallback_rig_session_with_history(
                 &event,
                 ProviderEvent::Event { event, .. }
                     if matches!(**event, Event::ConversationRecorded(_))
-            ) {
-                // These tests assert coordinator/UI events. Journal replay is tested separately.
+            ) || matches!(event, ProviderEvent::SessionReasoning(_))
+            {
+                // These tests assert coordinator/UI events. Journal replay
+                // and the reasoning announcements are tested separately.
                 continue;
             } else if forward.send(event).is_err() {
                 return;
