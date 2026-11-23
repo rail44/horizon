@@ -520,7 +520,6 @@ impl Mapper {
                 )
             }
             SessionState::WaitingForUser
-            | SessionState::Completed
             | SessionState::Cancelled
             | SessionState::Failed
             | SessionState::Terminated

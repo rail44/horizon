@@ -541,8 +541,5 @@ mod field_scoped_reads_tests {
 
         assert!(!state_indicates_turn_in_flight(None));
         assert!(!state_indicates_turn_in_flight(Some(SessionState::Created)));
-        assert!(!state_indicates_turn_in_flight(Some(
-            SessionState::Completed
-        )));
     }
 }

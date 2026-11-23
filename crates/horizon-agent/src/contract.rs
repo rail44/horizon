@@ -536,7 +536,6 @@ pub enum SessionState {
     WaitingForApproval,
     ToolRunning,
     Cancelled,
-    Completed,
     Failed,
     Terminated,
     /// The thread ended on [`Command::Suspend`]: not running, not resumed at
@@ -666,25 +665,13 @@ pub struct MessageDelta {
 /// An arbitrary JSON payload on a wire vocabulary — a tool call's
 /// arguments ([`ToolCallRequest::input`]) or result
 /// ([`ToolCallResult::output`]), and the host-tool exchange's
-/// `input`/`output`. Wraps `serde_json::Value` with a format-aware serde
-/// encoding, keyed on serde's `is_human_readable`:
-///
-/// - **Human-readable formats** (serde_json — the event log's on-disk
-///   JSONL, test fixtures) see the value *transparently*: the encoded
-///   bytes are identical to a plain `serde_json::Value` field, so the
-///   persisted event-log format is unchanged by the v10 cutover
-///   (`docs/remoc-adoption-design.md` §6: on-disk format out of scope) and
-///   every pre-v10 log line still decodes.
-/// - **Binary formats** carry it as its JSON *text* in one string, since
-///   `serde_json::Value`'s own `Deserialize` is built on serde's
-///   `deserialize_any`, which only a self-describing format can answer.
-///   No binary format carries it since the agent hub moved to ACP
-///   (`docs/acp-agentd-design.md`).
+/// `input`/`output`. Encoded exactly as a plain `serde_json::Value`.
 ///
 /// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
 /// indexing keep their shape); construct via `From<serde_json::Value>`,
 /// unwrap via `.0`.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(transparent)]
 pub struct JsonValue(pub serde_json::Value);
 
 #[cfg(test)]
@@ -734,41 +721,13 @@ impl PartialEq<serde_json::Value> for JsonValue {
     }
 }
 
-impl Serialize for JsonValue {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if serializer.is_human_readable() {
-            self.0.serialize(serializer)
-        } else {
-            serializer.serialize_str(&self.0.to_string())
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for JsonValue {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        if deserializer.is_human_readable() {
-            serde_json::Value::deserialize(deserializer).map(Self)
-        } else {
-            let text = String::deserialize(deserializer)?;
-            serde_json::from_str(&text)
-                .map(Self)
-                .map_err(serde::de::Error::custom)
-        }
-    }
-}
-
 impl JsonSchema for JsonValue {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "JsonValue".into()
     }
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // Any JSON value, like `serde_json::Value`'s own schema — with the
-        // wire-encoding note that distinguishes it.
-        schemars::json_schema!({
-            "$comment": "any JSON value; on the binary (Postbag) wire it travels as its JSON \
-                         text in one string"
-        })
+        schemars::json_schema!({ "$comment": "any JSON value" })
     }
 }
 
