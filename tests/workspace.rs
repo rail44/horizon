@@ -756,6 +756,50 @@ fn a_tabs_close_button_closes_it_and_keeps_its_session() {
 }
 
 #[test]
+fn a_tags_close_button_closes_its_pane_then_its_tab() {
+    let opened = open();
+    opened.chord();
+    opened.character("s");
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    let settle = || {
+        for _ in 0..2 {
+            opened.app.run_effects();
+            opened.app.resolve();
+        }
+    };
+
+    // Pressed and dragged away, the button takes no view to move it.
+    let (x, y) = opened.middle(opened.all("tag-close")[0]);
+    let to = opened.middle(opened.all("pane")[1]);
+    pointer(&opened.app, x, y, Pointer::Move);
+    pointer(&opened.app, x, y, Pointer::Down);
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
+    settle();
+    assert!(opened.all("drop").is_empty());
+    pointer(&opened.app, to.0, to.1, Pointer::Up);
+    settle();
+    assert_eq!(opened.panes(), panes);
+
+    // The first pane's, while the focus is on the second: the first goes,
+    // its session detached, and the tab stays.
+    click_at(&opened.app, x, y);
+    settle();
+    assert_eq!(opened.panes(), vec![panes[1]]);
+    assert_eq!(opened.model(Workspace::tab_count), 1);
+    assert_eq!(opened.sessions(), 2);
+    assert_eq!(opened.model(Workspace::detached_session_count), 1);
+
+    // The tab's last pane's closes the tab.
+    let (x, y) = opened.middle(opened.all("tag-close")[0]);
+    click_at(&opened.app, x, y);
+    settle();
+    assert_eq!(opened.model(Workspace::tab_count), 0);
+    assert_eq!(opened.sessions(), 2);
+    assert_eq!(opened.model(Workspace::detached_session_count), 2);
+}
+
+#[test]
 fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
     use horizon_control::contract::{EnvelopeBody, Invoke, Query};
     use horizon_control::host::executor::{ControlExecutor, ControlRequest};
@@ -2057,7 +2101,7 @@ fn paint_a_view_moving() {
     opened.chord();
     opened.character("s");
     let elements = opened.all("pane");
-    let handle = opened.middle(opened.all("handle")[0]);
+    let handle = opened.middle(opened.all("tag")[0]);
     let to = opened.middle(elements[1]);
     if std::env::var_os("HORIZON_MOVING_HOVER").is_some() {
         // The pointer near the top edge of the right pane.

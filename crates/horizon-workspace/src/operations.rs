@@ -26,7 +26,8 @@ impl Workspace {
     }
 }
 
-/// What [`Workspace::close_cursor_pane_or_tab`] actually did -- the shell
+/// What [`Workspace::close_cursor_pane_or_tab`] (or
+/// [`Workspace::close_pane_or_tab`]) actually did -- the shell
 /// mirrors the pane-close vs. tab-close lifecycle off this, and the
 /// payloads let tests pin the exact detached sessions.
 #[derive(Debug, PartialEq, Eq)]
@@ -38,7 +39,8 @@ pub enum CloseCursorOutcome {
     /// group's strip, so the tab closed instead; carries the tab's
     /// now-detached sessions.
     ClosedTab(Vec<SessionId>),
-    /// Nothing to act on: no cursor to resolve (an empty workspace).
+    /// Nothing to act on: no cursor to resolve (an empty workspace), or
+    /// no such pane.
     Noop,
 }
 
@@ -681,9 +683,20 @@ impl Workspace {
                 None => CloseCursorOutcome::Noop,
             };
         }
-        let Some(pane_id) = self.cursor_pane_id() else {
+        match self.cursor_pane_id() {
+            Some(pane_id) => self.close_pane_or_tab(pane_id),
+            None => CloseCursorOutcome::Noop,
+        }
+    }
+
+    /// Closes `pane_id`, or its tab when it is the tab's last pane: what
+    /// `x` does to the cursor's pane, for any pane (the one whose tag's
+    /// close button is pressed). A pane the workspace does not have is
+    /// left alone.
+    pub fn close_pane_or_tab(&mut self, pane_id: PaneId) -> CloseCursorOutcome {
+        if !self.panes.iter().any(|pane| pane.id == pane_id) {
             return CloseCursorOutcome::Noop;
-        };
+        }
         if !self.is_last_of_its_tab(pane_id) {
             return CloseCursorOutcome::ClosedPane(self.detach_pane(pane_id));
         }

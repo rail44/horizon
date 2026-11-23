@@ -158,7 +158,8 @@ impl Shell {
     }
 }
 
-/// `pane`'s tag: its name and the grip it is taken by, in its top right
+/// `pane`'s tag: its name, the grip it is taken by and the button it is
+/// closed with, in its top right
 /// corner, clear of a terminal's text, which begins at the left. Every
 /// pane has one, a pane that is all of its tab too, and it shows while the
 /// pointer is over the pane or in workspace mode.
@@ -179,6 +180,29 @@ pub(super) fn tag(shell: Shell, pane: PaneId) -> El {
         .child(el("span").class(styles::TAG_NAME).text_dyn(move || {
             (shell.model.with(|model| model.pane_label(pane))).unwrap_or_default()
         }))
+        // Closing the pane, or its tab when it is the tab's last, detaches
+        // the session in it, as `x` does.
+        .child(
+            el("div")
+                .class(styles::TAG_CLOSE)
+                .attr("title", "Close this view")
+                .text("×")
+                // (Not a press that takes the view to move it.)
+                .on("pointerdown", |_| {
+                    prevent_default();
+                    stop_propagation();
+                })
+                .on("click", move |_| {
+                    shell.change(|model| {
+                        model.exit_workspace_mode();
+                        model.close_pane_or_tab(pane);
+                    });
+                    // (The pane this is in is off the page now: the click
+                    // has no default for the document to act on it.)
+                    prevent_default();
+                    stop_propagation();
+                }),
+        )
         .on("pointerdown", move |event| {
             if let DomEventData::PointerDown(pointer) = &event.data {
                 shell.begin_moving(pane, pointer.page_x(), pointer.page_y());

@@ -514,6 +514,40 @@ fn close_cursor_pane_or_tab_on_last_pane_activates_the_neighbor_tab() {
 }
 
 #[test]
+fn close_pane_or_tab_closes_a_pane_the_focus_is_not_on() {
+    let mut workspace = Workspace::mvp();
+    let first = workspace.visible_pane_id(0).expect("first pane");
+    let first_session = workspace.active_terminal_session_id().expect("session");
+    let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
+    assert_eq!(workspace.focus, Some(second));
+
+    assert_eq!(
+        workspace.close_pane_or_tab(first),
+        CloseCursorOutcome::ClosedPane(Some(first_session))
+    );
+
+    assert_eq!(workspace.visible_pane_ids(), vec![second]);
+    assert_eq!(workspace.focus, Some(second));
+    assert_eq!(workspace.tab_count(), 1);
+    assert_eq!(workspace.detached_session_count(), 1);
+}
+
+#[test]
+fn close_pane_or_tab_closes_the_tab_of_its_last_pane() {
+    let mut workspace = Workspace::mvp();
+    let only = workspace.visible_pane_id(0).expect("pane");
+    let only_session = workspace.active_terminal_session_id().expect("session");
+
+    assert_eq!(
+        workspace.close_pane_or_tab(only),
+        CloseCursorOutcome::ClosedTab(vec![only_session])
+    );
+    assert_eq!(workspace.tab_count(), 0);
+    // A pane that is gone is nothing to close.
+    assert_eq!(workspace.close_pane_or_tab(only), CloseCursorOutcome::Noop);
+}
+
+#[test]
 fn close_cursor_pane_or_tab_is_inert_on_a_zero_tab_workspace() {
     let mut workspace = Workspace::mvp();
     workspace.close_tab_index(0);
