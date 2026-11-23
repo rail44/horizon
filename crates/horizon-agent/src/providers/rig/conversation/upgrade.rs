@@ -1,4 +1,7 @@
-//! Explicit offline v3 conversion. Never called by session restoration.
+//! The v3 to v4 conversion, kept for building test fixtures: a test writes
+//! a session as plain events and [`fixture`] adds the conversation records
+//! a v4 log carries. No v3 log is read anywhere else.
+use super::validate::validate_conversation_records;
 use super::*;
 use crate::contract::{MessageRole, ToolCallRequest};
 use serde_json::Value;
@@ -28,15 +31,13 @@ impl LegacyResponse {
 /// Upgrade a stopped v3 log in memory. Existing v4 data is returned unchanged.
 /// Original record identities and authority metadata survive; inserted records
 /// receive fresh IDs and the output's sequence is assigned in source order.
-pub fn upgrade_conversation_records(records: &[Value]) -> Result<Vec<Value>, String> {
+pub(crate) fn upgrade_conversation_records(records: &[Value]) -> Result<Vec<Value>, String> {
     if records.iter().all(|row| row["version"] == 4) {
         validate_conversation_records(records)?;
         return Ok(records.to_vec());
     }
     if records.iter().any(|row| row["version"] != 3) {
-        return Err(
-            "Expected one v3 log; first convert v1/v2 with migrate-agent-history.py".into(),
-        );
+        return Err("Expected one v3 log".into());
     }
     let mut sessions: HashMap<String, Session> = HashMap::new();
     let mut retries = HashSet::new();
@@ -183,7 +184,6 @@ fn restore_tool(request: &ToolCallRequest, payload: Option<&Value>) -> Result<To
     Ok(tool)
 }
 
-#[cfg(test)]
 pub(crate) fn fixture(events: Vec<Event>) -> Vec<Event> {
     let session_id = crate::contract::SessionId::new();
     let rows: Vec<_> = events.into_iter().enumerate().map(|(index, event)| serde_json::json!({
@@ -197,40 +197,6 @@ pub(crate) fn fixture(events: Vec<Event>) -> Vec<Event> {
         .into_iter()
         .map(|row| serde_json::from_value(row["event"].clone()).unwrap())
         .collect()
-}
-
-/// Validate the exact decoder, event envelopes, conversation codec and identities.
-pub fn validate_conversation_records(rows: &[Value]) -> Result<(), String> {
-    let mut sessions: HashMap<crate::contract::SessionId, (bool, Vec<Event>)> = HashMap::new();
-    let mut ids = HashSet::new();
-    let mut previous = None;
-    for row in rows {
-        let record: crate::persistence::event_log::Record =
-            serde_json::from_value(row.clone()).map_err(|error| error.to_string())?;
-        if record.schema != "horizon.agent.event_log"
-            || record.version != 4
-            || record.event_id.is_empty()
-            || !ids.insert(record.event_id)
-            || previous.is_some_and(|prior| record.sequence <= prior)
-        {
-            return Err("Invalid event envelope, duplicate identity or unordered sequence".into());
-        }
-        previous = Some(record.sequence);
-        let session = sessions.entry(record.session_id).or_default();
-        session.0 |= record
-            .provider_id
-            .as_ref()
-            .is_some_and(|id| id.0 == "builtin.agent.rig")
-            || matches!(record.event, Event::ConversationRecorded(_));
-        session.1.push(record.event);
-    }
-    for (session, (rig, events)) in sessions {
-        if rig {
-            ConversationHistory::from_events(&events)
-                .map_err(|error| format!("Session {session:?}: {error}"))?;
-        }
-    }
-    Ok(())
 }
 
 fn convert_clearing(session: &mut Session, cleared: &mut Value) -> Result<(), String> {

@@ -12,17 +12,10 @@ use crate::roles::RoleId;
 
 mod appender;
 mod health;
-mod offline;
-pub use offline::convert_conversation_file;
 mod turn;
 mod writer;
 
-#[cfg(test)]
-mod migration_tests;
-
-pub use crate::providers::rig::conversation::{
-    interrupted_conversation_calls, upgrade::upgrade_conversation_records,
-};
+pub use crate::providers::rig::conversation::interrupted_conversation_calls;
 pub use appender::{Appender, PendingEvents};
 pub use health::FailureSubscription;
 use turn::TurnTracker;
@@ -43,7 +36,7 @@ impl std::fmt::Display for UnsupportedEventLogFormat {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "agent event log {} has version {:?}; explicit format conversion to version {} is required; run horizon-migrate-conversation (for v1/v2, first run scripts/migrate-agent-history.py) before starting Horizon",
+            "agent event log {} has version {:?}; this build reads version {} only; convert it with a build from before 2026-11-24, or rotate it aside",
             self.path.display(),
             self.found,
             AGENT_EVENT_LOG_VERSION
