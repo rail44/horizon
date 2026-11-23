@@ -6,7 +6,6 @@ mod completion;
 mod transition;
 pub use transition::ToolUpdate;
 pub(crate) mod background;
-mod config;
 mod execution;
 pub(crate) mod explore;
 mod external;

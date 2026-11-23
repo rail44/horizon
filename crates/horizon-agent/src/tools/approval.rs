@@ -46,7 +46,7 @@ impl From<Result<ToolUpdate, String>> for ApprovalOutcome {
 /// report a result. See `docs/agent-tools-design.md`, "Approval Wiring".
 /// `fs_read`/`fs_glob`/`fs_grep` join here because an out-of-workspace-root
 /// read routes through the approval gate (see `execution::execute_agent_tool`'s
-/// `call_escapes_root` check); `config_write` joins for the same reason -- all
+/// `call_escapes_root` check) -- all
 /// are "runs to completion synchronously" shape -- see
 /// [`resolve_synchronous_tool`]. `request_sandbox_area` joins because its
 /// whole effect is the grant this approval applies
@@ -61,7 +61,6 @@ fn is_horizon_executed_tool(tool_id: &str) -> bool {
             | "fs_write"
             | "fs_edit"
             | "bash"
-            | "config_write"
             | "web_fetch"
             | "request_sandbox_area"
     )
@@ -308,7 +307,7 @@ fn resolve_web_fetch(
     outcome
 }
 
-/// `fs_write`/`fs_edit`/`config_write` and the approved-out-of-root read
+/// `fs_write`/`fs_edit` and the approved-out-of-root read
 /// tools (`fs_read`/`fs_glob`/`fs_grep`): all run to completion synchronously,
 /// so their approve/deny always resolves to `Executed`. Dispatches through
 /// `tools::execute_approved`, which picks the owning module by tool id.

@@ -703,8 +703,6 @@ mod tests {
             "fs_grep",
             "fs_glob",
             "workspace_snapshot",
-            "config_read",
-            "config_write",
             "recall_search",
             "recall_read",
             "skill_read",

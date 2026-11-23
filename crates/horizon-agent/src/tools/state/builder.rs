@@ -61,7 +61,6 @@ impl ToolSessionBuilder {
                 tools,
                 recall,
                 skills: SkillRegistry::default(),
-                config_path: None,
                 unattended: false,
                 read_only: None,
                 network: None,
@@ -108,12 +107,6 @@ impl ToolSessionBuilder {
     /// Install the host-discovered skill registry.
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
         self.inner.skills = skills;
-        self
-    }
-
-    /// Install the config path resolved by the host.
-    pub fn with_config_path(mut self, config_path: Option<PathBuf>) -> Self {
-        self.inner.config_path = config_path;
         self
     }
 

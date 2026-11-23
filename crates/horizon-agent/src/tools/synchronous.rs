@@ -4,7 +4,7 @@
 #[cfg(test)]
 use serde_json::Value;
 
-use super::{ToolSessionState, catalog::Definition, config, fs, knowledge, recall};
+use super::{ToolSessionState, catalog::Definition, fs, knowledge, recall};
 use crate::contract::ToolPermission;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,8 +14,6 @@ pub(super) enum SynchronousTool {
     Grep,
     WriteFile,
     EditFile,
-    ReadConfig,
-    WriteConfig,
     ReadSkill,
     SearchRecall,
     ReadRecall,
@@ -26,14 +24,12 @@ pub(super) enum SynchronousTool {
 
 impl SynchronousTool {
     #[cfg(test)]
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 11] = [
         Self::ReadFile,
         Self::Glob,
         Self::Grep,
         Self::WriteFile,
         Self::EditFile,
-        Self::ReadConfig,
-        Self::WriteConfig,
         Self::ReadSkill,
         Self::SearchRecall,
         Self::ReadRecall,
@@ -49,8 +45,6 @@ impl SynchronousTool {
             Self::Grep => "fs_grep",
             Self::WriteFile => "fs_write",
             Self::EditFile => "fs_edit",
-            Self::ReadConfig => "config_read",
-            Self::WriteConfig => "config_write",
             Self::ReadSkill => "skill_read",
             Self::SearchRecall => "recall_search",
             Self::ReadRecall => "recall_read",
@@ -62,11 +56,10 @@ impl SynchronousTool {
 
     fn permission(self) -> ToolPermission {
         match self {
-            Self::WriteFile | Self::EditFile | Self::WriteConfig => ToolPermission::RequireApproval,
+            Self::WriteFile | Self::EditFile => ToolPermission::RequireApproval,
             Self::ReadFile
             | Self::Glob
             | Self::Grep
-            | Self::ReadConfig
             | Self::ReadSkill
             | Self::SearchRecall
             | Self::ReadRecall
@@ -104,8 +97,6 @@ pub(super) fn execute(
         ToolInput::Grep(input) => fs::grep(state, input, allow_external),
         ToolInput::WriteFile(input) => fs::write(state, input),
         ToolInput::EditFiles(input) => fs::edit(state, input),
-        ToolInput::ReadConfig(_) => config::read(state),
-        ToolInput::WriteConfig(input) => config::write(state, input),
         ToolInput::ReadSkill(input) => {
             crate::skills::execute_read(state.skill_registry(), &input.id)
         }

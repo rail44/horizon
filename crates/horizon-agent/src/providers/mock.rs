@@ -740,7 +740,10 @@ mod tests {
         let provider = MockProvider::new();
         assert_eq!(Provider::resolved_model(&provider, None), None);
         assert_eq!(
-            Provider::resolved_model(&provider, Some(&RoleId("config".to_string()))),
+            Provider::resolved_model(
+                &provider,
+                Some(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+            ),
             None
         );
     }

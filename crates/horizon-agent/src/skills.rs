@@ -14,10 +14,10 @@
 //!
 //! **Trust note.** A repository skill is exactly the prompt-injection
 //! surface `docs/trust-boundaries.md`'s tier reasoning warns about — the
-//! same surface `roles::CONFIG_ROLE`'s doc comment already flags for
-//! `AGENTS.md`/`CLAUDE.md` ingestion — and arguably sharper here, since a
+//! same surface repository `AGENTS.md`/`CLAUDE.md` ingestion opens — and
+//! arguably sharper here, since a
 //! repository skill *overrides* an embedded one by id (any session working
-//! in a repo could have `horizon-config`'s instructions silently shadowed).
+//! in a repo could have `horizon-cli`'s instructions silently shadowed).
 //! Originally accepted unconditionally as a personal-project
 //! hypothesis-testing convenience; now gated behind a user-level trust
 //! decision: a session whose
@@ -105,7 +105,6 @@ impl Skill {
 /// This build's embedded skills, ship-native so the configuration agent
 /// (and `horizon-cli`'s generic-session audience) work no matter where
 /// Horizon was launched or whether any repository skills exist at all.
-const HORIZON_CONFIG_SKILL_SOURCE: &str = include_str!("../skills/horizon-config/SKILL.md");
 const HORIZON_CLI_SKILL_SOURCE: &str = include_str!("../skills/horizon-cli/SKILL.md");
 const HORIZON_DISTILL_SKILL_SOURCE: &str = include_str!("../skills/horizon-distill/SKILL.md");
 const GITHUB_PR_SKILL_SOURCE: &str = include_str!("../skills/github-pr/SKILL.md");
@@ -120,7 +119,6 @@ fn embedded_skills() -> &'static [Skill] {
     static SKILLS: std::sync::OnceLock<Vec<Skill>> = std::sync::OnceLock::new();
     SKILLS.get_or_init(|| {
         let mut sources: Vec<&'static str> = vec![
-            HORIZON_CONFIG_SKILL_SOURCE,
             HORIZON_CLI_SKILL_SOURCE,
             HORIZON_DISTILL_SKILL_SOURCE,
             GITHUB_PR_SKILL_SOURCE,
@@ -248,7 +246,7 @@ impl SkillRegistry {
     /// this registry -- the role-less/generic-session case added in v2.
     /// `None` for an empty registry, so a hypothetical build shipping no
     /// skills at all reproduces the pre-skill prompt byte-for-byte (this
-    /// build always embeds at least `horizon-config`/`horizon-cli`, so this
+    /// build always embeds at least `horizon-cli`/`horizon-cli`, so this
     /// is exercised directly against an empty registry in this module's own
     /// tests rather than through [`Self::discover`]).
     pub(crate) fn prompt_section_for_all(&self) -> Option<String> {
@@ -453,12 +451,6 @@ mod tests {
     #[test]
     fn embedded_skills_parse_and_are_registered() {
         let registry = SkillRegistry::embedded();
-        let config_skill = registry
-            .get("horizon-config")
-            .expect("horizon-config must be registered");
-        assert!(!config_skill.description.is_empty());
-        assert!(config_skill.body().contains("config.toml"));
-
         let cli_skill = registry
             .get("horizon-cli")
             .expect("horizon-cli must be registered");
@@ -502,7 +494,7 @@ mod tests {
         let section = registry
             .prompt_section_for_all()
             .expect("must build a section");
-        assert!(section.contains("horizon-config"));
+        assert!(section.contains("horizon-cli"));
         assert!(section.contains("horizon-cli"));
         assert!(section.contains("github-pr"));
         assert!(section.contains("skill_read"));
@@ -512,9 +504,9 @@ mod tests {
     fn prompt_section_for_ids_lists_only_the_given_ids() {
         let registry = SkillRegistry::embedded();
         let section = registry
-            .prompt_section_for_ids(&["horizon-config"])
+            .prompt_section_for_ids(&["horizon-distill"])
             .expect("must build a section");
-        assert!(section.contains("horizon-config"));
+        assert!(section.contains("horizon-distill"));
         assert!(!section.contains("horizon-cli"));
     }
 
@@ -522,9 +514,9 @@ mod tests {
     fn prompt_section_for_ids_silently_skips_an_unknown_skill_id() {
         let registry = SkillRegistry::embedded();
         let section = registry
-            .prompt_section_for_ids(&["horizon-config", "does-not-exist"])
+            .prompt_section_for_ids(&["horizon-cli", "does-not-exist"])
             .expect("must still build a section for the known entry");
-        assert!(section.contains("horizon-config"));
+        assert!(section.contains("horizon-cli"));
         assert!(!section.contains("does-not-exist"));
     }
 
@@ -566,7 +558,7 @@ mod tests {
         assert!(registry.get("broken").is_none());
         // The build's embedded skills must still be present -- one bad
         // repository skill must not take down the whole registry.
-        assert!(registry.get("horizon-config").is_some());
+        assert!(registry.get("horizon-cli").is_some());
     }
 
     #[test]
@@ -593,14 +585,14 @@ mod tests {
         let root = directory.path().to_path_buf();
         write_skill(
             &root,
-            "horizon-config",
-            "horizon-config",
+            "horizon-cli",
+            "horizon-cli",
             "Overridden description.",
             "Overridden body.",
         );
 
         let registry = SkillRegistry::discover(&root);
-        let skill = registry.get("horizon-config").unwrap();
+        let skill = registry.get("horizon-cli").unwrap();
         assert_eq!(skill.description, "Overridden description.");
         assert_eq!(skill.body(), "Overridden body.");
     }
@@ -627,7 +619,7 @@ mod tests {
 
         let registry = SkillRegistry::embedded();
         // Embedded skills are present.
-        assert!(registry.get("horizon-config").is_some());
+        assert!(registry.get("horizon-cli").is_some());
         // Repository skill is NOT present — embedded() does no discovery.
         assert!(registry.get("repo-skill").is_none());
     }
@@ -635,9 +627,9 @@ mod tests {
     #[test]
     fn execute_read_returns_the_body_for_a_known_id() {
         let registry = SkillRegistry::embedded();
-        let output = execute_read(&registry, &serde_json::json!({ "id": "horizon-config" }));
-        assert_eq!(output["id"], "horizon-config");
-        assert!(output["body"].as_str().unwrap().contains("config.toml"));
+        let output = execute_read(&registry, &serde_json::json!({ "id": "horizon-cli" }));
+        assert_eq!(output["id"], "horizon-cli");
+        assert!(output["body"].as_str().unwrap().contains("horizon"));
         assert_eq!(output["truncated"], false);
     }
 
@@ -664,12 +656,7 @@ mod tests {
         let registry = SkillRegistry::embedded();
         let output = execute_read(&registry, &serde_json::json!({ "id": "no-such-skill" }));
         assert_eq!(output["is_error"], true);
-        assert!(
-            output["message"]
-                .as_str()
-                .unwrap()
-                .contains("horizon-config")
-        );
+        assert!(output["message"].as_str().unwrap().contains("horizon-cli"));
     }
 
     #[test]

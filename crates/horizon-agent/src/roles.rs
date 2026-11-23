@@ -81,8 +81,7 @@ pub struct RoleDefinition {
     pub writes: RoleWrites,
     /// Whether repository `AGENTS.md`/`CLAUDE.md` instructions
     /// (`instructions::extra_sections`) are ingested for a session with
-    /// this role. See [`CONFIG_ROLE`]'s doc comment for why the `config`
-    /// role sets this to `false`.
+    /// this role.
     pub include_repository_instructions: bool,
     /// Skill ids (`skills::SkillRegistry::get`) advertised to a session with
     /// this role -- see `skills::SkillRegistry::prompt_section_for_ids`.
@@ -111,54 +110,6 @@ pub enum RoleWrites {
     /// Only in a worktree made for the session; until it has one, nowhere.
     InOwnWorktree,
 }
-
-/// Horizon's configuration assistant: the first role -- the concrete
-/// second use case `docs/research/
-/// agent-prompting.md` Part 2's audit said was needed before committing to
-/// a role design. Helps the user adjust `[theme]`/`[theme.ansi]`/
-/// `[keybindings]` in Horizon's config file conversationally, via the
-/// `horizon-config` skill and the `config.*`/`skill_read` tools -- see
-/// `tools::config` and the skill's own `SKILL.md` for the mechanics.
-///
-/// `include_repository_instructions: false`: this role can write
-/// `~/.config/horizon/config.toml` (or wherever `HORIZON_CONFIG` points),
-/// a single host-owned file the `config_write` tool deliberately reaches
-/// outside the usual `workspace_root` confinement to edit (see
-/// `tools::config`'s own doc comment). A host-config-writing agent must
-/// not also ingest arbitrary repository `AGENTS.md`/`CLAUDE.md` content --
-/// unlike a role-less coding session, where the repository *is* the trust
-/// boundary, this role's trust boundary is Horizon's own config file, and
-/// pulling in instructions from whatever repository happens to be the
-/// process's cwd would cross tiers for no benefit to the task at hand. See
-/// `docs/trust-boundaries.md`'s tier reasoning.
-pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
-    id: "config",
-    title: "Configuration Agent",
-    prompt_section: CONFIG_ROLE_PROMPT_SECTION,
-    allowed_tool_ids: Some(&["skill_read", "config_read", "config_write"]),
-    model: None,
-    uncapped_turns: false,
-    writes: RoleWrites::Anywhere,
-    include_repository_instructions: false,
-    skill_ids: &["horizon-config"],
-    unattended: false,
-};
-
-const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assistant: you help \
-     the user adjust Horizon's color theme and keybindings by editing its config file \
-     conversationally.\n\
-     \n\
-     Before proposing any change, read the `horizon-config` skill (via `skill_read`) and the \
-     user's current config file (via `config_read`) -- do not guess at the file's format, \
-     valid names, or current contents.\n\
-     \n\
-     Apply a change by writing the complete file with `config_write`, preserving every existing \
-     entry the user didn't ask you to change -- never write a partial file.\n\
-     \n\
-     Theme and keybinding changes apply automatically once the user approves a `config_write`; \
-     no restart is needed for those two sections, though other sections of the file still \
-     require one. You have no filesystem or shell access beyond `skill_read`/`config_read`/\
-     `config_write` -- do not suggest running commands or reading other files.";
 
 /// [`EXPLORE_ROLE`]'s id, named as a constant because two things outside
 /// this module have to recognize it without constructing a
@@ -194,7 +145,7 @@ pub const EXPLORE_ROLE_ID: &str = "explore";
 /// keeps the prompt's delegation-routing block out of an exploration's own
 /// system prompt (`providers::rig::session::advertises_task_tool`).
 ///
-/// `include_repository_instructions: true`, unlike [`CONFIG_ROLE`]: an
+/// `include_repository_instructions: true`: an
 /// exploration runs against the *requester's own* workspace root and its
 /// entire job is to understand that repository, so it wants exactly the
 /// `AGENTS.md`/`CLAUDE.md` context the requester itself has. There is no
@@ -307,7 +258,7 @@ fn is_exploration_id(id: &str) -> bool {
 /// Every role this build knows about. A `Vec`-free static slice since the
 /// set is fixed at compile time -- see the module doc on keeping this
 /// minimal rather than data-driven.
-static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE, &WRITE_TASK_ROLE];
+static ROLES: &[&RoleDefinition] = &[&EXPLORE_ROLE, &WRITE_TASK_ROLE];
 
 /// Roles registered at runtime by the composition root (`horizon-agentd`)
 /// from external crates (the board's roles, the wiki's thread role) -- see
@@ -386,46 +337,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_finds_the_config_role() {
-        let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
-        assert_eq!(role.id, "config");
-        assert_eq!(role.skill_ids, &["horizon-config"]);
-    }
-
-    #[test]
     fn resolve_returns_none_for_an_unknown_role() {
         assert!(resolve(&RoleId("does-not-exist".to_string())).is_none());
-    }
-
-    #[test]
-    fn config_role_allowlist_is_exactly_the_three_config_tools() {
-        let allowed = CONFIG_ROLE
-            .allowed_tool_ids
-            .expect("config role must restrict its tools");
-        assert_eq!(allowed, &["skill_read", "config_read", "config_write"]);
-        assert!(!allowed.contains(&"bash"), "config role must exclude bash");
-        assert!(
-            !allowed.contains(&"fs_read"),
-            "config role must exclude filesystem tools"
-        );
-        assert!(
-            !allowed.contains(&"fs_write"),
-            "config role must exclude filesystem tools"
-        );
-    }
-
-    #[test]
-    fn config_role_does_not_ingest_repository_instructions() {
-        let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
-        assert!(!role.include_repository_instructions);
-    }
-
-    #[test]
-    fn config_role_uses_the_session_default_model_and_budget() {
-        let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
-        assert_eq!(role.model, None);
-        assert!(!role.uncapped_turns);
-        assert_eq!(role.writes, RoleWrites::Anywhere);
     }
 
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
@@ -461,14 +374,7 @@ mod tests {
                 "the explore prompt must name {tool} so the child does not attempt it blindly"
             );
         }
-        for forbidden in [
-            "task",
-            "fs_write",
-            "fs_edit",
-            "web_fetch",
-            "web_search",
-            "config_write",
-        ] {
+        for forbidden in ["task", "fs_write", "fs_edit", "web_fetch", "web_search"] {
             assert!(
                 !allowed.contains(&forbidden),
                 "the explore role must exclude `{forbidden}`"
@@ -518,7 +424,6 @@ mod tests {
     #[test]
     fn is_exploration_matches_the_explore_role_only() {
         assert!(is_exploration(&RoleId(EXPLORE_ROLE_ID.to_string())));
-        assert!(!is_exploration(&RoleId("config".to_string())));
         assert!(!is_exploration(&RoleId("exploration".to_string())));
     }
 
@@ -569,7 +474,6 @@ mod tests {
             unattended: false,
         }]);
         // Built-in roles must still be found.
-        assert!(resolve(&RoleId("config".to_string())).is_some());
         assert!(resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).is_some());
         // The external one too.
         assert!(resolve(&RoleId("test-additive".to_string())).is_some());
@@ -597,12 +501,12 @@ mod tests {
         register_external(vec![
             role("test-second", "Second"),
             role("test-first", "Replacement"),
-            role("config", "Replacement"),
+            role(EXPLORE_ROLE_ID, "Replacement"),
         ]);
         let title = |id: &str| resolve(&RoleId(id.to_string())).map(|role| role.title);
         assert_eq!(title("test-first"), Some("First"));
         assert_eq!(title("test-second"), Some("Second"));
-        assert_eq!(title("config"), Some("Configuration Agent"));
+        assert_eq!(title(EXPLORE_ROLE_ID), Some("Exploration Session"));
         let launchable = user_launchable();
         assert_eq!(
             launchable
@@ -610,20 +514,6 @@ mod tests {
                 .filter(|role| role.id == "test-first")
                 .count(),
             1
-        );
-    }
-
-    /// `user_launchable` must include the config role and any externally
-    /// registered roles, but never the explore role (a delegated sub-session
-    /// that is never user-creatable).
-    #[test]
-    fn user_launchable_includes_config_excludes_explore() {
-        let roles = user_launchable();
-        let ids: Vec<&str> = roles.iter().map(|r| r.id).collect();
-        assert!(ids.contains(&"config"), "config must be user-launchable");
-        assert!(
-            !ids.contains(&EXPLORE_ROLE_ID),
-            "explore must never be user-launchable"
         );
     }
 }

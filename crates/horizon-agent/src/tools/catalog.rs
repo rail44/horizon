@@ -222,33 +222,6 @@ fn build_definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
-        // config_read/config_write (`tools::config`) are the config role's
-        // only allowed tools (`roles::CONFIG_ROLE`). Cataloging them
-        // globally here adds no new *capability* -- `bash` can already
-        // read/write this same file with no dedicated tool at all
-        // (`docs/agent-tools-design.md`) -- the restriction they exist for
-        // happens at the role's `allowed_tool_ids`, not here. See
-        // `tools::config`'s own doc comment for the full trust reasoning.
-        // `skill_read` is different: every session can call it, role-less
-        // or not -- see `skills`' module doc.
-        SynchronousTool::ReadConfig.definition(
-            "Read Horizon Config".to_string(),
-            "Read Horizon's config file: the resolved path and its current \
-                contents, or an explicit \"does not exist yet\" result (with the path still \
-                reported) if nothing has been written there yet. Takes no arguments."
-                .to_string(),
-
-        ),
-        SynchronousTool::WriteConfig.definition(
-            "Write Horizon Config".to_string(),
-            "Replace Horizon's config file with the given complete content \
-                (validated as well-formed TOML before writing). Preserve every entry the user \
-                didn't ask to change -- this replaces the whole file, not just one section. \
-                Overwriting an existing file requires it to have been read in this session \
-                (via config_read) with no changes on disk since."
-                .to_string(),
-
-        ),
         SynchronousTool::SearchRecall.definition(
             "Search Persisted History".to_string(),
             "Search committed conversation text and tool calls/results across \

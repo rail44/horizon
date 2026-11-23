@@ -15,11 +15,6 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
             json!({"edits": [{"path": "/tmp/input-example", "old_string": "hello", "new_string": "world"}]}),
         ),
         ("bash", json!({"command": "echo hello"})),
-        ("config_read", json!({})),
-        (
-            "config_write",
-            json!({"content": "[provider]\nmodel = 'example'"}),
-        ),
         ("skill_read", json!({"id": "example"})),
         ("recall_search", json!({"query": "hello"})),
         ("recall_read", json!({"from_sequence": 0})),

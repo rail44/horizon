@@ -1,18 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub(crate) struct ConfigRead {
-    /// The configuration file that was looked for.
-    pub path: String,
-    /// Whether that file exists.
-    pub exists: bool,
-    /// The file's contents, when it exists.
-    pub content: Option<String>,
-    /// Why there is no content, when there is none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SkillRead {
     /// The skill's id, which is its directory name.
     pub id: String,

@@ -2664,48 +2664,23 @@ fn web_search_is_advertised_when_exa_api_key_is_set() {
 // --- role_adjusted_config: a role narrows the process-wide RigAgentConfig -
 
 #[test]
-fn config_role_start_session_advertises_only_its_three_allowed_tools() {
-    let provider = Provider::for_entry(RigAgentConfig {
-        api_key_present: false,
-        ..Default::default()
-    });
-
-    let handle = AgentProvider::start_session(
-        &provider,
-        StartSession {
-            session_id: SessionId::new(),
-            provider_id: ProviderId("builtin.agent.rig".to_string()),
-            role_id: Some(RoleId("config".to_string())),
-            workspace_root: None,
-            history: Vec::new(),
-            trusted_project: true,
-        },
-    );
-
-    // Drain session-startup events (Created, init message, WaitingForUser) --
-    // this session never receives a completion request, so proving the
-    // role took effect has to happen through `rig_tool_definitions` /
-    // `role_adjusted_config` directly (below); this call just proves
-    // `start_session` accepts a role without erroring.
-    let rx = handle.events();
-    for _ in 0..3 {
-        recv(&rx);
-    }
-}
-
-#[test]
 fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
     let base = RigAgentConfig::default();
-    let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
+    let role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+        .expect("explore role must resolve");
 
     let config = role_adjusted_config(&base, Some(role));
 
     let allowed = config
         .allowed_tool_ids
-        .expect("config role must set an allow list");
-    assert_eq!(allowed, vec!["skill_read", "config_read", "config_write"]);
-    let definitions = rig_tool_definitions(Some(&allowed), true);
-    assert_eq!(definitions.len(), 3);
+        .expect("explore role must set an allow list");
+    let expected: Vec<String> = role
+        .allowed_tool_ids
+        .unwrap()
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    assert_eq!(allowed, expected);
 }
 
 /// `docs/agent-explore-design.md`'s first test requirement, at the point
@@ -2777,9 +2752,8 @@ fn resolved_model_reports_the_base_model_for_a_role_less_session() {
 }
 
 #[test]
-fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_override() {
-    // `roles::CONFIG_ROLE::model` is `None` (`config_role_uses_the_session_
-    // default_model` in `roles.rs`'s own tests) -- resolving a role that
+fn resolved_model_reports_the_base_model_for_a_role_without_an_override() {
+    // The explore role's `model` is `None` -- resolving a role that
     // doesn't override the model must fall back to the base config, not
     // report no model at all.
     let provider = Provider::for_entry(RigAgentConfig {
@@ -2789,7 +2763,10 @@ fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_ove
     });
 
     assert_eq!(
-        AgentProvider::resolved_model(&provider, Some(&RoleId("config".to_string()))),
+        AgentProvider::resolved_model(
+            &provider,
+            Some(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+        ),
         Some("test-model".to_string())
     );
 }
@@ -2914,7 +2891,7 @@ fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_r
         "the delegation-routing block must come first for a session that has `task`"
     );
     assert!(
-        sections[1].contains("horizon-config")
+        sections[1].contains("horizon-cli")
             && sections[1].contains("horizon-cli")
             && sections[1].contains("skill_read"),
         "a role-less session must list every available skill, got: {:?}",
@@ -2979,7 +2956,7 @@ fn session_extra_sections_skips_repository_content_for_an_untrusted_project() {
     );
     // Skills section lists embedded skills only — no repo skill.
     assert!(
-        sections[1].contains("horizon-config"),
+        sections[1].contains("horizon-cli"),
         "embedded skills must still be listed for an untrusted project"
     );
     assert!(
@@ -3069,44 +3046,6 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
             .any(|section| section.contains("task agents cannot write files")),
         "an exploration session has no `task` tool and must not be routed to it: \
          {explore_sections:?}"
-    );
-
-    let _ = std::fs::remove_dir_all(&cwd);
-}
-
-#[test]
-fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instructions_for_config_role()
- {
-    let cwd = git_repo_with_agents_md("config-role");
-    let environment = test_environment(cwd.clone());
-    let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
-    // The config a role-bearing session actually runs with -- production
-    // applies this before `spawn_rig_session`, and its `allowed_tool_ids`
-    // is what decides whether the delegation-routing block is included.
-    let config = role_adjusted_config(&RigAgentConfig::default(), Some(role));
-
-    let sections = session_extra_sections(&environment, &config, Some(role), true);
-
-    assert_eq!(
-        sections.len(),
-        2,
-        "expected exactly a role section and a skills section, got: {sections:?}"
-    );
-    assert!(
-        sections[0].contains("configuration assistant"),
-        "the role section must come first, got: {:?}",
-        sections[0]
-    );
-    assert!(
-        sections[1].contains("horizon-config") && sections[1].contains("skill_read"),
-        "the skills section must come second, got: {:?}",
-        sections[1]
-    );
-    assert!(
-        !sections
-            .iter()
-            .any(|section| section.contains("REPO_MARKER")),
-        "the config role must not ingest repository instructions, got: {sections:?}"
     );
 
     let _ = std::fs::remove_dir_all(&cwd);

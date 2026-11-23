@@ -19,7 +19,7 @@ macro_rules! bodies {
 }
 bodies! {
     Error(ToolError), Read(FileRead), Glob(Matches<String>), Grep(Matches<Location>),
-    Written(FileWritten), Edits(FileEdits), Config(ConfigRead), Skill(SkillRead),
+    Written(FileWritten), Edits(FileEdits), Skill(SkillRead),
     Knowledge(KnowledgeRead), KnowledgeWritten(KnowledgeWritten),
     RecallSearch(RecallSearch), RecallRead(RecallRead), RecallSessions(RecallSessions),
     Bash(BashOutput), Task(TaskOutput), Fetch(WebFetch), Search(WebSearch),

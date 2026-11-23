@@ -58,8 +58,7 @@ opens the chosen one. It supports these
 manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
-  terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
-  opens an agent tab) for a tab in the tab group the cursor is in.
+  terminal tab; `Enter` on `Agent` opens an agent tab) for a tab in the tab group the cursor is in.
 - `split right`, `split left`, `split down`, `split up`: open the same view
   chooser, but the chosen view goes beside what the cursor is on instead of
   in a new tab. In workspace mode, `k` from a group's top pane puts the
