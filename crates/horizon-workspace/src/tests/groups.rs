@@ -173,13 +173,20 @@ fn a_session_no_pane_shows_opens_in_the_group_that_last_had_focus() {
 }
 
 #[test]
-fn a_group_whose_last_tab_closes_goes_and_panes_beside_it_stay() {
+fn a_group_down_to_one_pane_is_that_pane_and_panes_beside_it_stay() {
     let mut workspace = Workspace::mvp();
     let list = with_a_list_on_the_left(&mut workspace);
     let group = root_group_of(&workspace);
 
+    // Down to one tab of one pane, the group is that pane, beside the list.
     workspace.close_tab_in(group, 0);
-    workspace.close_tab_in(group, 0);
+    assert!(workspace.tab_groups().is_empty());
+    let left = workspace.layout().pane_ids();
+    assert_eq!(left.len(), 2);
+    assert_eq!(left[0], list);
+    assert!(workspace.is_active_pane(left[1]));
+    assert!(workspace.layout().is_canonical());
+    workspace.close_pane_or_tab(left[1]);
 
     assert_eq!(workspace.layout().pane_ids(), vec![list]);
     assert!(workspace.tab_groups().is_empty());
@@ -193,6 +200,69 @@ fn a_group_whose_last_tab_closes_goes_and_panes_beside_it_stay() {
     );
     std::assert_matches!(workspace.layout(), LayoutNode::Tabs(group) if group.tabs.is_empty());
     assert!(workspace.is_workspace_mode_active());
+}
+
+/// The panes of `group`'s tab at `index`.
+fn panes_of(workspace: &Workspace, group: TabGroupId, index: usize) -> Vec<PaneId> {
+    workspace.tab_group(group).expect("the group").tabs[index]
+        .root
+        .pane_ids()
+}
+
+#[test]
+fn a_group_whose_one_tab_is_split_keeps_its_strip_until_one_pane_is_left() {
+    let mut workspace = Workspace::mvp();
+    let list = with_a_list_on_the_left(&mut workspace);
+    let group = root_group_of(&workspace);
+    workspace.activate_tab_in(group, 1);
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
+    let split = panes_of(&workspace, group, 1);
+    assert_eq!(split.len(), 2);
+
+    // One tab, split: the group stays.
+    workspace.close_tab_in(group, 0);
+    assert_eq!(workspace.tab_groups().len(), 1);
+    assert_eq!(panes_of(&workspace, group, 0), split);
+    // A pane moved beside the other in that tab: it stays too.
+    assert!(workspace.move_pane_beside(split[1], split[0], Side::Down));
+    assert_eq!(workspace.tab_groups().len(), 1);
+    assert_eq!(panes_of(&workspace, group, 0), split);
+
+    // One pane left: the group is that pane.
+    workspace.close_pane_or_tab(split[1]);
+    assert!(workspace.tab_groups().is_empty());
+    assert_eq!(workspace.layout().pane_ids(), vec![list, split[0]]);
+    assert!(workspace.is_active_pane(split[0]));
+    assert!(workspace.layout().is_canonical());
+}
+
+#[test]
+fn the_root_group_keeps_its_strip_down_to_one_pane() {
+    let mut workspace = Workspace::mvp();
+    let group = root_group(&workspace);
+    workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
+    workspace.close_tab_in(group, 0);
+    std::assert_matches!(workspace.layout(), LayoutNode::Tabs(kept) if kept.tabs.len() == 1);
+}
+
+#[test]
+fn the_cursor_on_a_strip_whose_group_goes_is_on_the_pane_left() {
+    let mut workspace = Workspace::mvp();
+    with_a_list_on_the_left(&mut workspace);
+    let group = root_group_of(&workspace);
+    workspace.workspace_mode = crate::mode::WorkspaceMode::Commands {
+        cursor: Some(Cursor::Strip(group)),
+    };
+
+    // `x` on the strip closes the tab it shows: the group is the other
+    // tab's pane, and the cursor is on it.
+    std::assert_matches!(
+        workspace.close_cursor_pane_or_tab(),
+        CloseCursorOutcome::ClosedTab(_)
+    );
+    assert!(workspace.tab_groups().is_empty());
+    let pane = workspace.layout().pane_ids()[1];
+    assert_eq!(workspace.workspace_cursor(), Some(Cursor::Pane(pane)));
 }
 
 /// The one group in a workspace with a list beside it.
@@ -272,7 +342,8 @@ fn with_no_group_a_tab_opens_in_a_new_one_right_of_the_rest() {
     let list = with_a_list_on_the_left(&mut workspace);
     let group = root_group_of(&workspace);
     workspace.close_tab_in(group, 0);
-    workspace.close_tab_in(group, 0);
+    let left = workspace.layout().pane_ids()[1];
+    workspace.close_pane_or_tab(left);
     assert!(workspace.tab_groups().is_empty());
 
     workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);

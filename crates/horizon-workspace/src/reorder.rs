@@ -255,6 +255,7 @@ impl Workspace {
             group.shown = tab.id;
             group.tabs.insert(at.min(group.tabs.len()), tab);
         }
+        self.dissolve_lone_groups();
         self.note_focus(pane);
         true
     }
@@ -314,6 +315,7 @@ impl Workspace {
             kept.shown = moved.id;
             kept.tabs.insert(at.min(kept.tabs.len()), moved);
         }
+        self.dissolve_lone_groups();
         self.note_focus(active);
         true
     }
@@ -355,6 +357,7 @@ impl Workspace {
         if let Some(group) = self.root.group_mut(group) {
             group.shown = tab;
         }
+        self.dissolve_lone_groups();
         self.note_focus(pane);
         true
     }
@@ -383,6 +386,7 @@ impl Workspace {
         }
         rest.flatten();
         self.root = rest;
+        self.dissolve_lone_groups();
         self.note_focus(pane);
         true
     }

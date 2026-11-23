@@ -347,6 +347,7 @@ impl Workspace {
             }
             None => LayoutNode::Tabs(empty(&self.root)),
         };
+        self.dissolve_lone_groups();
         if self
             .focus
             .is_some_and(|focus| !self.root.visible_pane_ids().contains(&focus))

@@ -49,10 +49,19 @@ is not a place of its own: it is whatever is not under a tab group.
   tab closes is removed from its parent, which is flattened again.
 - The root may be a tab group with no tabs: the empty workspace, the
   implicit command surface. Panes beside it stay.
-- A tab group with one tab keeps its strip.
+- A tab group that is not the root and comes down to one tab of one pane
+  -- a tab or a pane closed or moved out of it -- is that pane: the
+  group goes, and its strip with it (owner decision 2026-11-24). One whose
+  one tab is split keeps its strip: a split in a tab is drawn as one card,
+  its parts parted by lines, and one between cards as cards apart. The
+  root group keeps its strip down to one tab of one pane, and a layout
+  may make a group of one tab.
 
 The tree is normalized by `layout.rs`; a group is never spliced into
-anything.
+anything. A group come down to one pane is put away at the end of the
+operation that left it so (`Workspace::dissolve_lone_groups`), not by
+`flatten`, which an operation also runs halfway, a pane taken out and
+not yet put back.
 
 ## Focus and the cursor
 

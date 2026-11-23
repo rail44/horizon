@@ -614,6 +614,37 @@ impl LayoutNode {
         }
     }
 
+    /// Puts in place of each group below `self` -- `self` too, unless it
+    /// is the root -- whose one tab is one pane, that pane, and pushes the
+    /// group and the pane to `dissolved`. A group whose one tab is split
+    /// stays: a split in a tab is drawn as one card.
+    pub(crate) fn dissolve_lone_groups(
+        &mut self,
+        root: bool,
+        dissolved: &mut Vec<(TabGroupId, PaneId)>,
+    ) {
+        match self {
+            Self::Pane(_) => {}
+            Self::Split { children, .. } => {
+                for child in children {
+                    child.node.dissolve_lone_groups(false, dissolved);
+                }
+            }
+            Self::Tabs(group) => {
+                if let ([tab], false) = (group.tabs.as_slice(), root)
+                    && let Self::Pane(pane) = tab.root
+                {
+                    dissolved.push((group.id, pane));
+                    *self = Self::Pane(pane);
+                    return;
+                }
+                for tab in &mut group.tabs {
+                    tab.root.dissolve_lone_groups(false, dissolved);
+                }
+            }
+        }
+    }
+
     /// Test-only invariant checks: no `Split` has a single child, no
     /// `Split` child shares its parent's axis, and no group below the root
     /// is without a tab.

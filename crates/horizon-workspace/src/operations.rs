@@ -1,3 +1,4 @@
+use super::mode::{Cursor, WorkspaceMode};
 use super::types::{
     LayoutChild, LayoutNode, NodeKey, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab,
     TabGroup, TabGroupId, TabId, Workspace, WorkspaceSession,
@@ -500,7 +501,8 @@ impl Workspace {
                 ..TabGroup::empty()
             }),
         };
-        self.settle_focus(Some(group));
+        let dissolved = self.dissolve_lone_groups();
+        self.settle_focus_after(Some(group), &dissolved);
         session_ids
     }
 
@@ -555,6 +557,42 @@ impl Workspace {
     /// After panes or tabs went: focus on a pane still on screen -- the
     /// active pane of `preferring`'s shown tab when there is one, else of
     /// the group that last had focus, else the first pane on screen.
+    /// Puts in place of each group but the root that has come down to one
+    /// tab of one pane -- a tab or a pane closed or moved out of it -- that
+    /// pane (owner decision 2026-11-24, `docs/workspace-layout-design.md`).
+    /// What pointed at such a group -- the workspace-mode cursor on its
+    /// strip, the group that last had focus -- goes to the pane, or to
+    /// another group. The groups put away, each with its pane.
+    pub(crate) fn dissolve_lone_groups(&mut self) -> Vec<(TabGroupId, PaneId)> {
+        let mut dissolved = Vec::new();
+        self.root.dissolve_lone_groups(true, &mut dissolved);
+        for (group, pane) in &dissolved {
+            if self.last_group == Some(*group) {
+                self.last_group = self.root.groups().first().map(|group| group.id);
+            }
+            if let WorkspaceMode::Commands { cursor } = &mut self.workspace_mode
+                && *cursor == Some(Cursor::Strip(*group))
+            {
+                *cursor = Some(Cursor::Pane(*pane));
+            }
+        }
+        dissolved
+    }
+
+    /// [`Self::settle_focus`] preferring `group`, or the pane put in its
+    /// place where it is one of `dissolved`.
+    fn settle_focus_after(
+        &mut self,
+        preferring: Option<TabGroupId>,
+        dissolved: &[(TabGroupId, PaneId)],
+    ) {
+        let left = (dissolved.iter()).find(|(group, _)| Some(*group) == preferring);
+        match left {
+            Some((_, pane)) => self.note_focus(*pane),
+            None => self.settle_focus(preferring),
+        }
+    }
+
     fn settle_focus(&mut self, preferring: Option<TabGroupId>) {
         let visible = self.root.visible_pane_ids();
         if self.focus.is_some_and(|pane| visible.contains(&pane)) && preferring.is_none() {
@@ -623,11 +661,12 @@ impl Workspace {
                 _ => TabGroup::empty(),
             }),
         };
+        let dissolved = self.dissolve_lone_groups();
         let focused = self.focus == Some(pane_id);
         if focused {
             self.focus = None;
         }
-        self.settle_focus(group.filter(|_| focused));
+        self.settle_focus_after(group.filter(|_| focused), &dissolved);
         session_id
     }
 
