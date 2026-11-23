@@ -379,11 +379,6 @@ impl Workspace {
         Some(self.pane_title(pane))
     }
 
-    /// The active pane of the tab at `index` of `group`.
-    pub fn tab_active_pane(&self, group: TabGroupId, index: usize) -> Option<PaneId> {
-        Some(self.root.group(group)?.tabs.get(index)?.active)
-    }
-
     /// The tab group `pane` is in, the innermost where there are more.
     pub fn group_of(&self, pane: PaneId) -> Option<TabGroupId> {
         self.root.tabs_around(pane).last().map(|(group, _)| *group)
@@ -397,6 +392,11 @@ impl Workspace {
     /// The tab at `index` in `group`'s strip.
     pub fn tab_in(&self, group: TabGroupId, index: usize) -> Option<TabId> {
         Some(self.root.group(group)?.tabs.get(index)?.id)
+    }
+
+    /// The tab `tab`'s title, as its label has it.
+    pub fn tab_title_of(&self, tab: TabId) -> Option<String> {
+        self.root.tab(tab).map(|tab| self.tab_title(tab))
     }
 
     pub(crate) fn tab_title(&self, tab: &Tab) -> String {

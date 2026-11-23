@@ -472,15 +472,15 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
                             model.activate_tab_in(group, index);
                         });
                     })
-                    // (Taken by its label, a tab moves its active pane.)
+                    // (Taken by its label, the tab moves, every view in it.)
                     .on("pointerdown", move |event| {
                         let DomEventData::PointerDown(pointer) = &event.data else {
                             return;
                         };
-                        let pane = (shell.model)
-                            .with_untracked(|model| model.tab_active_pane(group, index));
-                        if let Some(pane) = pane {
-                            shell.begin_moving(pane, pointer.page_x(), pointer.page_y());
+                        let tab = (shell.model).with_untracked(|model| model.tab_in(group, index));
+                        if let Some(tab) = tab {
+                            let taken = super::moving::Taken::Tab(tab);
+                            shell.begin_moving(taken, pointer.page_x(), pointer.page_y());
                         }
                     })
             },
