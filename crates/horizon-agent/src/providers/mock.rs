@@ -18,6 +18,11 @@ impl MockProvider {
         Self { hold: None }
     }
 
+    /// The id the mock is registered under.
+    pub(crate) fn id() -> ProviderId {
+        ProviderId("builtin.agent.mock".to_string())
+    }
+
     /// A mock whose slow turns wait on `hold` after their first word.
     pub(crate) fn holding(hold: crate::registry::MockStreamHold) -> Self {
         Self { hold: Some(hold) }
@@ -25,10 +30,6 @@ impl MockProvider {
 }
 
 impl Provider for MockProvider {
-    fn provider_id(&self) -> ProviderId {
-        ProviderId("builtin.agent.mock".to_string())
-    }
-
     /// The mock provider has no real model concept -- most of its turns
     /// never emit `Event::ProviderRequestSent` at all (only the "slow" test
     /// path does, with a hardcoded `"mock"` string not representative of a
@@ -644,7 +645,7 @@ mod tests {
         ] {
             let handle = provider.start_session(StartSession {
                 session_id: SessionId::new(),
-                provider_id: provider.provider_id(),
+                provider_id: MockProvider::id(),
                 role_id: None,
                 workspace_root: None,
                 history: Vec::new(),
@@ -705,7 +706,7 @@ mod tests {
         let provider = MockProvider::new();
         let handle = provider.start_session(StartSession {
             session_id: SessionId::new(),
-            provider_id: provider.provider_id(),
+            provider_id: MockProvider::id(),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),

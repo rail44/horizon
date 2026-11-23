@@ -31,11 +31,8 @@ use crate::{
 
 use super::{
     clearing::{ClearingState, history_for_provider_request},
-    mapping::{
-        horizon_provider_events_from_rig_message, rig_fs_read_call, rig_multi_snapshot_calls,
-    },
+    mapping::horizon_provider_events_from_rig_message,
     retry::{Attempt, Retried, with_pre_generation_retry},
-    rig_workspace_snapshot_call,
 };
 
 /// Bounds the HTTP/request setup phase before rig yields a response stream.
@@ -631,66 +628,26 @@ pub(super) fn partial_assistant_message(
     ))
 }
 
-/// Line prefix the deterministic fallback reads an `fs_read` target from;
-/// the rest of the line is the path, verbatim (case-sensitive, unlike the
-/// keyword triggers below).
-pub(super) const READ_PATH_TRIGGER: &str = "fs_read path: ";
-
+/// The fallback responder's answer when no model is configured: an echo of
+/// the prompt. A build with test fixtures first lets a prompt drive tool
+/// calls (`super::fixtures`).
 pub(super) fn deterministic_rig_response(text: &str) -> Message {
-    let lower = text.to_ascii_lowercase();
-    if let Some(path) = text
-        .lines()
-        .find_map(|line| line.trim().strip_prefix(READ_PATH_TRIGGER))
-    {
-        // Deterministic hook for driving a real `fs_read` -- including one
-        // whose path leaves the workspace root, so the approval/refusal
-        // routing is exercisable without a network provider.
-        return Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
-            AssistantContent::ToolCall(rig_fs_read_call(path.trim())),
-        ]));
+    #[cfg(any(test, feature = "test-fixtures"))]
+    if let Some(message) = super::fixtures::response_to(text) {
+        return message;
     }
-    if lower.contains("multi tool") {
-        // Deterministic hook for exercising a parallel-tool-call batch (see
-        // `rig_multi_snapshot_calls`'s doc comment) without a network
-        // provider.
-        multi_tool_call_message(MULTI_TOOL_TEST_BATCH_SIZE)
-    } else if lower.contains("snapshot") {
-        Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
-            AssistantContent::ToolCall(rig_workspace_snapshot_call()),
-        ]))
-    } else {
-        Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
-            AssistantContent::Text(Text::new(format!("rig-core fallback response: {text}"))),
-        ]))
-    }
+    Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+        AssistantContent::Text(Text::new(format!("rig-core fallback response: {text}"))),
+    ]))
 }
 
-/// How many tool calls `deterministic_rig_response`'s "multi tool" trigger
-/// and `deterministic_tool_result_response`'s `loop_again_batch` hook
-/// request — arbitrary but fixed, so tests can assert an exact count.
-pub(super) const MULTI_TOOL_TEST_BATCH_SIZE: usize = 4;
-
+/// The fallback responder's answer to a tool result: an acknowledgement. A
+/// build with test fixtures first lets a result drive more tool calls
+/// (`super::fixtures`).
 pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Message {
-    // Deterministic hook for exercising the tool-call loop without a
-    // network provider: a result whose output sets `"loop_again": true`
-    // makes the fallback responder request the snapshot tool again, so
-    // tests can drive consecutive tool-driven turns (e.g. the
-    // iteration-cap guard). Real tool outputs never carry this key.
-    if result.output.get("loop_again") == Some(&serde_json::Value::Bool(true)) {
-        return Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
-            AssistantContent::ToolCall(rig_workspace_snapshot_call()),
-        ]));
-    }
-    // Same idea, but for a parallel batch: requests another
-    // `loop_again_batch`-many tool calls at once, so tests can drive
-    // consecutive tool-*batch* turns (e.g. asserting the iteration-cap guard
-    // counts one turn per batch, not one per result).
-    if let Some(count) = result
-        .output
-        .get("loop_again_batch")
-        .and_then(serde_json::Value::as_u64)
-    {
-        return multi_tool_call_message(count as usize);
+    #[cfg(any(test, feature = "test-fixtures"))]
+    if let Some(message) = super::fixtures::response_to_result(result) {
+        return message;
     }
     Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
         AssistantContent::Text(Text::new(format!(
@@ -698,15 +655,6 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
             result.call_id.0
         ))),
     ]))
-}
-
-fn multi_tool_call_message(count: usize) -> Message {
-    Message::Assistant(rig_core::completion::message::AssistantMessage::new(
-        rig_multi_snapshot_calls(count)
-            .into_iter()
-            .map(AssistantContent::ToolCall)
-            .collect(),
-    ))
 }
 
 /// Converts the catalog's tool definitions to rig's `ToolDefinition` shape,
