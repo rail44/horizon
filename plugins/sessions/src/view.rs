@@ -45,7 +45,7 @@ mod styles {
                 font-family: var(--font-family); font-size: var(--body-size);
                 line-height: var(--body-line);
         .search { flex: none; height: 32px; display: flex; align-items: center;
-                  padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
+                  padding: 0 var(--u8); border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; min-width: 0; border: none; outline: none; padding: 0;
                       background: none; color: var(--text); font-family: var(--font-family);
                       font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
@@ -55,11 +55,15 @@ mod styles {
                 padding: var(--u8) var(--u8) var(--u4); font-size: var(--meta-size);
                 line-height: var(--meta-line); color: var(--text-muted); }
         .row { display: flex; align-items: flex-start; box-sizing: border-box;
-               padding: var(--u4) var(--u12) var(--u4) 0;
+               padding: var(--u4) var(--u8) var(--u4) 0;
                border: var(--line) solid transparent; border-radius: var(--radius);
                cursor: pointer; }
         .row:hover { background: var(--band); }
-        .actions { flex: none; margin-left: var(--u8); opacity: 0; }
+        /* The menu, and since when under it. */
+        .side { flex: none; align-self: stretch; display: flex; flex-direction: column;
+                align-items: flex-end; justify-content: space-between;
+                margin-left: var(--u8); }
+        .actions { opacity: 0; }
         .row:hover .actions, .row.selected .actions { opacity: 1; }
         /* The cursor: a line, in the accent. */
         .row.selected { border-color: var(--accent); }
@@ -72,11 +76,10 @@ mod styles {
         .turning { animation: turn 1s linear infinite; }
         .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         .line { display: flex; align-items: center; gap: var(--u8); min-width: 0; }
-        .spacer { flex: 1; }
         .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
                  text-overflow: ellipsis; }
         .title.away { color: var(--text-muted); }
-        .time { flex: none; width: var(--u28); text-align: right;
+        .time { text-align: right; white-space: nowrap;
                 font-size: var(--micro-size); line-height: var(--micro-line);
                 color: var(--text-muted); }
         .under { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
@@ -344,9 +347,9 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
     };
     // Two lines, each there whatever the session is doing, so a row is as
     // tall whichever: its title, with what state it is in by an icon in
-    // the place of its kind's, and since when; under it its kind, the
-    // state's word and its words. A session no pane shows has its title
-    // muted.
+    // the place of its kind's; under it its kind, the state's word and its
+    // words. At the row's end its menu, and since when under it. A session
+    // no pane shows has its title muted.
     let tone_of = move || {
         this.with(|row| {
             let session = &row.as_ref()?.session;
@@ -392,12 +395,7 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
         let parts: Vec<String> = [kind, word(), detail()].into_iter().flatten().collect();
         parts.join(" · ")
     };
-    let first = el("div")
-        .class(styles::LINE)
-        .child(lead)
-        .child(title)
-        .child(el("span").class(styles::SPACER))
-        .child(time);
+    let first = el("div").class(styles::LINE).child(lead).child(title);
     let second = el("div")
         .class(styles::LINE)
         .child(el("span").class(styles::LEAD))
@@ -410,15 +408,20 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
                 .class(styles::LABEL)
                 .style_dyn("margin-left", move || {
                     let depth = this.with(|row| row.as_ref().map_or(0, |row| row.depth));
-                    format!("{}px", 12 + depth * 16)
+                    format!("{}px", 8 + depth * 16)
                 })
                 .child(first)
                 .child(second),
         )
         .child(
             el("div")
-                .class(styles::ACTIONS)
-                .each(move || vec![has_derived()], |has| *has, menu),
+                .class(styles::SIDE)
+                .child(el("div").class(styles::ACTIONS).each(
+                    move || vec![has_derived()],
+                    |has| *has,
+                    menu,
+                ))
+                .child(time),
         )
         .on("click", move |_| {
             state.chosen.set(Some(picked.clone()));
