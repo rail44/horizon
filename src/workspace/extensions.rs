@@ -194,8 +194,10 @@ impl Shell {
         }
     }
 
-    /// Makes again the panes that show a plugin among `names`.
+    /// Makes again the panes that show a plugin among `names`, and the
+    /// status bar where it is one of them.
     fn remake_panes_of(&self, names: &[&str]) {
+        self.remake_status_bar(names);
         let panes: Vec<_> = self.model.with_untracked(|model| {
             (model.all_pane_ids().into_iter())
                 .filter(|pane| {

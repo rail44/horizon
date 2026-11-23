@@ -90,6 +90,40 @@ pub struct Kept {
     pub typed: bool,
 }
 
+/// What a bar says of the keys of the elements the focus is in, kept as
+/// they keep them (`focused`, from the one with the focus outwards: each
+/// one's [`ATTRIBUTE`], and whether it takes every key), where the focus
+/// is in a text field or not: each element's in its order, up to one
+/// that takes every key; in a text field, none of a group that is typed
+/// there; of keys spelled the same, the first.
+pub fn said(focused: &[(String, bool)], typing: bool) -> Vec<Kept> {
+    let mut keys: Vec<Kept> = Vec::new();
+    for (attribute, alone) in focused {
+        for key in kept(attribute) {
+            let spelled = keys.iter().any(|was| was.spelled == key.spelled);
+            if !(typing && key.typed) && !spelled {
+                keys.push(key);
+            }
+        }
+        if *alone {
+            break;
+        }
+    }
+    keys
+}
+
+/// Keys as an element keeps them in [`ATTRIBUTE`]: for one that hears
+/// them some other way and says them all the same.
+pub fn written(keys: &[Kept]) -> String {
+    (keys.iter())
+        .map(|key| {
+            let typed = if key.typed { "1" } else { "0" };
+            format!("{}\t{}\t{typed}", key.spelled, key.label)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The keys an element keeps in [`ATTRIBUTE`], in their order.
 pub fn kept(attribute: &str) -> Vec<Kept> {
     (attribute.lines())
@@ -120,14 +154,15 @@ impl El {
     }
 
     fn keys_with(self, keys: Vec<Key>, alone: bool) -> Self {
-        let written: Vec<String> = (keys.iter())
-            .map(|key| {
-                let typed = if key.typed() { "1" } else { "0" };
-                format!("{}\t{}\t{typed}", key.spelled, key.label)
+        let said: Vec<Kept> = (keys.iter())
+            .map(|key| Kept {
+                spelled: key.spelled.clone(),
+                label: key.label.clone(),
+                typed: key.typed(),
             })
             .collect();
         let typed: Vec<(Chord, Run)> = (keys.into_iter()).flat_map(|key| key.bound).collect();
-        self.attr(ATTRIBUTE, &written.join("\n"))
+        self.attr(ATTRIBUTE, &written(&said))
             .on("keydown", move |event: &DomEvent| {
                 let DomEventData::KeyDown(pressed) = &event.data else {
                     return;

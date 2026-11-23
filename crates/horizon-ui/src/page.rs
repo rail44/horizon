@@ -136,46 +136,38 @@ impl Page<'_> {
         Some(layout.text.clone())
     }
 
-    /// The keys the elements the focus is in take ([`El::keys`]), from the
-    /// one with the focus outwards, each element's in its order, up to one
-    /// that takes every key. In a text field, those that are typed there
-    /// are left out; of keys spelled the same, the first is kept.
-    pub fn focused_keys(&self) -> Vec<crate::keys::Kept> {
-        let focused = self.0.get_focussed_node_id();
-        // (The document is lent here already: what the focused node is is
-        // read from it, not borrowed again.)
-        let typing = (focused.and_then(|id| self.0.get_node(id)))
-            .and_then(|node| node.element_data())
-            .is_some_and(|element| matches!(&*element.name.local, "input" | "textarea"));
-        let mut keys = Vec::new();
-        let mut node = focused;
+    /// What the elements the focus is in keep of their keys
+    /// ([`El::keys`]), from the one with the focus outwards, as they keep
+    /// it: each one's attribute, and whether it takes every key. Those
+    /// that keep none are not in it.
+    pub fn focused_kept(&self) -> Vec<(String, bool)> {
+        let mut kept = Vec::new();
+        let mut node = self.0.get_focussed_node_id();
         while let Some(id) = node {
             let Some(found) = self.0.get_node(id) else {
                 break;
             };
-            let attribute = (found.element_data()).and_then(|element| {
-                element.attr(blitz_dom::LocalName::from(crate::keys::ATTRIBUTE))
-            });
-            if let Some(attribute) = attribute {
-                for key in crate::keys::kept(attribute) {
-                    let said =
-                        (keys.iter()).any(|was: &crate::keys::Kept| was.spelled == key.spelled);
-                    if !(typing && key.typed) && !said {
-                        keys.push(key);
-                    }
+            if let Some(element) = found.element_data() {
+                let keys = element.attr(blitz_dom::LocalName::from(crate::keys::ATTRIBUTE));
+                let alone =
+                    (element.attr(blitz_dom::LocalName::from(crate::keys::ALONE))).is_some();
+                if keys.is_some() || alone {
+                    kept.push((keys.unwrap_or_default().to_string(), alone));
                 }
-            }
-            let alone = (found.element_data()).is_some_and(|element| {
-                element
-                    .attr(blitz_dom::LocalName::from(crate::keys::ALONE))
-                    .is_some()
-            });
-            if alone {
-                break;
             }
             node = found.parent;
         }
-        keys
+        kept
+    }
+
+    /// Whether the element with the focus is a field text is typed into.
+    pub fn typing(&self) -> bool {
+        // (The document is lent here already: what the focused node is is
+        // read from it, not borrowed again.)
+        (self.0.get_focussed_node_id())
+            .and_then(|id| self.0.get_node(id))
+            .and_then(|node| node.element_data())
+            .is_some_and(|element| matches!(&*element.name.local, "input" | "textarea"))
     }
 
     /// Whether the keys go to this element or to something inside it.

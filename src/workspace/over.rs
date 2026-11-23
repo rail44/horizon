@@ -23,6 +23,9 @@ pub(super) fn view(shell: Shell, inside: impl Component) -> El {
     };
     let sheet = el("div")
         .class(styles::SHEET)
+        // (Every key is the sheet's: the status bar says none of what is
+        // under it.)
+        .attr(horizon_ui::keys::ALONE, "")
         // A press in the sheet is not one outside it.
         .on("pointerdown", |_| stop_propagation())
         .on("keydown", move |event| {

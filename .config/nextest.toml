@@ -41,7 +41,8 @@ test-group = 'daemon-e2e'
 max-threads = 3
 
 # The shell's tests with wasm guests in them -- the extensions it comes with
-# (`tests/extension.rs`, `tests/sessions.rs`, `tests/wiki.rs`) and the
+# (`tests/extension.rs`, `tests/sessions.rs`, `tests/wiki.rs`,
+# `tests/status_bar.rs`) and the
 # preview's fixture (`tests/preview.rs`) -- each run 30 to 60 threads of
 # their own: wasmtime compiles a component on a rayon pool, and
 # wasmtime-wasi runs a tokio runtime of its own, each one thread per core.
@@ -50,7 +51,7 @@ max-threads = 3
 # run, against its 20 s wait for the extensions, and the tests beside it
 # slow down with it. The group lets only a few run at once.
 [[profile.default.overrides]]
-filter = 'binary_id(horizon::extension) + binary_id(horizon::sessions) + binary_id(horizon::wiki) + binary_id(horizon::preview)'
+filter = 'binary_id(horizon::extension) + binary_id(horizon::sessions) + binary_id(horizon::wiki) + binary_id(horizon::preview) + binary_id(horizon::status_bar)'
 test-group = 'wasm-guests'
 
 [test-groups.wasm-guests]
@@ -235,7 +236,8 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # runs git under the real sandbox to see a session commit in its own
 # worktree and reach no other branch; a sandbox cannot nest another one.
 # The shell's view tests that show a terminal (`horizon::terminal`,
-# `horizon::workspace`, `horizon::preview`, `horizon::extension`) open a real PTY
+# `horizon::workspace`, `horizon::preview`, `horizon::extension`,
+# `horizon::status_bar`) open a real PTY
 # through `tests/support`'s `openpty`, which the sandbox denies before the test's
 # own code runs ("failed to openpty: Operation not permitted"). They are boundary
 # tests: they stay out of this profile and run in the default one.
@@ -280,6 +282,7 @@ default-filter = '''
         + binary_id(horizon::workspace)
         + binary_id(horizon::preview)
         + binary_id(horizon::extension)
+        + binary_id(horizon::status_bar)
         + test(/^host::listener::tests::/)
         + (binary_id(horizon-sandbox-runtime) & test(/^report::tests::/))
         + binary_id(horizon-sandbox::linux_supervised_helper)

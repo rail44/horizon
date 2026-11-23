@@ -1,111 +1,89 @@
-//! The bar at the bottom of the window (board #84): the keys that work
-//! where the keys are, each with what it does. Workspace mode's while it
-//! is on; otherwise those the elements the focus is in take
-//! (`horizon_ui::keys`, a plugin's view's as the shell's own), and, but
-//! over the workspace, the chords the configuration binds. Each key is in
-//! a box of its own, its words after it; the bar is one line, and what
-//! does not fit is left out whole from the end. It is not pressed: what
-//! is pressed is the keys.
+//! The shell's own keys, kept as a view keeps its (`horizon_ui::keys`),
+//! for the status bar (board #84), and the place at the bottom of the
+//! window where the extension named `status-bar` shows it.
+//!
+//! The shell's root keeps workspace mode's keys while it is on, and
+//! otherwise the chords the configuration binds: the focus is in the root
+//! in the mode, and the root is around every view, so they are the last
+//! of what the bar reads. A sheet over the workspace takes every key
+//! (`over`), so under one the bar reads no further.
 
+use std::rc::Rc;
+
+use horizon_ui::blitz_dom::NodeId;
+use horizon_ui::keys::{self, Kept};
+use horizon_ui::reactive_graph::effect::Effect;
+use horizon_ui::reactive_graph::owner::Owner;
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
-use horizon_ui::{El, Page, each_layout, el};
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithUntracked};
+use horizon_ui::{El, each_layout};
 use horizon_workspace::Workspace;
 
-use super::Shell;
 use super::keymap::Bound;
 use super::keys::MODE;
+use super::{Shell, plugins};
+use crate::extension::Running;
+use crate::plugin_host::Asks;
 
-mod styles {
-    horizon_ui::css_module! {"
-    /* One line high: a line that wraps goes under its padding and out of
-       sight, the hints that do not fit with it. A key's box is drawn by a
-       shadow, which takes no room, so the line stays a line high. */
-    .bar { flex: none; display: flex; flex-wrap: wrap; align-items: center;
-           gap: var(--u8) var(--u12); height: var(--micro-line); overflow: hidden;
-           padding: var(--u4) var(--u8); white-space: nowrap;
-           font-size: var(--micro-size); line-height: var(--micro-line);
-           color: var(--text-muted); background: var(--background);
-           border-top: var(--line) solid var(--border); }
-    .hint { display: flex; align-items: center; gap: var(--u4); }
-    /* As faint as a pane's tag: its words, and a ground a step off the bar's. */
-    .keys { padding: 0 var(--u4); border-radius: var(--radius);
-            color: var(--text-muted); background: var(--chip-muted-surface);
-            box-shadow: inset 0 0 0 var(--line) var(--surface-chrome); }
-    "}
+/// The extension the status bar is.
+const STATUS_BAR: &str = "status-bar";
+
+/// The status bar shown: its view, the extension running it, and what it
+/// runs under, which ends it.
+pub(super) struct Shown {
+    root: El,
+    owner: Owner,
+    _running: Rc<Running>,
 }
 
-/// A key the bar says, spelled as it is there, and what it does.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Hint {
-    keys: String,
-    label: String,
-}
-
-impl Hint {
-    fn new(keys: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            keys: keys.into(),
-            label: label.into(),
-        }
+fn kept(spelled: &str, label: &str, typed: bool) -> Kept {
+    Kept {
+        spelled: spelled.to_string(),
+        label: label.to_string(),
+        typed,
     }
 }
 
 impl Shell {
-    /// The bar, saying the keys of where the keys are after each layout:
-    /// the focus moves with no signal of its own to follow.
-    pub(super) fn bar(&self) -> El {
+    /// Keeps the shell's own keys on `root` as they are after each
+    /// layout: the mode's, or the chords, of which a command's can be
+    /// carried out or not as anything changes.
+    pub(super) fn say_own_keys(&self, root: El) -> El {
         let shell = *self;
-        let shown = RwSignal::new(Vec::<Hint>::new());
-        each_layout(move |page| {
-            let now = shell.hints_now(page);
-            if shown.with_untracked(|was| *was != now) {
-                shown.set(now);
+        let said = RwSignal::new(String::new());
+        each_layout(move |_| {
+            let now = keys::written(&shell.own_keys());
+            if said.with_untracked(|was| *was != now) {
+                said.set(now);
             }
         });
-        el("div").class(styles::BAR).each(
-            move || shown.get().into_iter().enumerate().collect::<Vec<_>>(),
-            |(index, hint)| (*index, hint.clone()),
-            |(_, hint)| {
-                el("span")
-                    .class(styles::HINT)
-                    .child(el("span").class(styles::KEYS).text(&hint.keys))
-                    .child(el("span").text(&hint.label))
-            },
-        )
+        root.attr_dyn(keys::ATTRIBUTE, move || said.get())
     }
 
-    /// The keys of where the keys are now.
-    fn hints_now(&self, page: &Page) -> Vec<Hint> {
-        // Workspace mode's are the shell's own, under a sheet over the
-        // workspace too, which has the keys then.
-        if self.mode.get_untracked() && self.modal.get_untracked().is_none() {
+    /// The shell's own keys now.
+    fn own_keys(&self) -> Vec<Kept> {
+        if self.mode.get_untracked() {
             // With no tab, what is typed searches the views the workspace
             // shows; `:` is still the commands'.
             if self.model.with_untracked(Workspace::tab_count) == 0 {
-                return vec![Hint::new(":", "commands")];
+                return vec![kept(":", "commands", true)];
             }
             return (MODE.iter())
                 .filter(|group| group.here(*self))
-                .map(|group| Hint::new(group.keys, group.label))
+                .map(|group| kept(group.keys, group.label, false))
                 .collect();
         }
-        let mut hints: Vec<Hint> = (page.focused_keys().into_iter())
-            .map(|key| Hint::new(key.spelled, key.label))
-            .collect();
-        if self.modal.get_untracked().is_none() {
-            hints.extend(self.chord_hints());
-        }
-        hints
+        self.chords()
     }
 
     /// The chords the configuration binds that work now: workspace mode's,
     /// and those of the commands that can be carried out, each command
     /// once.
-    fn chord_hints(&self) -> Vec<Hint> {
-        let kept = self.kept();
-        let keymap = kept.keymap.borrow();
-        let mut hints = vec![Hint::new(keymap.workspace_mode.label(), "workspace mode")];
+    fn chords(&self) -> Vec<Kept> {
+        let kept_by = self.kept();
+        let keymap = kept_by.keymap.borrow();
+        let mode = &keymap.workspace_mode;
+        let mut chords = vec![kept(&mode.label(), "workspace mode", mode.typed())];
         let mut said: Vec<&Bound> = Vec::new();
         for (chord, bound) in keymap.bindings() {
             if said.contains(&bound) {
@@ -119,8 +97,73 @@ impl Shell {
                 },
             };
             said.push(bound);
-            hints.push(Hint::new(chord.label(), label));
+            chords.push(kept(&chord.label(), &label, chord.typed()));
         }
-        hints
+        chords
+    }
+
+    /// Shows the status bar again where `names` has the extension it is:
+    /// one read again, or taken in place of the one of its name. (It is
+    /// shown by an effect: this is told after a layout, where a plugin may
+    /// not change the document.)
+    pub(super) fn remake_status_bar(&self, names: &[&str]) {
+        if names.contains(&STATUS_BAR) {
+            self.status_asked
+                .update(|asked| *asked = asked.wrapping_add(1));
+        }
+    }
+
+    /// Shows the status bar each time it is asked to be shown again.
+    pub(super) fn follow_status_bar(&self) {
+        let shell = *self;
+        Effect::new(move |_| {
+            if shell.status_asked.get() > 0 {
+                shell.show_status_bar();
+            }
+        });
+    }
+
+    /// Shows the status bar the extension of its name has, in place of the
+    /// one shown.
+    fn show_status_bar(&self) {
+        let kept = self.kept();
+        let Some(place) = kept.status_place.get() else {
+            return;
+        };
+        // (The one shown ends before its view goes: its work would go on
+        // into nodes that are gone.)
+        let gone = kept.status_bar.borrow_mut().take();
+        if let Some(shown) = gone {
+            shown.owner.cleanup();
+            horizon_ui::host::remove(shown.root.0);
+        }
+        let Some(extension) = plugins::extension(STATUS_BAR) else {
+            return;
+        };
+        let owner = kept.owner.child();
+        let shown = owner.with(|| {
+            let failed = RwSignal::new(None::<String>);
+            let shown = extension.show_status_bar(Asks::default(), kept.wake.clone(), failed);
+            shown.map(|(running, node)| {
+                let running = Rc::new(running);
+                running.follow();
+                (running, node)
+            })
+        });
+        match shown {
+            Ok((running, node)) => {
+                let root = El(NodeId::from_u64(node));
+                place.child(root);
+                *kept.status_bar.borrow_mut() = Some(Shown {
+                    root,
+                    owner,
+                    _running: running,
+                });
+            }
+            Err(error) => {
+                owner.cleanup();
+                eprintln!("horizon: {STATUS_BAR}: {error}");
+            }
+        }
     }
 }

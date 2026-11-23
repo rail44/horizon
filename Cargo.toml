@@ -30,6 +30,7 @@ members = [
     "plugins/wiki",
     "plugins/sessions",
     "plugins/image",
+    "plugins/status-bar",
     "plugins/gallery",
     "plugins/fixture",
 ]

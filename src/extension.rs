@@ -172,6 +172,9 @@ pub struct Extension {
     /// The media types of the files it opens (`horizon:ui/opener`); none
     /// when it opens none.
     pub opens: Vec<String>,
+    /// Whether it has a view the bottom of the window shows
+    /// (`horizon:ui/status-bar`).
+    pub status_bar: bool,
     /// The component's file.
     pub file: PathBuf,
     compiled: Compiled,
@@ -234,6 +237,8 @@ struct Shape {
     creates: Option<Vec<Parameter>>,
     /// Whether it exports `horizon:ui/opener` with an `open` in it.
     opener: bool,
+    /// Whether it exports `horizon:ui/status-bar` with a `mount` in it.
+    status_bar: bool,
 }
 
 /// Reads what the component exports, and holds it to what an extension
@@ -345,6 +350,14 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
                     return Err(format!("the component's `{OPENER}` exports no `open`"));
                 }
             }
+            (STATUS_BAR, ComponentItem::ComponentInstance(instance)) => {
+                shape.status_bar = (instance.exports(engine)).any(|(name, item)| {
+                    name == "mount" && matches!(item.ty, ComponentItem::ComponentFunc(_))
+                });
+                if !shape.status_bar {
+                    return Err(format!("the component's `{STATUS_BAR}` exports no `mount`"));
+                }
+            }
             (name, ComponentItem::ComponentInstance(_))
                 if name.starts_with("horizon:ui/events") =>
             {
@@ -353,9 +366,10 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             _ => {}
         }
     }
-    if !shape.pane && shape.commands.is_empty() && !shape.opener {
+    if !shape.pane && shape.commands.is_empty() && !shape.opener && !shape.status_bar {
         return Err(
-            "the component exports no `pane`, no command of its own and no `open`".to_string(),
+            "the component exports no `pane`, no command of its own, no `open` and no status bar"
+                .to_string(),
         );
     }
     if !shape.pane && !shape.pane_commands.is_empty() {
@@ -369,6 +383,9 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
 
 /// The interface a component that opens files exports.
 const OPENER: &str = "horizon:ui/opener";
+
+/// The interface a component that shows the status bar exports.
+const STATUS_BAR: &str = "horizon:ui/status-bar";
 
 /// Holds the commands the component exports and the ones the manifest
 /// names to each other: each must name the other.
@@ -412,6 +429,7 @@ impl Extension {
             commands,
             mut creates,
             opener,
+            status_bar,
         } = shape_of(&compiled)?;
         match (opener, manifest.opens.is_empty()) {
             (true, true) => return Err("the manifest says no media type `open` opens".to_string()),
@@ -453,6 +471,7 @@ impl Extension {
             commands: listed(manifest.commands),
             creates,
             opens: manifest.opens,
+            status_bar,
             file: file.to_path_buf(),
             compiled,
             read: manifest.access.read,
@@ -725,6 +744,35 @@ impl Extension {
     }
 }
 
+impl Extension {
+    /// Shows the status bar in an instance made for it, which comes back
+    /// with the bar's view, its root node.
+    pub fn show_status_bar(
+        self: &Arc<Self>,
+        asks: Asks,
+        wake: Wake,
+        failed: RwSignal<Option<String>>,
+    ) -> Result<(Running, u64), String> {
+        if !self.status_bar {
+            return Err(format!("`{}` shows no status bar", self.name));
+        }
+        let running = self.instantiate(asks, wake, failed)?;
+        let root = running.loaded.call(|plugin, accessor| {
+            Box::pin(async move {
+                let mount = function(plugin, accessor, Some(STATUS_BAR), "mount")?;
+                let mut answer = [Val::U64(0)];
+                (mount.call_concurrent(accessor, &[], &mut answer)).await?;
+                Ok(answer[0].clone())
+            })
+        });
+        match root {
+            Some(Val::U64(root)) => Ok((running, root)),
+            _ => Err((failed.get_untracked())
+                .unwrap_or_else(|| "the status bar was not built".to_string())),
+        }
+    }
+}
+
 /// An extension running: for a pane, or for a command of its own.
 pub struct Running {
     extension: Arc<Extension>,
@@ -830,7 +878,7 @@ fn function(
 
 /// The components of the extensions that come with the shell, by their
 /// files' names and the packages they are built from.
-const OWN: [(&str, &str); 5] = [
+const OWN: [(&str, &str); 6] = [
     ("horizon_markdown_plugin.wasm", "horizon-markdown-plugin"),
     (
         "horizon_theme_settings_plugin.wasm",
@@ -839,6 +887,10 @@ const OWN: [(&str, &str); 5] = [
     ("horizon_wiki_plugin.wasm", "horizon-wiki-plugin"),
     ("horizon_sessions_plugin.wasm", "horizon-sessions-plugin"),
     ("horizon_image_plugin.wasm", "horizon-image-plugin"),
+    (
+        "horizon_status_bar_plugin.wasm",
+        "horizon-status-bar-plugin",
+    ),
 ];
 
 /// The files of the extensions that come with the shell: each beside the

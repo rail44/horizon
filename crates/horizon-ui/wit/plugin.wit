@@ -374,6 +374,30 @@ interface opener {
     open: func(file: file);
 }
 
+/// The keys the elements the focus is in keep (`horizon_ui::keys`), for
+/// a view that says them.
+interface keys {
+    /// An element the focus is in, as it keeps its keys: its `data-keys`,
+    /// and whether it takes every key.
+    record kept {
+        keys: string,
+        alone: bool,
+    }
+
+    /// From the element with the focus outwards, those that keep keys.
+    /// Asked while the page is lent, as `has-focus-within` is.
+    focused: func() -> list<kept>;
+
+    /// Whether the element with the focus is a field text is typed into.
+    typing: func() -> bool;
+}
+
+/// What a plugin that shows the status bar exports: the view the bottom
+/// of the window shows.
+interface status-bar {
+    mount: func() -> u64;
+}
+
 /// What a plugin imports: a plugin's world includes it, and declares
 /// only what is its own.
 world imports {
@@ -386,6 +410,7 @@ world imports {
     import session-control;
     import modal;
     import workspace;
+    import keys;
 }
 
 /// The shared exports with the imports: what the SDK's bindings are made

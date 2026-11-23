@@ -43,7 +43,7 @@ fn open_with(opening: Opening) -> Opened {
     let mut extensions =
         horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
     assert_eq!(extensions.first(), Some(&component()));
-    assert_eq!(extensions.len(), 5, "{extensions:?}");
+    assert_eq!(extensions.len(), 6, "{extensions:?}");
     // (And those `opening` adds to them.)
     extensions.extend(opening.extensions.iter().cloned());
     let mut shell = None;
@@ -910,7 +910,7 @@ fn an_extension_is_used_from_its_file_for_now_in_place_of_the_one_of_its_name() 
         Some(("temporary".to_string(), tried.clone()))
     );
     assert!(titled("Notebook") && !titled("Markdown"));
-    assert_eq!(opened.extensions().len(), 5);
+    assert_eq!(opened.extensions().len(), 6);
 
     // A file that is no extension is refused, and nothing changes.
     let none = directory.join("none.wasm");

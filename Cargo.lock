@@ -3236,6 +3236,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-status-bar-plugin"
+version = "0.1.0"
+dependencies = [
+ "horizon-ui",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "horizon-terminal-core"
 version = "0.1.0"
 dependencies = [

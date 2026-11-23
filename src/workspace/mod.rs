@@ -77,8 +77,9 @@ mod session_feed;
 
 pub(crate) mod styles {
     horizon_ui::css_module! {"
-    /* The workspace over the bar at the bottom of the window. */
+    /* The workspace over the status bar at the bottom of the window. */
     .window { display: flex; flex-direction: column; height: 100%; }
+    .status-place { flex: none; }
     .workspace { position: relative; display: flex; flex-direction: column; flex: 1;
                  min-height: 0;
                  box-sizing: border-box; padding: var(--u8);
@@ -544,6 +545,9 @@ struct Kept {
     sessions_feed: Arc<crate::plugin_host::SessionsFeed>,
     /// What plugins are told the workspace's focus and cursor are.
     workspace_feed: Arc<crate::plugin_host::WorkspaceFeed>,
+    /// Where the status bar is shown, and what shows it (`hints`).
+    status_place: Cell<Option<El>>,
+    status_bar: RefCell<Option<hints::Shown>>,
     /// The view an extension has over the workspace, and how many were
     /// asked for.
     over: RefCell<Option<Over>>,
@@ -596,6 +600,9 @@ pub struct Shell {
     /// Changed to have the panes arranged again though the tab's shape is
     /// the same: a pane's view was let go of, to be made again.
     rearranged: RwSignal<u32>,
+    /// How many times the status bar was asked to be shown again
+    /// (`hints`).
+    status_asked: RwSignal<u32>,
     kept: StoredValue<Rc<Kept>, LocalStorage>,
     root: El,
 }
@@ -1317,6 +1324,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         resizing: RwSignal::new(None),
         moving: RwSignal::new(None),
         rearranged: RwSignal::new(0),
+        status_asked: RwSignal::new(0),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
             strip_elements: RefCell::default(),
@@ -1348,6 +1356,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             watched: RefCell::default(),
             sessions_feed: Arc::default(),
             workspace_feed: Arc::default(),
+            status_place: Cell::new(None),
+            status_bar: RefCell::new(None),
             over: RefCell::default(),
             over_asked: Cell::new(0),
             choices: Cell::new(None),
@@ -1376,6 +1386,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     each_layout(move |_| shell.take_in_sessions());
     shell.feed_sessions();
     shell.feed_workspace();
+    shell.follow_status_bar();
     // The model is kept as it changes, though not at every step of a
     // boundary being dragged.
     if let Some(mut save) = opening.save {
@@ -1453,9 +1464,11 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());
     horizon_ui::each_effects(move || shell.let_go_of_commanded());
+    let place = el("div").class(styles::STATUS_PLACE);
+    shell.kept().status_place.set(Some(place));
     let window = el("div")
         .class(styles::WINDOW)
-        .child(root)
-        .child(shell.bar());
+        .child(shell.say_own_keys(root))
+        .child(place);
     (themed(move || shell.theme.get(), window), shell)
 }

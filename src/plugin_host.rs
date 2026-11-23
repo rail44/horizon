@@ -312,6 +312,7 @@ const USED: &[(&str, &[&str])] = &[
     ),
     ("modal", &["modal"]),
     ("workspace", &["focus", "cursor", "set-cursor", "watch"]),
+    ("keys", &["focused", "typing"]),
 ];
 
 impl Uses {
@@ -814,6 +815,21 @@ impl State {
         (self.workspace.as_ref()).ok_or_else(|| {
             wasmtime::Error::msg("the workspace's focus and cursor are not given to this plugin")
         })
+    }
+}
+
+impl self::horizon::ui::keys::Host for State {
+    fn focused(&mut self) -> wasmtime::Result<Vec<self::horizon::ui::keys::Kept>> {
+        self.may("keys", "focused")?;
+        let focused = host::lent(|page| page.focused_kept()).unwrap_or_default();
+        Ok((focused.into_iter())
+            .map(|(keys, alone)| self::horizon::ui::keys::Kept { keys, alone })
+            .collect())
+    }
+
+    fn typing(&mut self) -> wasmtime::Result<bool> {
+        self.may("keys", "typing")?;
+        Ok(host::lent(|page| page.typing()).unwrap_or(false))
     }
 }
 

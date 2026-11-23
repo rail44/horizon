@@ -176,7 +176,7 @@ impl Opened {
     fn bar(&self) -> String {
         let document = self.app.document();
         let document = document.borrow();
-        (horizon_ui::testing::find(&self.app, self.root, "bar").into_iter())
+        (horizon_ui::testing::find(&self.app, self.root, "status-bar").into_iter())
             .map(|node| document.get_node(node).unwrap().text_content())
             .collect()
     }

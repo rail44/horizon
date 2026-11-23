@@ -51,8 +51,8 @@ replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
 itself.
 
-The Markdown view, the wiki, the theme settings, the list of sessions and
-the image viewer are extensions (`plugins/*`),
+The Markdown view, the wiki, the theme settings, the list of sessions,
+the image viewer and the status bar are extensions (`plugins/*`),
 wasm components `cargo build --workspace` does not build: the second
 command above does (`--release` for a release Horizon), and Horizon reads
 each component from beside its executable or from where that command
@@ -416,11 +416,12 @@ their wiring:
   it, `docs/project-wiki-design.md`), the theme settings
   (`horizon new theme-settings`) and the list of sessions
   (`horizon new sessions`, and over the workspace by its own command,
-  `Manage Sessions`) and the image viewer (a `file://` link to an image
-  followed in a terminal, `docs/image-viewer-design.md`) are not
+  `Manage Sessions`), the image viewer (a `file://` link to an image
+  followed in a terminal, `docs/image-viewer-design.md`) and the status
+  bar (at the bottom of the window, `docs/status-bar-design.md`) are not
   here: they are extensions, whole in `plugins/markdown`, `plugins/wiki`,
-  `plugins/theme-settings`, `plugins/sessions` and `plugins/image`, over
-  `horizon-ui` and `horizon-components`.
+  `plugins/theme-settings`, `plugins/sessions`, `plugins/image` and
+  `plugins/status-bar`, over `horizon-ui` and `horizon-components`.
 - `preview.rs` — the preview pane: an extension still being written,
   shown from its component's file. See `docs/preview-pane-design.md`.
 - `control.rs` — the bridge from the CLI control plane's listener to the

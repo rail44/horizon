@@ -25,6 +25,7 @@ exec cargo "$command" \
   -p horizon-wiki-plugin \
   -p horizon-sessions-plugin \
   -p horizon-image-plugin \
+  -p horizon-status-bar-plugin \
   -p horizon-gallery-plugin \
   -p horizon-fixture-plugin \
   --target wasm32-wasip2 "$@"

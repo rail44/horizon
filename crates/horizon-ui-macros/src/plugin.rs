@@ -18,9 +18,12 @@
 //!   one of those media types is opened with, when the shell is asked to
 //!   open one (a link to it followed). It takes the `File` and gives
 //!   nothing.
+//! - a function marked `#[status_bar]` beside it: the view the bottom of
+//!   the window shows, its root node, where the shell shows the plugin
+//!   named `status-bar`. It takes nothing.
 //!
-//! A plugin has a `mod pane`, a command of its own, an `open`, or any of
-//! them together.
+//! A plugin has a `mod pane`, a command of its own, an `open`, a status
+//! bar, or any of them together.
 //!
 //! From those it writes the plugin's WIT world (the view as the
 //! interface `pane`, its commands as `pane-commands`, the plugin's own as
@@ -103,6 +106,22 @@ struct Command {
 struct Opener {
     function: syn::Ident,
     types: Vec<String>,
+}
+
+/// Takes `function` in as the status bar's view if it is marked
+/// `#[status_bar]`.
+fn status_bar_of(function: &mut ItemFn) -> syn::Result<Option<syn::Ident>> {
+    let Some(attribute) = take(&mut function.attrs, "status_bar") else {
+        return Ok(None);
+    };
+    let (_, shape) = signature(function)?;
+    if shape != "func() -> u64" {
+        return Err(error(
+            attribute.span(),
+            "takes nothing and gives the view's root node, `-> u64`",
+        ));
+    }
+    Ok(Some(function.sig.ident.clone()))
 }
 
 /// Takes `function` in as the opener if it is marked `#[open(..)]`.
@@ -501,6 +520,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
     let mut pane = None::<Pane>;
     let mut commands = Commands::default();
     let mut opener = None::<Opener>;
+    let mut status_bar = None::<syn::Ident>;
     for item in items {
         match item {
             Item::Mod(inner) if inner.ident == "pane" => {
@@ -524,6 +544,11 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                         return Err(error(function.sig.ident.span(), "one `#[open(..)]`"));
                     }
                     opener = Some(found);
+                } else if let Some(found) = status_bar_of(&mut function)? {
+                    if status_bar.is_some() {
+                        return Err(error(function.sig.ident.span(), "one `#[status_bar]`"));
+                    }
+                    status_bar = Some(found);
                 } else {
                     commands.take(&mut function)?;
                 }
@@ -532,10 +557,11 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             other => kept.push(other),
         }
     }
-    if pane.is_none() && commands.said.is_empty() && opener.is_none() {
+    if pane.is_none() && commands.said.is_empty() && opener.is_none() && status_bar.is_none() {
         return Err(error(
             module.ident.span(),
-            "a `mod pane`, or a function marked `#[command(..)]` or `#[open(..)]`",
+            "a `mod pane`, or a function marked `#[command(..)]`, `#[open(..)]` or \
+             `#[status_bar]`",
         ));
     }
 
@@ -551,6 +577,9 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
     text.push_str(&commands.interface("commands"));
     if opener.is_some() {
         text.push_str("\n    export horizon:ui/opener;\n");
+    }
+    if status_bar.is_some() {
+        text.push_str("\n    export horizon:ui/status-bar;\n");
     }
     text.push_str("}\n");
 
@@ -601,6 +630,15 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             }
         }
     });
+    let status_bar_export = status_bar.as_ref().map(|function| {
+        quote! {
+            impl exports::horizon::ui::status_bar::Guest for HorizonPlugin {
+                fn mount() -> u64 {
+                    #function()
+                }
+            }
+        }
+    });
     let derives = pane.iter().flat_map(|pane| &pane.derives);
     let pane = pane.as_ref().map(|pane| &pane.module);
     let (visibility, ident, attributes) = (&module.vis, &module.ident, &module.attrs);
@@ -622,6 +660,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                     "horizon:ui/session-control": ::horizon_ui::guest::bindings::horizon::ui::session_control,
                     "horizon:ui/modal": ::horizon_ui::guest::bindings::horizon::ui::modal,
                     "horizon:ui/workspace": ::horizon_ui::guest::bindings::horizon::ui::workspace,
+                    "horizon:ui/keys": ::horizon_ui::guest::bindings::horizon::ui::keys,
                 },
                 additional_derives: [#(#derives),*],
             });
@@ -635,6 +674,8 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             #commands_export
 
             #opener_export
+
+            #status_bar_export
 
             export!(HorizonPlugin);
             // What every plugin exports.

@@ -457,6 +457,21 @@ The decisions and who made them are on board #76. What they come to:
   which puts the list over the workspace (`modal`, below): the same
   rows, in a component of its own that Escape and going to a session
   leave.
+- **The status bar is an extension** (`plugins/status-bar`, board #84),
+  and the first that a pane does not show: it exports
+  `horizon:ui/status-bar` (`mount`, its view's root), written
+  `#[status_bar]` beside the plugin's module, and the shell shows the
+  view of the extension named `status-bar` in its place at the bottom of
+  the window, made again when that extension is read again or another of
+  its name is used in its place. What it says is read through
+  `horizon:ui/keys`: what the elements the focus is in keep of their keys
+  (`focused`, each one's `data-keys` and whether it takes every key) and
+  whether the focus is in a text field (`typing`), asked after a layout
+  as `has-focus-within` is. The shell keeps its own keys the same way, on
+  its root (workspace mode's, or the chords the configuration binds) and
+  on a sheet over the workspace (which takes every key), so the bar knows
+  nothing of the mode or of sheets; what it says of them all is
+  `horizon_ui::keys::said`, in the extension.
 - **A preview pane shows extensions only.** The preview plugins it also
   showed (views of the shell's own, built into wasm over sample data)
   went on 2026-11-16, and with them the root library's build for a guest
