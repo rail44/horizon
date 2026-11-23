@@ -280,23 +280,6 @@ fn build_definitions() -> Vec<Definition> {
                 .to_string(),
 
         ),
-        SynchronousTool::BashJobOutput.definition(
-            "Read a Background Bash Job".to_string(),
-            format!(
-                "Read the current state and log of a background bash job started with bash \
-                background: true. Works while it is running and after it finishes; the output \
-                shows at most {} characters, and the full log stays at the reported log_path. \
-                A finished job also arrives as a notification, so polling is not required.",
-                super::bash::jobs::OUTPUT_CHAR_CAP
-            ),
-        ),
-        SynchronousTool::BashJobCancel.definition(
-            "Cancel a Background Bash Job".to_string(),
-            "Stop a background bash job started by this session by killing its whole process \
-                tree. The job's real exit information and log remain readable through \
-                bash_output."
-                .to_string(),
-        ),
         SynchronousTool::ListSessions.definition(
             "List Persisted Sessions".to_string(),
             legend_after(
@@ -540,12 +523,6 @@ mod tests {
         assert!(
             grep.contains(&crate::config::FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT.to_string()),
             "fs_grep must state its traversal cap"
-        );
-
-        let job = definition("bash_output").description;
-        assert!(
-            job.contains(&crate::tools::bash::jobs::OUTPUT_CHAR_CAP.to_string()),
-            "bash_output must state how much of the log it shows"
         );
     }
 

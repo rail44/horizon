@@ -50,8 +50,6 @@ inputs! {
     WriteFile(WriteFile) => "fs_write",
     EditFiles(EditFiles) => "fs_edit",
     Bash(Bash) => "bash",
-    BashJobOutput(BashJob) => "bash_output",
-    BashJobCancel(BashJob) => "bash_cancel",
     ReadConfig(Empty) => "config_read",
     WriteConfig(ConfigWrite) => "config_write",
     ReadSkill(ReadEntry) => "skill_read",

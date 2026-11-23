@@ -24,8 +24,6 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
         ("recall_search", json!({"query": "hello"})),
         ("recall_read", json!({"from_sequence": 0})),
         ("recall_sessions", json!({})),
-        ("bash_output", json!({"job_id": "job-1"})),
-        ("bash_cancel", json!({"job_id": "job-1"})),
         ("knowledge_read", json!({"id": "example"})),
         (
             "knowledge_write",

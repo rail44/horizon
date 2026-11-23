@@ -2737,8 +2737,6 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
             "bash",
             "recall_search",
             "recall_read",
-            "bash_output",
-            "bash_cancel",
             "recall_sessions",
             "knowledge_read",
         ]

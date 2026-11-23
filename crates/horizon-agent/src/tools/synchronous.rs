@@ -20,15 +20,13 @@ pub(super) enum SynchronousTool {
     SearchRecall,
     ReadRecall,
     ListSessions,
-    BashJobOutput,
-    BashJobCancel,
     ReadKnowledge,
     WriteKnowledge,
 }
 
 impl SynchronousTool {
     #[cfg(test)]
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 13] = [
         Self::ReadFile,
         Self::Glob,
         Self::Grep,
@@ -40,8 +38,6 @@ impl SynchronousTool {
         Self::SearchRecall,
         Self::ReadRecall,
         Self::ListSessions,
-        Self::BashJobOutput,
-        Self::BashJobCancel,
         Self::ReadKnowledge,
         Self::WriteKnowledge,
     ];
@@ -59,8 +55,6 @@ impl SynchronousTool {
             Self::SearchRecall => "recall_search",
             Self::ReadRecall => "recall_read",
             Self::ListSessions => "recall_sessions",
-            Self::BashJobOutput => "bash_output",
-            Self::BashJobCancel => "bash_cancel",
             Self::ReadKnowledge => "knowledge_read",
             Self::WriteKnowledge => "knowledge_write",
         }
@@ -77,8 +71,6 @@ impl SynchronousTool {
             | Self::SearchRecall
             | Self::ReadRecall
             | Self::ListSessions
-            | Self::BashJobOutput
-            | Self::BashJobCancel
             | Self::ReadKnowledge
             | Self::WriteKnowledge => ToolPermission::AutoAllowRead,
         }
@@ -120,12 +112,6 @@ pub(super) fn execute(
         ToolInput::SearchRecall(input) => recall::search(state, input),
         ToolInput::ReadRecall(input) => recall::read(state, input),
         ToolInput::ListRecallSessions(input) => recall::sessions(state, input),
-        ToolInput::BashJobOutput(input) => {
-            super::bash::jobs::output(state.recall_context().session_id?, input)
-        }
-        ToolInput::BashJobCancel(input) => {
-            super::bash::jobs::cancel_tool(state.recall_context().session_id?, input)
-        }
         ToolInput::ReadKnowledge(input) => knowledge::read(state, input),
         ToolInput::WriteKnowledge(input) => knowledge::write(state, input),
         _ => return None,

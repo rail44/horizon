@@ -584,9 +584,14 @@ waits for retirement before deleting a worktree; see
 [background work ownership](agent-background-work.md) for the stop/finish contract
 and the requirements for adding a worker.
 
-## Background bash jobs (2026-11-04)
+## Background bash jobs (2026-11-04, removed 2026-11-24)
 
-`bash` accepts `background: true`. The call then returns a receipt immediately
+> **Removed 2026-11-24 (owner approval).** The owner's event log held one
+> background call and no `bash_output` or `bash_cancel` call, and a
+> running job held the session's bash FIFO, so every later bash call
+> waited behind it. The section below records the design as it was.
+
+`bash` accepted `background: true`. The call then returns a receipt immediately
 (`job_id`, state, log path) instead of waiting for the process. The job still
 runs through the ordinary path — same per-session FIFO, sandbox policy, grants,
 approval origin, and process-tree kill — and its terminal result is stored on
