@@ -28,9 +28,9 @@ mod styles {
            color: var(--text-muted); background: var(--background);
            border-top: var(--line) solid var(--border); }
     .hint { display: flex; align-items: center; gap: var(--u4); }
-    /* As faint as a pane's tag. */
+    /* As faint as a pane's tag: its words, and a ground a step off the bar's. */
     .keys { padding: 0 var(--u4); border-radius: var(--radius);
-            color: var(--text-muted); background: var(--band);
+            color: var(--text-muted); background: var(--chip-muted-surface);
             box-shadow: inset 0 0 0 var(--line) var(--surface-chrome); }
     "}
 }

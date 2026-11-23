@@ -24,9 +24,11 @@ not pressed.
 One line, as wide as the window, under the workspace: the panes end
 above it. Its ground is the views' (`--background`), a line of
 `--border` above it. Each key is in a box of its own, as faint as a
-pane's tag (`--band`, an edge of `--surface-chrome` drawn by an inset
-shadow, which takes no room, the key in `--text-muted`), its words after
-it in `--text-muted`, at the micro size.
+pane's tag: the key in `--text-muted`, not bold, on a ground a step off
+the bar's (`--chip-muted-surface`; the tag's own, `--band`, is next to
+none on the views' ground, where a tag is never drawn), an edge of
+`--surface-chrome` drawn by an inset shadow, which takes no room. Its
+words are after it in `--text-muted`, at the micro size.
 
 ## 3. What does not fit
 
