@@ -137,7 +137,7 @@ async fn read_response(
 ) -> Result<Response, String> {
     if !response.status().is_success() {
         let status = response.status();
-        let body = read_capped(&mut response, 8 * 1024)
+        let body = super::read_capped(&mut response, 8 * 1024, "web_fetch")
             .await
             .unwrap_or_default();
         let message = String::from_utf8_lossy(&body);
@@ -185,7 +185,7 @@ async fn read_response(
         ));
     }
 
-    let bytes = read_capped(&mut response, MAX_BODY_BYTES).await?;
+    let bytes = super::read_capped(&mut response, MAX_BODY_BYTES, "web_fetch").await?;
     let text = String::from_utf8(bytes)
         .map_err(|_| "web_fetch response was not valid UTF-8 text".to_string())?;
 
@@ -253,23 +253,6 @@ async fn extract_html(html: String, url: String) -> Result<ExtractedArticle, Str
     })
     .await
     .map_err(|error| format!("web_fetch HTML extractor stopped unexpectedly: {error}"))?
-}
-
-async fn read_capped(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("web_fetch response body failed: {error}"))?
-    {
-        if body.len().saturating_add(chunk.len()) > limit {
-            return Err(format!(
-                "web_fetch response exceeded the {limit} byte limit"
-            ));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
 }
 
 fn is_followed_redirect(status: StatusCode) -> bool {

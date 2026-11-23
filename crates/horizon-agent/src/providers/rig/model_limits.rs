@@ -122,26 +122,12 @@ fn cache() -> &'static LimitsCache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// One plain authenticated GET, the bearer token read from the variable
-/// `api_key_env` names. Every error path returns `None`, an unset key
-/// variable included.
+/// The window `model`'s entry in the OpenAI-shaped listing at `base_url`
+/// declares, the bearer token read from the variable `api_key_env` names.
+/// Every error path returns `None`, an unset key variable included.
 async fn fetch_model_limits(base_url: &str, api_key_env: &str, model: &str) -> Option<ModelLimits> {
     let api_key = std::env::var(api_key_env).ok()?;
-    let client = reqwest::Client::builder()
-        .timeout(MODELS_REQUEST_TIMEOUT)
-        .build()
-        .ok()?;
-    let response = client
-        .get(models_url(base_url))
-        .bearer_auth(api_key)
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body = response.text().await.ok()?;
-    let body: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let body = fetch_listing(Wire::OpenAi, &models_url(base_url), &api_key).await?;
     parse_model_limits(&body, model)
 }
 
@@ -231,16 +217,22 @@ fn cache_listings() -> &'static ListingCache {
 /// Anthropic's required API-version header value on every request.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// One provider request in its wire's own shape, keeping only the ids. Every
+/// One listing request in its wire's own shape, keeping only the ids. Every
 /// error path returns an empty list.
 async fn fetch_model_ids(wire: Wire, url: &str, api_key: &str) -> Vec<String> {
-    let client = match reqwest::Client::builder()
+    fetch_listing(wire, url, api_key)
+        .await
+        .map(|body| parse_model_ids(&body))
+        .unwrap_or_default()
+}
+
+/// One authenticated GET of a model listing in `wire`'s shape, its body as
+/// JSON. Every error path returns `None`.
+async fn fetch_listing(wire: Wire, url: &str, api_key: &str) -> Option<serde_json::Value> {
+    let client = reqwest::Client::builder()
         .timeout(MODELS_REQUEST_TIMEOUT)
         .build()
-    {
-        Ok(client) => client,
-        Err(_) => return Vec::new(),
-    };
+        .ok()?;
     let request = match wire {
         Wire::OpenAi => client.get(url).bearer_auth(api_key),
         // Anthropic rejects a Bearer token and mandates the version header.
@@ -249,21 +241,11 @@ async fn fetch_model_ids(wire: Wire, url: &str, api_key: &str) -> Vec<String> {
             .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION),
     };
-    let response = match request.send().await {
-        Ok(response) => response,
-        Err(_) => return Vec::new(),
-    };
+    let response = request.send().await.ok()?;
     if !response.status().is_success() {
-        return Vec::new();
+        return None;
     }
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(_) => return Vec::new(),
-    };
-    match serde_json::from_str::<serde_json::Value>(&body) {
-        Ok(body) => parse_model_ids(&body),
-        Err(_) => Vec::new(),
-    }
+    serde_json::from_str(&response.text().await.ok()?).ok()
 }
 
 /// Every `data[].id` of a `/models` listing, in listing order. Tolerant by

@@ -27,8 +27,8 @@ mod tool_call;
 pub use bursts::Burst;
 pub use diff::{DiffLine, DiffLineKind, reconstruct_line_diff};
 pub use tool_call::{
-    EditEntry, FileEffect, ToolCallClassification, cap_lines_head, cap_lines_tail, classify,
-    edit_entries, str_field, truncate_chars,
+    EditEntry, FileEffect, ToolCallClassification, affected_files, cap_lines_head, cap_lines_tail,
+    classify, edit_entries, str_field, truncate_chars,
 };
 
 #[cfg(test)]

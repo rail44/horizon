@@ -372,7 +372,7 @@ pub(super) fn run_job_body(
             // through to the payload inside -- every `downcast_ref` would
             // silently miss. Deref first so the trait object is built from
             // the actual payload.
-            let message = panic_payload_message(&*payload);
+            let message = crate::runtime_panic::panic_message(&*payload);
             eprintln!(
                 "bash worker panicked (session {session_id:?}, execution {identity:?}): {message}"
             );
@@ -383,22 +383,6 @@ pub(super) fn run_job_body(
     };
     if accept() {
         let _ = result_tx.send(completion);
-    }
-}
-
-/// Extracts a human-readable message from a caught panic's payload. Panic
-/// payloads are almost always `&'static str` (a string-literal panic
-/// message) or `String` (a formatted one, e.g. from `panic!("{x}")`) --
-/// anything else is an unusual payload type (`panic_any` with a custom
-/// type), which this reports generically rather than failing to build a
-/// completion at all.
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "<non-string panic payload>".to_string()
     }
 }
 

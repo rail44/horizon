@@ -87,7 +87,7 @@ impl SearchAdapter for ExaAdapter {
             .await
             .map_err(|error| format!("Exa search request failed: {error}"))?;
         let status = response.status();
-        let bytes = read_capped(&mut response, MAX_RESPONSE_BYTES).await?;
+        let bytes = super::read_capped(&mut response, MAX_RESPONSE_BYTES, "Exa").await?;
         if !status.is_success() {
             let body = String::from_utf8_lossy(&bytes);
             let body = redact_secret(body.trim(), &self.api_key);
@@ -231,21 +231,6 @@ async fn execute_with_adapter(adapter: &dyn SearchAdapter, request: SearchReques
         }
         Err(message) => error_output(message),
     }
-}
-
-async fn read_capped(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("Exa response body failed: {error}"))?
-    {
-        if body.len().saturating_add(chunk.len()) > limit {
-            return Err(format!("Exa response exceeded the {limit} byte limit"));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
 }
 
 fn normalize_result_url(value: String) -> Option<String> {

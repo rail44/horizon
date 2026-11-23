@@ -740,7 +740,7 @@ pub(super) fn watch_until_terminal(
         fold_until_terminal(events, cancel, on_activity, on_approval)
     }))
     .unwrap_or_else(|payload| Outcome {
-        terminal: Terminal::Panicked(panic_message(&*payload)),
+        terminal: Terminal::Panicked(crate::runtime_panic::panic_message(&*payload)),
         report: None,
         error: None,
     })
@@ -895,14 +895,6 @@ fn fold_until_terminal(
         report,
         error,
     }
-}
-
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".to_string())
 }
 
 /// Wall-clock now, epoch milliseconds — the launch timestamp every live

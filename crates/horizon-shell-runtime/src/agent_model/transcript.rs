@@ -1,16 +1,14 @@
 //! The structural reading of a folded frame: turn spans, tool-activity
 //! bursts, per-call views, and the receipt
 //! aggregation. The per-tool JSON readers
-//! (`classify`, `edit_entries`, `reconstruct_line_diff`) are
-//! `horizon_agent::transcript`'s, which take plain tool ids and JSON.
+//! (`classify`, `affected_files`) are `horizon_agent::transcript`'s,
+//! which take plain tool ids and JSON.
 
 use std::collections::HashSet;
 use std::time::Duration;
 
 use horizon_acp::ToolOutcome;
-use horizon_agent::transcript::{
-    DiffLineKind, FileEffect, ToolCallClassification, classify, edit_entries, reconstruct_line_diff,
-};
+use horizon_agent::transcript::{FileEffect, ToolCallClassification, affected_files, classify};
 use serde_json::Value;
 
 use super::types::*;
@@ -197,57 +195,6 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
             }
         })
         .collect()
-}
-
-fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {
-    use horizon_agent::contract::tool_output::{EditOutcome, FileEdits, FileWritten, decode};
-    let Some(output) = output else {
-        return Vec::new();
-    };
-    match tool_id {
-        "fs_edit" => decode::<FileEdits>(output)
-            .map(|result| {
-                let inputs = edit_entries(input);
-                result
-                    .edits
-                    .into_iter()
-                    .filter_map(|receipt| {
-                        let EditOutcome::Applied { occurrences } = receipt.outcome else {
-                            return None;
-                        };
-                        let edit = inputs
-                            .get(receipt.index)
-                            .filter(|edit| edit.path == receipt.path)?;
-                        let (added, removed) = line_diffstat(edit.old_string, edit.new_string);
-                        let occurrences = u32::try_from(occurrences).unwrap_or(u32::MAX);
-                        Some(FileEffect {
-                            path: receipt.path,
-                            added: added.saturating_mul(occurrences),
-                            removed: removed.saturating_mul(occurrences),
-                            created: false,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        "fs_write" => decode::<FileWritten>(output)
-            .map(|result| {
-                vec![FileEffect {
-                    path: result.path,
-                    added: 0,
-                    removed: 0,
-                    created: result.created,
-                }]
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
-fn line_diffstat(old: &str, new: &str) -> (u32, u32) {
-    let lines = reconstruct_line_diff(old, new);
-    let count = |kind| lines.iter().filter(|line| line.kind == kind).count() as u32;
-    (count(DiffLineKind::Added), count(DiffLineKind::Removed))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

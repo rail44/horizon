@@ -218,11 +218,7 @@ impl JudgeHandle {
                     JudgeFallbackReason::ClientError,
                     Some(super::bounded_fallback_error(&format!(
                         "judge panicked: {}",
-                        panic
-                            .downcast_ref::<&str>()
-                            .copied()
-                            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                            .unwrap_or("non-string panic payload")
+                        crate::runtime_panic::panic_message(&*panic)
                     ))),
                 ),
                 Err(_) => JudgeVerdict::fallback(

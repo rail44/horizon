@@ -16,7 +16,7 @@ mod util;
 mod view;
 
 pub use classify::{ToolCallClassification, classify};
-pub use files::{EditEntry, edit_entries};
+pub use files::{EditEntry, affected_files, edit_entries};
 pub use util::{cap_lines_head, cap_lines_tail, str_field, truncate_chars};
 pub use view::FileEffect;
 
