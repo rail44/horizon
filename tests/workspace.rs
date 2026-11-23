@@ -308,7 +308,7 @@ fn a_pane_that_is_all_of_its_tab_has_a_tag_with_its_name() {
 }
 
 #[test]
-fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
+fn a_view_dragged_by_its_tag_goes_beside_another_or_is_a_new_tab() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();
     opened.chord();
@@ -329,25 +329,28 @@ fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
     assert_eq!(tags.len(), 2);
     let elements = opened.all("pane");
     let from = opened.middle(tags[0]);
-    let to = opened.middle(elements[1]);
+    let (x, y, width, height) = opened.bounds(elements[1]);
+    // Nearer the other pane's right side than any other.
+    let to = (x + width * 0.7, y + height / 2.);
     pointer(&opened.app, from.0, from.1, Pointer::Move);
     settle();
-    // Taken and moved over the other pane, that pane is marked and the
-    // view's title goes beside the pointer.
+    // Taken and moved over the other pane, a line marks that pane's side
+    // nearest the pointer, and the view's title goes beside the pointer.
     pointer(&opened.app, from.0, from.1, Pointer::Down);
     settle();
     assert_eq!(hidden(), 1, "the title waits for a move");
     pointer(&opened.app, to.0, to.1, Pointer::Drag);
     settle();
-    assert_eq!(opened.all("drop"), vec![elements[1]]);
+    assert_eq!(opened.all("landing").len(), 1);
+    assert_eq!(opened.all("to-right").len(), 1);
     // (The view taken is faded by what is laid over it.)
     assert_eq!(opened.all("lifted").len(), 1);
     assert_eq!(hidden(), 0);
-    // Dropped there, the two swap places.
+    // Dropped there, it goes beside it on that side.
     pointer(&opened.app, to.0, to.1, Pointer::Up);
     settle();
     assert_eq!(opened.panes(), vec![panes[1], panes[0]]);
-    assert!(opened.all("drop").is_empty());
+    assert!(opened.all("landing").is_empty());
     assert_eq!(hidden(), 1);
 
     // A press that does not go far is no move.
@@ -360,18 +363,22 @@ fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
     settle();
     assert_eq!(opened.panes(), vec![panes[1], panes[0]]);
 
-    // Dropped on the group's strip, the view is a new tab of the group.
+    // On the second half of the group's one label, a line after it: the
+    // view is a new tab of the group there.
     let tabs = opened.model(Workspace::tab_count);
-    let strip = opened.middle(opened.all("tabs")[0]);
+    let (x, y, width, height) = opened.bounds(opened.all("tab-label")[0]);
+    let strip = (x + width * 0.75, y + height / 2.);
     pointer(&opened.app, tag.0, tag.1, Pointer::Move);
     settle();
     pointer(&opened.app, tag.0, tag.1, Pointer::Down);
     pointer(&opened.app, strip.0, strip.1, Pointer::Drag);
     settle();
-    assert_eq!(opened.all("drop"), opened.all("tabs"));
+    assert_eq!(opened.all("landing").len(), 1);
+    assert_eq!(opened.all("to-right").len(), 1);
     pointer(&opened.app, strip.0, strip.1, Pointer::Up);
     settle();
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
     assert_eq!(opened.panes(), vec![panes[1]]);
 
     // A pane that is all of its tab has no tag: its tab's label takes it.
@@ -379,7 +386,7 @@ fn a_view_dragged_by_its_tag_swaps_with_another_or_is_a_new_tab() {
 }
 
 #[test]
-fn a_view_dragged_onto_a_tabs_label_or_a_views_edge_goes_there() {
+fn a_tab_dragged_between_labels_moves_there_and_one_shown_on_the_way_takes_a_view() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();
     let settle = || {
@@ -393,36 +400,51 @@ fn a_view_dragged_onto_a_tabs_label_or_a_views_edge_goes_there() {
     opened.character("t");
     assert_eq!(opened.model(Workspace::tab_count), 2);
     let second = opened.panes()[0];
-    // The second tab's label, its pane taken by it, onto the first's: the
-    // first tab is shown on the way, and the pane goes into it, beside
-    // its active pane.
+    let on = |label, share: f32| {
+        let (x, y, width, height) = opened.bounds(label);
+        (x + width * share, y + height / 2.)
+    };
+
+    // The second tab's label, its pane taken by it, onto the first half
+    // of the first's: the first tab is shown on the way, a line is before
+    // its label, and the second tab goes there.
     let labels = opened.all("tab-label");
-    let (from, to) = (opened.middle(labels[1]), opened.middle(labels[0]));
+    let (from, to) = (opened.middle(labels[1]), on(labels[0], 0.25));
     pointer(&opened.app, from.0, from.1, Pointer::Move);
     pointer(&opened.app, from.0, from.1, Pointer::Down);
     pointer(&opened.app, to.0, to.1, Pointer::Drag);
     settle();
     assert_eq!(opened.model(Workspace::active_tab_index), 0);
-    assert_eq!(opened.all("drop"), vec![labels[0]]);
+    assert_eq!(opened.all("to-left").len(), 1);
     pointer(&opened.app, to.0, to.1, Pointer::Up);
     settle();
-    assert_eq!(opened.model(Workspace::tab_count), 1);
-    assert_eq!(opened.panes(), vec![first, second]);
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+    assert_eq!(opened.panes(), vec![second]);
 
-    // The second pane by its tag onto the first's lower edge: below it.
-    let panes = opened.all("pane");
-    let tag = opened.middle(opened.all("tag")[1]);
-    let (x, y, width, height) = opened.bounds(panes[0]);
-    let edge = (x + width / 2., y + height * 0.9);
-    pointer(&opened.app, tag.0, tag.1, Pointer::Move);
+    // Beside its own place it would stay: no line.
+    let labels = opened.all("tab-label");
+    let (from, to) = (opened.middle(labels[0]), on(labels[1], 0.25));
+    pointer(&opened.app, from.0, from.1, Pointer::Move);
+    pointer(&opened.app, from.0, from.1, Pointer::Down);
+    pointer(&opened.app, to.0, to.1, Pointer::Drag);
     settle();
-    pointer(&opened.app, tag.0, tag.1, Pointer::Down);
+    // (The tab of the label come over is shown.)
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert!(opened.all("landing").is_empty());
+
+    // Still held, onto the lower edge of the first tab's view, shown now:
+    // the view goes below it, in that tab.
+    let (x, y, width, height) = opened.bounds(opened.all("pane")[0]);
+    let edge = (x + width / 2., y + height * 0.9);
     pointer(&opened.app, edge.0, edge.1, Pointer::Drag);
     settle();
     assert_eq!(opened.all("to-bottom").len(), 1);
     pointer(&opened.app, edge.0, edge.1, Pointer::Up);
     settle();
+    assert_eq!(opened.model(Workspace::tab_count), 1);
     assert_eq!(opened.panes(), vec![first, second]);
+    let panes = opened.all("pane");
     let (above, below) = (opened.bounds(panes[0]), opened.bounds(panes[1]));
     assert!(above.1 + above.3 <= below.1, "{above:?} {below:?}");
     assert_eq!(above.0, below.0);
@@ -2111,9 +2133,10 @@ fn split_left_from_a_strip_puts_a_terminal_beside_the_whole_group() {
     opened.named(NamedKey::Escape);
 }
 
-/// Paints a view being moved over another, in this machine's theme, to
-/// the file `HORIZON_MOVING_OUT` names (a PPM): a picture for a person to
-/// look at. Run by hand.
+/// Paints a view being moved over another, near its right side -- or,
+/// with `HORIZON_MOVING_TO_STRIP` set, over the second half of the tab's
+/// label -- in this machine's theme, to the file `HORIZON_MOVING_OUT`
+/// names (a PPM): a picture for a person to look at. Run by hand.
 #[test]
 #[ignore = "writes a picture for a person: set HORIZON_MOVING_OUT"]
 fn paint_a_view_moving() {
@@ -2136,7 +2159,14 @@ fn paint_a_view_moving() {
     opened.character("s");
     let elements = opened.all("pane");
     let handle = opened.middle(opened.all("tag")[0]);
-    let to = opened.middle(elements[1]);
+    let to = {
+        let over = match std::env::var_os("HORIZON_MOVING_TO_STRIP") {
+            Some(_) => opened.all("tab-label")[0],
+            None => elements[1],
+        };
+        let (x, y, width, height) = opened.bounds(over);
+        (x + width * 0.75, y + height / 2.)
+    };
     if std::env::var_os("HORIZON_MOVING_HOVER").is_some() {
         // The pointer near the top edge of the right pane.
         let (x, y, width, _) = opened.bounds(elements[1]);

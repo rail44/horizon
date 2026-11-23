@@ -94,7 +94,8 @@ pub(crate) mod styles {
            width; those not shown are their words, a faint line between
            two of them, and the one shown is outlined. */
         .tabs { flex: none; display: flex; padding: 0 0 var(--u4); }
-        .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 var(--u4) 0 var(--u8);
+        .tab-label { position: relative; flex: 1; min-width: 0; display: flex;
+                     padding: 0 var(--u4) 0 var(--u8);
                      border: var(--line) solid transparent; border-radius: var(--radius);
                      font-size: var(--body-size); line-height: calc(var(--u4) * 6);
                      color: var(--text-muted); cursor: pointer; }
@@ -110,7 +111,6 @@ pub(crate) mod styles {
         .tab-label .close:hover { background: var(--surface-selected); }
         .tabs.cursor .tab-label.active { background: var(--selection); border-color: var(--accent); }
         .tabs.drop { border-radius: var(--radius); background: var(--surface-selected); }
-        .tab-label.drop { background: var(--surface-selected); }
         .tab-label.cursor { background: var(--selection); }
         .tab { flex: 1; min-height: 0; display: flex; }
         .group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -159,8 +159,7 @@ pub(crate) mod styles {
         .shown-tab.parted { padding: 0; overflow: visible; }
         .pane.part { border: none; border-radius: 0; background: transparent;
                      padding: calc(var(--u4) + var(--u2) + var(--line)); }
-        .pane.part.focused, .pane.part.drop { z-index: 1;
-                                              outline: var(--line) solid var(--accent); }
+        .pane.part.focused { z-index: 1; outline: var(--line) solid var(--accent); }
         .pane.part.edge-top { padding-top: var(--u4); }
         .pane.part.edge-right { padding-right: var(--u4); }
         .pane.part.edge-bottom { padding-bottom: var(--u4); }
@@ -177,15 +176,16 @@ pub(crate) mod styles {
         .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
                         background: var(--background); opacity: 0.5; pointer-events: none; }
         .pane.cursor > .veil { background: var(--accent); opacity: 0.15; }
-        .pane.drop { border-color: var(--accent); }
         .pane > .lifted { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
                           background: var(--background); opacity: 0.5; pointer-events: none; }
-        .pane > .landing { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 55;
-                           background: var(--accent); opacity: 0.12; pointer-events: none; }
-        .pane > .landing.to-left { right: 50%; }
-        .pane > .landing.to-right { left: 50%; }
-        .pane > .landing.to-top { bottom: 50%; }
-        .pane > .landing.to-bottom { top: 50%; }
+        /* Where a view moving would go: a line on the side of a pane it
+           would go beside, or between two tabs' labels. */
+        .landing { position: absolute; z-index: 55; background: var(--accent);
+                   pointer-events: none; }
+        .landing.to-left { left: 0; top: 0; bottom: 0; width: var(--line-strong); }
+        .landing.to-right { right: 0; top: 0; bottom: 0; width: var(--line-strong); }
+        .landing.to-top { left: 0; right: 0; top: 0; height: var(--line-strong); }
+        .landing.to-bottom { left: 0; right: 0; bottom: 0; height: var(--line-strong); }
 
         /* A pane's tag: its name between the mark it is taken by and the
            button it is closed with, in its corner, while the pointer is
@@ -818,23 +818,20 @@ impl Shell {
                         (false, _) => None,
                     }
                 })
-                .class_dyn(move || shell.drop_zone(id).is_some().then_some(styles::DROP))
                 .on("pointerdown", move |_| shell.pane_pressed(id))
                 .child(content)
                 .when(move || shell.veiled(id), || el("div").class(styles::VEIL))
-                // Where it would go: the whole of it, or the half on a side.
+                // Where a view moving would go beside it: a line on that side.
                 .when(
-                    move || shell.drop_zone(id).is_some(),
+                    move || shell.drop_side(id).is_some(),
                     move || {
                         el("div").class(styles::LANDING).class_dyn(move || {
-                            use horizon_workspace::Side;
-                            match shell.drop_zone(id) {
-                                Some(moving::Zone::Edge(Side::Left)) => Some(styles::TO_LEFT),
-                                Some(moving::Zone::Edge(Side::Right)) => Some(styles::TO_RIGHT),
-                                Some(moving::Zone::Edge(Side::Up)) => Some(styles::TO_TOP),
-                                Some(moving::Zone::Edge(Side::Down)) => Some(styles::TO_BOTTOM),
-                                _ => None,
-                            }
+                            shell.drop_side(id).map(|side| match side {
+                                Side::Left => styles::TO_LEFT,
+                                Side::Right => styles::TO_RIGHT,
+                                Side::Up => styles::TO_TOP,
+                                Side::Down => styles::TO_BOTTOM,
+                            })
                         })
                     },
                 )
