@@ -674,13 +674,6 @@ pub struct MessageDelta {
 #[serde(transparent)]
 pub struct JsonValue(pub serde_json::Value);
 
-#[cfg(test)]
-impl JsonValue {
-    pub(crate) fn new(value: serde_json::Value) -> Self {
-        Self(value)
-    }
-}
-
 impl From<serde_json::Value> for JsonValue {
     fn from(value: serde_json::Value) -> Self {
         Self(value)

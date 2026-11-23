@@ -16,7 +16,6 @@ pub(crate) mod job;
 pub(crate) mod jobs;
 mod output;
 pub(crate) mod process;
-pub(crate) mod recent;
 mod registry;
 mod shell;
 
@@ -37,7 +36,6 @@ pub(crate) use git::{approved_metadata_roots, metadata_writable_roots};
 // judge the same shape through `sandbox_area_approval`.
 #[cfg(test)]
 pub(crate) use git::metadata_grants;
-pub(crate) use recent::{find_reusable_output, guidance_output};
 
 /// What a [`spawn_sandboxed_call`] run's eventual `Finished` completion should be
 /// annotated with, once it lands -- distinguishes a genuine tier-1

@@ -135,23 +135,13 @@ fn execute_automatic(
                 );
             };
             if let ToolInput::Bash(input) = &request.input {
-                let command = &input.command;
-                if let Some(prior) = bash::find_reusable_output(&live.frame(), command) {
-                    let mut output = bash::guidance_output(command, &prior);
-                    annotate_auto_approval(
-                        &mut output,
-                        "contained",
-                        "engaged sandbox confined to the workspace root",
-                    );
-                    return started.complete(live, request.identity().finish(output), Vec::new());
-                }
                 if input.background {
                     let receipt = bash::jobs::launch(
                         session_id,
                         &request.identity(),
                         tool_state,
                         workspace_root,
-                        command,
+                        &input.command,
                     );
                     bash::spawn_sandboxed_call(
                         session_id,
