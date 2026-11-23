@@ -189,20 +189,52 @@ impl Workspace {
         self.swap_nodes(current.key(), next.key())
     }
 
+    /// The place among `group`'s tabs of the tab `pane` is all of, if
+    /// there is one.
+    pub fn alone_in_a_tab_of(&self, pane: PaneId, group: TabGroupId) -> Option<usize> {
+        let (_, tab) =
+            (self.root.tabs_around(pane).last().copied()).filter(|(around, _)| *around == group)?;
+        let tabs = &self.root.group(group)?.tabs;
+        (tabs.iter()).position(|kept| kept.id == tab && kept.root == LayoutNode::Pane(pane))
+    }
+
     /// Moves the pane `pane` into a new tab of `group`, last of its tabs,
     /// shown and with focus. `false`, a no-op, when either is unknown, or
     /// the pane is alone in a tab of `group` already (it would be the same
     /// tab), or `group` goes with the pane (the pane is all it has).
     pub fn move_pane_to_new_tab(&mut self, pane: PaneId, group: TabGroupId) -> bool {
+        let Some(count) = self.root.group(group).map(|group| group.tabs.len()) else {
+            return false;
+        };
+        if self.alone_in_a_tab_of(pane, group).is_some() {
+            return false;
+        }
+        self.move_pane_to_new_tab_at(pane, group, count)
+    }
+
+    /// Moves the pane `pane` into a new tab of `group` at `at`, the place
+    /// between its tabs as they are (0 before the first, their count after
+    /// the last), shown and with focus. A pane alone in a tab of `group`
+    /// already moves that tab there. `false`, a no-op, when either is
+    /// unknown, or `group` goes with the pane (the pane is all it has), or
+    /// the pane's tab is at that place already.
+    pub fn move_pane_to_new_tab_at(&mut self, pane: PaneId, group: TabGroupId, at: usize) -> bool {
         if !self.root.contains(NodeKey::Pane(pane)) || self.root.group(group).is_none() {
             return false;
         }
-        let alone_in_a_tab_of_it = (self.root.tabs_around(pane).last())
-            .filter(|(around, _)| *around == group)
-            .and_then(|(_, tab)| self.root.tab(*tab))
-            .is_some_and(|tab| tab.root == LayoutNode::Pane(pane));
-        if alone_in_a_tab_of_it {
-            return false;
+        if let Some(from) = self.alone_in_a_tab_of(pane, group) {
+            let Some(kept) = self.root.group_mut(group) else {
+                return false;
+            };
+            let to = if at > from { at - 1 } else { at }.min(kept.tabs.len() - 1);
+            if to == from {
+                return false;
+            }
+            let tab = kept.tabs.remove(from);
+            kept.shown = tab.id;
+            kept.tabs.insert(to, tab);
+            self.note_focus(pane);
+            return true;
         }
         let Some(mut rest) = self.root.without_pane(pane) else {
             return false;
@@ -217,9 +249,11 @@ impl Workspace {
             root: LayoutNode::Pane(pane),
             active: pane,
         };
+        // (The tabs of `group` are those `at` counted: what went with the
+        // pane was a split's part in one of them, or not of `group`.)
         if let Some(group) = self.root.group_mut(group) {
             group.shown = tab.id;
-            group.tabs.push(tab);
+            group.tabs.insert(at.min(group.tabs.len()), tab);
         }
         self.note_focus(pane);
         true
@@ -596,6 +630,62 @@ mod tests {
         assert!(workspace.root.is_canonical());
         // Alone in a tab of it already: the same tab.
         assert!(!workspace.move_pane_to_new_tab(right, group));
+    }
+
+    #[test]
+    fn a_pane_moves_into_a_new_tab_at_a_place_between_a_group_s_tabs() {
+        let (mut workspace, left, right, group, first, second) = row();
+        let tabs = |workspace: &Workspace| -> Vec<LayoutNode> {
+            (workspace.root.group(group).expect("the group").tabs.iter())
+                .map(|tab| tab.root.clone())
+                .collect()
+        };
+        // Between the two tabs.
+        assert!(workspace.move_pane_to_new_tab_at(right, group, 1));
+        assert_eq!(
+            tabs(&workspace),
+            [
+                LayoutNode::Pane(first),
+                LayoutNode::Pane(right),
+                LayoutNode::Pane(second)
+            ]
+        );
+        assert!(workspace.is_active_pane(right));
+        assert!(workspace.root.is_canonical());
+        // Before the first.
+        assert!(workspace.move_pane_to_new_tab_at(left, group, 0));
+        assert_eq!(tabs(&workspace)[0], LayoutNode::Pane(left));
+        assert_eq!(order(&workspace), [NodeKey::Group(group)]);
+    }
+
+    #[test]
+    fn a_pane_alone_in_a_tab_moves_that_tab_between_the_others() {
+        let (mut workspace, _, right, group, first, second) = row();
+        assert!(workspace.move_pane_to_new_tab(right, group));
+        let tabs = |workspace: &Workspace| -> Vec<LayoutNode> {
+            (workspace.root.group(group).expect("the group").tabs.iter())
+                .map(|tab| tab.root.clone())
+                .collect()
+        };
+        let three = tabs(&workspace);
+        // On either side of its own place, it stays.
+        assert!(!workspace.move_pane_to_new_tab_at(first, group, 0));
+        assert!(!workspace.move_pane_to_new_tab_at(first, group, 1));
+        assert_eq!(tabs(&workspace), three);
+        // The first goes last, its tab the one shown.
+        assert!(workspace.move_pane_to_new_tab_at(first, group, 3));
+        assert_eq!(
+            tabs(&workspace),
+            [
+                LayoutNode::Pane(second),
+                LayoutNode::Pane(right),
+                LayoutNode::Pane(first)
+            ]
+        );
+        assert!(workspace.is_active_pane(first));
+        // And back before the second.
+        assert!(workspace.move_pane_to_new_tab_at(first, group, 0));
+        assert_eq!(tabs(&workspace)[0], LayoutNode::Pane(first));
     }
 
     #[test]

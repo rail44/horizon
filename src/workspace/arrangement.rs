@@ -394,8 +394,8 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
             let on = shell.model.with(|model| model.workspace_cursor());
             (
                 (on == Some(Cursor::Strip(group)) && !shell.lent_shown()).then_some(styles::CURSOR),
-                shell
-                    .is_drop(super::moving::Target::Strip(group))
+                // (With no label to draw the line by, the strip is marked.)
+                (shell.drop_between(group).is_some() && tabs.with(Vec::is_empty))
                     .then_some(styles::DROP),
             )
         })
@@ -416,13 +416,22 @@ fn strip(shell: Shell, group: TabGroupId) -> El {
                         kept.tab_labels.borrow_mut().retain(|(of, ..)| *of != label);
                     }
                 });
+                // Where a view moving would go between the tabs: a line
+                // before this label, or after it when it is the last.
+                let line = move || {
+                    let last = tabs.with(Vec::len) == index + 1;
+                    match shell.drop_between(group) {
+                        Some(at) if at == index => Some(styles::TO_LEFT),
+                        Some(at) if at == index + 1 && last => Some(styles::TO_RIGHT),
+                        _ => None,
+                    }
+                };
                 label
                     .class(styles::TAB_LABEL)
-                    .class_dyn(move || {
-                        shell
-                            .is_drop(super::moving::Target::Tab(group, index))
-                            .then_some(styles::DROP)
-                    })
+                    .when(
+                        move || line().is_some(),
+                        move || el("div").class(styles::LANDING).class_dyn(line),
+                    )
                     .class_dyn(move || {
                         tab(index)
                             .is_some_and(|tab| tab.active)
