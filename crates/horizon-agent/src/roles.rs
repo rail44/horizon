@@ -213,8 +213,6 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
         "recall_sessions",
         "knowledge_read",
         "bash",
-        "bash_output",
-        "bash_cancel",
     ]),
     model: None,
     uncapped_turns: true,
@@ -231,8 +229,7 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      requester need not repeat your reading.\n\
      \n\
      Your toolset is read-only: fs_read, fs_grep, fs_glob, recall_search, recall_read, \
-     recall_sessions, knowledge_read, and bash (with bash_output and bash_cancel for its \
-     background jobs). bash runs in a sandbox where nothing is writable -- not the workspace, \
+     recall_sessions, knowledge_read, and bash. bash runs in a sandbox where nothing is writable -- not the workspace, \
      not a temporary directory -- so use it for commands that only read, such as `git log`, \
      `git show`, or `git blame`. You cannot edit or create files, and a command that writes, \
      builds, or runs tests is refused. When the answer genuinely needs that, say so in your \
@@ -259,8 +256,6 @@ pub(crate) const WRITE_TASK_ROLE: RoleDefinition = RoleDefinition {
         "fs_write",
         "fs_edit",
         "bash",
-        "bash_output",
-        "bash_cancel",
         "recall_search",
         "recall_read",
         "recall_sessions",
@@ -454,8 +449,6 @@ mod tests {
                 "recall_sessions",
                 "knowledge_read",
                 "bash",
-                "bash_output",
-                "bash_cancel",
             ]
         );
         // The prompt counts the same tools out in prose. It exists because a

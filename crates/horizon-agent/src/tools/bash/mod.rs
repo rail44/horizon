@@ -13,7 +13,6 @@ mod cargo;
 mod exec;
 mod git;
 pub(crate) mod job;
-pub(crate) mod jobs;
 mod output;
 pub(crate) mod process;
 mod registry;

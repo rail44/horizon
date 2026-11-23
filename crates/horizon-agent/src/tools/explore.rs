@@ -87,11 +87,6 @@ use crate::tools::state::ToolSessionState;
 
 pub(crate) use notify::{register_wake, unregister_wake};
 
-/// Wake a session loop whose finished background work is not a `task` child.
-pub(crate) fn wake(session_id: SessionId) {
-    notify::wake(session_id);
-}
-
 /// The model-visible tool id. Renamed from `agent_explore` on 2026-07-27:
 /// the plain `task` name measurably improved delegation adoption for one of
 /// the two production models and was neutral for the other
@@ -108,7 +103,7 @@ pub(crate) const TOOL_ID: &str = "task";
 
 /// The companion fetch tool's model-visible id
 /// (`docs/agent-async-task-design.md` decision 3, the mainstream
-/// `TaskOutput`/`bash_output` shape): re-read one finished child's full
+/// `TaskOutput` shape): re-read one finished child's full
 /// report, or learn that it is still running. Advertised only alongside
 /// [`TOOL_ID`] -- see `providers::rig::completion::rig_tool_definitions`.
 pub(crate) const OUTPUT_TOOL_ID: &str = "task_output";
@@ -519,22 +514,11 @@ pub(crate) struct TaskNotification {
 /// when a wake signal arrives with the turn already ended.
 pub(crate) fn take_notification(session_id: SessionId) -> Option<TaskNotification> {
     let completions = children::take_pending(session_id);
-    let jobs = super::bash::jobs::take_notifications(session_id);
-    if completions.is_empty() && jobs.is_empty() {
+    if completions.is_empty() {
         return None;
     }
-    let mut text = String::new();
-    if !completions.is_empty() {
-        text.push_str(&notify::notification_text(&completions));
-    }
-    for job in jobs {
-        if !text.is_empty() {
-            text.push_str("\n\n");
-        }
-        text.push_str(&job);
-    }
     Some(TaskNotification {
-        text,
+        text: notify::notification_text(&completions),
         failures: notify::unfinished_lines(&completions),
     })
 }
