@@ -2,6 +2,8 @@
 //! Response batches own their calls and results; flattening is an adapter step.
 mod projection;
 #[cfg(test)]
+pub(in crate::providers::rig) use projection::settle;
+#[cfg(test)]
 mod test_support;
 pub(crate) mod upgrade;
 use std::collections::{HashMap, HashSet};

@@ -63,15 +63,29 @@ fn assistant_message(response: &Response, in_progress: bool) -> Message {
         ),
     };
     if !in_progress {
-        message
-            .content
-            .retain(|part| !matches!(part, AssistantContent::Reasoning(_)));
-        if message.content.is_empty() {
-            // A reply that was reasoning alone still has to stand as a turn.
-            message.content.push(AssistantContent::text(""));
-        }
+        settle(&mut message);
     }
     Message::Assistant(message)
+}
+
+/// An ended turn's assistant message as later requests replay it: without
+/// its reasoning, and so without the provider items its other blocks were
+/// decoded from (`AssistantContent::canonical`). A provider pairs those
+/// items with their reasoning -- OpenAI's Responses API refuses a
+/// `function_call` item replayed without its `reasoning` item -- and rig
+/// rebuilds a block without one as another model's turn, a call with no
+/// item id.
+pub(in crate::providers::rig) fn settle(
+    message: &mut rig_core::completion::message::AssistantMessage,
+) {
+    message.content = (message.content.iter())
+        .filter(|part| !matches!(part, AssistantContent::Reasoning(_)))
+        .map(AssistantContent::canonical)
+        .collect();
+    if message.content.is_empty() {
+        // A reply that was reasoning alone still has to stand as a turn.
+        message.content.push(AssistantContent::text(""));
+    }
 }
 
 impl ConversationHistory {

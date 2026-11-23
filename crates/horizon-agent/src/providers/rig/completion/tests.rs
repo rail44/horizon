@@ -975,3 +975,108 @@ async fn openais_own_endpoint_runs_a_tool_turn_and_its_replay_over_responses() {
     assert_eq!(typed("function_call").unwrap()["call_id"], "call-1");
     assert_eq!(typed("function_call_output").unwrap()["call_id"], "call-1");
 }
+
+/// An ended turn replays on Responses without its reasoning and without
+/// the item ids its calls were decoded with: OpenAI refuses a
+/// `function_call` item replayed with its id but without its `reasoning`
+/// item (`conversation::settle`).
+#[tokio::test]
+async fn an_ended_turn_replays_its_calls_on_responses_without_their_item_ids() {
+    let key = "HORIZON_TEST_RESPONSES_SETTLED_KEY";
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let config = RigAgentConfig {
+        vendor: Vendor::openai(),
+        api_key_present: true,
+        api_key_env: key.into(),
+        model: "test-model".into(),
+        max_output_tokens: 100,
+        allowed_tool_ids: Some(vec!["fs_read".into()]),
+        ..Default::default()
+    };
+    let model = || {
+        let connection = (config
+            .vendor
+            .connection("local-test-key".into(), None)
+            .unwrap())
+        .with_base_url(base_url.clone());
+        let facts = super::super::model_catalog::current().facts(config.vendor.id(), &config.model);
+        connection.completion_model(&config.model, rig_reqwest::shared(), facts)
+    };
+    let server = tokio::spawn(async move {
+        let reasoning = json!({"type": "reasoning", "id": "rs-1",
+            "summary": [{"type": "summary_text", "text": "look first"}]});
+        let call = json!({"type": "function_call", "id": "fc_1", "call_id": "call-1",
+            "name": "fs_read", "arguments": "{\"path\":\"README.md\"}", "status": "completed"});
+        let answer = json!({"type": "message", "id": "msg-2", "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "annotations": [], "text": "done"}]});
+        let first = serve_transport(
+            &listener,
+            false,
+            responses_stream(vec![reasoning, call]),
+            Transport::Complete,
+        )
+        .await;
+        let second = serve_transport(
+            &listener,
+            false,
+            responses_stream(vec![answer]),
+            Transport::Complete,
+        )
+        .await;
+        (first, second)
+    });
+    let environment = SessionEnvironment::for_workspace_root(None);
+    let token = CancellationToken::new();
+    let turn = |prompt: Message, history: Vec<Message>| {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        run_provider_stream(
+            &config,
+            model(),
+            &environment,
+            &[],
+            prompt,
+            history,
+            tx,
+            &token,
+            ProviderDeadlines::default(),
+        )
+    };
+    let prompt = Message::user("read the file");
+    let Attempt::Complete((assistant, _)) = turn(prompt.clone(), vec![]).await else {
+        panic!("the first turn completes");
+    };
+    let Message::Assistant(mut message) = assistant else {
+        panic!("the reply is the assistant's");
+    };
+    let call = (message.content.iter())
+        .find_map(|item| match item {
+            AssistantContent::ToolCall(call) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("the reply calls a tool");
+    // The turn has ended: the next one is a new user message.
+    super::super::conversation::settle(&mut message);
+    let result = Message::tool_results(vec![call.result(vec![
+        rig_core::completion::message::ToolResultContent::text("# Horizon"),
+    ])]);
+    let history = vec![prompt, Message::Assistant(message), result];
+    let Attempt::Complete(_) = turn(Message::user("and now?"), history).await else {
+        panic!("the next turn completes");
+    };
+
+    let (_, (_, second)) = server.await.unwrap();
+    let input = second["input"].as_array().expect("Responses input items");
+    assert!(
+        input.iter().all(|item| item["type"] != "reasoning"),
+        "{input:?}"
+    );
+    let replayed = (input.iter())
+        .find(|item| item["type"] == "function_call")
+        .expect("the call is replayed");
+    assert_eq!(replayed["call_id"], "call-1");
+    assert!(replayed.get("id").is_none(), "{replayed}");
+}
