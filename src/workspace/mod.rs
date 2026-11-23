@@ -91,9 +91,11 @@ pub(crate) mod styles {
 
         /* A tab group: its strip above, with no frame of its own, and the
            tab it shows in a card under it. The tabs share the strip's
-           width; those not shown are their words, a faint line between
-           two of them, and the one shown is outlined. */
-        .tabs { flex: none; display: flex; padding: 0 0 var(--u4); }
+           width, a little apart; those not shown are their words, a faint
+           line between two of them, and the one shown is outlined. The
+           line where a tab or a view moving would go is drawn between
+           two of them, clear of the outline. */
+        .tabs { flex: none; display: flex; gap: var(--u4); padding: 0 0 var(--u4); }
         .tab-label { position: relative; flex: 1; min-width: 0; display: flex;
                      padding: 0 var(--u4) 0 var(--u8);
                      border: var(--line) solid transparent; border-radius: var(--radius);
@@ -186,6 +188,10 @@ pub(crate) mod styles {
         .landing.to-right { right: 0; top: 0; bottom: 0; width: var(--line-strong); }
         .landing.to-top { left: 0; right: 0; top: 0; height: var(--line-strong); }
         .landing.to-bottom { left: 0; right: 0; bottom: 0; height: var(--line-strong); }
+        .tab-label > .landing.to-left {
+            left: calc((var(--u2) + var(--line) + var(--line-strong) / 2) * -1); }
+        .tab-label > .landing.to-right {
+            right: calc((var(--u2) + var(--line) + var(--line-strong) / 2) * -1); }
 
         /* A pane's tag: its name between the mark it is taken by and the
            button it is closed with, in its corner, while the pointer is

@@ -195,9 +195,11 @@ What is drawn is chosen so that what holds what reads from the drawing
   apart by a line, so a split in a tab reads apart from one between
   cards (`in-tab`).
 - A group's strip is above its card, with no frame of its own. The tabs
-  share its width, in the body's size; those not shown are their words, a
-  faint line between two of them, and the shown one is outlined -- in
-  the accent in the group with the focus (in workspace mode, the cursor).
+  share its width, in the body's size, a little apart; those not shown
+  are their words, a faint line between two of them, and the shown one is
+  outlined -- in the accent in the group with the focus (in workspace
+  mode, the cursor). The line where something moving would go between
+  two of them is drawn in the space between, clear of that outline.
 - Every pane has a tag in its top right corner, clear of a terminal's
   text, which begins at the left: its name and the grip it is taken by
   -- a pane that is all of its tab too, though its tab's label names it
