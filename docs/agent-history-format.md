@@ -1,7 +1,10 @@
 # Agent history format
 
-The current event-log format is v4; the agent wire is v27. Existing v1/v2/v3
-logs require explicit offline conversion before restarting the new build.
+The current event-log format is v4; the agent wire is v27. The offline
+converter from v1/v2/v3 logs was removed 2026-11-24 (owner approval): the
+owner's log holds no record older than v4. Its code remains only as the
+builder of test fixtures (`providers::rig::conversation::upgrade`, compiled for
+tests); an older log can be converted with a build from before that date.
 
 Every tool request, start, approval, approval decision, and result names both
 `call_id` and `occurrence_id`. A retry keeps the provider's call ID and gets a
@@ -51,64 +54,13 @@ an announcement written immediately before a crash prevented dispatch. It retain
 real completed results. Sending a request with unsettled canonical calls fails
 explicitly instead of producing a malformed tool conversation.
 
-## Offline conversion
+## Validating a log
 
-Stop writes to the source log. For v3, run:
-
-```sh
-cargo run --locked -p horizon-agent --bin horizon-migrate-conversation -- /path/to/events.jsonl /path/to/new-v4-bundle
-```
-
-For v1/v2, first run the older converter, then pass its v3 output to the command
-above. Inspect any archived sessions in this first stage:
+A read-only preflight checks a v4 log:
 
 ```sh
-python3 scripts/migrate-agent-history.py /path/to/old.jsonl /path/to/v3-bundle
-cargo run --locked -p horizon-agent --bin horizon-migrate-conversation -- /path/to/v3-bundle/events.jsonl /path/to/v4-bundle
-```
-
-The v4 converter decodes every record, replays the conversation model, and rebuilds
-DuckDB in memory before creating an output directory. Unknown codecs, ambiguous
-identities, corrupt records and incomplete final lines reject conversion. Existing
-v4 logs are validated and copied unchanged. The destination must not exist.
-
-The bundle contains `original.jsonl` (exact source bytes), `events.jsonl` and a
-`manifest.json` with counts and limitations. It never changes the source or
-activates output. Existing event IDs, timestamps, provider payloads and authority
-metadata survive; inserted conversation records have new IDs, and sequence numbers
-are reassigned in source order. Unfinished legacy calls receive cancellation
-results. Old clearing IDs are resolved to the corresponding result occurrences.
-
-Only metadata actually recorded in v3 can be recovered. Tool-call provider payloads
-are retained where available; missing historic reasoning signatures cannot be
-recreated. Preserve the original bundle even after activation. v1/v2's converter
-archives entire ambiguous sessions rather than inventing execution authority.
-
-A separate read-only preflight is also available:
-
-```sh
-cargo run --locked -p horizon-agent --example validate-history -- /path/to/new-v4-bundle/events.jsonl
+cargo run --locked -p horizon-agent --example validate-history -- /path/to/events.jsonl
 ```
 
 It uses the actual decoder, canonical conversation replay and DuckDB projection,
 and fails if a record would be skipped.
-
-## Activation checklist
-
-1. Review the manifest and any v1/v2 archived sessions. Pass the preflight above and compare
-   its record count to `converted_records`. Keep the original bundle.
-2. Stop Horizon and the agent daemon before replacing any active agent files.
-3. Install the converted JSONL and rotate the derived agent DuckDB file and any
-   WAL together. A fresh DuckDB projection must be rebuilt from the converted log. The runtime
-   also invalidates projections whose event-format stamp is missing or older,
-   even when their sequence high-water mark matches; rotating also covers
-   older incompatible table schemas.
-4. Build the whole workspace and restart Horizon itself; an agent-runtime reload
-   alone cannot cross the wire-version change. Leave terminald running.
-5. Verify JSONL read counts, projection import counts, resumed sessions, and a
-   request/approval/retry/cancellation flow before deleting any backup.
-
-The converter tests run with `python3 scripts/test-migrate-agent-history.py`.
-Rust migration tests additionally pass converter output through the actual event
-reader and DuckDB projection. Real user data has not been converted as part of
-this implementation work.

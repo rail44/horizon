@@ -4,7 +4,9 @@ mod projection;
 pub(in crate::providers::rig) use projection::EarlierReasoning;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
 pub(crate) mod upgrade;
+pub(crate) mod validate;
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 pub(crate) use test_support::{announcement, fixture};

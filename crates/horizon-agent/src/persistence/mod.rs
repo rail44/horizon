@@ -14,7 +14,7 @@ pub fn validate_history(path: impl AsRef<std::path::Path>) -> anyhow::Result<usi
     if let Some(summary) = report.skipped_summary() {
         anyhow::bail!("history is not ready for activation: {summary}");
     }
-    crate::providers::rig::conversation::upgrade::validate_conversation_records(
+    crate::providers::rig::conversation::validate::validate_conversation_records(
         &report
             .records
             .iter()

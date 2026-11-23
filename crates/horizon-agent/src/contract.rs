@@ -588,6 +588,7 @@ pub enum MessageRole {
 /// Which side of a provider conversation a [`MessageRole`] replays as.
 /// Internal to `horizon-agent` -- not on the wire; see
 /// [`MessageRole::provider_side`].
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProviderSide {
     User,
@@ -633,6 +634,7 @@ impl MessageRole {
     /// that disagreed with the sent one would change the model's view of its
     /// own past. The distinct role exists for persistence and the transcript,
     /// not for the provider -- see [`MessageRole::TaskNotification`].
+    #[cfg(test)]
     pub(crate) fn provider_side(self) -> ProviderSide {
         match self {
             Self::User | Self::TaskNotification | Self::AutoContinue => ProviderSide::User,

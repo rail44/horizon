@@ -35,6 +35,7 @@ pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 2;
 /// (a float-preserving projection of a call rig decoded itself) and
 /// `blob_slot` (a reasoning blob's JSON pointer, which a tool call does not
 /// carry) stay empty.
+#[cfg(test)]
 pub(super) fn native_from_provider_item(item: serde_json::Value) -> rig_core::message::Native {
     rig_core::message::Native {
         fingerprint: rig_core::message::Fingerprint::of(&item),
