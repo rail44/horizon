@@ -534,6 +534,40 @@ fn a_boundary_dragged_changes_the_panes_shares_and_builds_nothing() {
     assert_eq!(opened.bounds(panes[0]), after);
 }
 
+/// Three panes side by side, a boundary dragged or not, then the right one
+/// closed: the right edge of the panes left, against the card's.
+fn right_edges_after_closing_the_right_one_of_three(dragged: bool) -> (f32, f32) {
+    let opened = open();
+    opened.chord();
+    opened.character("s");
+    opened.chord();
+    opened.character("s");
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 3);
+    if dragged {
+        let (x, y) = opened.middle(opened.all("divider")[0]);
+        pointer(&opened.app, x, y, Pointer::Move);
+        pointer(&opened.app, x, y, Pointer::Down);
+        pointer(&opened.app, x - 20., y, Pointer::Drag);
+        pointer(&opened.app, x - 20., y, Pointer::Up);
+        opened.app.resolve();
+    }
+    opened.model_closing(panes[2]);
+    assert_eq!(opened.panes(), panes[..2]);
+    let card = opened.bounds(opened.all("shown-tab")[0]);
+    let last = *opened.all("pane").last().expect("a pane");
+    let last = opened.bounds(last);
+    (last.0 + last.2, card.0 + card.2)
+}
+
+#[test]
+fn the_panes_left_fill_the_card_once_the_right_one_of_three_is_closed() {
+    let (pane, card) = right_edges_after_closing_the_right_one_of_three(false);
+    assert!((card - pane).abs() < 4., "{pane} {card}");
+    let (pane, card) = right_edges_after_closing_the_right_one_of_three(true);
+    assert!((card - pane).abs() < 4., "{pane} {card}");
+}
+
 #[test]
 fn the_keys_of_the_mode_change_the_shares_of_the_split_around_the_cursor() {
     let opened = open();
