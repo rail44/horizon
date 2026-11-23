@@ -44,19 +44,16 @@ impl SessionLoopState {
                     results,
                 }) if received == id => {
                     for result in results {
-                        if let Some(descriptor) = calls.get(&result.call_id) {
-                            if let Err(message) =
+                        if let Some(descriptor) = calls.get(&result.call_id)
+                            && let Err(message) =
                                 self.rig_history.append_result(&result, &descriptor.tool_id)
-                            {
-                                let _ = self.events_tx.send(
-                                    crate::contract::Event::Error(crate::contract::Error {
-                                        message,
-                                    })
+                        {
+                            let _ = self.events_tx.send(
+                                crate::contract::Event::Error(crate::contract::Error { message })
                                     .into(),
-                                );
-                                self.inbox.push_front(Command::Shutdown);
-                                return;
-                            }
+                            );
+                            self.inbox.push_front(Command::Shutdown);
+                            return;
                         }
                     }
                     self.inbox.retain(|command| !matches!(command,

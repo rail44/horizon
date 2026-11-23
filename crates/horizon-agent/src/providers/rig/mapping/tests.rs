@@ -69,13 +69,12 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
         ]
     );
     let events = super::super::conversation::upgrade::fixture(events);
-    for history in [super::super::history::load_rig_session_history(&events).unwrap()] {
-        assert_eq!(
-            history.messages.messages(),
-            messages,
-            "both resume sources preserve the provider view"
-        );
-    }
+    let history = super::super::history::load_rig_session_history(&events).unwrap();
+    assert_eq!(
+        history.messages.messages(),
+        messages,
+        "the resumed history preserves the provider view"
+    );
 }
 
 #[test]
