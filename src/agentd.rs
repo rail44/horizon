@@ -9,7 +9,6 @@ use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_acp::HostToolRequest;
-use horizon_agent::contract::SessionId as AgentSessionId;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_shell_runtime::{AgentdHandle, WorkspaceRootUpdate, wait_for_drain};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
@@ -21,7 +20,7 @@ use crate::workspace::{AgentRuntime, Models, RunningAgent, Shell, SpawnAgent};
 
 enum Told {
     HostTool(HostToolRequest),
-    Directory(AgentSessionId, WorkspaceRootUpdate),
+    Directory(SessionId, WorkspaceRootUpdate),
 }
 
 type Wake = Arc<Mutex<Option<Waker>>>;
@@ -35,14 +34,6 @@ pub struct Agentd {
     tell: Sender<Told>,
     told: Receiver<Told>,
     waker: Wake,
-}
-
-fn agent_id(session: SessionId) -> AgentSessionId {
-    AgentSessionId::from_uuid(session.as_uuid())
-}
-
-fn session_id(session: AgentSessionId) -> SessionId {
-    SessionId::from_uuid(session.as_uuid())
 }
 
 impl Agentd {
@@ -108,9 +99,9 @@ impl Agentd {
         let sessions = self.handle().session_list()?;
         Ok((sessions.into_iter())
             .map(|agent| RunningAgent {
-                session: session_id(agent.session_id),
+                session: agent.session_id,
                 directory: agent.workspace_root,
-                parent: agent.parent_session_id.map(session_id),
+                parent: agent.parent_session_id,
             })
             .collect())
     }
@@ -156,7 +147,7 @@ impl Agentd {
             attach: Box::new(move |session| attached.attach(session)),
             organizer: Arc::new(move |root| {
                 let made = organized.handle().ensure_board_organizer(root)?;
-                (organized.listed(session_id(made))?)
+                (organized.listed(made)?)
                     .ok_or_else(|| "The board organizer is not available yet".to_string())
             }),
             find: Arc::new(move |session| {
@@ -173,18 +164,18 @@ impl Agentd {
         let runtime = self.clone();
         Box::new(move |starting| {
             AgentSession::attached(runtime.handle().start_session(
-                agent_id(starting.session),
+                starting.session,
                 ProviderRegistry::default().default_provider_id(),
                 starting.role,
                 starting.directory,
-                starting.from.map(agent_id),
+                starting.from,
             ))
         })
     }
 
     /// A session of this runtime that is running already.
     pub fn attach(&self, session: SessionId) -> AgentSession {
-        AgentSession::attached(self.handle().attach_session(agent_id(session)))
+        AgentSession::attached(self.handle().attach_session(session))
     }
 
     /// Takes in what the daemon has told since the last call: for each
@@ -203,10 +194,9 @@ impl Agentd {
                     (self.handle().responder()).respond_host_tool(&request.request_id, output);
                 }
                 Told::Directory(session, update) => shell.model.update(|model| {
-                    let session = session_id(session);
                     model.set_session_directory(session, update.workspace_root);
                     if let Some(parent) = update.parent_session_id {
-                        model.set_session_parent(session, session_id(parent));
+                        model.set_session_parent(session, parent);
                     }
                 }),
             }
@@ -227,14 +217,10 @@ impl Models for RuntimeModels {
     }
 
     fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
-        (self.0.handle()).set_session_model(
-            agent_id(session),
-            provider.to_string(),
-            model.to_string(),
-        )
+        (self.0.handle()).set_session_model(session, provider.to_string(), model.to_string())
     }
 
     fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String> {
-        (self.0.handle()).set_session_effort(agent_id(session), level.to_string())
+        (self.0.handle()).set_session_effort(session, level.to_string())
     }
 }
