@@ -274,11 +274,13 @@ use horizon_theme::spec::{FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE};
 /// What summarizes a first message into a title under `config`.
 fn summarizer(config: &RawConfig) -> Option<Arc<AuxiliaryClient>> {
     let small = config.resolved_small_model().ok()?;
-    Some(Arc::new(AuxiliaryClient::new(AuxiliaryConfig {
-        base_url: small.provider.base_url,
-        api_key_env: small.provider.api_key_env,
-        model: small.model,
-    })))
+    let config = AuxiliaryConfig::resolve(
+        &small.provider.vendor,
+        small.provider.base_url,
+        small.provider.api_key_env,
+        small.model,
+    );
+    Some(Arc::new(AuxiliaryClient::new(config.ok()?)))
 }
 
 /// Hands a notification a program in a terminal session asked for to the

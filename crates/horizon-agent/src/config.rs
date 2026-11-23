@@ -36,7 +36,14 @@
 //! only override path.
 
 mod selection;
+mod vendor;
 pub use selection::{ResolvedModelSelection, resolve_model_selection};
+pub use vendor::{Vendor, Wire};
+
+/// The vendor an entry names when it names none. Mirrors
+/// `horizon_config::DEFAULT_VENDOR` (this crate has no dependency on
+/// `horizon-config` -- the two literals must agree).
+pub const DEFAULT_VENDOR: &str = "openai";
 
 use std::path::PathBuf;
 
@@ -320,42 +327,6 @@ impl AgentConfig {
     }
 }
 
-/// Which rig-backed provider *client* a turn builds — the owner-agreed
-/// first scope (`openai-compatible` + `anthropic`). rig-core 0.42 bundles
-/// both clients with no feature gates. Mirrors
-/// `horizon_config::RawProviderKind` (this crate has no dependency on
-/// `horizon-config` — the caller translates).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ProviderKind {
-    /// Any endpoint speaking OpenAI's chat-completions wire (rig's
-    /// `openai::CompletionsClient`) — the default, and the kind every
-    /// pre-`[[providers]]` config resolves to.
-    #[default]
-    OpenAiCompatible,
-    /// rig's `anthropic::Client`.
-    Anthropic,
-}
-
-impl ProviderKind {
-    /// The endpoint this kind's rig client uses when the entry has no
-    /// `base_url` — rig's own per-kind default (`completion_client` leaves the builder's default in
-    /// place for `None`). Named here so callers outside the client (the
-    /// picker's `/models` discovery) resolve the same endpoint the client
-    /// actually talks to.
-    pub(crate) fn default_base_url(self) -> &'static str {
-        match self {
-            ProviderKind::OpenAiCompatible => DEFAULT_OPENAI_BASE_URL,
-            ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
-        }
-    }
-}
-
-/// rig's own default endpoint for an OpenAI-compatible client — the value
-/// `completion_client` leaves in place when `config.base_url` is `None`.
-pub(crate) const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-/// rig's own default endpoint for an Anthropic client.
-pub(crate) const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
-
 /// One resolved `[[providers]]` entry as the caller (`horizon-agentd`'s
 /// `main` / `AgentdState::reload_provider_config`) translates it from
 /// `horizon_config`'s own resolution. Secrets stay out: the
@@ -364,8 +335,9 @@ pub(crate) const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamedProviderConfig {
     pub name: String,
-    pub kind: ProviderKind,
-    /// The file's `base_url`, if any; `None` leaves the kind's own default
+    /// The rig vendor the entry is reached as ([`Vendor`]).
+    pub vendor: Vendor,
+    /// The file's `base_url`, if any; `None` leaves the vendor's own
     /// endpoint.
     pub base_url: Option<String>,
     /// The environment variable **name** the entry's API key is read from
@@ -385,7 +357,7 @@ impl Default for NamedProviderConfig {
     fn default() -> Self {
         Self {
             name: DEFAULT_PROVIDER_NAME.into(),
-            kind: ProviderKind::OpenAiCompatible,
+            vendor: Vendor::openai(),
             base_url: None,
             api_key_env: OPENAI_API_KEY_VAR.into(),
             api_key_present: false,
@@ -406,8 +378,8 @@ impl NamedProviderConfig {
     /// The provider's own live model listing (`GET {base_url}/models`), for
     /// the picker's discovery (`_horizon/list_provider_models`).
     /// Resolves this entry the same way [`Self::resolved`] resolves its
-    /// base URL and key name — the entry's `base_url`, then the kind's own
-    /// default endpoint — so an Anthropic
+    /// base URL and key name — the entry's `base_url`, then the vendor's own
+    /// endpoint — so an Anthropic
     /// entry with no `base_url` asks `api.anthropic.com`, not rig's OpenAI
     /// default. An unavailable entry (no key variable set) or a provider
     /// that answers no listing yields an empty list. Never an error: this
@@ -417,16 +389,15 @@ impl NamedProviderConfig {
             return Vec::new();
         }
         let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
-        crate::providers::rig::list_model_ids(self.kind, &self.discovery_base_url(), &api_key).await
+        crate::providers::rig::list_model_ids(self.vendor, &self.discovery_base_url(), &api_key)
+            .await
     }
 
     /// Where this entry's `/models` discovery request goes: the entry's
-    /// `base_url`, else the kind's own default endpoint (the same endpoint
+    /// `base_url`, else the vendor's own endpoint (the same endpoint
     /// `completion_client` would talk to for this entry).
     fn discovery_base_url(&self) -> String {
-        self.base_url
-            .clone()
-            .unwrap_or_else(|| self.kind.default_base_url().to_string())
+        (self.base_url.clone()).unwrap_or_else(|| self.vendor.default_base_url())
     }
 }
 
@@ -441,7 +412,7 @@ impl NamedProviderConfig {
             api_key_present: self.api_key_present,
             model: String::new(),
             base_url: self.base_url.clone(),
-            kind: self.kind,
+            vendor: self.vendor,
             api_key_env: self.api_key_env.clone(),
             clearing_threshold_pct: resolve_clearing_threshold_pct(
                 std::env::var(CLEARING_THRESHOLD_PCT_VAR).ok(),
@@ -505,10 +476,10 @@ pub struct RigAgentConfig {
     /// `api_key_present` with `[[providers]]`: which *variable* decides it
     /// is now per-entry, so the name had to stop claiming OpenAI.
     pub api_key_present: bool,
-    /// Which provider client this config builds (`[[providers]]`'s `kind`,
-    /// [`ProviderKind`]). `openai-compatible` (the default) is every
-    /// pre-`[[providers]]` config.
-    pub kind: ProviderKind,
+    /// The rig vendor the turn's requests go through (`[[providers]]`'s
+    /// `vendor`, [`Vendor`]): the dialect they are spelled in and the
+    /// catalog vendor the model's facts are read under.
+    pub vendor: Vendor,
     /// The environment variable **name** this config's API key is read
     /// from (never a value — the module doc's secrets-stay-out rule). The
     /// default variable is [`OPENAI_API_KEY_VAR`]; a `[[providers]]`
@@ -517,10 +488,8 @@ pub struct RigAgentConfig {
     /// Completion model id passed to the provider client. Empty means no
     /// model is configured (see [`Self::model_in_play`]).
     pub model: String,
-    /// Explicit base URL for the OpenAI client, if any. `None` means "use
-    /// rig's own default" (`https://api.openai.com/v1`) — see
-    /// `providers::rig::completion`'s client construction for how this is
-    /// applied via the client builder's `.base_url(..)`.
+    /// The entry's base URL, if any. `None` means the vendor's own endpoint
+    /// ([`Vendor::connection`]).
     pub base_url: Option<String>,
     /// Consecutive-tool-turn iteration cap (`docs/agent-tools-design.md`,
     /// "Error Model and Loop Guards"). Always [`DEFAULT_ITERATION_CAP`] --
@@ -601,7 +570,7 @@ impl Default for RigAgentConfig {
     fn default() -> Self {
         Self {
             api_key_present: false,
-            kind: ProviderKind::OpenAiCompatible,
+            vendor: Vendor::openai(),
             api_key_env: OPENAI_API_KEY_VAR.to_string(),
             model: String::new(),
             base_url: None,
@@ -630,7 +599,7 @@ impl RigAgentConfig {
 }
 
 /// Points `config` at one `[[providers]]` entry running `model`: the
-/// provider bits (kind, key variable, base URL, key presence) plus the model
+/// provider bits (vendor, key variable, base URL, key presence) plus the model
 /// id. Used by the plain provider switch ([`ResolvedModelSelection::apply`]).
 /// Key presence is re-read from the environment here, the same rule a
 /// switch has always followed.
@@ -639,7 +608,7 @@ pub(crate) fn apply_provider_entry(
     entry: &NamedProviderConfig,
     model: &str,
 ) {
-    config.kind = entry.kind;
+    config.vendor = entry.vendor;
     config.api_key_env = entry.api_key_env.clone();
     config.base_url = entry.base_url.clone();
     config.api_key_present = std::env::var_os(&entry.api_key_env).is_some();
@@ -1096,28 +1065,13 @@ mod tests {
         assert_eq!(config.bash.drain_grace_secs, DEFAULT_BASH_DRAIN_GRACE_SECS);
     }
 
-    /// Each kind names the endpoint its rig client would actually talk to
-    /// when no base URL is configured — an Anthropic entry must not fall
-    /// through to rig's OpenAI default on the discovery path.
+    /// An Anthropic entry with no `base_url` discovers against the vendor's
+    /// own endpoint, never rig's OpenAI endpoint.
     #[test]
-    fn provider_kinds_name_their_own_default_endpoints() {
-        assert_eq!(
-            ProviderKind::OpenAiCompatible.default_base_url(),
-            "https://api.openai.com/v1"
-        );
-        assert_eq!(
-            ProviderKind::Anthropic.default_base_url(),
-            "https://api.anthropic.com"
-        );
-    }
-
-    /// An Anthropic entry with no `base_url` discovers against the kind's own
-    /// default, never rig's OpenAI endpoint.
-    #[test]
-    fn discovery_base_url_falls_back_to_the_kinds_own_default() {
+    fn discovery_base_url_falls_back_to_the_vendors_own_endpoint() {
         let entry = NamedProviderConfig {
             name: "claude".to_string(),
-            kind: ProviderKind::Anthropic,
+            vendor: Vendor::resolve("anthropic").unwrap(),
             base_url: None,
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             api_key_present: true,

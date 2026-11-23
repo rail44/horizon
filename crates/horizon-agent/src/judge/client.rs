@@ -228,11 +228,13 @@ mod tests {
         // FIXME: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::set_var("HORIZON_TEST_AUX_SECOND_KEY", "second-helper-key") };
         let first = AuxiliaryConfig {
+            vendor: crate::config::Vendor::openai(),
             base_url: Some(first_url),
             api_key_env: "HORIZON_TEST_AUX_FIRST_KEY".into(),
             model: "small-test".into(),
         };
         let second = AuxiliaryConfig {
+            vendor: crate::config::Vendor::openai(),
             base_url: Some(second_url),
             api_key_env: "HORIZON_TEST_AUX_SECOND_KEY".into(),
             model: "small-test".into(),

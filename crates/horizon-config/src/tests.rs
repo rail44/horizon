@@ -516,7 +516,7 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
          name = \"synthetic\"\n\
          [[providers]]\n\
          name = \"claude\"\n\
-         kind = \"anthropic\"\n\
+         vendor = \"anthropic\"\n\
          api_key_env = \"CLAUDE_KEY\"\n",
     )
     .unwrap();
@@ -529,15 +529,15 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
             .collect::<Vec<_>>(),
         vec!["synthetic", "claude"]
     );
-    // Defaults: kind -> openai-compatible, api_key_env -> the kind's own
-    // variable name, overridden api_key_env kept as-is.
+    // Defaults: vendor -> openai; an unset api_key_env stays unset (the
+    // vendor's own variable is rig's to name), a written one is kept as-is.
+    assert_eq!(resolution.providers[0].vendor, DEFAULT_VENDOR);
+    assert_eq!(resolution.providers[0].api_key_env, None);
+    assert_eq!(resolution.providers[1].vendor, "anthropic");
     assert_eq!(
-        resolution.providers[0].kind,
-        RawProviderKind::OpenAiCompatible
+        resolution.providers[1].api_key_env.as_deref(),
+        Some("CLAUDE_KEY")
     );
-    assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
-    assert_eq!(resolution.providers[1].kind, RawProviderKind::Anthropic);
-    assert_eq!(resolution.providers[1].api_key_env, "CLAUDE_KEY");
     assert_eq!(
         resolution.default_model,
         Some(ResolvedModelPair {
@@ -597,14 +597,15 @@ fn retired_provider_table_requires_explicit_conversion() {
 
 #[test]
 fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
-    // The zero-config case: one openai-compatible endpoint entry, no base
-    // URL (env precedence in horizon-agent decides the rest), and no model
-    // at all — neither pair has a built-in value.
+    // The zero-config case: one entry on OpenAI's vendor, no base URL and
+    // no key variable of its own (horizon-agent takes rig's for both), and
+    // no model at all — neither pair has a built-in value.
     let config = RawConfig::default();
     let resolution = config.resolved_providers();
     assert_eq!(resolution.providers.len(), 1);
     assert_eq!(resolution.providers[0].name, DEFAULT_PROVIDER_NAME);
-    assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
+    assert_eq!(resolution.providers[0].vendor, DEFAULT_VENDOR);
+    assert_eq!(resolution.providers[0].api_key_env, None);
     assert_eq!(resolution.default_model, None);
     assert!(config.resolved_small_model().is_err());
 }
@@ -615,7 +616,7 @@ fn mixed_old_and_new_provider_tables_are_rejected_without_partial_application() 
 }
 
 #[test]
-fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
+fn small_model_is_independent_of_default_model() {
     let config = parse(
         r#"
         default_model = { provider = "chat", model = "big" }
@@ -623,7 +624,7 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
         decision_model = { provider = "helper", model = "clef:cloud" }
         [[providers]]
         name = "chat"
-        kind = "anthropic"
+        vendor = "anthropic"
         [[providers]]
         name = "helper"
         base_url = "https://helpers.invalid/v1"
@@ -638,15 +639,10 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
         "chat"
     );
     assert_eq!(small.provider.name, "helper");
-    assert_eq!(small.provider.api_key_env, "HELPER_KEY");
+    assert_eq!(small.provider.api_key_env.as_deref(), Some("HELPER_KEY"));
     assert_eq!(small.model, "small");
     assert!(provider_config_warnings(&config).is_empty());
-    for invalid in [
-        Some(("chat", "small")),
-        Some(("missing", "small")),
-        Some(("helper", "")),
-        None,
-    ] {
+    for invalid in [Some(("missing", "small")), Some(("helper", "")), None] {
         let mut invalid_config = config.clone();
         invalid_config.small_model = invalid.map(|(provider, model)| RawModelPair {
             provider: provider.into(),
@@ -659,17 +655,6 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
                 .any(|w| w.starts_with("small_model:"))
         );
     }
-    let mut anthropic = config.clone();
-    anthropic.small_model = Some(RawModelPair {
-        provider: "chat".into(),
-        model: "small".into(),
-    });
-    assert!(
-        anthropic
-            .resolved_small_model()
-            .unwrap_err()
-            .contains("openai-compatible")
-    );
 }
 
 #[test]
@@ -719,18 +704,6 @@ fn a_decision_model_naming_an_unknown_entry_is_rejected() {
 }
 
 #[test]
-fn a_decision_model_on_an_anthropic_entry_is_rejected() {
-    let config = parse(
-        "decision_model = { provider = \"claude\", model = \"clef:cloud\" }\n\
-         [[providers]]\nname = \"claude\"\nkind = \"anthropic\"\n",
-    )
-    .unwrap();
-    let error = config.resolved_decision_model().unwrap_err();
-    assert!(error.contains("openai-compatible"));
-    assert!(error.contains("turn-continuation checks are disabled"));
-}
-
-#[test]
 fn a_valid_decision_model_resolves_its_entry_and_model() {
     let config = parse(
         r#"
@@ -747,7 +720,10 @@ fn a_valid_decision_model_resolves_its_entry_and_model() {
     assert_eq!(decision.provider.name, "deepinfra");
     // The URL is taken as written, never derived from base_url.
     assert_eq!(decision.url, "https://api.deepinfra.com/v1/decisions");
-    assert_eq!(decision.provider.api_key_env, "DEEPINFRA_API_KEY");
+    assert_eq!(
+        decision.provider.api_key_env.as_deref(),
+        Some("DEEPINFRA_API_KEY")
+    );
     assert_eq!(decision.model, "Cloudflare/clef");
     assert!(
         !provider_config_warnings(&config)
@@ -811,7 +787,7 @@ fn nameless_entries_are_dropped_and_warned() {
 fn duplicate_entry_names_warn_about_the_shadowed_later_entry() {
     let config = parse(
         "[[providers]]\nname = \"synthetic\"\n\
-         [[providers]]\nname = \"synthetic\"\nkind = \"anthropic\"\n",
+         [[providers]]\nname = \"synthetic\"\nvendor = \"anthropic\"\n",
     )
     .unwrap();
     assert!(
@@ -825,11 +801,12 @@ fn duplicate_entry_names_warn_about_the_shadowed_later_entry() {
 }
 
 #[test]
-fn bad_provider_kind_is_a_parse_error_of_the_whole_file() {
-    // A typo'd kind is not per-key skippable (parity with [provider]'s own
-    // fields): the whole file fails parse and falls back to defaults with
-    // the ordinary never-fail-startup warning.
-    assert!(parse("[[providers]]\nname = \"x\"\nkind = \"anthromorphic\"\n").is_err());
+fn a_kind_key_refuses_the_whole_file_naming_vendor() {
+    // `kind` was replaced by `vendor`: an entry still writing it is refused
+    // as the removed `[provider]` table is, rather than read as OpenAI's
+    // vendor, which would send an Anthropic key to OpenAI.
+    let error = parse("[[providers]]\nname = \"x\"\nkind = \"anthropic\"\n").unwrap_err();
+    assert!(error.contains("`kind` was replaced by `vendor`"), "{error}");
 }
 
 #[test]

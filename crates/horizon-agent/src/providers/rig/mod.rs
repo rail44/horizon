@@ -25,7 +25,7 @@ use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind};
 
 use crate::{
-    config::{ProviderKind, RigAgentConfig},
+    config::RigAgentConfig,
     contract::{ProviderId, StartSession},
     persistence::projection::duckdb::SharedDuckdbStore,
     registry::{Provider as AgentProvider, SessionHandle},
@@ -148,10 +148,7 @@ pub(super) fn rig_initialization_message(
     } else {
         format!(" Loaded {loaded_history_messages} persisted Rig history message(s).")
     };
-    let kind = match config.kind {
-        ProviderKind::OpenAiCompatible => "openai-compatible",
-        ProviderKind::Anthropic => "anthropic",
-    };
+    let kind = config.vendor.name();
     if config.model.is_empty() {
         format!(
             "Rig provider `{}` initialized without a model: the config file's `default_model` \

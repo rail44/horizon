@@ -124,7 +124,7 @@ small_model = {{ provider = "mock", model = "mock-model" }}
 
 [[providers]]
 name = "mock"
-kind = "openai-compatible"
+vendor = "openai"
 base_url = "http://127.0.0.1:{port}/v1"
 api_key_env = "HORIZON_TEST_MOCK_KEY"
 "#

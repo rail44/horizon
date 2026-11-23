@@ -24,7 +24,7 @@ pub(crate) fn test_config() -> AgentConfig {
         providers: ProvidersTable {
             entries: vec![NamedProviderConfig {
                 name: "default".into(),
-                kind: rig.kind,
+                vendor: rig.vendor,
                 base_url: rig.base_url.clone(),
                 api_key_env: rig.api_key_env.clone(),
                 api_key_present: rig.api_key_present,

@@ -144,6 +144,7 @@ mod tests {
     fn the_title_model_is_the_connections_small_model() {
         let connection =
             crate::auxiliary::AuxiliaryClient::new(crate::auxiliary::AuxiliaryConfig {
+                vendor: crate::config::Vendor::openai(),
                 base_url: None,
                 api_key_env: "HORIZON_TEST_KEY_NEVER_SET".into(),
                 model: "small-test".into(),

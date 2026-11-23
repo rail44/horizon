@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use super::completion::{
     MULTI_TOOL_TEST_BATCH_SIZE, ProviderRequestSpan, ProviderWait, TurnCompletion,
-    await_provider_phase, output_cap_truncated, partial_assistant_message,
-    provider_additional_params, rig_tool_definitions,
+    await_provider_phase, generation_options, output_cap_truncated, partial_assistant_message,
+    rig_tool_definitions,
 };
 use super::guards::{GuardHalt, TurnLoopGuard, tool_result_fingerprint};
 use super::mapping::{
@@ -509,16 +509,17 @@ async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
 }
 
 #[test]
-fn openai_compatible_turns_explicitly_enable_parallel_tool_calls() {
+fn openais_own_vendor_turns_explicitly_enable_parallel_tool_calls() {
+    use crate::config::Vendor;
     assert_eq!(
-        provider_additional_params(crate::config::ProviderKind::OpenAiCompatible)["parallel_tool_calls"],
-        serde_json::Value::Bool(true)
+        generation_options(Vendor::openai()).parallel_tool_calls,
+        Some(true)
     );
-    // The anthropic kind carries nothing openai-specific.
-    assert_eq!(
-        provider_additional_params(crate::config::ProviderKind::Anthropic),
-        serde_json::Value::Object(serde_json::Map::new())
-    );
+    // A vendor rig has a dialect for keeps that provider's own default:
+    // Ollama's API takes no such flag, and Anthropic's nothing OpenAI's.
+    for vendor in ["ollama", "anthropic"] {
+        assert!(generation_options(Vendor::resolve(vendor).unwrap()).is_default());
+    }
 }
 
 /// Exercises the same `rig_core` builder call

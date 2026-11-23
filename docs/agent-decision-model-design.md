@@ -54,7 +54,7 @@ ACP line to the shell or the terminal wire.
 
 `decision_model = { provider, model }` is a top-level pair beside
 `default_model` and `small_model` (`docs/provider-configuration.md`). Its
-provider must be an `openai-compatible` entry with a `decision_url`, the
+provider must be an entry with a `decision_url`, the
 route's full URL used as written, and its `api_key_env` is the credential.
 The URL is not joined onto `base_url`: Ollama cloud serves the route at
 `https://ollama.com/v1/systemone`, but DeepInfra serves it at

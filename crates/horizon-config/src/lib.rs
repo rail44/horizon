@@ -8,13 +8,13 @@
 //! relevant to them and apply their own env-var precedence and built-in
 //! defaults on top (env var > this file > built-in default).
 //!
-//! Named `[[providers]]` entries describe endpoints and credentials only.
+//! Named `[[providers]]` entries describe endpoints and credentials only,
+//! each reached as a rig vendor (`vendor`, [`DEFAULT_VENDOR`] when unset).
 //! Models are chosen by three top-level `{ provider, model }` pairs:
 //! `default_model` for conversation sessions, `small_model` for titles (and
 //! approval judgments when no decision model is available), and
-//! `decision_model` for approval judgments and turn-continuation checks (the
-//! last two must name an OpenAI-compatible entry).
-//! No provider entries means the built-in OpenAI-compatible `default` entry.
+//! `decision_model` for approval judgments and turn-continuation checks.
+//! No provider entries means the built-in `default` entry, OpenAI's vendor.
 //! Endpoint URLs come only from the file; secrets remain environment-only.
 //! A missing file uses defaults. Invalid files warn at startup; reload errors
 //! retain the previously applied configuration. Reload applies provider changes
@@ -57,14 +57,14 @@ pub struct RawConfig {
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub default_model: Option<RawModelPair>,
     /// `small_model = { provider, model }`: the model titles, and approval
-    /// judgments when no decision model is available, run on. The provider
-    /// must be an openai-compatible entry; `None` (or an invalid pair)
-    /// disables titles and that fallback judge.
+    /// judgments when no decision model is available, run on. The provider's
+    /// vendor must speak OpenAI's wire (`horizon-agent` checks it); `None`
+    /// (or an invalid pair) disables titles and that fallback judge.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub small_model: Option<RawModelPair>,
     /// `decision_model = { provider, model }`: the System One decision model
     /// approval judgments and turn-continuation checks ask. The provider
-    /// must be an openai-compatible entry with a `decision_url`; `None` (or
+    /// must be an entry with a `decision_url`; `None` (or
     /// an invalid pair) disables
     /// turn-continuation checks, and approval judgments fall back to
     /// `small_model`'s chat judge.
@@ -117,33 +117,10 @@ impl RawConfig {
     }
 }
 
-/// Which rig-backed provider *client* an entry builds: the first-scope kinds
-/// (owner-agreed: `openai-compatible` + `anthropic`). `openai-compatible`
-/// (the default) is any endpoint speaking OpenAI's chat-completions wire
-/// (rig's `openai::CompletionsClient`); `anthropic` is rig's
-/// `anthropic::Client`. rig-core 0.42 bundles both with no feature gates.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RawProviderKind {
-    #[default]
-    #[serde(rename = "openai-compatible")]
-    OpenAiCompatible,
-    Anthropic,
-}
-
-impl RawProviderKind {
-    /// The environment variable *name* an entry's API key is read from when
-    /// the file doesn't override `api_key_env` — per kind, mirroring rig's
-    /// own `api_key_env` defaults. The config file never carries the key
-    /// itself: it only ever names the variable (the module doc's
-    /// secrets-stay-out rule, now one variable *name* per provider).
-    pub fn default_api_key_env(self) -> &'static str {
-        match self {
-            RawProviderKind::OpenAiCompatible => "OPENAI_API_KEY",
-            RawProviderKind::Anthropic => "ANTHROPIC_API_KEY",
-        }
-    }
-}
+/// The vendor an entry names when it names none: OpenAI's own dialect,
+/// which with a `base_url` is any endpoint speaking OpenAI's
+/// chat-completions wire that rig has no dialect of its own for.
+pub const DEFAULT_VENDOR: &str = "openai";
 
 /// One `[[providers]]` entry as the file writes it: an endpoint and the
 /// name of its credential variable. There is no model here: the picker's
@@ -154,11 +131,16 @@ impl RawProviderKind {
 #[serde(default)]
 pub struct RawNamedProviderConfig {
     pub name: String,
-    pub kind: Option<RawProviderKind>,
+    /// The rig vendor the entry is reached as (`"anthropic"`, `"ollama"`,
+    /// `"openrouter"`, ...): its dialect, the way its requests are spelled,
+    /// and the catalog its models' facts are read from. `None` is
+    /// [`DEFAULT_VENDOR`]. Which names exist is rig's to say, so this crate
+    /// takes the name as written and `horizon-agent` resolves it.
+    pub vendor: Option<String>,
     pub base_url: Option<String>,
     /// The environment variable **name** (never a value) the entry's API key
-    /// is read from. `None` means the kind's own default
-    /// ([`RawProviderKind::default_api_key_env`]).
+    /// is read from. `None` means the vendor's own variable, which
+    /// `horizon-agent` reads from rig.
     pub api_key_env: Option<String>,
     /// The full URL of the entry's System One decision route (e.g.
     /// `https://ollama.com/v1/systemone`). It is not derived from
@@ -184,8 +166,8 @@ pub struct ResolvedModelPair {
     pub model: String,
 }
 
-/// [`RawConfig::resolved_small_model`]'s output: the openai-compatible entry
-/// the `small_model` pair names, plus the model id titles, and approval
+/// [`RawConfig::resolved_small_model`]'s output: the entry the `small_model`
+/// pair names, plus the model id titles, and approval
 /// judgments when no decision model is available, run on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedSmallModel {
@@ -193,8 +175,8 @@ pub struct ResolvedSmallModel {
     pub model: String,
 }
 
-/// [`RawConfig::resolved_decision_model`]'s output: the openai-compatible
-/// entry the `decision_model` pair names, its decision URL, and the
+/// [`RawConfig::resolved_decision_model`]'s output: the entry the
+/// `decision_model` pair names, its decision URL, and the
 /// decision model id.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedDecisionModel {
@@ -212,9 +194,11 @@ pub struct ResolvedDecisionModel {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedProviderConfig {
     pub name: String,
-    pub kind: RawProviderKind,
+    /// The entry's `vendor`, or [`DEFAULT_VENDOR`].
+    pub vendor: String,
     pub base_url: Option<String>,
-    pub api_key_env: String,
+    /// The entry's `api_key_env`; `None` leaves the vendor's own variable.
+    pub api_key_env: Option<String>,
     pub decision_url: Option<String>,
 }
 
@@ -232,18 +216,16 @@ pub const DEFAULT_PROVIDER_NAME: &str = "default";
 
 impl RawConfig {
     /// Apply entry defaults, drop nameless entries, and resolve the conversation
-    /// default model. An empty file surface yields the built-in
-    /// OpenAI-compatible entry.
+    /// default model. An empty file surface yields the built-in `default`
+    /// entry on [`DEFAULT_VENDOR`].
     pub fn resolved_providers(&self) -> ProvidersResolution {
         let mut providers: Vec<ResolvedProviderConfig> = Vec::new();
         if self.providers.is_empty() {
             providers.push(ResolvedProviderConfig {
                 name: DEFAULT_PROVIDER_NAME.to_string(),
-                kind: RawProviderKind::OpenAiCompatible,
+                vendor: DEFAULT_VENDOR.to_string(),
                 base_url: None,
-                api_key_env: RawProviderKind::OpenAiCompatible
-                    .default_api_key_env()
-                    .to_string(),
+                api_key_env: None,
                 decision_url: None,
             });
         } else {
@@ -251,15 +233,11 @@ impl RawConfig {
                 if entry.name.is_empty() {
                     continue;
                 }
-                let kind = entry.kind.unwrap_or_default();
                 providers.push(ResolvedProviderConfig {
                     name: entry.name.clone(),
-                    kind,
+                    vendor: (entry.vendor.clone()).unwrap_or_else(|| DEFAULT_VENDOR.to_string()),
                     base_url: entry.base_url.clone(),
-                    api_key_env: entry
-                        .api_key_env
-                        .clone()
-                        .unwrap_or_else(|| kind.default_api_key_env().to_string()),
+                    api_key_env: entry.api_key_env.clone(),
                     decision_url: entry.decision_url.clone(),
                 });
             }
@@ -282,19 +260,13 @@ impl RawConfig {
             .map(|(_, pair)| pair)
     }
 
-    /// The `small_model` pair resolved against the provider entries. Its
-    /// provider must be openai-compatible; an invalid pair never redirects a
-    /// request to another entry.
+    /// The `small_model` pair resolved against the provider entries; an
+    /// invalid pair never redirects a request to another entry. Whether its
+    /// vendor speaks OpenAI's wire, as the judge needs, is rig's to say:
+    /// `horizon-agent` checks it where it builds the connection.
     pub fn resolved_small_model(&self) -> Result<ResolvedSmallModel, String> {
         let providers = self.resolved_providers().providers;
         let (entry, pair) = resolve_pair(SMALL_MODEL_KEY, self.small_model.as_ref(), &providers)?;
-        if entry.kind != RawProviderKind::OpenAiCompatible {
-            return Err(format!(
-                "{SMALL_MODEL_KEY}: provider {:?} must be openai-compatible — {}",
-                pair.provider,
-                pair_consequence(SMALL_MODEL_KEY)
-            ));
-        }
         Ok(ResolvedSmallModel {
             provider: entry,
             model: pair.model,
@@ -302,19 +274,12 @@ impl RawConfig {
     }
 
     /// The `decision_model` pair resolved against the provider entries. Its
-    /// provider must be openai-compatible and state a `decision_url`; an
-    /// invalid pair never redirects a request to another entry.
+    /// provider must state a `decision_url`; an invalid pair never redirects
+    /// a request to another entry.
     pub fn resolved_decision_model(&self) -> Result<ResolvedDecisionModel, String> {
         let providers = self.resolved_providers().providers;
         let (entry, pair) =
             resolve_pair(DECISION_MODEL_KEY, self.decision_model.as_ref(), &providers)?;
-        if entry.kind != RawProviderKind::OpenAiCompatible {
-            return Err(format!(
-                "{DECISION_MODEL_KEY}: provider {:?} must be openai-compatible — {}",
-                pair.provider,
-                pair_consequence(DECISION_MODEL_KEY)
-            ));
-        }
         let url = entry.decision_url.clone().ok_or_else(|| {
             format!(
                 "{DECISION_MODEL_KEY}: provider {:?} has no decision_url — {}",
@@ -801,6 +766,10 @@ pub fn parse(contents: &str) -> Result<RawConfig, String> {
     let root = toml::from_str::<toml::Table>(contents).map_err(|error| error.to_string())?;
     if root.contains_key("provider") {
         return Err("[provider] was removed; convert it to [[providers]] using the procedure in docs/provider-configuration.md".into());
+    }
+    let entries = root.get("providers").and_then(toml::Value::as_array);
+    if (entries.into_iter().flatten()).any(|entry| entry.get("kind").is_some()) {
+        return Err("[[providers]] `kind` was replaced by `vendor`; rewrite each entry as docs/provider-configuration.md describes".into());
     }
     toml::Value::Table(root)
         .try_into()

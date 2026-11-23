@@ -646,7 +646,7 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
     std::fs::write(
         &config_path,
         format!(
-            "{initial}\n[[providers]]\nname = \"added\"\nkind = \"anthropic\"\n\
+            "{initial}\n[[providers]]\nname = \"added\"\nvendor = \"anthropic\"\n\
              api_key_env = \"HORIZON_SWITCH_TEST_KEY\"\n"
         ),
     )

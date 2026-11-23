@@ -453,7 +453,7 @@ product-owned API. Decisions:
   loop bypassed" stance (`docs/trust-boundaries.md`).
 - **Judge model**: the config file's top-level `small_model` pair
   (`{ provider, model }`), shared with title generation (board #64). Its
-  provider must be an openai-compatible `[[providers]]` entry. There is no
+  provider's vendor must speak OpenAI's wire. There is no
   built-in judge model: without a valid `small_model` no judge is built and
   every candidate goes to the human. On synthetic.new, the judge-prompt
   research's provider-probe appendix found `syn:small:text` (a

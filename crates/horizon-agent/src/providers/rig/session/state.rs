@@ -313,7 +313,7 @@ impl SessionLoopState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
+    use crate::config::{NamedProviderConfig, ProvidersTable, Vendor};
 
     fn apply_set_session_model(
         config: &mut RigAgentConfig,
@@ -330,14 +330,14 @@ mod tests {
             entries: vec![
                 NamedProviderConfig {
                     name: "openai".to_string(),
-                    kind: ProviderKind::OpenAiCompatible,
+                    vendor: Vendor::openai(),
                     base_url: Some("https://openai.example.invalid".to_string()),
                     api_key_env: "OPENAI_API_KEY".to_string(),
                     api_key_present: true,
                 },
                 NamedProviderConfig {
                     name: "claude".to_string(),
-                    kind: ProviderKind::Anthropic,
+                    vendor: Vendor::resolve("anthropic").unwrap(),
                     base_url: None,
                     api_key_env: "ANTHROPIC_API_KEY".to_string(),
                     api_key_present: false,
@@ -359,7 +359,7 @@ mod tests {
         };
 
         apply_set_session_model(&mut config, &table(), "claude", "m-opus").unwrap();
-        assert_eq!(config.kind, ProviderKind::Anthropic);
+        assert_eq!(config.vendor, Vendor::resolve("anthropic").unwrap());
         assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
         assert_eq!(config.model, "m-opus");
         // The entry's own base URL, unset here: rig's default applies.
@@ -377,7 +377,7 @@ mod tests {
         let mut config = RigAgentConfig::default();
         apply_set_session_model(&mut config, &table(), "openai", "raw-model-id").unwrap();
         assert_eq!(config.model, "raw-model-id");
-        assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(config.vendor, Vendor::openai());
         assert_eq!(
             config.base_url.as_deref(),
             Some("https://openai.example.invalid")
@@ -399,7 +399,7 @@ mod tests {
             crate::config::resolve_model_selection(&table(), "claude", "m-opus").unwrap();
         state.handle_set_session_model(&selection).await;
         assert_eq!(state.config.model, "m-opus");
-        assert_eq!(state.config.kind, ProviderKind::Anthropic);
+        assert_eq!(state.config.vendor, Vendor::resolve("anthropic").unwrap());
         assert_eq!(
             events_rx.try_recv().unwrap(),
             ProviderEvent::SessionModel("m-opus".into())
