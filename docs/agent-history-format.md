@@ -1,7 +1,7 @@
 # Agent history format
 
 The current event-log format is v4; the agent wire is v27. The offline
-converter from v1/v2/v3 logs was removed 2026-11-24 (owner approval): the
+converter from v1/v2/v3 logs was removed 2026-11-24: the
 owner's log holds no record older than v4. Its code remains only as the
 builder of test fixtures (`providers::rig::conversation::upgrade`, compiled for
 tests); an older log can be converted with a build from before that date.
