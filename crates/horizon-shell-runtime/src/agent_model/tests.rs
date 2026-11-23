@@ -490,6 +490,33 @@ fn the_model_option_sets_the_selection() {
 }
 
 #[test]
+fn the_effort_option_sets_the_effort_and_its_absence_clears_it() {
+    let mut model = AgentModel::default();
+    let entries = ["low", "high"]
+        .map(|level| v2::SessionConfigSelectOption::new(level, level))
+        .to_vec();
+    let option =
+        v2::SessionConfigOption::select(horizon_acp::EFFORT_CONFIG_ID, "Effort", "high", entries);
+    apply(
+        &mut model,
+        v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![option])),
+    );
+    assert_eq!(
+        model.effort,
+        Some(EffortSelection {
+            current: "high".into(),
+            choices: vec!["low".into(), "high".into()],
+        })
+    );
+    // A model that takes no effort comes without the option.
+    apply(
+        &mut model,
+        v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![])),
+    );
+    assert_eq!(model.effort, None);
+}
+
+#[test]
 fn argument_progress_is_replaced_in_place_and_removed_on_close() {
     let mut model = AgentModel::default();
     for bytes in [10, 64] {

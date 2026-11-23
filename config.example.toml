@@ -65,7 +65,12 @@
 # - default_model: what a conversation session runs until you switch models.
 #   Unset, or naming no [[providers]] entry: there is no model at all —
 #   startup warns naming the key, and sessions start in the deterministic
-#   fallback (no provider is called) with a first message saying so.
+#   fallback (no provider is called) with a first message saying so. It also
+#   takes a third key, effort: the reasoning effort a session starts with,
+#   "none" / "minimal" / "low" / "medium" (default) / "high" / "xhigh" /
+#   "max", fitted to the levels the model takes. A session switches it with
+#   Switch Effort… (or the model picker's Effort row) and `horizon
+#   set-effort`.
 # - small_model: the model AI titles run on, and automatic approval
 #   judgments when no decision model is available. Its provider's vendor
 #   must speak OpenAI's wire (openai, ollama, openrouter, ...; not
@@ -84,7 +89,7 @@
 #   small_model (approval stays with you when that is unavailable too), and
 #   turn-continuation checks are off. Ollama cloud needs a paid plan or credits.
 #
-# default_model  = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
+# default_model  = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash", effort = "high" }
 # small_model    = { provider = "synthetic", model = "syn:small:text" }
 # decision_model = { provider = "ollama", model = "clef:cloud" }
 

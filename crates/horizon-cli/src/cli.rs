@@ -117,6 +117,14 @@ pub enum Subcommand {
         provider: String,
         model: String,
     },
+    /// Switch an agent session's reasoning effort: the CLI counterpart of
+    /// the model picker's effort step. `level` is a level's word (`none`,
+    /// `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); the daemon
+    /// refuses one the session's model does not take.
+    SetEffort {
+        session_id: String,
+        level: String,
+    },
     ReloadAgentRuntime,
     /// `reload-agent-runtime`'s terminal-daemon counterpart
     /// (`docs/terminald-split-design.md` decision 3). Destructive: it
@@ -184,6 +192,7 @@ Subcommands:\n  \
   continue-turn <session-id>\n  \
   send <session-id> [text]\n  \
   set-model <session-id> <provider> <model>\n  \
+  set-effort <session-id> <level>\n  \
   reload-agent-runtime\n  \
   reload-terminal-runtime\n  \
   reload-config\n  \
@@ -309,6 +318,12 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 provider,
                 model,
             }
+        }
+        "set-effort" => {
+            let session_id = next_required(&mut positionals, "set-effort", "session-id")?;
+            let level = next_required(&mut positionals, "set-effort", "level")?;
+            reject_extra(&mut positionals, "set-effort")?;
+            Subcommand::SetEffort { session_id, level }
         }
         "reload-agent-runtime" => {
             reject_extra(&mut positionals, "reload-agent-runtime")?;

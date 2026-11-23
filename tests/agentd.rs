@@ -322,16 +322,42 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
             .map(|name| document.get_node(name).unwrap().text_content())
             .collect::<Vec<_>>()
     };
-    until("the providers", &|| rows() == ["mock"]);
+    // The session's effort is above the providers: a model no catalog
+    // lists takes every level.
+    until("the providers", &|| rows() == ["Effort", "mock"]);
+    let down = || press(&app, Key::Named(NamedKey::ArrowDown), Modifiers::default());
     enter();
-    until("the provider's models", &|| rows() == ["mock-model"]);
+    let levels = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    until("the levels", &|| rows() == levels);
     // Escape goes back a step before it leaves.
     press(&app, Key::Named(NamedKey::Escape), Modifiers::default());
-    assert_eq!(rows(), ["mock"]);
+    assert_eq!(rows(), ["Effort", "mock"]);
+    down();
+    enter();
+    until("the provider's models", &|| rows() == ["mock-model"]);
+    press(&app, Key::Named(NamedKey::Escape), Modifiers::default());
+    assert_eq!(rows(), ["Effort", "mock"]);
+    down();
     enter();
     until("the provider's models", &|| rows() == ["mock-model"]);
     enter();
     assert_eq!(shell.modal(), None);
+
+    // `Switch Effort…` opens the picker at the levels; the level chosen
+    // goes to the daemon, and the composer's chip says it.
+    press(&app, Key::Character("'".into()), Modifiers::CONTROL);
+    press(&app, Key::Character(":".into()), Modifiers::default());
+    commit("switch effort");
+    enter();
+    std::assert_matches!(shell.modal(), Some(Modal::Effort(_)));
+    until("the levels", &|| rows() == levels);
+    commit("high");
+    until("the level typed", &|| rows() == ["high", "xhigh"]);
+    enter();
+    assert_eq!(shell.modal(), None);
+    until("the chip's effort", &|| {
+        text().contains("mock-model · high")
+    });
 
     // `Reload Agent Runtime`: while the daemon is replaced the pane says
     // so, then it is back on the same session, with what was said in it,

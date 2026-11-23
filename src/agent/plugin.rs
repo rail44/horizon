@@ -24,6 +24,7 @@ pub enum AgentPaneCommand {
     Cancel,
     Continue,
     SwitchModel,
+    SwitchEffort,
 }
 
 /// What the agent asks of whoever shows it.
@@ -31,6 +32,8 @@ pub enum AgentPaneCommand {
 pub enum AgentAsked {
     /// The provider and model the session goes on with, to choose.
     SwitchModel,
+    /// The reasoning effort the session goes on with, to choose.
+    SwitchEffort,
 }
 
 impl AgentPlugin {
@@ -58,6 +61,7 @@ impl AgentPlugin {
                 AgentPaneCommand::Cancel => Some(AgentCommand::Cancel),
                 AgentPaneCommand::Continue => Some(AgentCommand::ContinueTurn),
                 AgentPaneCommand::SwitchModel => return ask.run(AgentAsked::SwitchModel),
+                AgentPaneCommand::SwitchEffort => return ask.run(AgentAsked::SwitchEffort),
             };
             if let Some(sent) = sent {
                 running.send(sent);
@@ -70,6 +74,7 @@ impl AgentPlugin {
                 AgentPaneCommand::Cancel => standing.turn_in_flight,
                 AgentPaneCommand::Continue => standing.paused_turn,
                 AgentPaneCommand::SwitchModel => true,
+                AgentPaneCommand::SwitchEffort => session.effort().is_some(),
             }
         });
         let mounted = Mounted {
@@ -128,6 +133,12 @@ impl Plugin for AgentPlugin {
                 "Switch Model…",
                 "Switch the active agent session's provider and model.",
                 SwitchModel,
+            ),
+            command(
+                "switch-effort",
+                "Switch Effort…",
+                "Switch how much the active agent session's model reasons.",
+                SwitchEffort,
             ),
         ]
     }

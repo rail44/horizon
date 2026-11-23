@@ -5,8 +5,8 @@
 (0.46)の仕組みに任せ、Horizon は「どの値をどこに持つか」と「どう選ばせるか」
 だけを持つ。
 
-作業は二段に分かれる。前段(接続とモデル情報を rig に寄せる)は実装済み、
-後段(effort そのもの)は未実装。
+作業は二段に分かれる。前段は接続とモデル情報を rig に寄せる部分、後段は
+effort そのもの。
 
 ## 前段: 接続とモデル情報(実装済み)
 
@@ -51,30 +51,41 @@
 DeepInfra は rig の `Effort` の 6 段と `none` をそのまま受け付け、段で量が
 変わる。また、このモデルは何も送らないと推論しない。
 
-## 後段: effort(未実装)
+## 後段: effort(実装済み)
 
-- **値**: rig の `Reasoning::Off` と `Reasoning::Effort(Minimal..=Max)`。
-  `Reasoning::Budget` は出さない。
-- **持ち方**: モデルと同じくセッションごとに agentd が持ち、ACP の
-  `session/set_config_option` の設定項目(カテゴリ `thought_level`)として
-  見せる。切り替えはモデルと同じく次のターンから効く。
+- **値**: `ReasoningLevel`(`none`、`minimal`、`low`、`medium`、`high`、
+  `xhigh`、`max`。`crates/horizon-agent/src/config/reasoning.rs`)。送るときは
+  rig の `Reasoning::Off` / `Reasoning::Effort(..)` にする。`Reasoning::Budget`
+  は出さない。
 - **既定値**: `default_model = { provider, model, effort = "high" }` の
-  `effort`。書かれていなければ `medium`。推論するモデルには常に値を送る
-  (上の計測のとおり、送らないことの意味はモデルとプロバイダで変わり、
-  画面から読めない)。
-- **選択肢**: catalog がモデルを知っていれば `ModelSpec.reasoning.choices()`
-  から、知らなければ `none` と 6 段すべて。
-- **送れない値**: `OnUnsupported::Error` のまま、ターンの失敗として見せる。
-- **ジャッジと要約**: いま `additional_params` で手書きしている
-  `reasoning_effort: "none"` を `Reasoning::Off` にする。
-- **画面と操作**: モデルピッカーで effort も選ぶ。composer のチップは
-  `provider · model · effort`。パレットのコマンドと `horizon` CLI の
-  `set-effort`。
-- **wire**: effort は ACP 標準の config option(id `effort`、
-  `horizon_acp::EFFORT_CONFIG_ID`)に載り、Horizon の拡張の語彙は増えない
-  (`HORIZON_ACP_EXT_VERSION` はそのまま)。effort を知らないシェルは
-  その option を読み飛ばし、知らないデーモンは切り替えを
-  `Unknown config option` で拒む。
+  `effort`。書かれていなければ `medium`。
+- **選択肢**: catalog の行の `reasoning` から。`Listed` なら列挙された段に、
+  推論を切れるなら `none` を足したもの、`None`(推論しない)なら無し、
+  catalog がモデルを知らないか `Unknown` なら 7 段すべて。budget しか取らない
+  モデル(Anthropic の Haiku 4.5 など)は段を持たないので、選べるのは
+  `none` だけになる。
+- **送り方**: セッションが望む段を、モデルの選択肢に合わせて送る
+  (`ReasoningLevel::fit`: 含まれていればそのまま、無ければその下で一番高い段、
+  それも無ければ一番低い段)。推論しないモデルには何も送らない。推論する
+  モデルには常に送る(上の計測のとおり、送らないことの意味はモデルと
+  プロバイダで変わり、画面から読めない)。望む段はモデルを切り替えても
+  変わらない。rig が送れないと判断した値はターンの失敗になる。
+- **持ち方**: rig のセッションが、開始時・モデル切り替え後・effort 切り替え後に
+  今の段と選択肢を知らせ(`ProviderEvent::SessionReasoning`)、agentd が
+  セッションごとに最後の知らせを持って再接続のたびに送り直す。
+- **ACP**: `session/set_config_option` の 2 つ目の設定項目、id `effort`
+  (`horizon_acp::EFFORT_CONFIG_ID`、カテゴリ `thought_level`)。値は段の語、
+  項目はモデルの選択肢。モデルが受け付けない段への切り替えは要求の時点で
+  拒む。切り替えはモデルと同じく次のターンから効く。Horizon の拡張の語彙は
+  増えない(`HORIZON_ACP_EXT_VERSION` はそのまま)。effort を知らないシェルは
+  その項目を読み飛ばし、知らないデーモンは切り替えを `Unknown config option`
+  で拒む。
+- **ジャッジと要約**: `crate::auxiliary::reasoning_off`(`Reasoning::Off` を
+  受け付けられなければ付けずに送る)。
+- **画面と操作**: composer のチップは `model · effort`。モデルピッカーの最初の
+  段の先頭に `Effort` の行があり、選ぶと段の一覧になる。パレットの
+  `Switch Effort…` はピッカーをその一覧から開く。CLI は
+  `horizon set-effort <session-id> <level>`。
 
 ## `max_tokens`
 

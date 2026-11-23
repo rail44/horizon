@@ -233,4 +233,8 @@ impl Models for RuntimeModels {
             model.to_string(),
         )
     }
+
+    fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String> {
+        (self.0.handle()).set_session_effort(agent_id(session), level.to_string())
+    }
 }

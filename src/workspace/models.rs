@@ -1,6 +1,8 @@
 //! The model picker: an agent session's provider, then one of the models
 //! that provider lists. Both are asked of the agent runtime when the list
-//! needs them, off the UI thread.
+//! needs them, off the UI thread. Above the providers, the session's
+//! reasoning effort, when its model takes one: a step of its own listing
+//! the levels the model takes.
 
 use std::collections::HashMap;
 
@@ -15,6 +17,17 @@ use super::{Models, Shell, styles};
 
 /// A provider's models: `None` while they are being asked for.
 type Listed = HashMap<usize, Option<Vec<String>>>;
+
+/// Which list the picker shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Stage {
+    /// The effort row, then the providers.
+    Providers,
+    /// The models of the provider at this place.
+    Models(usize),
+    /// The levels the session's model takes.
+    Effort,
+}
 
 /// A row that only says something.
 fn saying(text: &str) -> Vec<Row> {
@@ -39,11 +52,32 @@ fn unavailable_reason(provider: &ProviderSummary) -> String {
     }
 }
 
-pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn Models>) -> El {
+/// The picker for `session`, opened at its effort step when `at_effort`.
+pub(super) fn view(
+    shell: Shell,
+    session: SessionId,
+    models: std::sync::Arc<dyn Models>,
+    at_effort: bool,
+) -> El {
     // `None` while the providers are being asked for.
     let providers = RwSignal::new(None::<Vec<ProviderSummary>>);
-    // The provider chosen, once one is.
-    let stage = RwSignal::new(None::<usize>);
+    // The session's effort as the picker opened on it.
+    let effort = (shell.kept().agents.borrow().get(&session)).and_then(|agent| agent.effort());
+    let stage = RwSignal::new(match (at_effort, &effort) {
+        (true, Some(_)) => Stage::Effort,
+        _ => Stage::Providers,
+    });
+    let held = RwSignal::new(effort.clone());
+    // The effort row is above the providers while it matches.
+    let effort_shown =
+        move |query: &str| held.with_untracked(Option::is_some) && holds("effort", query);
+    let matching_levels = move |query: &str| -> Vec<String> {
+        let choices =
+            held.with_untracked(|effort| (effort.as_ref()).map(|effort| effort.choices.clone()));
+        (choices.unwrap_or_default().into_iter())
+            .filter(|level| holds(level, query))
+            .collect()
+    };
     let listed = RwSignal::new(Listed::new());
     let source = models.clone();
     shell.in_background(
@@ -72,10 +106,50 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
             .filter(|model| holds(model, query))
             .collect()
     };
+    let effort_row = {
+        let effort = effort.clone();
+        move || Row {
+            key: "effort".to_string(),
+            class: (styles::COMMAND, None),
+            parts: vec![
+                (styles::NAME, "Effort".to_string()),
+                (
+                    styles::ABOUT,
+                    (effort.as_ref()).map_or(String::new(), |effort| effort.current.clone()),
+                ),
+            ],
+            indent: 0.,
+        }
+    };
+    let current_level = effort.map(|effort| effort.current);
     let rows = move |query: &str| match stage.get() {
-        None => {
+        Stage::Effort => {
+            let rows: Vec<Row> = (matching_levels(query).into_iter())
+                .map(|level| {
+                    let about = match current_level.as_deref() == Some(level.as_str()) {
+                        true => "current",
+                        false => "",
+                    };
+                    Row {
+                        key: level.clone(),
+                        class: (styles::COMMAND, None),
+                        parts: vec![(styles::NAME, level), (styles::ABOUT, about.to_string())],
+                        indent: 0.,
+                    }
+                })
+                .collect();
+            match rows.is_empty() {
+                true => saying("No matching levels"),
+                false => rows,
+            }
+        }
+        Stage::Providers => {
+            let above: Vec<Row> = effort_shown(query).then(&effort_row).into_iter().collect();
             if providers.with(Option::is_none) {
-                return saying("Loading providers…");
+                return above
+                    .into_iter()
+                    .chain(saying("Loading providers…"))
+                    .collect();
             }
             let rows: Vec<Row> = (matching_providers(query).into_iter())
                 .map(|(_, provider)| {
@@ -95,12 +169,13 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
                     }
                 })
                 .collect();
-            match rows.is_empty() {
+            let rows = match rows.is_empty() {
                 true => saying("No providers configured"),
                 false => rows,
-            }
+            };
+            above.into_iter().chain(rows).collect()
         }
-        Some(provider) => {
+        Stage::Models(provider) => {
             let state = listed.with(|listed| listed.get(&provider).cloned());
             match state {
                 None | Some(None) => return saying("Loading models…"),
@@ -124,8 +199,33 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
     let picked = move |index: usize| {
         let query = shell.search.query.get_untracked();
         match stage.get_untracked() {
-            None => {
-                let Some((provider, summary)) = matching_providers(&query).into_iter().nth(index)
+            Stage::Effort => {
+                let Some(level) = matching_levels(&query).into_iter().nth(index) else {
+                    return;
+                };
+                shell.modal.set(None);
+                shell.change(Workspace::exit_workspace_mode);
+                // The session says so itself when its effort has changed.
+                let source = models.clone();
+                shell.in_background(
+                    move || source.set_effort(session, &level),
+                    |_, answer| {
+                        if let Err(error) = answer {
+                            eprintln!("effort switch failed: {error}");
+                        }
+                    },
+                );
+            }
+            Stage::Providers => {
+                let above = usize::from(effort_shown(&query));
+                if index < above {
+                    stage.set(Stage::Effort);
+                    shell.search.query.set(String::new());
+                    shell.search.chosen.set(0);
+                    return;
+                }
+                let Some((provider, summary)) =
+                    matching_providers(&query).into_iter().nth(index - above)
                 else {
                     return;
                 };
@@ -152,11 +252,11 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
                         },
                     );
                 }
-                stage.set(Some(provider));
+                stage.set(Stage::Models(provider));
                 shell.search.query.set(String::new());
                 shell.search.chosen.set(0);
             }
-            Some(provider) => {
+            Stage::Models(provider) => {
                 let Some(model) = matching_models(provider, &query).into_iter().nth(index) else {
                     return;
                 };
@@ -180,11 +280,12 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
             }
         }
     };
-    // Escape from a provider's models goes back to the providers.
+    // Escape from a provider's models, or from the levels, goes back to the
+    // providers.
     let back = move || {
-        let stepped = stage.get_untracked().is_some();
+        let stepped = stage.get_untracked() != Stage::Providers;
         if stepped {
-            stage.set(None);
+            stage.set(Stage::Providers);
             shell.search.query.set(String::new());
             shell.search.chosen.set(0);
         }

@@ -300,6 +300,8 @@ pub trait Models: Send + Sync {
     fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String>;
     fn models(&self, provider: &str) -> Result<Vec<String>, String>;
     fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String>;
+    /// Switches the session's reasoning effort to the level `level` names.
+    fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String>;
 }
 
 /// What is done on the UI thread with what a thread came back with.
@@ -454,6 +456,9 @@ pub enum Modal {
     Chooser(Placement),
     /// Which model an agent session goes on with.
     Models(SessionId),
+    /// Which reasoning effort an agent session goes on with: the model
+    /// picker, at its effort step.
+    Effort(SessionId),
     /// Which file the new pane of this extension at this place is made
     /// on.
     Finder(&'static str, Placement),
@@ -766,6 +771,7 @@ impl Shell {
                     session.set_summarizer(kept.summarizer.borrow().clone());
                     let ask = Callback::new(move |asked| match asked {
                         AgentAsked::SwitchModel => shell.switch_model(session_id),
+                        AgentAsked::SwitchEffort => shell.switch_effort(session_id),
                     });
                     let (mounted, view) = AgentPlugin { session }.mount_keeping(ask);
                     agent = Some(view);
@@ -1096,6 +1102,14 @@ impl Shell {
     fn switch_model(&self, session: SessionId) {
         if self.kept().models.is_some() {
             self.open(Modal::Models(session));
+        }
+    }
+
+    /// Opens the model picker at its effort step, if there is a runtime to
+    /// ask.
+    fn switch_effort(&self, session: SessionId) {
+        if self.kept().models.is_some() {
+            self.open(Modal::Effort(session));
         }
     }
 
@@ -1454,7 +1468,11 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                     Modal::Chooser(placement) => chooser::view(shell, shell.search, *placement),
                     Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
                     Modal::Models(session) => match shell.kept().models.clone() {
-                        Some(source) => models::view(shell, *session, source),
+                        Some(source) => models::view(shell, *session, source, false),
+                        None => el("div"),
+                    },
+                    Modal::Effort(session) => match shell.kept().models.clone() {
+                        Some(source) => models::view(shell, *session, source, true),
                         None => el("div"),
                     },
                     Modal::Extension(_) => el("div"),
