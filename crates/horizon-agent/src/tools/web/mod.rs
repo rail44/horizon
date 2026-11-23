@@ -99,7 +99,7 @@ pub(crate) fn spawn(
             result = work => Some(match result {
                 Ok(completion) => completion,
                 Err(payload) => ToolCompletion::Finished(identity.finish(
-                    error_output(format!("{tool_id} worker panicked: {}", panic_message(&*payload))),
+                    error_output(format!("{tool_id} worker panicked: {}", crate::runtime_panic::panic_message(&*payload))),
                 )),
             }),
         };
@@ -236,12 +236,25 @@ fn web_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".to_string())
+/// Reads `response`'s body, failing once it would pass `limit` bytes;
+/// `source` names who answered (`web_fetch`, `Exa`) in the error.
+async fn read_capped(
+    response: &mut reqwest::Response,
+    limit: usize,
+    source: &str,
+) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("{source} response body failed: {error}"))?
+    {
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(format!("{source} response exceeded the {limit} byte limit"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 #[cfg(test)]

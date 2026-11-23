@@ -36,6 +36,16 @@ impl fmt::Display for PanicLocation {
     }
 }
 
+/// A panic payload as text: the message of a `&str` or `String` panic
+/// (what `panic!` produces), and a fixed note for any other payload type.
+pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PanicReport {
     pub payload: String,
@@ -44,15 +54,8 @@ pub struct PanicReport {
 
 impl PanicReport {
     fn from_payload(payload: Box<dyn Any + Send>) -> Self {
-        let payload = match payload.downcast::<String>() {
-            Ok(message) => *message,
-            Err(payload) => match payload.downcast::<&'static str>() {
-                Ok(message) => (*message).to_string(),
-                Err(_) => "non-string panic payload".to_string(),
-            },
-        };
         Self {
-            payload,
+            payload: panic_message(&*payload),
             location: take_location(),
         }
     }

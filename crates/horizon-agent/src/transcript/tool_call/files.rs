@@ -3,11 +3,9 @@ use serde_json::Value;
 use super::util::{line_diffstat, str_field};
 use super::view::FileEffect;
 
-pub(super) fn affected_files(
-    tool_id: &str,
-    input: &Value,
-    output: Option<&Value>,
-) -> Vec<FileEffect> {
+/// The files a finished `fs_edit`/`fs_write` call changed, with their
+/// line counts -- the one reading of those outputs every frontend shares.
+pub fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {
     let Some(output) = output else {
         return Vec::new();
     };
