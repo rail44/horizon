@@ -120,8 +120,9 @@ pub(super) fn history_for_provider_request(
     history: &ConversationHistory,
     cleared: &ClearedResults,
     memory: Option<&MemoryDocument>,
+    earlier: super::conversation::EarlierReasoning,
 ) -> Vec<Message> {
-    let mut messages = history.messages();
+    let mut messages = history.messages_with(earlier);
     for site in history.result_sites() {
         if !cleared.contains(&site.result.occurrence_id) {
             continue;

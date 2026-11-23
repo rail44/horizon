@@ -156,19 +156,31 @@ Tier 1 適用後もなお 80% を超える場合のみ。
 ## 送り返す reasoning の範囲（2026-10-20）
 
 provider に戻すアシスタント発話のうち、**進行中のターンより前の
-reasoning は投影から外す**（`providers/rig/conversation/projection.rs`）。
-進行中のターンの分は残す: 先に考えるモデルは同じツール呼び出しラウンドの
-reasoning を必要とし（DeepSeek 自社 API は欠けると 400 を返す）、前の
-ターンの分はどの provider も要らない。reasoning だけで終わった応答は
+reasoning は、chat completions の経路でだけ投影から外す**
+（`providers/rig/conversation/projection.rs` の `EarlierReasoning`、
+どの経路かは `Vendor::sends_back_earlier_reasoning`）。Anthropic の wire と
+OpenAI の Responses の経路では、前のターンの分もそのまま rig に渡し、扱いは
+rig と provider に任せる。進行中のターンの分はどの経路でも残す: 先に考える
+モデルは同じツール呼び出しラウンドの reasoning を必要とする（DeepSeek 自社
+API は欠けると 400 を返す）。reasoning だけで終わった応答を外したときは
 空のテキストとして送り、発話の交代を崩さない。
+
+経路で分ける理由: Anthropic の API は前ターンの thinking を自分で捨てるので、
+外しても入力は減らない。OpenAI の Responses API は、項目 ID 付きの
+`function_call` を対になる `reasoning` 項目なしで受け取ると 400 を返す
+（2026-11-24、`Item 'fc_…' of type 'function_call' was provided without its
+required 'reasoning' item`）。前ターンの reasoning を使うかどうかは、
+Responses では rig の `ReasoningContext`（GPT-5.6 以降）で provider に
+指示できる。送り返した前ターンの reasoning を OpenAI が入力として数えるかは
+未計測。
 
 根拠: オーナーの 2026-10-13〜20 のセッション（入力 62 万トークンに到達、
 compaction は窓が不明で一度も発火せず）の内訳は、ツール出力 99 万文字・
 reasoning 47 万文字・ツール入力 20 万・可視テキスト 6 万。連続する
 リクエストの入力増分は直前の応答の出力トークンの 1.6 倍（中央値、263 対）
 で、reasoning が毎回まるごと再送されていた。Anthropic の API は前ターンの
-thinking を自分で捨て入力に数えないが、OpenAI 互換経路では送った分が
-そのまま入力になる。Ollama（deepseek-v4.1-flash）に対し、前ターン分・
+thinking を自分で捨て入力に数えないが、OpenAI 互換の chat completions の
+経路では送った分がそのまま入力になる。Ollama（deepseek-v4.1-flash）に対し、前ターン分・
 同ラウンド分とも reasoning を落として 200 を返すことを 2026-10-20 に実測。
 
 既知の非互換: DeepSeek 自社 API（api.deepseek.com）は `tools` ありの
