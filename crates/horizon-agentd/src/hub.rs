@@ -27,6 +27,7 @@ use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client, Error};
 use horizon_acp as acp;
+use horizon_agent::config::ReasoningLevel;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::hosting::{HostToolRequest, HostToolResponse, SessionNew};
 use horizon_agent::persistence::event_log::WriterHandle;
@@ -199,8 +200,13 @@ impl Shared {
 
     fn session_model_options(&self, session_id: SessionId) -> Vec<v2::SessionConfigOption> {
         let provider_id = self.session_facts(session_id).provider_id;
-        let (model, selection) = self.connection.session_model_state(session_id);
-        mapping::model_options(&provider_id, model.as_deref(), selection.as_ref())
+        let (model, selection, reasoning) = self.connection.session_model_state(session_id);
+        mapping::model_options(
+            &provider_id,
+            model.as_deref(),
+            selection.as_ref(),
+            reasoning.as_ref(),
+        )
     }
 
     fn initialize(
@@ -501,20 +507,27 @@ impl Shared {
             let session_id = mapping::parse_session_id(&request.session_id).ok_or_else(|| {
                 call_error(format!("Unknown agent session {}", request.session_id))
             })?;
-            if &*request.config_id.0 != acp::MODEL_CONFIG_ID {
-                return Err(call_error(format!(
-                    "Unknown config option {}",
-                    request.config_id.0
-                )));
+            let value = request.value.as_id().map(|value| &*value.0);
+            match &*request.config_id.0 {
+                acp::MODEL_CONFIG_ID => {
+                    let (provider, model) =
+                        value.and_then(acp::decode_model_option_id).ok_or_else(|| {
+                            call_error("The model option's value must be `provider/model`")
+                        })?;
+                    self.connection
+                        .set_session_model(session_id, provider.to_string(), model.to_string())
+                        .map_err(call_error)?;
+                }
+                acp::EFFORT_CONFIG_ID => {
+                    let level = value
+                        .ok_or_else(|| call_error("The effort option's value must be a level"))
+                        .and_then(|word| ReasoningLevel::parse(word).map_err(call_error))?;
+                    self.connection
+                        .set_session_reasoning(session_id, level)
+                        .map_err(call_error)?;
+                }
+                other => return Err(call_error(format!("Unknown config option {other}"))),
             }
-            let (provider, model) = request
-                .value
-                .as_id()
-                .and_then(|value| acp::decode_model_option_id(&value.0))
-                .ok_or_else(|| call_error("The model option's value must be `provider/model`"))?;
-            self.connection
-                .set_session_model(session_id, provider.to_string(), model.to_string())
-                .map_err(call_error)?;
             Ok(v2::SetSessionConfigOptionResponse::new(
                 self.session_model_options(session_id),
             ))

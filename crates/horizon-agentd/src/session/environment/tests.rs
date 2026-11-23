@@ -91,6 +91,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
                 role_id: None,
                 model: None,
                 selection: None,
+                reasoning: None,
                 inbound: commands.clone(),
                 replay,
                 parent_session_id: None,

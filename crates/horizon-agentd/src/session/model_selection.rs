@@ -13,7 +13,9 @@ pub(super) fn resolve(state: &AgentdState, provider: &str, model: &str) -> Resul
 pub(super) fn record_applied(state: &AgentdState, session_id: SessionId, event: &ProviderEvent) {
     if !matches!(
         event,
-        ProviderEvent::SessionModel(_) | ProviderEvent::SessionSelection(_)
+        ProviderEvent::SessionModel(_)
+            | ProviderEvent::SessionSelection(_)
+            | ProviderEvent::SessionReasoning(_)
     ) {
         return;
     }
@@ -22,6 +24,7 @@ pub(super) fn record_applied(state: &AgentdState, session_id: SessionId, event: 
         match event {
             ProviderEvent::SessionModel(model) => entry.model = Some(model.clone()),
             ProviderEvent::SessionSelection(selection) => entry.selection = Some(selection.clone()),
+            ProviderEvent::SessionReasoning(reasoning) => entry.reasoning = Some(reasoning.clone()),
             _ => {}
         }
     }

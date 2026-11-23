@@ -70,8 +70,11 @@ DeepInfra は rig の `Effort` の 6 段と `none` をそのまま受け付け�
 - **画面と操作**: モデルピッカーで effort も選ぶ。composer のチップは
   `provider · model · effort`。パレットのコマンドと `horizon` CLI の
   `set-effort`。
-- **wire**: 切り替えの通知(`SessionSelection`)に effort が加わるので
-  `HORIZON_ACP_EXT_VERSION` を上げる。
+- **wire**: effort は ACP 標準の config option(id `effort`、
+  `horizon_acp::EFFORT_CONFIG_ID`)に載り、Horizon の拡張の語彙は増えない
+  (`HORIZON_ACP_EXT_VERSION` はそのまま)。effort を知らないシェルは
+  その option を読み飛ばし、知らないデーモンは切り替えを
+  `Unknown config option` で拒む。
 
 ## `max_tokens`
 

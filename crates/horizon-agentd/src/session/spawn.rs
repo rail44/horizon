@@ -168,6 +168,7 @@ pub(super) fn spawn_session_thread_with_context(
             role_id: role_id.clone(),
             model,
             selection,
+            reasoning: None,
             inbound: inbound_tx,
             replay: replay_tx,
             parent_session_id: restored_worktree.as_ref().and(spawn_source_session_id),

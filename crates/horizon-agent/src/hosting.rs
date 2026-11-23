@@ -63,6 +63,11 @@ pub enum AgentWireEvent {
     /// `provider · model` label beside the resolved model id
     /// [`Self::SessionModel`] carries.
     SessionSelection(ModelSelection),
+    /// The session's reasoning effort as its current model takes it: sent
+    /// when the session starts, after a model switch and after an effort
+    /// switch, and re-announced to every later attachment. Ephemeral like
+    /// [`Self::SessionModel`].
+    SessionReasoning(ReasoningSelection),
     /// Close the preview identified by its streaming key.
     ToolCallProgressClosed(String),
     /// One of this session's `task` children asks for an approval, shown to
@@ -98,6 +103,7 @@ impl AgentWireEvent {
             ProviderEvent::ToolCallProgress(progress) => Self::ToolCallProgress(progress.clone()),
             ProviderEvent::SessionModel(model) => Self::SessionModel(model.clone()),
             ProviderEvent::SessionSelection(selection) => Self::SessionSelection(selection.clone()),
+            ProviderEvent::SessionReasoning(reasoning) => Self::SessionReasoning(reasoning.clone()),
             ProviderEvent::TaskProgress(progress) => Self::TaskProgress(progress.clone()),
             ProviderEvent::ToolCallProgressClosed(key) => Self::ToolCallProgressClosed(key.clone()),
             ProviderEvent::SettleTools { .. } => return None,
@@ -114,6 +120,16 @@ pub struct ModelSelection {
     pub provider: String,
     /// The model id the caller asked for.
     pub model: String,
+}
+
+/// [`AgentWireEvent::SessionReasoning`]'s payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReasoningSelection {
+    /// The level the session's requests send: the wanted one fitted to
+    /// [`Self::choices`]. `None` when the model takes no level.
+    pub level: Option<crate::config::ReasoningLevel>,
+    /// The levels the session's current model takes, lowest first.
+    pub choices: Vec<crate::config::ReasoningLevel>,
 }
 
 /// [`AgentWireEvent::WorkspaceRootResolved`]'s payload.

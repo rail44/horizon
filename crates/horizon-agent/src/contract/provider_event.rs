@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Event, TaskProgress, ToolCallProgress};
-use crate::hosting::ModelSelection;
+use crate::hosting::{ModelSelection, ReasoningSelection};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ProviderEvent {
@@ -16,6 +16,7 @@ pub enum ProviderEvent {
     SessionModel(String),
     TaskProgress(TaskProgress),
     SessionSelection(ModelSelection),
+    SessionReasoning(ReasoningSelection),
     /// Close exactly one streamed preview when its request is finalized.
     ToolCallProgressClosed(String),
     /// Internal provider-to-host settlement barrier; never published or persisted.
@@ -48,6 +49,7 @@ impl ProviderEvent {
             Self::SessionModel(_) => "session_model",
             Self::TaskProgress(_) => "task_progress",
             Self::SessionSelection(_) => "session_selection",
+            Self::SessionReasoning(_) => "session_reasoning",
             Self::ToolCallProgressClosed(_) => "tool_call_progress_closed",
             Self::SettleTools { .. } => "settle_tools",
         }

@@ -4,9 +4,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use horizon_agent::contract::SessionId;
+use horizon_agent::config::ReasoningLevel;
+use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::hosting::{
-    HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, SessionNew, SessionSummary,
+    HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, ReasoningSelection,
+    SessionNew, SessionSummary,
 };
 use horizon_agent::persistence::event_log::WriterHandle;
 use tokio::sync::mpsc::UnboundedSender;
@@ -286,11 +288,47 @@ impl Connection {
     pub(crate) fn session_model_state(
         &self,
         session_id: SessionId,
-    ) -> (Option<String>, Option<ModelSelection>) {
+    ) -> (
+        Option<String>,
+        Option<ModelSelection>,
+        Option<ReasoningSelection>,
+    ) {
         lock_unpoisoned(&self.state.sessions)
             .get(&session_id)
-            .map(|entry| (entry.model.clone(), entry.selection.clone()))
+            .map(|entry| {
+                (
+                    entry.model.clone(),
+                    entry.selection.clone(),
+                    entry.reasoning.clone(),
+                )
+            })
             .unwrap_or_default()
+    }
+
+    /// Queue a reasoning switch. The session applies it at its next turn
+    /// boundary and announces what it applied; a level its model does not
+    /// take is refused here, where the caller can be told.
+    pub(crate) fn set_session_reasoning(
+        &self,
+        session_id: SessionId,
+        level: ReasoningLevel,
+    ) -> Result<(), String> {
+        let sessions = lock_unpoisoned(&self.state.sessions);
+        let entry = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("Unknown session {session_id:?}."))?;
+        if let Some(reasoning) = &entry.reasoning
+            && !reasoning.choices.contains(&level)
+        {
+            return Err(format!(
+                "The session's model does not take effort {:?}.",
+                level.as_str()
+            ));
+        }
+        entry
+            .inbound
+            .send(Command::SetSessionReasoning { level })
+            .map_err(|_| "Session is no longer accepting commands.".to_string())
     }
 
     /// This session's resolved model id, if any -- see [`super::state::SessionEntry::model`]'s
@@ -418,6 +456,7 @@ mod tests {
                 role_id: None,
                 model: Some("stored-model".to_string()),
                 selection: None,
+                reasoning: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -458,6 +497,7 @@ mod tests {
                 role_id: None,
                 model: None,
                 selection: None,
+                reasoning: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: Some(parent_id),
@@ -578,6 +618,7 @@ mod tests {
                 role_id: None,
                 model: Some("test-model".to_string()),
                 selection: None,
+                reasoning: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
