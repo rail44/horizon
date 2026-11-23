@@ -105,10 +105,6 @@ mod tests {
 
     #[test]
     fn a_transcript_without_a_user_message_yields_no_title() {
-        assert_eq!(
-            derive_title_from_items(&[AgentFrameItem::MemoryCheckpointMissed]),
-            None
-        );
         assert_eq!(derive_title_from_items(&[]), None);
     }
 }

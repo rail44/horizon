@@ -180,6 +180,4 @@ a rebuild (listed in AGENTS.md beside the clearing threshold):
 ## Scope
 
 Images and `score` questions are unused. The decision model is not a
-router: model selection stays with the person and the model picker. The
-standing-agent memory checkpoint keeps its mechanical form
-(`docs/standing-agent-memory-design.md`).
+router: model selection stays with the person and the model picker.

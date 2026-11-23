@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use horizon_acp::{MemoryDigest, MemoryField, TaskProgressNotification, ToolOutcome};
+use horizon_acp::{TaskProgressNotification, ToolOutcome};
 
 use super::turns::{
     DiffLineKind, ToolCallBody, ToolCallView, build_tool_call_views, group_into_turns,
@@ -386,43 +386,9 @@ fn notice(item: &AgentFrameItem) -> Option<Notice> {
                 grouped(cleared.recovered_chars)
             ),
         ),
-        AgentFrameItem::MemoryDigest(digest) => (Tone::Muted, memory_digest(digest)),
-        AgentFrameItem::MemoryCheckpointMissed => {
-            (Tone::Warning, "Memory checkpoint missed".to_string())
-        }
         _ => return None,
     };
     Some(Notice { tone, text })
-}
-
-fn memory_digest(digest: &MemoryDigest) -> String {
-    if let Some(reason) = &digest.no_update_reason {
-        return format!("Memory not updated: {reason}");
-    }
-    let mut fields: Vec<&str> = Vec::new();
-    for update in &digest.updates {
-        let field = memory_field(update.field);
-        if !fields.contains(&field) {
-            fields.push(field);
-        }
-    }
-    if fields.is_empty() {
-        "Memory digested".to_string()
-    } else {
-        format!("Memory updated: {}", fields.join(", "))
-    }
-}
-
-fn memory_field(field: MemoryField) -> &'static str {
-    match field {
-        MemoryField::Goal => "goal",
-        MemoryField::Decisions => "decisions",
-        MemoryField::Completed => "completed",
-        MemoryField::InProgress => "in progress",
-        MemoryField::Stuck => "stuck",
-        MemoryField::NextStep => "next step",
-        MemoryField::Related => "related",
-    }
 }
 
 /// `31204` as `31,204`.
@@ -609,7 +575,6 @@ fn model_label(model: &AgentModel) -> String {
 mod tests {
     use std::time::Duration;
 
-    use horizon_acp::{MemoryFieldUpdate, MemoryOp};
     use serde_json::json;
 
     use super::super::turns::test_support::{
@@ -1000,16 +965,6 @@ mod tests {
                 cleared_occurrence_ids: Vec::from_fn(12, |i| i.to_string()),
                 recovered_chars: 31_204,
             }),
-            AgentFrameItem::MemoryDigest(MemoryDigest {
-                updates: vec![MemoryFieldUpdate {
-                    field: MemoryField::NextStep,
-                    op: MemoryOp::Set,
-                    content: "x".to_string(),
-                }],
-                folded_log_range: None,
-                no_update_reason: None,
-            }),
-            AgentFrameItem::MemoryCheckpointMissed,
             AgentFrameItem::Error("boom".to_string()),
             turn_end(TurnEndReason::Failed),
             AgentFrameItem::Exited("gone".to_string()),
@@ -1035,8 +990,6 @@ mod tests {
                     Tone::Muted,
                     "History compacted: 12 tool outputs (31,204 chars) reclaimed".to_string()
                 ),
-                (Tone::Muted, "Memory updated: next step".to_string()),
-                (Tone::Warning, "Memory checkpoint missed".to_string()),
                 (Tone::Danger, "boom".to_string()),
                 (Tone::Danger, "gone".to_string()),
             ]

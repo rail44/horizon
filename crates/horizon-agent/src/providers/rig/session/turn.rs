@@ -1,7 +1,6 @@
 //! Provider rounds, recovery, checkpoints and completion of an interaction.
 
 use super::super::conversation::Prompt;
-use super::memory::CheckpointAtTurnEnd;
 use crate::contract::ConversationInputKind;
 
 use std::collections::HashMap;
@@ -39,11 +38,9 @@ impl SessionLoopState {
     /// [`super::state::SessionLoopState::run`] does its own arm-specific
     /// setup, then calls this with the prompt message and a fallback closure.
     ///
-    /// Three hooks run in order on each round's outcome before it is
-    /// applied: truncation recovery ([`Self::handle_truncation_recovery`]),
-    /// the turn-continuation check ([`Self::handle_continuation_check`]),
-    /// and the standing-role memory checkpoint
-    /// ([`Self::handle_memory_checkpoint`]).
+    /// Two steps run in order on each round's outcome before it is
+    /// applied: truncation recovery ([`Self::handle_truncation_recovery`])
+    /// and the turn-continuation check ([`Self::handle_continuation_check`]).
     pub(crate) async fn run_turn(&mut self, prompt: Prompt, fallback: impl FnOnce() -> Message) {
         horizon_sandbox::reprobe_sandbox();
         self.collect_inputs();
@@ -72,10 +69,7 @@ impl SessionLoopState {
             let Some(continued) = self.handle_continuation_check(recovered).await else {
                 return;
             };
-            let Some(checked) = self.handle_memory_checkpoint(continued).await else {
-                return;
-            };
-            outcome = checked;
+            outcome = continued;
             if outcome.stop.truncation().is_some() {
                 continue;
             }
@@ -184,7 +178,6 @@ impl SessionLoopState {
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
         let token = CancellationToken::new();
-        let memory = self.memory.as_ref().map(|memory| &memory.document);
         let turn = complete_rig_turn(
             config,
             &self.environment,
@@ -193,7 +186,6 @@ impl SessionLoopState {
             prompt,
             &self.events_tx,
             &mut self.clearing,
-            memory,
             fallback,
             &token,
         );
@@ -346,66 +338,6 @@ impl SessionLoopState {
         Some(outcome)
     }
 
-    /// The turn-end memory checkpoint for standing-role sessions
-    /// (`docs/standing-agent-memory-design.md` decision 2). A standing turn
-    /// may only end by updating the memory document or explicitly declaring
-    /// no update — the structural prevention of the agent-way's biggest risk
-    /// (silent write-forgetfulness). This runs after truncation recovery and
-    /// before `apply_turn_outcome`, so it only fires on a turn that would
-    /// otherwise end `Completed` (not cancelled, not failed, no outstanding
-    /// tool calls).
-    ///
-    /// **Bounded**: at most one reminder is injected (setting
-    /// the checkpoint to `Reminded`), then one re-run; if it still ends
-    /// without a memory update, a `MemoryCheckpointMissed` event is emitted and the
-    /// turn ends. No infinite loop — the second visit to this method can only
-    /// satisfy (return) or miss (return), never remind again.
-    async fn handle_memory_checkpoint(
-        &mut self,
-        mut outcome: TurnCompletion,
-    ) -> Option<TurnCompletion> {
-        loop {
-            // Only standing roles have a memory checkpoint (`self.memory` is
-            // `Some` exclusively for standing roles — see `SessionLoopState::new`),
-            // and only a completing turn reaches it.
-            if !outcome.is_completing() {
-                return Some(outcome);
-            }
-            let Some(memory) = &mut self.memory else {
-                return Some(outcome);
-            };
-            match memory.complete_turn() {
-                CheckpointAtTurnEnd::Satisfied => return Some(outcome),
-                CheckpointAtTurnEnd::Missed => {
-                    let _ = self.events_tx.send(Event::MemoryCheckpointMissed.into());
-                    return Some(outcome);
-                }
-                CheckpointAtTurnEnd::Remind => {}
-            }
-            // First miss: inject a reminder and re-run the turn once.
-            let _ = self
-                .events_tx
-                .send(Event::StateChanged(SessionState::Running).into());
-            let _ = self.events_tx.send(
-                Event::MessageCommitted(AgentMessage {
-                    role: MessageRole::AutoContinue,
-                    text: MEMORY_CHECKPOINT_REMINDER.to_string(),
-                })
-                .into(),
-            );
-            outcome = self
-                .run_cancellable_turn(
-                    Prompt::input(
-                        ConversationInputKind::Continuation,
-                        MEMORY_CHECKPOINT_REMINDER,
-                    ),
-                    || deterministic_rig_response("memory checkpoint reminder"),
-                )
-                .await;
-            // The next completing round can only satisfy or miss.
-        }
-    }
-
     /// Retires every tool call still owned by the unfinished turn.
     ///
     /// This operates on normalized provider call ids, not tool implementations,
@@ -550,14 +482,3 @@ fn truncation_continuation_prompt_for(reason: Truncation, cap: u64) -> String {
         )
     }
 }
-
-/// The reminder injected when a standing-role turn ends without a memory
-/// update or a no-update declaration (`docs/standing-agent-memory-design.md`
-/// decision 2, checkpoint). One chance; a second miss closes the turn with a
-/// `MemoryCheckpointMissed` event.
-const MEMORY_CHECKPOINT_REMINDER: &str = "You have not updated your memory document this turn. \
-     Before ending the turn, call memory_update to record what you learned (or declare no_update \
-     with a reason). The turn cannot end without one of these.";
-
-#[cfg(test)]
-mod tests;

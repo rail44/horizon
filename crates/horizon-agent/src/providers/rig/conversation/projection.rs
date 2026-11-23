@@ -102,13 +102,6 @@ impl ConversationHistory {
     pub(in crate::providers::rig) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-    pub(in crate::providers::rig) fn turn_start(&self) -> usize {
-        self.entries
-            .iter()
-            .take_while(|entry| entry.turn != self.turn)
-            .map(entry_len)
-            .sum()
-    }
     pub(in crate::providers::rig) fn result_sites(&self) -> Vec<ResultSite<'_>> {
         let latest = self
             .entries

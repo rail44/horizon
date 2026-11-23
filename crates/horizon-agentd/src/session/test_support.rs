@@ -42,7 +42,7 @@ pub(crate) fn test_config() -> AgentConfig {
 
 fn state_from_config(config: AgentConfig, trusted: Vec<std::path::PathBuf>) -> Arc<AgentdState> {
     Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(config.clone(), SharedDuckdbStore::unavailable()),
+        ProviderRegistry::builtin_with_config(config.clone()),
         config,
         None,
         SharedDuckdbStore::unavailable(),

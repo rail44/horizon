@@ -128,13 +128,7 @@ impl Store {
             | Event::Error(_)
             | Event::ProviderRateLimited(_)
             | Event::Exited(_) => Ok(()),
-            // Standing-agent memory events: no dedicated projection table —
-            // the raw `agent_events` row is what the provider-view projection
-            // replays the document from
-            // (`tools::memory::memory_document_from_events`).
-            | Event::MemoryDigest(_)
-            | Event::MemoryCheckpointMissed
-            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded | Event::ConversationRecorded(_) => Ok(()),
+            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::ConversationRecorded(_) => Ok(()),
         }
     }
 

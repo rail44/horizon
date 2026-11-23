@@ -154,12 +154,10 @@ async fn main() -> anyhow::Result<()> {
     // The shared slot for the live DuckDB projection -- see
     // `SharedDuckdbStore`'s doc comment. Created pending here (before
     // the event log's writer thread, and therefore any real DuckDB store,
-    // exists) and handed to both the provider registry (the rig provider's
-    // history replay) and `AgentdState` (the recall tools' context);
+    // exists) and handed to `AgentdState` (the recall tools' context);
     // populated later, once, by `spawn_resume_task`'s propagator.
     let duckdb_cell = SharedDuckdbStore::pending();
-    let mut providers =
-        ProviderRegistry::builtin_with_config(agent_config.clone(), duckdb_cell.clone());
+    let mut providers = ProviderRegistry::builtin_with_config(agent_config.clone());
     if let Some(gate) = test_gate(TEST_MOCK_STREAM_GATE_VAR) {
         providers.hold_mock_streams(Arc::new(move || wait_for_gate(&gate)));
     }
@@ -508,10 +506,7 @@ mod tests {
 
         let agent_config = crate::session::test_support::test_config();
         let state = Arc::new(AgentdState::new(
-            ProviderRegistry::builtin_with_config(
-                agent_config.clone(),
-                SharedDuckdbStore::unavailable(),
-            ),
+            ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             Some(writer),
             SharedDuckdbStore::unavailable(),

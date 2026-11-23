@@ -69,16 +69,7 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
         ]
     );
     let events = super::super::conversation::upgrade::fixture(events);
-    let session_id = crate::contract::SessionId::new();
-    let store = crate::persistence::projection::duckdb::Store::open_in_memory().unwrap();
-    store
-        .append_events(session_id, None, events.clone())
-        .unwrap();
-    let store = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
-    for history in [
-        super::super::history::load_rig_session_history(Some(&store), session_id, &[]).unwrap(),
-        super::super::history::load_rig_session_history(None, session_id, &events).unwrap(),
-    ] {
+    for history in [super::super::history::load_rig_session_history(&events).unwrap()] {
         assert_eq!(
             history.messages.messages(),
             messages,
@@ -277,10 +268,6 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
         messages.last(),
         Some(&rig_tool_result_message(&result, "fs_edit"))
     );
-    let stored = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
-    let restored =
-        super::super::history::load_rig_session_history(Some(&stored), session, &[]).unwrap();
-    assert_eq!(restored.messages.messages(), messages);
 }
 
 fn continuation_verdict() -> crate::contract::ContinuationVerdict {
@@ -344,11 +331,4 @@ fn continuation_verdicts_replay_without_affecting_history_or_the_frame() {
         store.frame_for_session(session_id).unwrap().items,
         plain_store.frame_for_session(plain_session).unwrap().items
     );
-
-    let store = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
-    let from_store =
-        super::super::history::load_rig_session_history(Some(&store), session_id, &[]).unwrap();
-    let from_log =
-        super::super::history::load_rig_session_history(None, session_id, &events).unwrap();
-    assert_eq!(from_store.messages.messages(), from_log.messages.messages());
 }

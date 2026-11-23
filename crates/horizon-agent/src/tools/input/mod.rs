@@ -5,13 +5,11 @@ mod area;
 mod bounded;
 mod context;
 mod filesystem;
-mod memory;
 
 pub(crate) use area::RequestSandboxArea;
 pub use context::TaskAccess;
 pub(crate) use context::*;
 pub(crate) use filesystem::*;
-pub(crate) use memory::MemoryUpdate;
 
 use crate::contract::ToolCallRequest;
 use schemars::JsonSchema;
@@ -62,7 +60,6 @@ inputs! {
     ListRecallSessions(RecallSessions) => "recall_sessions",
     ReadKnowledge(ReadEntry) => "knowledge_read",
     WriteKnowledge(KnowledgeWrite) => "knowledge_write",
-    UpdateMemory(MemoryUpdate) => "memory_update",
     Task(Task) => "task",
     TaskOutput(TaskOutput) => "task_output",
     WebSearch(WebSearch) => "web_search",
@@ -107,9 +104,6 @@ impl ToolInput {
                 if matches!(input.scope, RecallScope::All) && input.session_id.is_some() {
                     return Err("session_id cannot be combined with scope=all".into());
                 }
-            }
-            Self::UpdateMemory(input) => {
-                input.digest()?;
             }
             _ => {}
         }

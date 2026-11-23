@@ -60,29 +60,18 @@ fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries()
     let mut restored_clearing = ClearingState::disabled();
     restored_clearing.seed_cleared(cleared_occurrence_ids_from_events(&events));
     assert_eq!(live.messages(), restored.messages());
-    assert_eq!(live.turn_start(), restored.turn_start());
-    for memory in [
-        None,
-        Some(crate::tools::MemoryDocument {
-            goal: "remember earlier work".into(),
-            ..Default::default()
-        }),
-    ] {
-        assert_eq!(
-            history_for_provider_request(
-                &live,
-                clearing.cleared(),
-                memory.as_ref(),
-                crate::providers::rig::conversation::EarlierReasoning::Dropped
-            ),
-            history_for_provider_request(
-                &restored,
-                restored_clearing.cleared(),
-                memory.as_ref(),
-                crate::providers::rig::conversation::EarlierReasoning::Dropped,
-            )
-        );
-    }
+    assert_eq!(
+        history_for_provider_request(
+            &live,
+            clearing.cleared(),
+            crate::providers::rig::conversation::EarlierReasoning::Dropped
+        ),
+        history_for_provider_request(
+            &restored,
+            restored_clearing.cleared(),
+            crate::providers::rig::conversation::EarlierReasoning::Dropped,
+        )
+    );
 }
 
 #[test]

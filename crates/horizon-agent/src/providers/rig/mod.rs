@@ -27,7 +27,6 @@ use stream::{StreamDeltaBuffer, StreamDeltaKind};
 use crate::{
     config::RigAgentConfig,
     contract::{ProviderId, StartSession},
-    persistence::projection::duckdb::SharedDuckdbStore,
     registry::{Provider as AgentProvider, SessionHandle},
     roles::{RoleDefinition, RoleId},
 };
@@ -43,11 +42,6 @@ pub(crate) struct Provider {
     /// authoritative), for any other entry its `NamedProviderConfig::
     /// resolved`.
     config: RigAgentConfig,
-    /// The shared slot for the live DuckDB projection -- see
-    /// [`SharedDuckdbStore`]'s doc comment. Cloned into every session's own
-    /// dedicated rig thread (`start_session`/`spawn_rig_session`), which
-    /// reads it once at start without waiting.
-    duckdb_cell: SharedDuckdbStore,
 }
 
 impl Provider {
@@ -55,16 +49,8 @@ impl Provider {
     /// which id(s) the entry registers under and whether it passes the
     /// state's own `rig` view (the default entry) or this entry's own
     /// resolution.
-    pub(crate) fn for_entry(
-        id: ProviderId,
-        config: RigAgentConfig,
-        duckdb_cell: SharedDuckdbStore,
-    ) -> Self {
-        Self {
-            id,
-            config,
-            duckdb_cell,
-        }
+    pub(crate) fn for_entry(id: ProviderId, config: RigAgentConfig) -> Self {
+        Self { id, config }
     }
 }
 
@@ -84,7 +70,7 @@ impl AgentProvider for Provider {
     fn start_session(&self, request: StartSession) -> SessionHandle {
         let role = request.role_id.as_ref().and_then(crate::roles::resolve);
         let config = role_adjusted_config(&self.config, role);
-        spawn_rig_session(request, config, role, self.duckdb_cell.clone())
+        spawn_rig_session(request, config, role)
     }
 
     /// The same role-adjusted `config.model` [`Self::start_session`] would
@@ -112,8 +98,8 @@ impl AgentProvider for Provider {
     }
 }
 
-/// Applies a role's `allowed_tool_ids`/`model` overrides, its turn budget
-/// and its `standing` flag on top of the provider's own (process-wide) [`RigAgentConfig`], producing the config
+/// Applies a role's `allowed_tool_ids`/`model` overrides and its turn budget
+/// on top of the provider's own (process-wide) [`RigAgentConfig`], producing the config
 /// this one session actually runs with. `role: None` (the role-less case)
 /// returns `base` cloned unchanged -- byte-identical behavior to before
 /// roles existed.
@@ -134,7 +120,6 @@ fn role_adjusted_config(
     if role.uncapped_turns {
         config.iteration_cap = None;
     }
-    config.standing = role.standing;
     config
 }
 

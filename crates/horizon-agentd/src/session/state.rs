@@ -218,10 +218,7 @@ impl AgentdState {
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
         let new_agent_config = crate::providers::agent_config(&raw);
-        let new_providers = ProviderRegistry::builtin_with_config(
-            new_agent_config.clone(),
-            self.duckdb_cell.clone(),
-        );
+        let new_providers = ProviderRegistry::builtin_with_config(new_agent_config.clone());
         *lock_unpoisoned(&self.agent_config) = new_agent_config;
         *lock_unpoisoned(&self.providers) = new_providers;
         Ok(())

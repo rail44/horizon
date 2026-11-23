@@ -1,6 +1,8 @@
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::contract::SessionId;
+#[cfg(test)]
 use crate::contract::{Event, ProviderId};
 #[cfg(test)]
 use crate::contract::{MessageRole, ToolCallId};
@@ -57,6 +59,7 @@ pub struct SessionLiveness {
     pub dead: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentStoredEvent {
     pub event_id: String,

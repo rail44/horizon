@@ -91,18 +91,6 @@ pub struct RoleDefinition {
     /// module doc's v2 update), so a repository skill can override an
     /// embedded one even for a role.
     pub skill_ids: &'static [&'static str],
-    /// Whether this is a *standing* role -- a long-lived, context-carrying
-    /// agent that maintains a memory document across turns
-    /// (`docs/standing-agent-memory-design.md`). A standing role's session
-    /// gets the `memory_update` tool, a turn-end checkpoint that forces it
-    /// to update (or explicitly skip) its memory each turn, and a
-    /// provider-view projection that prepends the current memory document
-    /// in place of the old turn-by-turn history. The board keeper (removed
-    /// in 8e057dd7) was the first standing role; today the board flow's roles
-    /// (`horizon-agentd`'s `board_flow::roles`) set it, and coding sessions
-    /// are not standing. Added for the keeper, which needed exactly this
-    /// one field the two prior roles didn't.
-    pub standing: bool,
     /// Whether nobody is there to answer an approval for a session with this
     /// role -- it has no pane, or it works where its owner is not watching
     /// -- so a tool call the judge would leave to a human is refused instead
@@ -153,7 +141,6 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     writes: RoleWrites::Anywhere,
     include_repository_instructions: false,
     skill_ids: &["horizon-config"],
-    standing: false,
     unattended: false,
 };
 
@@ -234,7 +221,6 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     writes: RoleWrites::Nowhere,
     include_repository_instructions: true,
     skill_ids: &[],
-    standing: false,
     unattended: false,
 };
 
@@ -289,7 +275,6 @@ pub(crate) const WRITE_TASK_ROLE: RoleDefinition = RoleDefinition {
     writes: RoleWrites::Anywhere,
     include_repository_instructions: true,
     skill_ids: &[],
-    standing: false,
     unattended: false,
 };
 
@@ -562,7 +547,6 @@ mod tests {
             writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
-            standing: false,
             unattended: false,
         }]);
         let role = resolve(&RoleId("test-external-role".to_string()))
@@ -589,7 +573,6 @@ mod tests {
             writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
-            standing: false,
             unattended: false,
         }]);
         // Built-in roles must still be found.
@@ -615,7 +598,6 @@ mod tests {
             writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
-            standing: false,
             unattended: false,
         };
         register_external(vec![role("test-first", "First")]);

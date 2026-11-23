@@ -1,7 +1,7 @@
 //! Accept tool results and resume halted results before starting the next turn.
 
 use super::super::conversation::Prompt;
-use crate::contract::{ToolCallResult, ToolOutcome};
+use crate::contract::ToolCallResult;
 
 use super::{
     SessionLoopState, deterministic_rig_response, deterministic_tool_result_response,
@@ -14,7 +14,6 @@ impl SessionLoopState {
             return;
         };
 
-        self.record_tool_effects(&result, &descriptor);
         if let Err(message) = self.rig_history.append_result(&result, &descriptor.tool_id) {
             let _ = self
                 .events_tx
@@ -46,31 +45,6 @@ impl SessionLoopState {
 
         self.advance_from_tool_result(result, &descriptor.tool_id)
             .await;
-    }
-
-    pub(super) fn record_tool_effects(
-        &mut self,
-        result: &ToolCallResult,
-        descriptor: &super::ToolCallDescriptor,
-    ) {
-        // Standing-agent memory (`docs/standing-agent-memory-
-        // design.md`): a `memory_update` result applies the
-        // parsed digest to the session's memory document (the
-        // tool handler already validated it and returned a
-        // confirmation — this is the state-mutation half) and
-        // emits the `MemoryDigest` event for persistence and
-        // transcript display. Both `Updated` and `Skipped`
-        // (no_update) satisfy the turn-end checkpoint.
-        if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID
-            && result.outcome == ToolOutcome::Succeeded
-            && let Some(memory) = self.memory.as_mut()
-            && let Ok(digest) = crate::tools::parse_update(&descriptor.args)
-        {
-            memory.record_update(&digest);
-            let _ = self
-                .events_tx
-                .send(crate::contract::Event::MemoryDigest(digest).into());
-        }
     }
 
     pub(super) async fn continue_halted_turn(&mut self) {
@@ -175,60 +149,5 @@ mod tests {
         );
         assert!(!state.execution.contains(&reused));
         assert!(state.execution.contains(&sibling));
-    }
-    #[tokio::test]
-    async fn only_a_successful_memory_result_commits_the_checkpoint() {
-        use super::super::memory::{MemoryCheckpoint, StandingMemory};
-        for outcome in [
-            ToolOutcome::Succeeded,
-            ToolOutcome::Failed,
-            ToolOutcome::Denied,
-            ToolOutcome::Cancelled,
-            ToolOutcome::Superseded {
-                retry_occurrence_id: crate::contract::OccurrenceId::new(),
-            },
-        ] {
-            let call = ToolCallId("memory".into());
-            let descriptor = ToolCallDescriptor {
-                identity: crate::test_support::tool_identity(&call),
-                tool_id: crate::tools::MEMORY_UPDATE_TOOL_ID.into(),
-                args: serde_json::json!({"no_update": {"reason": "nothing changed"}}),
-            };
-            let (events_tx, events_rx) = crossbeam_channel::unbounded();
-            let mut state = SessionLoopState {
-                events_tx,
-                memory: Some(StandingMemory::default()),
-                execution: HashMap::from([
-                    (call.clone(), descriptor.clone()),
-                    (ToolCallId("sibling".into()), descriptor),
-                ])
-                .into(),
-                guard: super::super::TurnLoopGuard::new(Some(20), 10),
-                ..SessionLoopState::default()
-            };
-            let mut result = ToolCallResult::new(
-                call.clone(),
-                crate::test_support::tool_identity(&call).occurrence_id,
-                serde_json::json!({}),
-            );
-            result.outcome = outcome.clone();
-            state.handle_tool_result(result).await;
-            let success = outcome == ToolOutcome::Succeeded;
-            assert_eq!(
-                state.memory.as_ref().unwrap().checkpoint == MemoryCheckpoint::Satisfied,
-                success
-            );
-            assert_eq!(
-                events_rx.try_iter().any(|event| matches!(
-                    event.as_event(),
-                    Some(crate::contract::Event::MemoryDigest(_))
-                )),
-                success
-            );
-            assert_eq!(
-                state.execution.contains(&call),
-                matches!(outcome, ToolOutcome::Superseded { .. })
-            );
-        }
     }
 }

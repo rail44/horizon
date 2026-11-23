@@ -22,7 +22,6 @@ bodies! {
     Written(FileWritten), Edits(FileEdits), Config(ConfigRead), Skill(SkillRead),
     Knowledge(KnowledgeRead), KnowledgeWritten(KnowledgeWritten),
     RecallSearch(RecallSearch), RecallRead(RecallRead), RecallSessions(RecallSessions),
-    Memory(MemoryUpdated),
     Bash(BashOutput), Task(TaskOutput), Fetch(WebFetch), Search(WebSearch),
     Worktree(WorktreeRequested),
     Area(SandboxAreaGranted),

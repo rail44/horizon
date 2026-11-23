@@ -1,12 +1,11 @@
 //! Reversible provider projection. Durable result identities choose the cleared
-//! bodies; explicit conversation turns choose the standing-memory boundary.
+//! bodies.
 use super::conversation::ConversationHistory;
 use crate::{
     config::{
         CLEARING_CHARS_PER_TOKEN, CLEARING_RECOVERY_FLOOR_TOKENS, CLEARING_TAIL_BUDGET_TOKENS,
     },
     contract::{Event, HistoryCleared, OccurrenceId},
-    tools::MemoryDocument,
 };
 use rig_core::completion::{
     Message,
@@ -119,7 +118,6 @@ pub(super) fn plan_clearing_pass(
 pub(super) fn history_for_provider_request(
     history: &ConversationHistory,
     cleared: &ClearedResults,
-    memory: Option<&MemoryDocument>,
     earlier: super::conversation::EarlierReasoning,
 ) -> Vec<Message> {
     let mut messages = history.messages_with(earlier);
@@ -144,12 +142,6 @@ pub(super) fn history_for_provider_request(
             unreachable!()
         };
         result.content = vec![ToolResultContent::text(placeholder)];
-    }
-    let tail_start = history.turn_start();
-    if let Some(document) = memory.filter(|doc| !doc.is_empty()) {
-        messages = std::iter::once(Message::user(document.render()))
-            .chain(messages[tail_start..].iter().cloned())
-            .collect();
     }
     messages
 }

@@ -568,10 +568,7 @@ mod tests {
             tools: horizon_agent::config::AgentToolsConfig::default(),
         };
         let state = Arc::new(AgentdState::new(
-            ProviderRegistry::builtin_with_config(
-                agent_config.clone(),
-                SharedDuckdbStore::unavailable(),
-            ),
+            ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             None,
             SharedDuckdbStore::unavailable(),

@@ -226,14 +226,6 @@ pub(crate) fn apply_agent_event_to_frame(
                 .items
                 .push(AgentFrameItem::HistoryCleared(cleared.clone()));
         }
-        Event::MemoryDigest(digest) => {
-            frame
-                .items
-                .push(AgentFrameItem::MemoryDigest(digest.clone()));
-        }
-        Event::MemoryCheckpointMissed => {
-            frame.items.push(AgentFrameItem::MemoryCheckpointMissed);
-        }
         // Audit/observability-only (board #41): no frame item.
         Event::SessionInputSent { .. }
         | Event::EnvironmentReady { .. }
@@ -245,7 +237,6 @@ pub(crate) fn apply_agent_event_to_frame(
         | Event::InputAccepted(_)
         | Event::InputOutcome(_)
         | Event::DeliveryAcknowledged(_)
-        | Event::MemorySeeded
         | Event::ConversationRecorded(_) => {}
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => {

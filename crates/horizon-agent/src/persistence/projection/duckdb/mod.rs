@@ -18,6 +18,7 @@ use schema::INITIALIZE_SCHEMA_SQL;
 
 pub(crate) use import::ApplyRecordsReport;
 
+#[cfg(test)]
 use records::AgentStoredEvent;
 
 pub use records::SessionLiveness;

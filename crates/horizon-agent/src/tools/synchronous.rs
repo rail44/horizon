@@ -4,7 +4,7 @@
 #[cfg(test)]
 use serde_json::Value;
 
-use super::{ToolSessionState, catalog::Definition, config, fs, knowledge, memory, recall};
+use super::{ToolSessionState, catalog::Definition, config, fs, knowledge, recall};
 use crate::contract::ToolPermission;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,12 +24,11 @@ pub(super) enum SynchronousTool {
     BashJobCancel,
     ReadKnowledge,
     WriteKnowledge,
-    UpdateMemory,
 }
 
 impl SynchronousTool {
     #[cfg(test)]
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 15] = [
         Self::ReadFile,
         Self::Glob,
         Self::Grep,
@@ -45,7 +44,6 @@ impl SynchronousTool {
         Self::BashJobCancel,
         Self::ReadKnowledge,
         Self::WriteKnowledge,
-        Self::UpdateMemory,
     ];
 
     fn id(self) -> &'static str {
@@ -65,7 +63,6 @@ impl SynchronousTool {
             Self::BashJobCancel => "bash_cancel",
             Self::ReadKnowledge => "knowledge_read",
             Self::WriteKnowledge => "knowledge_write",
-            Self::UpdateMemory => memory::TOOL_ID,
         }
     }
 
@@ -83,8 +80,7 @@ impl SynchronousTool {
             | Self::BashJobOutput
             | Self::BashJobCancel
             | Self::ReadKnowledge
-            | Self::WriteKnowledge
-            | Self::UpdateMemory => ToolPermission::AutoAllowRead,
+            | Self::WriteKnowledge => ToolPermission::AutoAllowRead,
         }
     }
 
@@ -132,7 +128,6 @@ pub(super) fn execute(
         }
         ToolInput::ReadKnowledge(input) => knowledge::read(state, input),
         ToolInput::WriteKnowledge(input) => knowledge::write(state, input),
-        ToolInput::UpdateMemory(input) => memory::execute(input),
         _ => return None,
     })
 }

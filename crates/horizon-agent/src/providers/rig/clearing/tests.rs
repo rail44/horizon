@@ -82,13 +82,6 @@ fn body(message: &Message) -> String {
     };
     text.text.clone()
 }
-fn memory() -> MemoryDocument {
-    MemoryDocument {
-        goal: "Keep the task".into(),
-        ..Default::default()
-    }
-}
-
 #[test]
 fn measured_threshold_and_unknown_window_control_clearing() {
     for (window, usage, expected) in [
@@ -135,7 +128,6 @@ fn a_reused_id_keeps_the_original_calls_placeholder_description() {
     let projected = history_for_provider_request(
         &history,
         &ClearedResults::from_occurrences([id("old")]),
-        None,
         crate::providers::rig::conversation::EarlierReasoning::Dropped,
     );
     assert!(body(&projected[1]).contains("old.rs"));
@@ -178,7 +170,6 @@ fn projection_preserves_canonical_messages_and_freezes_exact_results_across_repl
     let first = history_for_provider_request(
         &history,
         state.cleared(),
-        None,
         crate::providers::rig::conversation::EarlierReasoning::Dropped,
     );
     assert_eq!(before, history.messages());
@@ -193,57 +184,12 @@ fn projection_preserves_canonical_messages_and_freezes_exact_results_across_repl
         history_for_provider_request(
             &history,
             resumed.cleared(),
-            None,
             crate::providers::rig::conversation::EarlierReasoning::Dropped
         )
     );
 }
 #[test]
-fn internal_inputs_do_not_move_the_memory_turn_boundary() {
-    let mut history = history();
-    history.open_turn(&channel());
-    input(
-        &mut history,
-        ConversationInputKind::User,
-        "current owner request",
-    );
-    round(&mut history, "call", "now", "now.rs", 100);
-    input(
-        &mut history,
-        ConversationInputKind::Notification,
-        "child completed",
-    );
-    input(
-        &mut history,
-        ConversationInputKind::Continuation,
-        "continue after truncation",
-    );
-    let projected = history_for_provider_request(
-        &history,
-        &ClearedResults::default(),
-        Some(&memory()),
-        crate::providers::rig::conversation::EarlierReasoning::Dropped,
-    );
-    let text = serde_json::to_string(&projected).unwrap();
-    assert!(text.contains("Keep the task"));
-    assert!(text.contains("current owner request"));
-    assert!(text.contains("child completed"));
-    assert!(text.contains("continue after truncation"));
-    assert!(!text.contains("file-0.rs"));
-    assert_eq!(projected.len(), 6);
-}
-#[test]
-fn empty_memory_keeps_history_and_unicode_descriptions_remain_bounded() {
-    let history = history();
-    assert_eq!(
-        history.messages(),
-        history_for_provider_request(
-            &history,
-            &ClearedResults::default(),
-            Some(&MemoryDocument::default()),
-            crate::providers::rig::conversation::EarlierReasoning::Dropped,
-        )
-    );
+fn unicode_descriptions_remain_bounded() {
     let argument = key_argument(&serde_json::json!({"path":"界".repeat(200)})).unwrap();
     assert!(argument.ends_with("…\""));
     assert!(argument.chars().count() < 140);
@@ -272,7 +218,6 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
     let projected = history_for_provider_request(
         &history,
         &ClearedResults::from_occurrences([id("task-occurrence")]),
-        None,
         crate::providers::rig::conversation::EarlierReasoning::Dropped,
     );
     assert!(body(&projected[1]).contains("cleared old tool result"));

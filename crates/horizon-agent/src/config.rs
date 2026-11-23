@@ -565,11 +565,6 @@ pub struct RigAgentConfig {
     /// (fail-closed), matching `StartSession::trusted_project`'s own
     /// `#[serde(default)]`.
     pub trusted_project: bool,
-    /// Whether the session's role is standing (`roles::RoleDefinition::
-    /// standing`): set per session by `providers::rig::role_adjusted_config`,
-    /// `false` here as process-wide config. `rig_tool_definitions` offers
-    /// `memory_update` exactly when it is set.
-    pub standing: bool,
     /// The `decision_model` connection the session's turn-continuation
     /// check asks (`docs/agent-decision-model-design.md`). Copied from
     /// [`AgentConfig::decision`] onto every provider's config when the
@@ -596,7 +591,6 @@ impl Default for RigAgentConfig {
             clearing_threshold_pct: DEFAULT_CLEARING_TRIGGER_PCT,
             allowed_tool_ids: None,
             trusted_project: false,
-            standing: false,
             decision: None,
         }
     }

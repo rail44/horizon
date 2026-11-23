@@ -31,7 +31,7 @@ const TEST_ITERATION_CAP: u32 = 100;
 const TEST_DOOM_LOOP_WINDOW: usize = 5;
 use crate::contract::SessionId;
 use crate::contract::{
-    Command, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent, ProviderId,
+    Command, Event, Message as AgentMessage, MessageRole, ProviderEvent, ProviderId,
     ProviderRequestUsage, SessionState, StartSession, ToolCallId, ToolCallRequest, ToolCallResult,
     ToolPermission, TurnEndReason,
 };
@@ -826,108 +826,10 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
     );
 }
 
-/// `load_rig_history` reads through the *shared* `Arc<Mutex<Store>>` handle
-/// -- never a fresh `Store::open` of the same path (see that function's and
-/// `SharedDuckdbStore`'s doc comments for why a second independent open is
-/// unsound with DuckDB's relaxed durability). This appends through the same
-/// `Arc` `load_rig_history` reads through, exactly mirroring how
-/// `event_log::writer`'s background thread and a resumed session's rig
-/// thread now share one instance in production.
+/// A fresh spawn hands over no events and starts with an empty history.
 #[test]
-fn loads_initial_rig_history_from_duckdb_projection() {
-    use crate::persistence::projection::duckdb::DuckdbStoreHandle;
-
-    let path = std::env::temp_dir().join(format!(
-        "horizon-rig-memory-{}.duckdb",
-        uuid::Uuid::new_v4()
-    ));
-    let session_id = crate::contract::SessionId::new();
-    let events = vec![
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            text: "hello".to_string(),
-        }),
-        Event::AssistantTextDelta(MessageDelta {
-            role: MessageRole::Assistant,
-            text: "streaming ignored".to_string(),
-        }),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::Assistant,
-            text: "hi".to_string(),
-        }),
-    ];
-    let events = super::conversation::upgrade::fixture(events);
-
-    let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
-    store
-        .append_events(
-            session_id,
-            Some(ProviderId("builtin.agent.rig".to_string())),
-            events.clone(),
-        )
-        .expect("append events");
-    let shared_store = DuckdbStoreHandle::new(store);
-
-    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]).unwrap();
-    assert_eq!(
-        persisted.messages.messages(),
-        vec![RigMessage::user("hello"), RigMessage::assistant("hi")]
-    );
-    assert!(
-        persisted.cleared_occurrence_ids.is_empty(),
-        "a log with no clearing pass restores an empty cleared set"
-    );
-
-    drop(shared_store);
-    let _ = std::fs::remove_file(path);
-}
-
-/// Issue 012: when the DuckDB projection store is unavailable (`None` — it
-/// failed to open or rebuild, e.g. lock contention from a stale daemon),
-/// `load_rig_session_history` must not silently return an empty history.
-/// Instead it rebuilds from the JSONL event log's events the resume path
-/// threads through `StartSession::history`, using the same reconstruction
-/// the store path uses. This test proves the fallback: `None` store +
-/// non-empty fallback events → the same messages and cleared set the store
-/// would have produced.
-#[test]
-fn load_rig_session_history_falls_back_to_event_log_when_store_is_unavailable() {
-    let session_id = crate::contract::SessionId::new();
-    let events = vec![
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            text: "what is 2+2?".to_string(),
-        }),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::Assistant,
-            text: "4".to_string(),
-        }),
-    ];
-    let events = super::conversation::upgrade::fixture(events);
-
-    let persisted = load_rig_session_history(None, session_id, &events).unwrap();
-
-    assert_eq!(
-        persisted.messages.messages(),
-        super::conversation::ConversationHistory::from_events(&events)
-            .unwrap()
-            .messages(),
-        "a None store must rebuild the same messages from the fallback events"
-    );
-    assert!(
-        persisted.cleared_occurrence_ids.is_empty(),
-        "no clearing events → empty cleared set"
-    );
-}
-
-/// Issue 012: when the store is `None` and the fallback events are also
-/// empty (a fresh `Control::SessionNew`, or persistence unavailable in a
-/// test), the original empty-history return is preserved — no spurious
-/// reconstruction, no error.
-#[test]
-fn load_rig_session_history_returns_empty_when_store_and_events_are_both_empty() {
-    let session_id = crate::contract::SessionId::new();
-    let persisted = load_rig_session_history(None, session_id, &[]).unwrap();
+fn load_rig_session_history_returns_empty_for_no_events() {
+    let persisted = load_rig_session_history(&[]).unwrap();
     assert!(
         persisted.messages.messages().is_empty(),
         "no store and no events → empty messages"
@@ -941,17 +843,10 @@ fn load_rig_session_history_returns_empty_when_store_and_events_are_both_empty()
 /// The resume path end to end: a session whose persisted events carry the
 /// `b182c25b` shape (a streamed assistant text between a tool call and its
 /// result, plus a tool call the interrupted turn never answered) comes back
-/// from the DuckDB projection as a pairing-valid history, not one a strict
+/// as a pairing-valid history, not one a strict
 /// chat template rejects forever.
 #[test]
-fn resumed_history_from_duckdb_is_pairing_valid() {
-    use crate::persistence::projection::duckdb::DuckdbStoreHandle;
-
-    let path = std::env::temp_dir().join(format!(
-        "horizon-rig-pairing-{}.duckdb",
-        uuid::Uuid::new_v4()
-    ));
-    let session_id = crate::contract::SessionId::new();
+fn resumed_history_is_pairing_valid() {
     let events = vec![
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
@@ -967,24 +862,11 @@ fn resumed_history_from_duckdb_is_pairing_valid() {
     ];
     let events = super::conversation::upgrade::fixture(events);
 
-    let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
-    store
-        .append_events(
-            session_id,
-            Some(ProviderId("builtin.agent.rig".to_string())),
-            events,
-        )
-        .expect("append events");
-    let shared_store = DuckdbStoreHandle::new(store);
-
-    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]).unwrap();
+    let persisted = load_rig_session_history(&events).unwrap();
     // user, assistant(call-1 + "Let me check."), tool(call-1),
     // assistant(call-2), tool(cancelled call-2).
     assert_pairing_valid(&persisted.messages.messages());
     assert_eq!(persisted.messages.messages().len(), 5);
-
-    drop(shared_store);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -1050,7 +932,6 @@ fn a_task_notification_replays_to_the_provider_as_a_user_message() {
 /// no message and the messages around it survive unchanged.
 #[test]
 fn a_persisted_error_contributes_no_message_when_history_is_rebuilt() {
-    let session_id = crate::contract::SessionId::new();
     let events = vec![
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
@@ -1066,7 +947,7 @@ fn a_persisted_error_contributes_no_message_when_history_is_rebuilt() {
     ];
     let events = super::conversation::upgrade::fixture(events);
 
-    let persisted = load_rig_session_history(None, session_id, &events).unwrap();
+    let persisted = load_rig_session_history(&events).unwrap();
 
     assert_eq!(
         persisted.messages.messages().len(),
@@ -2047,11 +1928,7 @@ fn start_fallback_rig_session_with_history(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
-    let provider = Provider::for_entry(
-        ProviderId("builtin.agent.rig".to_string()),
-        config,
-        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
-    );
+    let provider = Provider::for_entry(ProviderId("builtin.agent.rig".to_string()), config);
     let handle = AgentProvider::start_session(
         &provider,
         StartSession {
@@ -2705,51 +2582,23 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
     let all = crate::tools::definitions();
 
-    let definitions = rig_tool_definitions(None, true, false);
+    let definitions = rig_tool_definitions(None, true);
 
-    // `memory_update` is deliberately excluded for a session that is not
-    // standing — it is a standing-role-only tool.
-    let expected: Vec<_> = all.iter().filter(|d| d.id != "memory_update").collect();
-    assert_eq!(definitions.len(), expected.len());
-    for definition in &expected {
+    assert_eq!(definitions.len(), all.len());
+    for definition in &all {
         assert!(
             definitions.iter().any(|d| d.name == definition.id),
             "expected `{}` to be present with no allow list",
             definition.id
         );
     }
-    assert!(
-        !definitions.iter().any(|d| d.name == "memory_update"),
-        "memory_update must not be advertised to a session that is not standing"
-    );
-}
-
-#[test]
-fn a_standing_session_is_offered_memory_update_without_an_allow_list() {
-    let definitions = rig_tool_definitions(None, true, true);
-
-    assert!(
-        definitions.iter().any(|d| d.name == "memory_update"),
-        "a standing session's turn cannot end without memory_update, so it \
-         must be offered even when the role narrows no tools"
-    );
-}
-
-#[test]
-fn an_allow_list_naming_memory_update_does_not_offer_it_to_a_session_that_is_not_standing() {
-    let allowed = vec!["fs_read".to_string(), "memory_update".to_string()];
-
-    let definitions = rig_tool_definitions(Some(&allowed), true, false);
-
-    let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
-    assert_eq!(names, vec!["fs_read"]);
 }
 
 #[test]
 fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
     let allowed = vec!["fs_read".to_string(), "fs_glob".to_string()];
 
-    let definitions = rig_tool_definitions(Some(&allowed), true, false);
+    let definitions = rig_tool_definitions(Some(&allowed), true);
 
     assert_eq!(definitions.len(), 2);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -2764,7 +2613,7 @@ fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
 fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
     let allowed: Vec<String> = Vec::new();
 
-    let definitions = rig_tool_definitions(Some(&allowed), true, false);
+    let definitions = rig_tool_definitions(Some(&allowed), true);
 
     assert!(definitions.is_empty());
 }
@@ -2781,7 +2630,7 @@ fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var(crate::config::EXA_API_KEY_VAR) };
 
-    let definitions = rig_tool_definitions(None, true, false);
+    let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2801,7 +2650,7 @@ fn web_search_is_advertised_when_exa_api_key_is_set() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
 
-    let definitions = rig_tool_definitions(None, true, false);
+    let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2822,7 +2671,6 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             api_key_present: false,
             ..Default::default()
         },
-        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
     let handle = AgentProvider::start_session(
@@ -2848,60 +2696,6 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
     }
 }
 
-/// A session must start while the projection is still being rebuilt: the
-/// slot stays `Pending` for this whole test (never `set`), the session
-/// still reaches `WaitingForUser`, and a pending slot is not mistaken for
-/// the issue-012 "store unavailable" failure even when the restored
-/// history yields no messages.
-#[test]
-fn a_session_starts_over_a_pending_projection_without_an_issue_012_error() {
-    let slot = crate::persistence::projection::duckdb::SharedDuckdbStore::pending();
-    let provider = Provider::for_entry(
-        ProviderId("builtin.agent.rig".to_string()),
-        RigAgentConfig {
-            api_key_present: false,
-            ..Default::default()
-        },
-        slot.clone(),
-    );
-    let handle = AgentProvider::start_session(
-        &provider,
-        StartSession {
-            session_id: SessionId::new(),
-            provider_id: AgentProvider::provider_id(&provider),
-            role_id: None,
-            workspace_root: None,
-            history: vec![
-                Event::StateChanged(SessionState::Created),
-                Event::StateChanged(SessionState::WaitingForUser),
-            ],
-            trusted_project: true,
-        },
-    );
-
-    let rx = handle.events();
-    let mut seen = Vec::new();
-    loop {
-        let event = recv(&rx);
-        assert!(
-            !matches!(event, Event::Error(_)),
-            "a pending projection is not a failure: {seen:?} then {event:?}"
-        );
-        let waiting = event == Event::StateChanged(SessionState::WaitingForUser);
-        seen.push(event);
-        if waiting {
-            break;
-        }
-    }
-    assert!(
-        matches!(
-            slot.current(),
-            crate::persistence::projection::duckdb::DuckdbStoreState::Pending
-        ),
-        "the session must not have needed the slot decided"
-    );
-}
-
 #[test]
 fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
     let base = RigAgentConfig::default();
@@ -2913,7 +2707,7 @@ fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
         .allowed_tool_ids
         .expect("config role must set an allow list");
     assert_eq!(allowed, vec!["skill_read", "config_read", "config_write"]);
-    let definitions = rig_tool_definitions(Some(&allowed), true, false);
+    let definitions = rig_tool_definitions(Some(&allowed), true);
     assert_eq!(definitions.len(), 3);
 }
 
@@ -2933,7 +2727,7 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
     let allowed = config
         .allowed_tool_ids
         .expect("the explore role must set an allow list");
-    let advertised = rig_tool_definitions(Some(&allowed), true, false)
+    let advertised = rig_tool_definitions(Some(&allowed), true)
         .into_iter()
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
@@ -2982,7 +2776,6 @@ fn resolved_model_reports_the_base_model_for_a_role_less_session() {
             model: "test-model".to_string(),
             ..Default::default()
         },
-        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
     assert_eq!(
@@ -3004,7 +2797,6 @@ fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_ove
             model: "test-model".to_string(),
             ..Default::default()
         },
-        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
     assert_eq!(
@@ -3026,7 +2818,6 @@ fn resolved_model_is_none_in_deterministic_fallback_mode() {
             model: "test-model".to_string(),
             ..Default::default()
         },
-        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
     assert_eq!(AgentProvider::resolved_model(&provider, None), None);
@@ -3342,7 +3133,7 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
 #[test]
 fn task_output_is_advertised_only_alongside_task() {
     let names = |allowed: Option<&[String]>| {
-        rig_tool_definitions(allowed, true, false)
+        rig_tool_definitions(allowed, true)
             .into_iter()
             .map(|definition| definition.name)
             .collect::<Vec<_>>()
@@ -3381,7 +3172,7 @@ fn task_output_is_advertised_only_alongside_task() {
 fn knowledge_tools_are_advertised_for_a_trusted_session() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let definitions = rig_tool_definitions(None, true, false);
+    let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
         names.contains("knowledge_read"),
@@ -3397,7 +3188,7 @@ fn knowledge_tools_are_advertised_for_a_trusted_session() {
 fn knowledge_tools_are_not_advertised_for_an_untrusted_session() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let definitions = rig_tool_definitions(None, false, false);
+    let definitions = rig_tool_definitions(None, false);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
         !names.contains("knowledge_read"),

@@ -34,7 +34,6 @@ pub(super) enum Outgoing {
     Update(Box<v2::SessionUpdate>),
     TaskProgress(acp::TaskProgressNotification),
     ToolCallProgress(acp::ToolCallProgressNotification),
-    Memory(acp::MemoryNotification),
     SessionEvent(acp::SessionEventNotification),
     /// An approval the client must be asked for with
     /// `session/request_permission`.
@@ -459,14 +458,6 @@ impl Mapper {
                     recovered_chars: cleared.recovered_chars,
                 })
             }
-            Event::MemoryDigest(digest) => vec![Outgoing::Memory(acp::MemoryNotification {
-                session_id,
-                event: acp::MemoryEvent::Digest(memory_digest(digest)),
-            })],
-            Event::MemoryCheckpointMissed => vec![Outgoing::Memory(acp::MemoryNotification {
-                session_id,
-                event: acp::MemoryEvent::CheckpointMissed,
-            })],
             Event::ProviderRequestSent(_) => {
                 // A retried request starts its text over.
                 self.close_stream();
@@ -483,7 +474,6 @@ impl Mapper {
             | Event::EnvironmentReady { .. }
             | Event::EnvironmentActivated(_)
             | Event::EnvironmentActivationFailed(_)
-            | Event::MemorySeeded
             | Event::ContinueTurnRequested(_)
             | Event::ContinuationVerdict(_)
             | Event::ConversationRecorded(_)
@@ -673,37 +663,6 @@ fn task_progress(
         },
         activity: progress.activity.clone(),
         started_at_epoch_ms: progress.started_at_epoch_ms,
-    }
-}
-
-fn memory_digest(digest: &contract::MemoryDigest) -> acp::MemoryDigest {
-    acp::MemoryDigest {
-        updates: digest
-            .updates
-            .iter()
-            .map(|update| acp::MemoryFieldUpdate {
-                field: match update.field {
-                    contract::MemoryField::Goal => acp::MemoryField::Goal,
-                    contract::MemoryField::Decisions => acp::MemoryField::Decisions,
-                    contract::MemoryField::Completed => acp::MemoryField::Completed,
-                    contract::MemoryField::InProgress => acp::MemoryField::InProgress,
-                    contract::MemoryField::Stuck => acp::MemoryField::Stuck,
-                    contract::MemoryField::NextStep => acp::MemoryField::NextStep,
-                    contract::MemoryField::Related => acp::MemoryField::Related,
-                },
-                op: match update.op {
-                    contract::MemoryOp::Set => acp::MemoryOp::Set,
-                    contract::MemoryOp::Append => acp::MemoryOp::Append,
-                    contract::MemoryOp::Clear => acp::MemoryOp::Clear,
-                },
-                content: update.content.clone(),
-            })
-            .collect(),
-        folded_log_range: digest.folded_log_range.map(|range| acp::FoldedLogRange {
-            from_seq: range.from_seq,
-            to_seq: range.to_seq,
-        }),
-        no_update_reason: digest.no_update_reason.clone(),
     }
 }
 

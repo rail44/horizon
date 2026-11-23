@@ -23,7 +23,6 @@ pub enum Inbound {
     SessionEvent(acp::SessionEventNotification),
     TaskProgress(acp::TaskProgressNotification),
     ToolCallProgress(acp::ToolCallProgressNotification),
-    Memory(acp::MemoryNotification),
     Permission(
         v2::RequestPermissionRequest,
         Responder<v2::RequestPermissionResponse>,
@@ -110,7 +109,6 @@ pub async fn connect_acp(stream: UnixStream) -> AcpClient {
     let builder = notification!(builder, acp::SessionEventNotification, SessionEvent);
     let builder = notification!(builder, acp::TaskProgressNotification, TaskProgress);
     let builder = notification!(builder, acp::ToolCallProgressNotification, ToolCallProgress);
-    let builder = notification!(builder, acp::MemoryNotification, Memory);
     let builder = request!(builder, v2::RequestPermissionRequest, Permission);
     let builder = request!(builder, acp::HostToolRequest, HostTool);
     let transport = byte_streams(stream);
