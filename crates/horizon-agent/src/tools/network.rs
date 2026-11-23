@@ -11,8 +11,8 @@
 //! already owns every other piece of per-session tool state (`tools::state::
 //! ToolSessionState`) -- `horizon-agentd` becomes a pure consumer, handing
 //! this crate an `isolated`/sandbox-availability fact and getting back a
-//! handle it threads into `ToolSessionState` exactly like `with_skills`/
-//! `with_config_path` already do.
+//! handle it threads into `ToolSessionState` exactly like `with_skills`
+//! already does.
 //!
 //! **One instance per session, not one per process.** Leg 4a's single
 //! per-daemon proxy had one shared, empty allowlist -- fine for "refuse

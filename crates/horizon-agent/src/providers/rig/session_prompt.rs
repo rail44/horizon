@@ -24,9 +24,7 @@ pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment 
 /// for a session that actually has the `task` tool -- see
 /// [`advertises_task_tool`]), the role's own prompt section (if any), then a
 /// skills listing, then repository `AGENTS.md`/`CLAUDE.md` instructions --
-/// but only when `role.include_repository_instructions` allows it
-/// (`roles::CONFIG_ROLE` sets this `false`; see its own doc comment for
-/// why).
+/// but only when `role.include_repository_instructions` allows it.
 ///
 /// The skills listing (`skills::SkillRegistry`, composed here from this
 /// session's own cwd -- see `skills`' module doc for the v2 repository

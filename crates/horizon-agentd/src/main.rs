@@ -140,9 +140,7 @@ async fn main() -> anyhow::Result<()> {
     // One accepted snapshot supplies conversation and auxiliary providers.
     let raw_config = horizon_config::load();
     let agent_config = providers::agent_config(raw_config);
-    // Resolved once at startup and handed to every session's
-    // `ToolSessionState` (see `AgentdState::config_path`/`run_session`):
-    // the `config_read`/`config_write` agent tools' one and only target.
+    // Resolved once at startup; a provider reload reads it again.
     let config_path = horizon_config::resolved_path();
     eprintln!(
         "horizon-agentd: starting on {} (model={})",

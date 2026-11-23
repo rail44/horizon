@@ -56,9 +56,6 @@ pub(crate) enum BoundaryDisposition {
 /// the tool's own workspace-root path check, so sandbox availability does
 /// not affect them. A target inside the repository's gitdir is decided
 /// before this classification (`plan_prepared_call`).
-///
-/// `config_write` always asks -- it edits Horizon's own config file, not
-/// anything inside a session's workspace.
 fn classify_input(tool_id: &str, sandbox_available: bool) -> Classification {
     match tool_id {
         "fs_write" | "fs_edit" => Classification::Contained,
@@ -71,7 +68,7 @@ fn classify_input(tool_id: &str, sandbox_available: bool) -> Classification {
         // comment. Not sensitive to `sandbox_available`: a boundary crossing
         // is defined by running outside the containment perimeter.
         "web_search" | "web_fetch" | "mock_boundary_crossing" => Classification::BoundaryCrossing,
-        // `config_write`, `mock_approval_required`, and anything else this
+        // `mock_approval_required`, and anything else this
         // crate ever catalogs as `RequireApproval` in the future: always
         // ask unless explicitly classified above -- the conservative
         // default the design doc asks for.
@@ -430,17 +427,6 @@ mod tests {
             ),
             Classification::AlwaysAsk
         );
-    }
-
-    #[test]
-    fn config_write_always_asks_regardless_of_sandbox() {
-        let input = serde_json::json!({ "content": "" });
-        for sandbox_available in [false, true] {
-            assert_eq!(
-                classify_call("config_write", &input, sandbox_available),
-                Classification::AlwaysAsk
-            );
-        }
     }
 
     #[test]

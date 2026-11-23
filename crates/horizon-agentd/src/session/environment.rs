@@ -242,7 +242,6 @@ impl SessionEnvironment<'_> {
             } else {
                 SkillRegistry::embedded()
             })
-            .with_config_path(state.config_path.clone())
             .with_mach_services(mach_services)
             .with_domain_policy(domains)
             .with_network_proxy(network)

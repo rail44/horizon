@@ -1454,7 +1454,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
         new_session_request(
             session_id,
             &mock_provider_id().0,
-            Some("config"),
+            Some("board-task"),
             test_cwd(),
         ),
     )
@@ -1478,7 +1478,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     assert_listed(
         &list_sessions(&client).await,
         session_id,
-        Some("config"),
+        Some("board-task"),
         Some(test_cwd()),
     );
 }

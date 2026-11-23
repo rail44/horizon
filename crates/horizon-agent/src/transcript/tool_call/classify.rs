@@ -127,8 +127,6 @@ fn classify_tool(
         }
         "workspace_snapshot" => ("Snapshot".to_string(), None, None),
         "worktree_enter" => ("Enter Worktree".to_string(), None, None),
-        "config_read" => ("Config Read".to_string(), None, None),
-        "config_write" => ("Config Write".to_string(), None, None),
         "recall_search" => ("Recall Search".to_string(), None, None),
         "recall_read" => ("Recall Read".to_string(), None, None),
         "skill_read" => {

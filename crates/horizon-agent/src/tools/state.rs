@@ -161,22 +161,6 @@ struct Inner {
     /// recall`'s tests, Horizon's UI-side dummy-tool-state test helper) --
     /// stays unchanged.
     skills: SkillRegistry,
-    /// Host-resolved path to Horizon's single config file
-    /// (`$HORIZON_CONFIG`, falling back to `$XDG_CONFIG_HOME/horizon/
-    /// config.toml`, falling back to `~/.config/horizon/config.toml`), for
-    /// `tools::config`'s `config_read`/`config_write`.
-    /// This crate can't resolve that path itself (see `config`'s module
-    /// doc -- it has no dependency on `horizon-config`), so it's injected
-    /// post-construction the same way [`ToolSessionBuilder::with_skills`] injects the
-    /// skill registry: the one production call site
-    /// (`horizon-agentd`'s `session::run_session`, which resolves it via
-    /// `horizon_config::resolved_path()`) calls
-    /// [`ToolSessionBuilder::with_config_path`] right after construction.
-    /// `None` everywhere else (this crate's own tests, Horizon's UI-side
-    /// dummy-tool-state test helper), same as before this seam existed:
-    /// `config_read`/`config_write` degrade to an actionable error instead
-    /// of guessing a path.
-    config_path: Option<PathBuf>,
     /// Whether nobody is there to answer an approval prompt for this session
     /// (`roles::RoleDefinition::unattended`): a wiki thread, a board
     /// session. A call that would otherwise wait for a human resolves as a
@@ -551,13 +535,6 @@ impl ToolSessionState {
     /// what `tools::config`'s `skill_read` dispatch reads from.
     pub(crate) fn skill_registry(&self) -> &SkillRegistry {
         &self.inner.skills
-    }
-
-    /// The host-resolved config-file path (see [`Inner::config_path`]) --
-    /// what `tools::config`'s `config_read`/`config_write` dispatch reads
-    /// from.
-    pub(crate) fn config_path(&self) -> Option<&Path> {
-        self.inner.config_path.as_deref()
     }
 
     pub(crate) fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {

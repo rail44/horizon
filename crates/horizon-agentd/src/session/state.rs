@@ -102,11 +102,8 @@ pub(crate) struct AgentdState {
     /// projection is still being rebuilt.
     duckdb_cell: SharedDuckdbStore,
     /// Horizon's single config file's host-resolved path (`main`'s
-    /// `horizon_config::resolved_path()` call), injected into every
-    /// spawned session's `ToolSessionState` (see `run_session`) for the
-    /// `config_read`/`config_write` agent tools -- see
-    /// `horizon_agent::tools::state::ToolSessionState::config_path`'s doc
-    /// comment for the full seam. `None` means the same thing it means for
+    /// `horizon_config::resolved_path()` call), which a provider reload
+    /// reads again. `None` means the same thing it means for
     /// `horizon_config::resolved_path`: no `HOME`/`XDG_CONFIG_HOME` to fall
     /// back to.
     pub(super) config_path: Option<PathBuf>,

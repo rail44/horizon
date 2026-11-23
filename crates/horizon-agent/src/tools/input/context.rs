@@ -8,13 +8,6 @@ pub(crate) struct Empty {}
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ConfigWrite {
-    /// Complete replacement TOML document.
-    pub content: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ReadEntry {
     /// Entry id from the system prompt's skill or knowledge index.
     pub id: String,
