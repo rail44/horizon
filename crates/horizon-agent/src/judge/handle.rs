@@ -296,6 +296,7 @@ mod tests {
 
     fn auxiliary(api_key_env: &str) -> AuxiliaryConfig {
         AuxiliaryConfig {
+            vendor: crate::config::Vendor::openai(),
             base_url: Some("https://ollama.com/v1".into()),
             api_key_env: api_key_env.into(),
             model: "small-chat".into(),

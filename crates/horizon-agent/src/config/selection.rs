@@ -54,14 +54,14 @@ pub fn resolve_model_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProviderKind;
+    use crate::config::Vendor;
     use crate::contract::Command;
 
     fn catalog() -> ProvidersTable {
         ProvidersTable {
             entries: vec![NamedProviderConfig {
                 name: "selected".into(),
-                kind: ProviderKind::Anthropic,
+                vendor: Vendor::resolve("anthropic").unwrap(),
                 base_url: Some("https://selected.invalid".into()),
                 api_key_env: "HORIZON_SELECTION_TEST_KEY".into(),
                 api_key_present: false,
@@ -82,7 +82,7 @@ mod tests {
         };
         selection.apply(&mut config);
         assert_eq!(config.model, "chosen");
-        assert_eq!(config.kind, ProviderKind::Anthropic);
+        assert_eq!(config.vendor, Vendor::resolve("anthropic").unwrap());
         assert_eq!(config.api_key_env, "HORIZON_SELECTION_TEST_KEY");
         assert_eq!(
             config.iteration_cap,

@@ -1,56 +1,95 @@
 //! Translate the accepted file configuration into runtime configuration.
-use horizon_agent::config::{ModelPair, NamedProviderConfig, ProviderKind};
+//! Which vendors exist, and which key variable each reads by default, is
+//! rig's to say, so the entries are resolved here, in the crate that has
+//! rig, rather than in `horizon-config`; what does not resolve is said on
+//! stderr, as `horizon-config` says the file's own warnings.
+use horizon_agent::config::{ModelPair, NamedProviderConfig, Vendor};
+
+/// One resolved entry as the runtime holds it, or why it cannot serve.
+fn named_provider_config(
+    entry: &horizon_config::ResolvedProviderConfig,
+) -> Result<NamedProviderConfig, String> {
+    let resolved = Vendor::resolve(&entry.vendor).and_then(|vendor| {
+        Ok(NamedProviderConfig {
+            name: entry.name.clone(),
+            vendor,
+            base_url: entry.base_url.clone(),
+            api_key_env: vendor.api_key_env(entry.api_key_env.clone())?,
+            // Resolved centrally by `from_env_and_providers`.
+            api_key_present: false,
+        })
+    });
+    resolved.map_err(|error| {
+        format!(
+            "[[providers]] {:?}: {error} — the entry is dropped",
+            entry.name
+        )
+    })
+}
 
 /// Translates the resolved provider surface out of a config file load.
 /// Returns the entries in file order plus the `default_model` pair, when it
-/// resolves against them.
+/// resolves against them, and what did not resolve.
 pub(crate) fn named_provider_configs(
     config: &horizon_config::RawConfig,
-) -> (Vec<NamedProviderConfig>, Option<ModelPair>) {
+) -> (Vec<NamedProviderConfig>, Option<ModelPair>, Vec<String>) {
     let resolution = config.resolved_providers();
-    let entries = resolution
-        .providers
-        .iter()
-        .map(|entry| NamedProviderConfig {
-            name: entry.name.clone(),
-            kind: match entry.kind {
-                horizon_config::RawProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
-                horizon_config::RawProviderKind::Anthropic => ProviderKind::Anthropic,
-            },
-            base_url: entry.base_url.clone(),
-            api_key_env: entry.api_key_env.clone(),
-            // Resolved centrally by `from_env_and_providers`.
-            api_key_present: false,
+    let mut warnings = Vec::new();
+    let entries: Vec<NamedProviderConfig> = (resolution.providers.iter())
+        .filter_map(|entry| {
+            named_provider_config(entry)
+                .map_err(|warning| warnings.push(warning))
+                .ok()
         })
         .collect();
     let default_model = resolution.default_model.map(|pair| ModelPair {
         provider: pair.provider,
         model: pair.model,
     });
-    (entries, default_model)
+    (entries, default_model, warnings)
 }
 
 /// Startup and reload share one translation, including the `small_model`
-/// (titles) and `decision_model` connections.
+/// (titles) and `decision_model` connections. What does not resolve is said
+/// on stderr.
 pub(crate) fn agent_config(raw: &horizon_config::RawConfig) -> horizon_agent::config::AgentConfig {
-    let (entries, default_model) = named_provider_configs(raw);
+    let (entries, default_model, mut warnings) = named_provider_configs(raw);
     let mut config =
         horizon_agent::config::AgentConfig::from_env_and_providers(entries, default_model);
-    config.auxiliary =
-        raw.resolved_small_model()
-            .ok()
-            .map(|small| horizon_agent::auxiliary::AuxiliaryConfig {
-                base_url: small.provider.base_url,
-                api_key_env: small.provider.api_key_env,
-                model: small.model,
-            });
-    config.decision = raw.resolved_decision_model().ok().map(|decision| {
-        horizon_agent::decision::DecisionConfig {
-            url: decision.url,
-            api_key_env: decision.provider.api_key_env,
-            model: decision.model,
-        }
+    config.auxiliary = raw.resolved_small_model().ok().and_then(|small| {
+        horizon_agent::auxiliary::AuxiliaryConfig::resolve(
+            &small.provider.vendor,
+            small.provider.base_url,
+            small.provider.api_key_env,
+            small.model,
+        )
+        .map_err(|error| {
+            warnings.push(format!(
+                "small_model: {error} — titles are disabled, and so is the fallback judge"
+            ))
+        })
+        .ok()
     });
+    config.decision = raw.resolved_decision_model().ok().and_then(|decision| {
+        let api_key_env = Vendor::resolve(&decision.provider.vendor)
+            .and_then(|vendor| vendor.api_key_env(decision.provider.api_key_env));
+        api_key_env
+            .map(|api_key_env| horizon_agent::decision::DecisionConfig {
+                url: decision.url,
+                api_key_env,
+                model: decision.model,
+            })
+            .map_err(|error| {
+                warnings.push(format!(
+                    "decision_model: {error} — approval judgments fall back to small_model's \
+                     chat judge and turn-continuation checks are disabled"
+                ))
+            })
+            .ok()
+    });
+    for warning in warnings {
+        eprintln!("horizon config: {warning}");
+    }
     config
 }
 
@@ -67,11 +106,10 @@ mod tests {
             decision_model = { provider = "ollama", model = "clef:cloud" }
             [[providers]]
             name = "chat"
-            kind = "anthropic"
+            vendor = "anthropic"
             api_key_env = "CHAT_KEY"
             [[providers]]
             name = "helper"
-            kind = "openai-compatible"
             base_url = "https://helper.invalid/v1"
             api_key_env = "HELPER_KEY"
             [[providers]]
@@ -83,7 +121,7 @@ mod tests {
         )
         .unwrap();
         let before = agent_config(&raw);
-        assert_eq!(before.rig.kind, ProviderKind::Anthropic);
+        assert_eq!(before.rig.vendor, Vendor::resolve("anthropic").unwrap());
         assert_eq!(before.rig.model, "big");
         let auxiliary = before.auxiliary.as_ref().unwrap();
         assert_eq!(auxiliary.api_key_env, "HELPER_KEY");
@@ -120,8 +158,8 @@ mod tests {
             auxiliary.base_url.as_deref(),
             Some("https://helper.invalid/v1")
         );
-        // An anthropic entry cannot serve small_model; an absent pair
-        // disables it too.
+        // An entry on Anthropic's wire cannot serve small_model; an absent
+        // pair disables it too.
         changed.small_model = Some(horizon_config::RawModelPair {
             provider: "chat".into(),
             model: "small".into(),

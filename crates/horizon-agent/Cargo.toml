@@ -42,6 +42,9 @@ libc = "0.2"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rig-core = { version = "0.46.0", features = ["reqwest"] }
+# rig's own shared reqwest client, handed to a turn's model: rig-core
+# builds it behind its `reqwest` feature without re-exporting it.
+rig-reqwest = "0.46.0"
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

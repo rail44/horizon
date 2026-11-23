@@ -1,22 +1,53 @@
-//! OpenAI-compatible connections for titles, and for approval judgments when
+//! Connections on OpenAI's wire for titles, and for approval judgments when
 //! no decision model is available, built from the config file's
 //! `small_model` pair.
 //! Clients belong to an accepted configuration, never to the whole process.
 
 use std::sync::OnceLock;
 
-use rig_core::providers::openai;
+use rig_core::providers::{openai, registry::ProviderConfig};
 
-/// The `small_model` pair's openai-compatible entry and model id. The file
-/// layer validates the entry's kind; only the secret's environment variable
-/// name crosses this boundary.
+use crate::config::{Vendor, Wire};
+
+/// The `small_model` pair's entry and model id, on a vendor speaking
+/// OpenAI's wire ([`Self::resolve`]): the judge reads the logprobs of an
+/// OpenAI chat completion. Only the secret's environment variable name
+/// crosses this boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuxiliaryConfig {
-    /// The entry's `base_url`, used as written.
+    /// The entry's vendor, whose dialect the requests are spelled in.
+    pub vendor: Vendor,
+    /// The entry's `base_url`, used as written; `None` is the vendor's own.
     pub base_url: Option<String>,
     pub api_key_env: String,
     /// The model id titles, and the fallback approval judge, run on.
     pub model: String,
+}
+
+impl AuxiliaryConfig {
+    /// The connection the file's `small_model` entry names: its `vendor`
+    /// resolved, and refused unless it speaks OpenAI's wire; its own key
+    /// variable, else the vendor's.
+    pub fn resolve(
+        vendor: &str,
+        base_url: Option<String>,
+        api_key_env: Option<String>,
+        model: String,
+    ) -> Result<Self, String> {
+        let vendor = Vendor::resolve(vendor)?;
+        if vendor.wire() != Wire::OpenAi {
+            return Err(format!(
+                "vendor {:?} does not speak OpenAI's wire, which small_model's judge reads",
+                vendor.name()
+            ));
+        }
+        Ok(Self {
+            vendor,
+            base_url,
+            api_key_env: vendor.api_key_env(api_key_env)?,
+            model,
+        })
+    }
 }
 
 pub struct AuxiliaryClient {
@@ -41,14 +72,14 @@ impl AuxiliaryClient {
         self.client
             .get_or_init(|| {
                 let api_key = std::env::var(&self.config.api_key_env).ok()?;
-                // rig 0.44's OpenAI dialect defaults to `/responses`; every
-                // configured endpoint speaks `/chat/completions`.
-                let mut config =
-                    openai::wire::OpenAIConfig::new(api_key).with_route(openai::Route::Chat);
-                if let Some(base_url) = &self.config.base_url {
-                    config = config.with_base_url(base_url);
+                let connection = (self.config.vendor)
+                    .connection(api_key, self.config.base_url.as_deref())
+                    .ok()?;
+                match connection {
+                    ProviderConfig::OpenAi(config) => Some(config.client()),
+                    // `resolve` admits OpenAI's wire alone.
+                    _ => None,
                 }
-                Some(config.client())
             })
             .clone()
             .ok_or_else(|| {

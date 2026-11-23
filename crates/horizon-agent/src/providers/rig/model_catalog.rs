@@ -1,49 +1,36 @@
-//! The model catalog (models.dev, the catalog OpenCode lists models from)
-//! as the window source for a provider whose `/models` listing declares
-//! none -- `docs/agent-compaction-design.md`'s window sources, decided
-//! 2026-10-20 (owner): a provider that speaks only the OpenAI-compatible
-//! surface has no standard way to say its context length, and reading a
-//! provider's own API for it (Ollama's `/api/show`) would be the first
-//! provider-specific branch in this crate.
+//! The model catalog: the facts a turn's requests are encoded with (which
+//! generation options a model takes, and how its vendor's dialect spells
+//! them) and a source of the context window Tier 1 clearing is measured
+//! against (`docs/agent-compaction-design.md`).
 //!
-//! One document, `https://models.dev/api.json`, keyed by catalog provider
-//! id; each provider carries the base URL it serves (`api`) and its models
-//! with `limit.{context,output}`. A Horizon `[[providers]]` entry is matched
-//! to a catalog provider by that base URL, never by model id alone (the
-//! same id appears under several providers with different windows), and
-//! the model by exact id inside it. No match means no window, as before.
+//! It is rig's own catalog (`rig_core::catalog::Catalog::builtin`:
+//! models.dev, with its main providers reviewed by hand) with a newer copy
+//! of models.dev (`https://models.dev/api.json`, the catalog OpenCode lists
+//! models from) laid over it by rig's own rule, which keeps the facts rig
+//! reviewed by hand. A model is found by the entry's vendor
+//! ([`crate::config::Vendor`]) and its id, by rig's lookup rule: the id as
+//! listed, or a dated snapshot of a listed id. A provider rig has no vendor
+//! for (DeepInfra, reached as OpenAI's vendor with its own `base_url`) has
+//! no models here; its own `/models` listing is what declares a window for
+//! it (`super::model_limits`).
 //!
-//! The catalog writes `api` only for providers reached through a generic
-//! SDK that needs the URL (`@ai-sdk/openai-compatible` and the like); a
-//! provider with its own SDK package -- DeepInfra, Groq, OpenAI, Anthropic,
-//! Mistral, xAI, ... -- has `api: null`, its URL living in that package's
-//! code. Those are matched instead by the registrable domain of their
-//! `doc` link against the configured base URL's (`api.deepinfra.com` and
-//! `deepinfra.com/models` share `deepinfra.com`), only when no provider
-//! serves the base URL exactly, and only when one such provider claims the
-//! domain (Azure's two entries share `microsoft.com` and match nothing).
-//! The registrable domain is approximated as the host's last two labels:
-//! no `api: null` provider's `doc` sits under a two-label public suffix
-//! such as `co.jp`, and the exact model id is still required. Decided
-//! 2026-11-08 (owner), over matching the key variable's name against the
-//! catalog's `env`, which an owner names freely, and over extracting each
-//! SDK package's default URL, which is not reliably machine-readable.
-//!
-//! Fetched once per process the first time a window is needed, and the
-//! body written to `$XDG_CACHE_HOME/horizon/models-dev-api.json` (falling
-//! back to `~/.cache`); when the fetch fails the cached copy serves, and
-//! with neither the catalog is simply absent for the life of the process.
-//! `HORIZON_MODEL_CATALOG_URL` and `HORIZON_MODEL_CATALOG_CACHE` relocate
-//! the two, for tests and for a machine that mirrors the file.
+//! The copy is fetched once per process the first time a session needs the
+//! catalog, and the body written to `$XDG_CACHE_HOME/horizon/models-dev-api.json`
+//! (falling back to `~/.cache`); when the fetch fails the cached copy
+//! serves when it is newer than rig's own data, and with neither, rig's own
+//! catalog serves alone. Until the first session has loaded it, rig's own
+//! serves too ([`current`]). `HORIZON_MODEL_CATALOG_URL` and
+//! `HORIZON_MODEL_CATALOG_CACHE` relocate the two, for tests and for a
+//! machine that mirrors the file.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use serde::Deserialize;
+use rig_core::catalog::Catalog;
 
 use super::model_limits::ModelLimits;
+use crate::config::Vendor;
 
 /// Environment variable naming where the catalog is fetched from.
 pub(super) const CATALOG_URL_VAR: &str = "HORIZON_MODEL_CATALOG_URL";
@@ -57,148 +44,86 @@ const HOME_VAR: &str = "HOME";
 /// on this once per process, then never again.
 const CATALOG_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Per model id, the declared limits.
-type ModelTable = HashMap<String, ModelLimits>;
+/// The catalog the first session loaded ([`catalog`]).
+static LOADED: OnceLock<Arc<Catalog>> = OnceLock::new();
 
-/// The catalog reduced to what a window lookup reads: per provider base
-/// URL (normalized), per model id, the declared limits; and for providers
-/// without a base URL, the same keyed by their `doc` link's registrable
-/// domain, `None` where several providers claim one domain.
-#[derive(Debug, Default)]
-pub(super) struct Catalog {
-    providers: HashMap<String, ModelTable>,
-    by_doc_domain: HashMap<String, Option<ModelTable>>,
+/// rig's own catalog, shared rather than cloned per turn.
+fn builtin() -> Arc<Catalog> {
+    static BUILTIN: OnceLock<Arc<Catalog>> = OnceLock::new();
+    BUILTIN
+        .get_or_init(|| Arc::new(Catalog::builtin().clone()))
+        .clone()
 }
 
-#[derive(Deserialize)]
-struct RawProvider {
-    api: Option<String>,
-    doc: Option<String>,
-    #[serde(default)]
-    models: HashMap<String, RawModel>,
+/// The catalog as loaded so far, without waiting: the loaded one once a
+/// session has loaded it, rig's own until then. What a turn encodes with.
+pub(super) fn current() -> Arc<Catalog> {
+    LOADED.get().cloned().unwrap_or_else(builtin)
 }
 
-#[derive(Deserialize)]
-struct RawModel {
-    limit: Option<RawLimit>,
-}
-
-#[derive(Deserialize)]
-struct RawLimit {
-    context: Option<u64>,
-}
-
-impl Catalog {
-    /// Reads the catalog document. A provider with neither a base URL nor a
-    /// usable `doc` domain, and a model without a context limit, contribute
-    /// nothing; anything else malformed fails the whole parse, which reads
-    /// as "no catalog".
-    pub(super) fn parse(body: &str) -> Option<Self> {
-        let raw: HashMap<String, RawProvider> = serde_json::from_str(body).ok()?;
-        let mut catalog = Self::default();
-        for provider in raw.into_values() {
-            let models = model_table(provider.models);
-            if let Some(api) = provider.api {
-                catalog
-                    .providers
-                    .entry(normalize_base_url(&api))
-                    .or_default()
-                    .extend(models);
-            } else if let Some(domain) = provider.doc.as_deref().and_then(registrable_domain) {
-                catalog
-                    .by_doc_domain
-                    .entry(domain)
-                    .and_modify(|claimed| *claimed = None)
-                    .or_insert(Some(models));
-            }
-        }
-        Some(catalog)
-    }
-
-    /// The limits the catalog declares for `model` at the provider serving
-    /// `base_url`, if it knows both: by exact base URL, else by the one
-    /// URL-less provider whose `doc` shares the base URL's domain.
-    pub(super) fn limits(&self, base_url: &str, model: &str) -> Option<ModelLimits> {
-        let models = match self.providers.get(&normalize_base_url(base_url)) {
-            Some(models) => models,
-            None => self
-                .by_doc_domain
-                .get(&registrable_domain(base_url)?)?
-                .as_ref()?,
-        };
-        models.get(model).copied()
-    }
-}
-
-fn model_table(models: HashMap<String, RawModel>) -> ModelTable {
-    models
-        .into_iter()
-        .filter_map(|(id, model)| {
-            let context_length = model.limit?.context?;
-            Some((id, ModelLimits { context_length }))
-        })
-        .collect()
-}
-
-/// `https://ollama.com/v1/` and `https://ollama.com/v1` are one provider.
-fn normalize_base_url(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
-}
-
-/// The URL's host reduced to its last two labels (`api.deepinfra.com` →
-/// `deepinfra.com`); `None` for an IP address, a single-label host such
-/// as `localhost`, or an unparsable URL.
-fn registrable_domain(url: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(url.trim()).ok()?;
-    let host = parsed.domain()?.trim_end_matches('.').to_ascii_lowercase();
-    let mut labels = host.rsplit('.');
-    let tld = labels.next().filter(|label| !label.is_empty())?;
-    let name = labels.next().filter(|label| !label.is_empty())?;
-    Some(format!("{name}.{tld}"))
-}
-
-/// The catalog's limits for `model` at `base_url`, loading the catalog on
-/// the first call of the process.
-pub(super) async fn catalog_limits(base_url: &str, model: &str) -> Option<ModelLimits> {
-    catalog().await?.limits(base_url, model)
-}
-
-/// The process's catalog, loaded on first use. A load that found nothing
-/// is kept too: the catalog is per daemon start, not per session.
-async fn catalog() -> Option<Arc<Catalog>> {
-    static CATALOG: OnceLock<Option<Arc<Catalog>>> = OnceLock::new();
-    if let Some(loaded) = CATALOG.get() {
+/// The process's catalog, loaded on first use. A load that found no copy is
+/// kept too: the catalog is per daemon start, not per session.
+pub(super) async fn catalog() -> Arc<Catalog> {
+    if let Some(loaded) = LOADED.get() {
         return loaded.clone();
     }
-    let loaded = load_catalog().await.map(Arc::new);
-    CATALOG.get_or_init(|| loaded).clone()
+    let loaded = Arc::new(load_catalog().await);
+    LOADED.get_or_init(|| loaded).clone()
 }
 
-/// Fetches the document and refreshes the cached copy; on any failure
-/// reads the cached copy instead. Says on stderr which one served, since a
-/// stale cached copy is the one state the owner might want to know about.
-async fn load_catalog() -> Option<Catalog> {
+/// The context window `catalog` lists for `vendor`'s `model`.
+fn window(catalog: &Catalog, vendor: Vendor, model: &str) -> Option<ModelLimits> {
+    let context = catalog.get(vendor.id(), model)?.spec.context_window?;
+    Some(ModelLimits {
+        context_length: u64::from(context),
+    })
+}
+
+/// The catalog's context window for `vendor`'s `model`, loading the
+/// catalog on the first call of the process.
+pub(super) async fn catalog_limits(vendor: Vendor, model: &str) -> Option<ModelLimits> {
+    window(&*catalog().await, vendor, model)
+}
+
+/// rig's own catalog with the fetched copy laid over it; on a failed fetch,
+/// with the cached copy when it is newer than rig's own data (an older one
+/// would only hide what rig shipped). Says on stderr when the cached copy
+/// serves, since a stale copy is the one state the owner might want to
+/// know about.
+async fn load_catalog() -> Catalog {
     let url = std::env::var(CATALOG_URL_VAR)
         .ok()
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| DEFAULT_CATALOG_URL.to_string());
     let cache = cache_path();
     if let Some(body) = fetch(&url).await
-        && let Some(catalog) = parse_off_thread(body.clone()).await
+        && let Some(fetched) = parse_off_thread(body.clone()).await
     {
         if let Some(path) = &cache {
             write_cache(path.clone(), body).await;
         }
-        return Some(catalog);
+        return Catalog::builtin().with_models_dev(&fetched);
     }
-    let path = cache?;
-    let body = read_cache(path.clone()).await?;
-    let catalog = parse_off_thread(body).await?;
-    eprintln!(
-        "horizon-agent: model catalog fetch from {url} failed; using the cached copy at {}",
-        path.display()
-    );
-    Some(catalog)
+    if let Some(path) = cache
+        && newer_than_builtin(&path)
+        && let Some(body) = read_cache(path.clone()).await
+        && let Some(fetched) = parse_off_thread(body).await
+    {
+        eprintln!(
+            "horizon-agent: model catalog fetch from {url} failed; using the cached copy at {}",
+            path.display()
+        );
+        return Catalog::builtin().with_models_dev(&fetched);
+    }
+    Catalog::builtin().clone()
+}
+
+/// Whether the copy at `path` was written after rig's own data was read
+/// from models.dev.
+fn newer_than_builtin(path: &std::path::Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|written| written > Catalog::generated_at())
 }
 
 async fn fetch(url: &str) -> Option<String> {
@@ -213,12 +138,17 @@ async fn fetch(url: &str) -> Option<String> {
     response.text().await.ok()
 }
 
-/// The document is megabytes of JSON: parsed off the session's thread.
+/// The document is megabytes of JSON: read off the session's thread. A
+/// provider rig has no vendor for is skipped by rig, not an error.
 async fn parse_off_thread(body: String) -> Option<Catalog> {
-    tokio::task::spawn_blocking(move || Catalog::parse(&body))
-        .await
-        .ok()
-        .flatten()
+    tokio::task::spawn_blocking(move || {
+        Catalog::from_models_dev(&body)
+            .ok()
+            .map(|(catalog, _skipped)| catalog)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn read_cache(path: PathBuf) -> Option<String> {
@@ -264,174 +194,61 @@ fn cache_path() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// Two catalog providers in the document's shape, one of them serving
-    /// Ollama Cloud's base URL.
+    fn vendor(name: &str) -> Vendor {
+        Vendor::resolve(name).unwrap()
+    }
+
+    /// A models.dev document in the shape rig reads: Ollama's section with
+    /// one model rig's own data lists (a window changed) and one it does
+    /// not, plus a provider rig has no vendor for.
     fn document() -> String {
+        let row = |context: u64| {
+            serde_json::json!({
+                "name": "test row",
+                "reasoning": true,
+                "tool_call": true,
+                "modalities": {"input": ["text"], "output": ["text"]},
+                "limit": {"context": context, "output": 8192}
+            })
+        };
         serde_json::json!({
-            "ollama-cloud": {
-                "id": "ollama-cloud",
-                "name": "Ollama Cloud",
-                "api": "https://ollama.com/v1",
-                "models": {
-                    "deepseek-v4.1-flash": {"limit": {"context": 1048576, "output": 384000}},
-                    "glm-5.3-flash": {"limit": {"context": 1000000, "output": 131072}},
-                    "no-limit": {"name": "no limit declared"}
-                }
-            },
-            "other": {
-                "id": "other",
-                "api": "https://other.invalid/v1",
-                "models": {
-                    "deepseek-v4.1-flash": {"limit": {"context": 65536, "output": 8192}}
-                }
-            },
-            "no-api": {
-                "id": "no-api",
-                "models": {"x": {"limit": {"context": 1}}}
-            }
+            "ollama": {"models": {
+                "kimi-k2.6": row(300_000),
+                "horizon-test-model": row(65_536)
+            }},
+            "deepinfra": {"models": {"deepseek-ai/DeepSeek-V4.1-Flash-1017": row(1_048_576)}}
         })
         .to_string()
     }
 
     #[test]
-    fn limits_are_read_by_provider_base_url_then_model_id() {
-        let catalog = Catalog::parse(&document()).expect("parses");
+    fn windows_are_read_by_vendor_then_model_id() {
+        let builtin = Catalog::builtin();
+        // Ollama Cloud's models, which models.dev was first read for.
         assert_eq!(
-            catalog.limits("https://ollama.com/v1", "deepseek-v4.1-flash"),
-            Some(ModelLimits {
-                context_length: 1_048_576,
-            })
+            window(builtin, vendor("ollama"), "kimi-k2.6").map(|limits| limits.context_length),
+            Some(262_144)
         );
-        // The same id under another provider is another window.
+        // The same id under another vendor is another model.
+        assert_eq!(window(builtin, vendor("anthropic"), "kimi-k2.6"), None);
+        assert_eq!(window(builtin, vendor("ollama"), "no-such-model"), None);
+    }
+
+    #[test]
+    fn a_fetched_copy_is_laid_over_rigs_own_and_adds_its_models() {
+        let (fetched, skipped) = Catalog::from_models_dev(&document()).unwrap();
+        // A provider rig has no vendor for is skipped, not fatal.
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        let catalog = Catalog::builtin().with_models_dev(&fetched);
         assert_eq!(
-            catalog
-                .limits("https://other.invalid/v1", "deepseek-v4.1-flash")
+            window(&catalog, vendor("ollama"), "kimi-k2.6").map(|limits| limits.context_length),
+            Some(300_000)
+        );
+        assert_eq!(
+            window(&catalog, vendor("ollama"), "horizon-test-model")
                 .map(|limits| limits.context_length),
             Some(65_536)
         );
-        // A trailing slash or capitals in the configured base URL still match.
-        assert_eq!(
-            catalog
-                .limits("https://Ollama.com/v1/", "glm-5.3-flash")
-                .map(|limits| limits.context_length),
-            Some(1_000_000)
-        );
-        // Unknown provider, unknown model, and a model without a limit.
-        assert_eq!(
-            catalog.limits("https://nowhere.invalid/v1", "glm-5.3-flash"),
-            None
-        );
-        assert_eq!(catalog.limits("https://ollama.com/v1", "nemo"), None);
-        assert_eq!(catalog.limits("https://ollama.com/v1", "no-limit"), None);
-        assert!(
-            !catalog.providers.contains_key(""),
-            "a provider without api is skipped"
-        );
-    }
-
-    /// URL-less providers in the document's shape: one with its own SDK
-    /// (DeepInfra), two sharing a `doc` domain (Azure's pair), and one
-    /// URL-carrying provider on a domain a URL-less one also documents.
-    fn url_less_document() -> String {
-        serde_json::json!({
-            "deepinfra": {
-                "id": "deepinfra",
-                "npm": "@ai-sdk/deepinfra",
-                "doc": "https://deepinfra.com/models",
-                "models": {
-                    "deepseek-ai/DeepSeek-V4.1-Flash-1017": {"limit": {"context": 1048576}}
-                }
-            },
-            "azure": {
-                "id": "azure",
-                "doc": "https://learn.microsoft.com/en-us/azure/models",
-                "models": {"gpt-5": {"limit": {"context": 400000}}}
-            },
-            "azure-cognitive-services": {
-                "id": "azure-cognitive-services",
-                "doc": "https://learn.microsoft.com/en-us/azure/ai-services/models",
-                "models": {"gpt-5": {"limit": {"context": 272000}}}
-            },
-            "groq": {
-                "id": "groq",
-                "doc": "https://console.groq.com/docs/models",
-                "models": {"kimi": {"limit": {"context": 1000}}}
-            },
-            "groq-exact": {
-                "id": "groq-exact",
-                "api": "https://api.groq.com/openai/v1",
-                "models": {"kimi": {"limit": {"context": 2000}}}
-            }
-        })
-        .to_string()
-    }
-
-    #[test]
-    fn a_url_less_provider_is_matched_by_its_doc_domain() {
-        let catalog = Catalog::parse(&url_less_document()).expect("parses");
-        assert_eq!(
-            catalog
-                .limits(
-                    "https://api.deepinfra.com/v1/openai",
-                    "deepseek-ai/DeepSeek-V4.1-Flash-1017"
-                )
-                .map(|limits| limits.context_length),
-            Some(1_048_576)
-        );
-        // The model id still has to match exactly.
-        assert_eq!(
-            catalog.limits("https://api.deepinfra.com/v1/openai", "DeepSeek-V4.1"),
-            None
-        );
-    }
-
-    #[test]
-    fn a_doc_domain_claimed_twice_matches_nothing() {
-        let catalog = Catalog::parse(&url_less_document()).expect("parses");
-        assert_eq!(
-            catalog.limits("https://myres.openai.azure.microsoft.com/v1", "gpt-5"),
-            None
-        );
-    }
-
-    #[test]
-    fn an_exact_base_url_wins_over_a_doc_domain() {
-        let catalog = Catalog::parse(&url_less_document()).expect("parses");
-        assert_eq!(
-            catalog
-                .limits("https://api.groq.com/openai/v1", "kimi")
-                .map(|limits| limits.context_length),
-            Some(2000)
-        );
-        // Another path on the same host has no exact provider: the domain
-        // match answers.
-        assert_eq!(
-            catalog
-                .limits("https://api.groq.com/v2", "kimi")
-                .map(|limits| limits.context_length),
-            Some(1000)
-        );
-    }
-
-    #[test]
-    fn the_registrable_domain_is_the_hosts_last_two_labels() {
-        assert_eq!(
-            registrable_domain("https://api.deepinfra.com/v1/openai").as_deref(),
-            Some("deepinfra.com")
-        );
-        assert_eq!(
-            registrable_domain("https://API.X.ai./v1").as_deref(),
-            Some("x.ai")
-        );
-        assert_eq!(registrable_domain("http://127.0.0.1:8080/v1"), None);
-        assert_eq!(registrable_domain("http://localhost:11434/v1"), None);
-        assert_eq!(registrable_domain("not a url"), None);
-    }
-
-    #[test]
-    fn a_malformed_document_is_no_catalog() {
-        assert!(Catalog::parse("not json").is_none());
-        assert!(Catalog::parse("[]").is_none());
     }
 
     #[test]
@@ -460,9 +277,9 @@ mod tests {
     }
 
     /// Not a check: a live fetch of the real catalog, for a reader who
-    /// wants to see what it says about the provider in use. Run by hand
-    /// with `--run-ignored all --no-capture`; the copy goes to a
-    /// temporary path, not the real cache.
+    /// wants to see what it says about a model in use. Run by hand with
+    /// `--run-ignored all --no-capture`; the copy goes to a temporary path,
+    /// not the real cache.
     #[tokio::test]
     #[ignore = "fetches the live catalog over the network"]
     async fn live_catalog_knows_ollama_cloud() {
@@ -472,8 +289,8 @@ mod tests {
         unsafe { std::env::set_var(CATALOG_CACHE_VAR, dir.join("catalog.json")) };
         // FIXME: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::remove_var(CATALOG_URL_VAR) };
-        let limits = catalog_limits("https://ollama.com/v1", "deepseek-v4.1-flash").await;
-        println!("live catalog, ollama-cloud / deepseek-v4.1-flash: {limits:?}");
+        let limits = catalog_limits(vendor("ollama"), "deepseek-v4.1-flash").await;
+        println!("live catalog, ollama / deepseek-v4.1-flash: {limits:?}");
         println!(
             "cached copy: {} bytes",
             std::fs::metadata(dir.join("catalog.json"))
@@ -499,12 +316,17 @@ mod tests {
         unsafe { std::env::set_var(CATALOG_CACHE_VAR, &cache) };
 
         assert_eq!(
-            catalog_limits("https://ollama.com/v1", "glm-5.3-flash")
+            catalog_limits(vendor("ollama"), "horizon-test-model")
                 .await
                 .map(|limits| limits.context_length),
-            Some(1_000_000)
+            Some(65_536)
         );
-        assert_eq!(catalog_limits("https://ollama.com/v1", "nemo").await, None);
+        // What the session loaded is what a turn now encodes with.
+        assert!(
+            current()
+                .get(vendor("ollama").id(), "horizon-test-model")
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

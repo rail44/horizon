@@ -39,15 +39,17 @@ T-callid 級のタスクは有効窓 229k を使い切って死ぬ（追補 4）
   実行（cache 全損を「まれに一度」に留める。OpenCode の
   PRUNE_MINIMUM と同思想）。
 - 有効窓 = context_length − 送信中の max_tokens。context_length は
-  (1) provider 自身の `/models` 申告、無ければ (2) モデルカタログ
-  （models.dev の `api.json`、`providers/rig/model_catalog.rs`。
-  provider の `base_url` でカタログの provider を引き、その中でモデル id を
-  完全一致で引く。2026-10-20 のオーナー決定: OpenAI 互換面には窓を申告する
-  標準がなく、Ollama の `/api/show` のような provider 固有 API を読む分岐は
-  持たない）。agentd がプロセスごとに初回必要時に取得し、カタログは
+  (1) provider 自身の `/models` 申告（OpenAI の wire の entry のみ）、無ければ
+  (2) モデルカタログ（rig-core の組み込みカタログに models.dev の
+  `api.json` の新しい写しを rig の規則で重ねたもの、
+  `providers/rig/model_catalog.rs`。entry の vendor とモデル id で引く。
+  2026-10-20 のオーナー決定: OpenAI 互換面には窓を申告する標準がなく、
+  Ollama の `/api/show` のような provider 固有 API を読む分岐は持たない。
+  vendor については `docs/provider-configuration.md`）。
+  agentd がプロセスごとに初回必要時に取得し、写しは
   `$XDG_CACHE_HOME/horizon/models-dev-api.json` に保存して取得失敗時は
-  保存済みを使う。どちらも無ければ **発火しない**（fallback 窓は持たない —
-  `providers/rig/model_limits.rs`）。
+  rig 自身のデータより新しければ保存済みを使う。どちらも窓を知らなければ
+  **発火しない**（fallback 窓は持たない — `providers/rig/model_limits.rs`）。
 - 透明性: 何をどの範囲 clear したかを専用イベントとして event log に
   記録し、transcript に区切りを表示。
 - 計測スイッチ: 閾値の env-only 強制（LangChain 方式の強制発火計測用。
@@ -149,7 +151,7 @@ Tier 1 適用後もなお 80% を超える場合のみ。
 | tail 保護予算 | 16k トークン | 往復単位で遡る（turn 非依存） |
 | 要約上限 | 8k トークン | |
 | fallback 有効窓 | なし | /models もカタログも無ければ窓を持たず、発火しない |
-| カタログ | models.dev `api.json` | /models が申告しないとき。base_url とモデル id で引く。起動ごとに取得、失敗時は保存済み |
+| カタログ | rig の組み込み + models.dev `api.json` | /models が申告しないとき。vendor とモデル id で引く。起動ごとに取得、失敗時は保存済み |
 
 ## 送り返す reasoning の範囲（2026-10-20）
 

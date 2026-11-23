@@ -12,17 +12,16 @@ use crossbeam_channel::Sender;
 use futures_util::StreamExt;
 use rig_core::{
     completion::{
-        AssistantContent, CompletionRequest, Message, ToolDefinition,
+        AssistantContent, CompletionRequest, GenerationOptions, Message, ToolDefinition,
         message::{Text, ToolCall},
     },
     driver::DynModel,
     operation::Completion,
-    providers::{anthropic, openai},
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::{ProviderKind, RigAgentConfig},
+    config::{RigAgentConfig, Vendor},
     contract::{
         Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ToolCallId, ToolCallResult,
     },
@@ -350,17 +349,18 @@ async fn rig_provider_turn_with_retry(
     let outcome = with_pre_generation_retry(
         token,
         || async {
-            match completion_client(config) {
-                Ok(client) => {
-                    rig_provider_turn_streaming(
+            match completion_model(config) {
+                Ok(model) => {
+                    run_provider_stream(
                         config,
-                        client,
+                        model,
                         environment,
                         extra_sections,
                         prompt.clone(),
                         history.clone(),
                         events_tx.clone(),
                         token,
+                        ProviderDeadlines::default(),
                     )
                     .await
                 }
@@ -412,35 +412,9 @@ async fn rig_provider_turn_with_retry(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
-async fn rig_provider_turn_streaming(
-    config: &RigAgentConfig,
-    client: RigCompletionClient,
-    environment: &SessionEnvironment,
-    extra_sections: &[String],
-    prompt: Message,
-    history: Vec<Message>,
-    events_tx: Sender<ProviderEvent>,
-    token: &CancellationToken,
-) -> Attempt<(Message, TurnCompletion)> {
-    let model = client.completion_model(&config.model);
-    run_provider_stream(
-        config,
-        model,
-        environment,
-        extra_sections,
-        prompt,
-        history,
-        events_tx,
-        token,
-        ProviderDeadlines::default(),
-    )
-    .await
-}
-
-/// One streamed provider turn on whichever client the turn's kind built:
-/// rig 0.44 hands every provider to a consumer as one erased
-/// `DynModel<Completion>`, so both kinds share this body unchanged.
+/// One streamed provider turn on the model the turn's vendor built: rig
+/// hands every provider to a consumer as one erased `DynModel<Completion>`,
+/// so every vendor shares this body unchanged.
 #[expect(clippy::too_many_arguments)]
 async fn run_provider_stream(
     config: &RigAgentConfig,
@@ -469,7 +443,7 @@ async fn run_provider_stream(
         ))
         .preamble(system_prompt(environment, extra_sections))
         .max_tokens(config.max_output_tokens)
-        .additional_params(provider_additional_params(config.kind));
+        .options(generation_options(config.vendor));
     let mut stream = match await_provider_phase(
         async { model.stream(request) },
         token,
@@ -516,84 +490,48 @@ pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancell
     !cancelled && output_tokens == Some(cap)
 }
 
-/// OpenAI defaults this to true, but Horizon also supports configurable
-/// OpenAI-compatible endpoints. Sending the flag explicitly makes the
-/// intended contract stable across those backends: one assistant response
-/// may request several independent tools, while the session coordinator
-/// still waits for every result before the next completion.
-pub(super) fn provider_additional_params(kind: ProviderKind) -> serde_json::Value {
-    match kind {
-        // OpenAI-compatible: one assistant response may request several
-        // independent tools, while the session coordinator still
-        // waits for every result before the next completion. Sending the
-        // flag explicitly makes the intended contract stable across
-        // configurable backends.
-        ProviderKind::OpenAiCompatible => serde_json::json!({ "parallel_tool_calls": true }),
-        // Anthropic: nothing openai-specific to send.
-        ProviderKind::Anthropic => serde_json::Value::Object(serde_json::Map::new()),
-    }
-}
-
-/// Either bundled rig client a turn's kind can build.
+/// The generation options a turn's request carries, which rig spells in
+/// the vendor's dialect -- or refuses, failing the request, when the
+/// dialect cannot honour one.
 ///
-/// rig-core 0.42 bundles both with no feature gates; the enum (rather than
-/// a trait object) is what lets `run_provider_stream` stay generic over the
-/// concrete `CompletionClient` impl without dyn-safe contortions.
-#[derive(Debug)]
-pub(super) enum RigCompletionClient {
-    OpenAi(Box<openai::OpenAI>),
-    Anthropic(Box<anthropic::Anthropic>),
-}
-
-impl RigCompletionClient {
-    /// The turn's completion model on this client's transport, erased the way
-    /// rig 0.44 hands every provider to a consumer that names no wire.
-    fn completion_model(&self, model: &str) -> DynModel<Completion> {
-        match self {
-            Self::OpenAi(client) => client.completion(model).erase(),
-            Self::Anthropic(client) => client.completion(model).erase(),
-        }
+/// `parallel_tool_calls` is sent on OpenAI's own vendor only. OpenAI
+/// defaults it to true, and an entry on that vendor may be any
+/// OpenAI-compatible gateway rig has no dialect for, so the flag is stated
+/// there to keep the contract the same across them: one assistant response
+/// may request several independent tools, while the session coordinator
+/// still waits for every result before the next completion. A vendor rig
+/// has a dialect for is left to that provider's own default, which is
+/// rig's to know: Ollama's API, for one, takes no such flag.
+pub(super) fn generation_options(vendor: Vendor) -> GenerationOptions {
+    let options = GenerationOptions::default();
+    if vendor == Vendor::openai() {
+        options.parallel_tool_calls(true)
+    } else {
+        options
     }
 }
 
-/// Builds the rig completion client for a turn — generalized from
-/// `openai_completions_client` (the single-kind predecessor) by `[[providers]]`:
-/// `kind` dispatches between rig's bundled clients, constructed the same
-/// way either kind.
+/// The turn's completion model: the vendor's configuration
+/// ([`Vendor::connection`]) for the entry's key and `base_url`, encoding
+/// with the model catalog's facts for the model
+/// (`super::model_catalog`).
 ///
 /// The API key is always read straight from the environment variable
 /// **named** by `config.api_key_env` — secrets never flow through the
-/// config file (`agent::config`'s module doc) — so this can't just call
-/// `from_env()`: rig's own env helpers also read their base-URL variables,
-/// which would let the environment redirect an entry. The base URL is the
-/// entry's `base_url` as written (`config.base_url`); `None` leaves rig's own default (`https://api.openai.com/v1` /
-/// `https://api.anthropic.com`) in place by simply not calling
-/// `.base_url(..)` on the builder. The variable is re-read per turn —
-/// `config.api_key_env` is a name, and a key appearing (or disappearing)
-/// in the environment mid-session is honored at the next turn boundary.
-fn completion_client(config: &RigAgentConfig) -> anyhow::Result<RigCompletionClient> {
+/// config file (`agent::config`'s module doc) — so this can't call rig's
+/// own `from_env()`: rig's env helpers also read their base-URL variables,
+/// which would let the environment redirect an entry. The variable is
+/// re-read per turn — `config.api_key_env` is a name, and a key appearing
+/// (or disappearing) in the environment mid-session is honored at the next
+/// turn boundary.
+fn completion_model(config: &RigAgentConfig) -> anyhow::Result<DynModel<Completion>> {
     let api_key = std::env::var(&config.api_key_env)
         .map_err(|_| anyhow::anyhow!("{} is not set", config.api_key_env))?;
-
-    match config.kind {
-        ProviderKind::OpenAiCompatible => {
-            // rig 0.44's OpenAI dialect defaults to `/responses`; the
-            // OpenAI-compatible kind is the `/chat/completions` wire.
-            let mut provider =
-                openai::wire::OpenAIConfig::new(api_key).with_route(openai::Route::Chat);
-            if let Some(base_url) = &config.base_url {
-                provider = provider.with_base_url(base_url);
-            }
-            Ok(RigCompletionClient::OpenAi(Box::new(provider.client())))
-        }
-        ProviderKind::Anthropic => {
-            let mut provider = anthropic::wire::AnthropicConfig::new(api_key);
-            if let Some(base_url) = &config.base_url {
-                provider = provider.with_base_url(base_url);
-            }
-            Ok(RigCompletionClient::Anthropic(Box::new(provider.client())))
-        }
-    }
+    let connection = config
+        .vendor
+        .connection(api_key, config.base_url.as_deref())?;
+    let facts = super::model_catalog::current().facts(config.vendor.id(), &config.model);
+    Ok(connection.completion_model(&config.model, rig_reqwest::shared(), facts))
 }
 
 /// Decodes a double-encoded tool-call `arguments` value in place: a JSON

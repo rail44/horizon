@@ -9,8 +9,8 @@
 //! standard OpenAI `/models` does not carry them, and the provider in use
 //! since 2026-09 (Ollama Cloud) is that case. So the listing is read **when
 //! it declares limits**, and otherwise the model catalog
-//! ([`super::model_catalog`], models.dev, decided 2026-10-20) is asked for
-//! the provider's base URL and the model id.
+//! ([`super::model_catalog`], rig's own with models.dev laid over it) is
+//! asked for the entry's vendor and the model id.
 //!
 //! "Nothing at all" is still the failure model past those two. Every
 //! failure mode -- no API key, an unreachable endpoint, a non-JSON body, a
@@ -26,15 +26,14 @@
 //! The config carries that name, never a value; an unset variable resolves
 //! to `None` like any other failure.
 //!
-//! Only [`ProviderKind::OpenAiCompatible`] entries are looked up: the
-//! `{base_url}/models` path, the bearer header, and the
-//! `context_length` field are the openai-compatible listing's. [`ProviderKind::Anthropic`] returns `None` without a request
-//! -- rig's anthropic client authenticates with `x-api-key` plus
-//! `anthropic-version`, and an anthropic entry with no `base_url` resolves
-//! to [`DEFAULT_OPENAI_BASE_URL`] below, so a request here would carry that
-//! entry's key to another vendor's endpoint.
+//! Only an entry on OpenAI's wire ([`Wire::OpenAi`]) has its listing read:
+//! the `{base_url}/models` path, the bearer header, and the
+//! `context_length` field are the OpenAI-shaped listing's. An entry on
+//! Anthropic's wire goes straight to the catalog without a request -- its
+//! listing authenticates with `x-api-key` plus `anthropic-version` and
+//! declares no window.
 //!
-//! One lookup per process per `(base_url, api_key_env, model)`, negative
+//! One lookup per process per `(vendor, base_url, api_key_env, model)`, negative
 //! results cached too -- a provider that doesn't publish limits must not be
 //! re-asked once per session for the life of the daemon. The key variable's
 //! name is part of the cache key because two entries can share a base URL
@@ -45,19 +44,12 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::config::{ProviderKind, RigAgentConfig};
+use crate::config::{RigAgentConfig, Vendor, Wire};
 
 /// Bounds the whole `/models` lookup. Session start waits on this once per
 /// process, so it is short: an unresponsive endpoint costs a session a few
 /// seconds of clearing-disabled startup, never a hang.
 const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Rig's own default when `RigAgentConfig::base_url` is `None` (see
-/// `providers::rig::completion::completion_client`). Named here so
-/// the cache key and the request URL agree on what "no base URL" resolves
-/// to. The picker's discovery path passes a concrete URL (the kind's own
-/// default is resolved by the caller), so only [`model_limits`] reads this.
-const DEFAULT_OPENAI_BASE_URL: &str = crate::config::DEFAULT_OPENAI_BASE_URL;
 
 /// What a provider declares about one model's context budget, as reported;
 /// the effective window is derived by the caller
@@ -81,9 +73,9 @@ impl ModelLimits {
     }
 }
 
-/// Keyed by `(base_url, api_key_env, model)`; the value is the *answer*, so
-/// a `None` (this provider declares no limits) is cached exactly like a hit.
-type LimitsCache = Mutex<HashMap<(String, String, String), Option<ModelLimits>>>;
+/// Keyed by `(vendor, base_url, api_key_env, model)`; the value is the
+/// *answer*, so a `None` (no window known) is cached exactly like a hit.
+type LimitsCache = Mutex<HashMap<(&'static str, String, String, String), Option<ModelLimits>>>;
 
 /// Keyed by base URL; the value is the ids a *successful* listing returned.
 /// Failures (transport, non-2xx, no ids) are deliberately not cached — a
@@ -94,22 +86,14 @@ type ListingCache = Mutex<HashMap<String, Vec<String>>>;
 /// Resolves this process's cached limits for this session's provider entry,
 /// fetching them on the first call and reusing the answer -- including a
 /// negative one -- for every later session on the same
-/// `(base_url, api_key_env, model)`. The provider's own listing is asked
-/// first; a listing that declares no limits for the model defers to the
-/// model catalog (`super::model_catalog`).
+/// `(vendor, base_url, api_key_env, model)`. The provider's own listing is
+/// asked first (OpenAI's wire only -- module doc); a listing that declares
+/// no limits for the model defers to the model catalog
+/// (`super::model_catalog`).
 pub(super) async fn model_limits(config: &RigAgentConfig) -> Option<ModelLimits> {
-    match config.kind {
-        ProviderKind::OpenAiCompatible => {}
-        // No OpenAI-shaped lookup for another wire's entry -- module doc.
-        ProviderKind::Anthropic => return None,
-    }
-
-    let base = config
-        .base_url
-        .as_deref()
-        .unwrap_or(DEFAULT_OPENAI_BASE_URL)
-        .to_string();
+    let base = (config.base_url.clone()).unwrap_or_else(|| config.vendor.default_base_url());
     let key = (
+        config.vendor.name(),
         base.clone(),
         config.api_key_env.clone(),
         config.model.clone(),
@@ -119,9 +103,13 @@ pub(super) async fn model_limits(config: &RigAgentConfig) -> Option<ModelLimits>
         return cached;
     }
 
-    let fetched = match fetch_model_limits(&base, &config.api_key_env, &config.model).await {
+    let declared = match config.vendor.wire() {
+        Wire::OpenAi => fetch_model_limits(&base, &config.api_key_env, &config.model).await,
+        Wire::Anthropic => None,
+    };
+    let fetched = match declared {
         Some(declared) => Some(declared),
-        None => super::model_catalog::catalog_limits(&base, &config.model).await,
+        None => super::model_catalog::catalog_limits(config.vendor, &config.model).await,
     };
     if let Ok(mut map) = cache().lock() {
         map.insert(key, fetched);
@@ -186,24 +174,21 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
 /// provider's own listing request, keeping every `data[].id` rather than
 /// looking up one model's limits.
 ///
-/// `kind` picks the request shape, not just the endpoint: openai-compatible
-/// takes `GET {base}/models` with `Authorization: Bearer`, while Anthropic
-/// takes `GET {host}/v1/models` with `x-api-key` and `anthropic-version`
-/// ([`models_url_for`]). `base_url` is already resolved to a concrete
-/// endpoint by the caller (the kind's env var > the entry's `base_url` >
-/// the kind's own default). A successful listing is cached process-lifetime,
+/// The vendor's wire picks the request shape, not just the endpoint:
+/// OpenAI's takes `GET {base}/models` with `Authorization: Bearer`, while
+/// Anthropic's takes `GET {host}/v1/models` with `x-api-key` and
+/// `anthropic-version` ([`models_url_for`]). `base_url` is already resolved
+/// to a concrete endpoint by the caller (the entry's `base_url` > the
+/// vendor's own). A successful listing is cached process-lifetime,
 /// keyed by the request URL (discovery rarely changes mid-run, and a picker
 /// reopen must not re-ask); a failure is not cached. An empty key is
 /// treated as "no key" and returns nothing without a request.
-pub(crate) async fn list_model_ids(
-    kind: crate::config::ProviderKind,
-    base_url: &str,
-    api_key: &str,
-) -> Vec<String> {
+pub(crate) async fn list_model_ids(vendor: Vendor, base_url: &str, api_key: &str) -> Vec<String> {
     if api_key.is_empty() {
         return Vec::new();
     }
-    let url = models_url_for(kind, base_url);
+    let wire = vendor.wire();
+    let url = models_url_for(wire, base_url);
     if let Some(cached) = cache_listings()
         .lock()
         .ok()
@@ -211,7 +196,7 @@ pub(crate) async fn list_model_ids(
     {
         return cached;
     }
-    let ids = fetch_model_ids(kind, &url, api_key).await;
+    let ids = fetch_model_ids(wire, &url, api_key).await;
     if !ids.is_empty()
         && let Ok(mut map) = cache_listings().lock()
     {
@@ -220,14 +205,14 @@ pub(crate) async fn list_model_ids(
     ids
 }
 
-/// The listing URL for a kind. Openai-compatible is `{base}/models`
-/// (tolerating a trailing slash); Anthropic is `{host}/v1/models`, where rig
-/// stores the bare host and appends `/v1` per route, stripping a `/v1` the
-/// configured base already carries.
-pub(super) fn models_url_for(kind: crate::config::ProviderKind, base_url: &str) -> String {
-    match kind {
-        crate::config::ProviderKind::OpenAiCompatible => models_url(base_url),
-        crate::config::ProviderKind::Anthropic => anthropic_models_url(base_url),
+/// The listing URL on a wire. OpenAI's is `{base}/models` (tolerating a
+/// trailing slash); Anthropic's is `{host}/v1/models`, where rig stores the
+/// bare host and appends `/v1` per route, stripping a `/v1` the configured
+/// base already carries.
+pub(super) fn models_url_for(wire: Wire, base_url: &str) -> String {
+    match wire {
+        Wire::OpenAi => models_url(base_url),
+        Wire::Anthropic => anthropic_models_url(base_url),
     }
 }
 
@@ -246,13 +231,9 @@ fn cache_listings() -> &'static ListingCache {
 /// Anthropic's required API-version header value on every request.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// One provider request in its kind's own shape, keeping only the ids. Every
+/// One provider request in its wire's own shape, keeping only the ids. Every
 /// error path returns an empty list.
-async fn fetch_model_ids(
-    kind: crate::config::ProviderKind,
-    url: &str,
-    api_key: &str,
-) -> Vec<String> {
+async fn fetch_model_ids(wire: Wire, url: &str, api_key: &str) -> Vec<String> {
     let client = match reqwest::Client::builder()
         .timeout(MODELS_REQUEST_TIMEOUT)
         .build()
@@ -260,10 +241,10 @@ async fn fetch_model_ids(
         Ok(client) => client,
         Err(_) => return Vec::new(),
     };
-    let request = match kind {
-        crate::config::ProviderKind::OpenAiCompatible => client.get(url).bearer_auth(api_key),
+    let request = match wire {
+        Wire::OpenAi => client.get(url).bearer_auth(api_key),
         // Anthropic rejects a Bearer token and mandates the version header.
-        crate::config::ProviderKind::Anthropic => client
+        Wire::Anthropic => client
             .get(url)
             .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION),
@@ -513,17 +494,45 @@ mod tests {
 
     #[tokio::test]
     async fn an_anthropic_entry_is_never_asked_for_an_openai_listing() {
-        // The entry's key must not reach an OpenAI-shaped endpoint.
+        // The entry's key must not reach an OpenAI-shaped endpoint. Nothing
+        // listens on the catalog's URL and no copy is cached: the catalog
+        // the entry falls back to is rig's own.
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe {
+            std::env::set_var(
+                super::super::model_catalog::CATALOG_URL_VAR,
+                "http://127.0.0.1:1/api.json",
+            )
+        };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe {
+            std::env::set_var(
+                super::super::model_catalog::CATALOG_CACHE_VAR,
+                "/nonexistent/horizon-catalog.json",
+            )
+        };
         // FIXME: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key") };
         let mock = ModelsMock::start("live-key").await;
         let anthropic = RigAgentConfig {
-            kind: ProviderKind::Anthropic,
+            vendor: Vendor::resolve("anthropic").unwrap(),
             ..config_on(&mock.base_url, "HORIZON_TEST_MODEL_LIMITS_KEY_B")
         };
 
         assert_eq!(model_limits(&anthropic).await, None);
-        // An openai-compatible entry on the same endpoint proves the mock
+        // A model the catalog lists has its window from the catalog, still
+        // without a request.
+        let claude = RigAgentConfig {
+            model: "claude-haiku-4-5".to_string(),
+            ..anthropic.clone()
+        };
+        assert_eq!(
+            model_limits(&claude)
+                .await
+                .map(|limits| limits.context_length),
+            Some(200_000)
+        );
+        // An OpenAI-shaped entry on the same endpoint proves the mock
         // was reachable all along, and counts the requests it really got.
         assert!(
             model_limits(&config_on(
@@ -555,8 +564,8 @@ mod tests {
     }
 
     /// The listing answers but declares nothing for the model (standard
-    /// OpenAI `/models`, Ollama's too): the catalog's entry for this base
-    /// URL is the window. The catalog comes from a cached copy, since
+    /// OpenAI `/models`, Ollama's too): the catalog's entry for the entry's
+    /// vendor is the window. The catalog comes from a cached copy, since
     /// nothing listens on the fetch URL.
     #[tokio::test]
     async fn a_listing_without_limits_defers_to_the_catalog() {
@@ -569,9 +578,14 @@ mod tests {
         std::fs::write(
             &cache,
             serde_json::json!({
-                "mock": {
-                    "api": mock.base_url,
-                    "models": {"unlisted-model": {"limit": {"context": 1048576, "output": 384000}}}
+                "openai": {
+                    "models": {"unlisted-model": {
+                        "name": "unlisted",
+                        "reasoning": false,
+                        "tool_call": true,
+                        "modalities": {"input": ["text"], "output": ["text"]},
+                        "limit": {"context": 1048576, "output": 384000}
+                    }}
                 }
             })
             .to_string(),
@@ -692,22 +706,21 @@ mod tests {
         );
     }
 
-    /// The listing request differs by kind: openai-compatible appends
-    /// `/models`; Anthropic appends `/v1/models` to the bare host (and
-    /// tolerates a base that already carries `/v1`).
+    /// The listing request differs by wire: OpenAI's appends `/models`;
+    /// Anthropic's appends `/v1/models` to the bare host (and tolerates a
+    /// base that already carries `/v1`).
     #[test]
-    fn listing_urls_match_each_kinds_request_shape() {
-        use crate::config::ProviderKind;
+    fn listing_urls_match_each_wires_request_shape() {
         assert_eq!(
-            models_url_for(ProviderKind::OpenAiCompatible, "https://api.openai.com/v1"),
+            models_url_for(Wire::OpenAi, "https://api.openai.com/v1"),
             "https://api.openai.com/v1/models"
         );
         assert_eq!(
-            models_url_for(ProviderKind::Anthropic, "https://api.anthropic.com"),
+            models_url_for(Wire::Anthropic, "https://api.anthropic.com"),
             "https://api.anthropic.com/v1/models"
         );
         assert_eq!(
-            models_url_for(ProviderKind::Anthropic, "https://api.anthropic.com/v1"),
+            models_url_for(Wire::Anthropic, "https://api.anthropic.com/v1"),
             "https://api.anthropic.com/v1/models"
         );
     }

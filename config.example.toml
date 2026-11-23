@@ -67,15 +67,16 @@
 #   startup warns naming the key, and sessions start in the deterministic
 #   fallback (no provider is called) with a first message saying so.
 # - small_model: the model AI titles run on, and automatic approval
-#   judgments when no decision model is available. Its provider must be an
-#   openai-compatible entry, whose base_url and api_key_env serve it. Unset
+#   judgments when no decision model is available. Its provider's vendor
+#   must speak OpenAI's wire (openai, ollama, openrouter, ...; not
+#   anthropic); that entry's base_url and api_key_env serve it. Unset
 #   or invalid (warned at startup), or its key variable unset: tabs keep
 #   their raw titles and that fallback judge is off; it never borrows
 #   another entry's credentials.
 # - decision_model: the decision model (System One API, POST
 #   {decision_url}) automatic approval judgments and turn-continuation
-#   checks ask. Its provider must be an openai-compatible entry with a
-#   decision_url, e.g. an entry with decision_url
+#   checks ask. Its provider must be an entry with a decision_url, e.g. an
+#   entry with decision_url
 #   "https://ollama.com/v1/systemone" and model "clef:cloud"; that entry's
 #   api_key_env serves it. Unset or invalid, the entry without a
 #   decision_url, or its key variable unset:
@@ -92,18 +93,25 @@
 #
 # - Entries are listed in the order written; the picker shows them in that
 #   same file order. Commented out below: both fall back per the rules noted.
-# - kind: "openai-compatible" (default — any endpoint speaking OpenAI's
-#   chat-completions wire) or "anthropic". rig-core bundles both; no feature
-#   gates.
+# - vendor: the rig vendor the entry is reached as — "openai" (default),
+#   "anthropic", "ollama", "openrouter", "deepseek", "groq", "mistral",
+#   "moonshot", "zai", ... (rig-core's provider registry). The vendor decides
+#   how requests are spelled for that provider and which catalog its models'
+#   facts (context window, reasoning levels) come from. An endpoint rig has
+#   no vendor for (DeepInfra, synthetic.new) is "openai" with its own
+#   base_url. An entry whose vendor rig cannot reach is dropped with a
+#   warning. The old key `kind` is refused: rewrite it as vendor
+#   (docs/provider-configuration.md).
 # - api_key_env: the environment variable's *name* the entry's API key is
 #   read from — never a value (see the header's secrets rule). Unset means
-#   the kind's own variable name: OPENAI_API_KEY for openai-compatible,
-#   ANTHROPIC_API_KEY for anthropic. An entry whose variable is not set is
-#   registered but unavailable (grayed out, not hidden); sessions on it run
-#   the ordinary deterministic fallback instead of calling the provider.
-# - base_url: unset means rig's own default endpoint for the kind
-#   (https://api.openai.com/v1 / https://api.anthropic.com). No environment
-#   variable overrides it.
+#   the vendor's own variable name as rig names it: OPENAI_API_KEY for
+#   openai, ANTHROPIC_API_KEY for anthropic, OLLAMA_API_KEY for ollama. An
+#   entry whose variable is not set is registered but unavailable (grayed
+#   out, not hidden); sessions on it run the ordinary deterministic fallback
+#   instead of calling the provider.
+# - base_url: unset means the vendor's own endpoint
+#   (https://api.openai.com/v1 for openai). No environment variable
+#   overrides it.
 # - decision_url: the full URL of the entry's System One decision route,
 #   used as written (never derived from base_url; no env var overrides it).
 #   Only an entry decision_model names needs it. Providers serve it at
@@ -122,8 +130,12 @@
 #
 # [[providers]]
 # name = "claude"
-# kind = "anthropic"
-# api_key_env = "ANTHROPIC_API_KEY"
+# vendor = "anthropic"
+#
+# [[providers]]
+# name = "ollama"
+# vendor = "ollama"
+# base_url = "https://ollama.com/v1"
 
 # ---------------------------------------------------------------------------
 # [terminal] — cell rendering metrics for the spawned shell.

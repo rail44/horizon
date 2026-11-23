@@ -241,20 +241,18 @@ impl ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        AgentPersistenceConfig, NamedProviderConfig, ProviderKind, ProvidersTable,
-    };
+    use crate::config::{AgentPersistenceConfig, NamedProviderConfig, ProvidersTable, Vendor};
     use crate::persistence::projection::duckdb::SharedDuckdbStore;
 
     fn named_entry(
         name: &str,
-        kind: ProviderKind,
+        kind: Vendor,
         api_key_env: &str,
         api_key_present: bool,
     ) -> NamedProviderConfig {
         NamedProviderConfig {
             name: name.to_string(),
-            kind,
+            vendor: kind,
             base_url: None,
             api_key_env: api_key_env.to_string(),
             api_key_present,
@@ -279,15 +277,10 @@ mod tests {
             },
             providers: ProvidersTable {
                 entries: vec![
-                    named_entry(
-                        "openai",
-                        ProviderKind::OpenAiCompatible,
-                        "OPENAI_API_KEY",
-                        true,
-                    ),
+                    named_entry("openai", Vendor::openai(), "OPENAI_API_KEY", true),
                     named_entry(
                         "claude",
-                        ProviderKind::Anthropic,
+                        Vendor::resolve("anthropic").unwrap(),
                         "ANTHROPIC_API_KEY",
                         false,
                     ),

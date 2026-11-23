@@ -3005,6 +3005,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rig-core",
+ "rig-reqwest",
  "schemars 1.2.3",
  "serde",
  "serde_json",

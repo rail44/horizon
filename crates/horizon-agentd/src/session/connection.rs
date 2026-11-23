@@ -349,7 +349,7 @@ mod tests {
     use crate::session::state::SessionEntry;
     use crate::session::test_support::{state_with_rig_config, test_state};
     use crossbeam_channel::unbounded;
-    use horizon_agent::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
+    use horizon_agent::config::{NamedProviderConfig, ProvidersTable, Vendor};
     use horizon_agent::contract::Command;
     use horizon_agent::contract::ProviderId;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
@@ -490,14 +490,14 @@ mod tests {
         let entries = vec![
             NamedProviderConfig {
                 name: "openai".to_string(),
-                kind: ProviderKind::OpenAiCompatible,
+                vendor: Vendor::openai(),
                 base_url: None,
                 api_key_env: "OPENAI_API_KEY".to_string(),
                 api_key_present: true,
             },
             NamedProviderConfig {
                 name: "claude".to_string(),
-                kind: ProviderKind::Anthropic,
+                vendor: Vendor::resolve("anthropic").unwrap(),
                 base_url: None,
                 api_key_env: "ANTHROPIC_API_KEY".to_string(),
                 api_key_present: false,

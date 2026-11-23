@@ -1,5 +1,6 @@
 //! Exercise both adapters through real HTTP/SSE, without an external provider.
 use super::*;
+use crate::config::Wire;
 use crate::contract::ConversationInputKind;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -77,9 +78,14 @@ async fn serve_transport(
     (headers, body)
 }
 
-fn response(kind: ProviderKind) -> String {
-    let frames = match kind {
-        ProviderKind::OpenAiCompatible => vec![
+/// Both wires a turn can travel on, by a vendor of each.
+fn vendors() -> [Vendor; 2] {
+    [Vendor::openai(), Vendor::resolve("anthropic").unwrap()]
+}
+
+fn response(kind: Vendor) -> String {
+    let frames = match kind.wire() {
+        Wire::OpenAi => vec![
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
                 "choices":[{"index":0,"delta":{"role":"assistant","content":"reading"},"finish_reason":null}]}),
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
@@ -88,7 +94,7 @@ fn response(kind: ProviderKind) -> String {
                 "choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],
                 "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}),
         ],
-        ProviderKind::Anthropic => vec![
+        Wire::Anthropic => vec![
             json!({"type":"message_start","message":{"id":"message-1","role":"assistant","content":[],"model":"test-model","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}),
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reading"}}),
@@ -107,7 +113,7 @@ fn response(kind: ProviderKind) -> String {
         }
         sse.push_str(&format!("data: {frame}\n\n"));
     }
-    if kind == ProviderKind::OpenAiCompatible {
+    if kind.wire() == Wire::OpenAi {
         sse.push_str("data: [DONE]\n\n");
     }
     sse
@@ -119,11 +125,11 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
     let key = "HORIZON_TEST_PROVIDER_VARIANTS_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         for rejected in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let config = RigAgentConfig {
-                kind,
+                vendor: kind,
                 api_key_present: true,
                 api_key_env: key.into(),
                 base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -163,8 +169,8 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
             assert_eq!(request["max_tokens"], 100);
             assert_eq!(request["stream"], true);
             assert_eq!(request["tools"].as_array().unwrap().len(), 1);
-            match kind {
-                ProviderKind::OpenAiCompatible => {
+            match kind.wire() {
+                Wire::OpenAi => {
                     assert!(headers.starts_with("POST /v1/chat/completions "));
                     assert!(
                         headers
@@ -174,7 +180,7 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                     assert_eq!(request["parallel_tool_calls"], true);
                     assert_eq!(request["tools"][0]["function"]["name"], "fs_read");
                 }
-                ProviderKind::Anthropic => {
+                Wire::Anthropic => {
                     assert!(headers.starts_with("POST /v1/messages "));
                     assert!(headers.to_lowercase().contains("x-api-key: local-test-key"));
                     assert!(request.get("parallel_tool_calls").is_none());
@@ -230,11 +236,11 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
     }
 }
 
-fn partial_response(kind: ProviderKind) -> String {
+fn partial_response(kind: Vendor) -> String {
     let complete = response(kind);
-    match kind {
-        ProviderKind::OpenAiCompatible => complete.replace("data: [DONE]\n\n", ""),
-        ProviderKind::Anthropic => complete
+    match kind.wire() {
+        Wire::OpenAi => complete.replace("data: [DONE]\n\n", ""),
+        Wire::Anthropic => complete
             .split("event: message_delta")
             .next()
             .unwrap()
@@ -246,9 +252,9 @@ fn partial_response(kind: ProviderKind) -> String {
 /// its arguments start, no frame ever closes it, and the finish reason says the
 /// output cap was reached. This is the shape rig's fold reports through
 /// `CompletionResponse::unfinished_calls`, which the collector now trusts.
-fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
-    let frames = match kind {
-        ProviderKind::OpenAiCompatible => vec![
+fn tool_call_cut_by_usage_cap(kind: Vendor) -> String {
+    let frames = match kind.wire() {
+        Wire::OpenAi => vec![
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
                 "choices":[{"index":0,"delta":{"role":"assistant","content":"reading"},"finish_reason":null}]}),
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
@@ -257,7 +263,7 @@ fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
                 "choices":[{"index":0,"delta":{},"finish_reason":"length"}],
                 "usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}),
         ],
-        ProviderKind::Anthropic => vec![
+        Wire::Anthropic => vec![
             json!({"type":"message_start","message":{"id":"message-1","role":"assistant","content":[],"model":"test-model","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}),
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reading"}}),
@@ -275,7 +281,7 @@ fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
         }
         sse.push_str(&format!("data: {frame}\n\n"));
     }
-    if kind == ProviderKind::OpenAiCompatible {
+    if kind.wire() == Wire::OpenAi {
         sse.push_str("data: [DONE]\n\n");
     }
     sse
@@ -289,10 +295,10 @@ async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
     let key = "HORIZON_TEST_PROVIDER_OPEN_CALL_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = RigAgentConfig {
-            kind,
+            vendor: kind,
             api_key_present: true,
             api_key_env: key.into(),
             base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -327,11 +333,9 @@ async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
         // when the reply ends, so its `unfinished_calls` is empty and the cap is
         // what names the truncation. Measured against rig 0.45 with a canned
         // stream through the public client seam, not assumed.
-        let expected = match kind {
-            ProviderKind::OpenAiCompatible => {
-                crate::providers::rig::completion::Truncation::OutputCap
-            }
-            ProviderKind::Anthropic => crate::providers::rig::completion::Truncation::Tools {
+        let expected = match kind.wire() {
+            Wire::OpenAi => crate::providers::rig::completion::Truncation::OutputCap,
+            Wire::Anthropic => crate::providers::rig::completion::Truncation::Tools {
                 unfinished: std::num::NonZeroUsize::new(1).expect("one open call"),
                 output_cap: true,
             },
@@ -349,7 +353,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
     let key = "HORIZON_TEST_PROVIDER_INTERRUPTION_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         for (transport, cancel) in [
             (Transport::Cut, false),
             (Transport::Stall, false),
@@ -357,7 +361,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let config = RigAgentConfig {
-                kind,
+                vendor: kind,
                 api_key_present: true,
                 api_key_env: key.into(),
                 base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -402,36 +406,18 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
                 },
             };
             let environment = SessionEnvironment::for_workspace_root(None);
-            let attempt = match completion_client(&config).unwrap() {
-                RigCompletionClient::OpenAi(client) => {
-                    run_provider_stream(
-                        &config,
-                        client.completion(&config.model).erase(),
-                        &environment,
-                        &[],
-                        Message::user("read"),
-                        vec![],
-                        tx,
-                        &token,
-                        deadline,
-                    )
-                    .await
-                }
-                RigCompletionClient::Anthropic(client) => {
-                    run_provider_stream(
-                        &config,
-                        client.completion(&config.model).erase(),
-                        &environment,
-                        &[],
-                        Message::user("read"),
-                        vec![],
-                        tx,
-                        &token,
-                        deadline,
-                    )
-                    .await
-                }
-            };
+            let attempt = run_provider_stream(
+                &config,
+                completion_model(&config).unwrap(),
+                &environment,
+                &[],
+                Message::user("read"),
+                vec![],
+                tx,
+                &token,
+                deadline,
+            )
+            .await;
             server.abort();
             let seen = cancellation.await.unwrap();
             let (_, completion) = match attempt {
@@ -483,11 +469,11 @@ async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
     let key = "HORIZON_TEST_PROVIDER_FINISH_REASON_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         for limited in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let config = RigAgentConfig {
-                kind,
+                vendor: kind,
                 api_key_present: true,
                 api_key_env: key.into(),
                 base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -497,12 +483,12 @@ async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
             };
             let mut body = response(kind);
             if limited {
-                body = match kind {
-                    ProviderKind::OpenAiCompatible => body.replace(
+                body = match kind.wire() {
+                    Wire::OpenAi => body.replace(
                         "\"finish_reason\":\"tool_calls\"",
                         "\"finish_reason\":\"length\"",
                     ),
-                    ProviderKind::Anthropic => body.replace(
+                    Wire::Anthropic => body.replace(
                         "\"stop_reason\":\"tool_use\"",
                         "\"stop_reason\":\"max_tokens\"",
                     ),
@@ -535,11 +521,11 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
     let key = "HORIZON_TEST_PROVIDER_RETRY_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         for issued in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let config = RigAgentConfig {
-                kind,
+                vendor: kind,
                 api_key_present: true,
                 api_key_env: key.into(),
                 base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -550,11 +536,11 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
             let prefix = if issued {
                 partial_response(kind)
             } else {
-                match kind {
-                    ProviderKind::OpenAiCompatible => {
+                match kind.wire() {
+                    Wire::OpenAi => {
                         format!("{}\n\n", response(kind).split("\n\n").next().unwrap())
                     }
-                    ProviderKind::Anthropic => response(kind)
+                    Wire::Anthropic => response(kind)
                         .split("event: content_block_stop")
                         .next()
                         .unwrap()
@@ -631,7 +617,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
     let key = "HORIZON_TEST_PROVIDER_MULTIPLE_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         let original: Vec<Value> = response(kind)
             .split("\n\n")
             .filter_map(|block| {
@@ -643,8 +629,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             .collect();
         let mut frames = Vec::new();
         for frame in original {
-            if kind == ProviderKind::OpenAiCompatible
-                && frame["choices"][0]["delta"]["tool_calls"].is_array()
+            if kind.wire() == Wire::OpenAi && frame["choices"][0]["delta"]["tool_calls"].is_array()
             {
                 // One OpenAI response interleaves argument fragments for two calls.
                 for (index, arguments) in [
@@ -661,7 +646,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
                     };
                     frames.push(chunk);
                 }
-            } else if kind == ProviderKind::Anthropic && frame["type"] == "message_delta" {
+            } else if kind.wire() == Wire::Anthropic && frame["type"] == "message_delta" {
                 // Anthropic delivers complete content blocks in order; both
                 // calls still belong to the same parallel execution batch.
                 frames.extend([
@@ -681,12 +666,12 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             }
             body.push_str(&format!("data: {frame}\n\n"));
         }
-        if kind == ProviderKind::OpenAiCompatible {
+        if kind.wire() == Wire::OpenAi {
             body.push_str("data: [DONE]\n\n");
         }
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = RigAgentConfig {
-            kind,
+            vendor: kind,
             api_key_present: true,
             api_key_env: key.into(),
             base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -740,10 +725,10 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
     let key = "HORIZON_TEST_HISTORY_REPLAY_KEY";
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(key, "local-test-key") };
-    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+    for kind in vendors() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = RigAgentConfig {
-            kind,
+            vendor: kind,
             api_key_present: true,
             api_key_env: key.into(),
             base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
@@ -755,7 +740,7 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
         let mut live = ConversationHistory::default();
         live.open_turn(&tx);
         let mut sse = response(kind);
-        if kind == ProviderKind::Anthropic {
+        if kind.wire() == Wire::Anthropic {
             // A signed thinking block belongs to the same assistant response as its calls.
             let reasoning = [
                 json!({"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":""}}),
@@ -832,7 +817,7 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
         }
         let (first, second) = server.await.unwrap();
         assert_eq!(first, second, "{kind:?} request differs after replay");
-        if kind == ProviderKind::Anthropic {
+        if kind.wire() == Wire::Anthropic {
             assert!(
                 first.to_string().contains("opaque-signature"),
                 "signed reasoning must reach the next request: {first}"
