@@ -1,6 +1,6 @@
 # Agent Roles, Skills, and the Configuration Agent
 
-> **The configuration agent was removed 2026-11-24 (owner approval)**:
+> **The configuration agent was removed 2026-11-24**:
 > the `config` role, `config_read`/`config_write` and the embedded
 > `horizon-config` skill. The owner's event log held one `config_read`
 > and no `config_write`. Roles and skills themselves remain; the sections

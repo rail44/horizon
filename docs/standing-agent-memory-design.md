@@ -1,6 +1,6 @@
 # 常設エージェントの記憶モデル — ターン毎の「要約+本文」集約
 
-> **撤去(2026-11-24、オーナー承認)**: この仕組み(role の `standing`、
+> **撤去(2026-11-24)**: この仕組み(role の `standing`、
 > `memory_update`、ターン終わりの checkpoint、記憶文書の前置き、
 > `MemoryDigest`/`MemoryCheckpointMissed`/`MemorySeeded`、ACP の
 > `_horizon/memory`)はコードから取り除いた。設計の相手だった keeper は

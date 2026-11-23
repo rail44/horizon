@@ -586,7 +586,7 @@ and the requirements for adding a worker.
 
 ## Background bash jobs (2026-11-04, removed 2026-11-24)
 
-> **Removed 2026-11-24 (owner approval).** The owner's event log held one
+> **Removed 2026-11-24.** The owner's event log held one
 > background call and no `bash_output` or `bash_cancel` call, and a
 > running job held the session's bash FIFO, so every later bash call
 > waited behind it. The section below records the design as it was.

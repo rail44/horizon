@@ -38,6 +38,14 @@ config option the model picker and `horizon set-effort` switch. Open: whether
 `max` turns need more than the fixed 32,768 output tokens.
 See [the effort design](agent-reasoning-effort-design.md).
 
+The built-in agent is to be split into a core common to agent frameworks
+(loop, provider, tools, conversation record, compaction) and modules that
+plug into fixed stages of it (approval and judge, continuation, prompt
+sections), and a session into a conversation tree and the run attached to
+one of its leaves, so a conversation can be branched. Not started. See
+[the core and extension design](agent-core-extension-design.md) and
+[the framework survey](research/agent-frameworks-core-and-extension-2026-11-23.md).
+
 Subagents become one delegation tool with a read and a write mode: `task`
 gains `access`, exploration is its read mode, a child has no budget,
 reports how it ended, can be sent a follow-up, routes its approvals to the

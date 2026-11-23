@@ -113,7 +113,7 @@ candidate instead of a two-stage chat cascade.
   start (the pair absent or invalid, or its key variable unset), the
   session has no judge and every approval candidate goes to the human. The
   two-stage chat cascade on the `small_model` connection that served this
-  case was removed 2026-11-24 (owner approval): every one of the 319
+  case was removed 2026-11-24: every one of the 319
   recorded verdicts carrying `judge_backend` had come from the decision
   model. A decision call that fails at runtime escalates.
 
