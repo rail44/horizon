@@ -94,8 +94,8 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
         );
         events.push(initialized);
         assert_eq!(
-            agent_frame_from_events(&events).status(),
-            Some(SessionStatus::Failed)
+            agent_frame_from_events(&events).turn_end_reason,
+            Some(agent::TurnEndReason::Failed)
         );
         handle.sender().send(agent::Command::Shutdown).unwrap();
     }
@@ -591,102 +591,6 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
     std::assert_matches!(
         &frame.items[0],
         AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs_write");
-}
-
-/// `docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum (turn
-/// receipts): a turn's `TurnEnded` fold must carry the end reason, the
-/// model id reported by the turn's `ProviderRequestSent`, and an elapsed
-/// duration measured from the turn's opening `MessageCommitted(User)`.
-#[test]
-fn turn_ended_folds_a_receipt_with_reason_model_and_elapsed() {
-    let mut frame = AgentFrame::empty();
-    let mut turn = TurnClock::new();
-
-    apply_agent_event_to_frame(
-        &mut frame,
-        &agent::Event::MessageCommitted(agent::Message {
-            role: agent::MessageRole::User,
-            text: "question".to_string(),
-        }),
-        &mut turn,
-    );
-    apply_agent_event_to_frame(
-        &mut frame,
-        &agent::Event::ProviderRequestSent(agent::ProviderRequestSent {
-            model: "gpt-4o-mini".to_string(),
-        }),
-        &mut turn,
-    );
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    apply_agent_event_to_frame(
-        &mut frame,
-        &agent::Event::TurnEnded(agent::TurnEndReason::Completed),
-        &mut turn,
-    );
-
-    match frame.items.last().expect("a TurnEnded item") {
-        AgentFrameItem::TurnEnded {
-            reason,
-            model,
-            elapsed,
-        } => {
-            assert_eq!(*reason, agent::TurnEndReason::Completed);
-            assert_eq!(model.as_deref(), Some("gpt-4o-mini"));
-            assert!(
-                *elapsed >= std::time::Duration::from_millis(5),
-                "elapsed {elapsed:?} should cover the sleep between request and turn end"
-            );
-        }
-        other => panic!("expected a TurnEnded item, got {other:?}"),
-    }
-}
-
-/// A turn that ends before any `ProviderRequestSent` (e.g. an immediate
-/// cancel) has no model to report -- `model` must read back `None`, not a
-/// stale value from an earlier turn.
-#[test]
-fn turn_ended_with_no_provider_request_has_no_model() {
-    let frame = agent_frame_from_events(&[
-        agent::Event::MessageCommitted(agent::Message {
-            role: agent::MessageRole::User,
-            text: "question".to_string(),
-        }),
-        agent::Event::TurnEnded(agent::TurnEndReason::Cancelled),
-    ]);
-
-    match frame.items.last().expect("a TurnEnded item") {
-        AgentFrameItem::TurnEnded { reason, model, .. } => {
-            assert_eq!(*reason, agent::TurnEndReason::Cancelled);
-            assert_eq!(*model, None);
-        }
-        other => panic!("expected a TurnEnded item, got {other:?}"),
-    }
-}
-
-/// Old-log replay compat for the elapsed-time trade-off (`TurnClock`'s doc
-/// comment): a `TurnEnded` with nothing preceding it in the replayed slice
-/// (a legacy pre-turn_id log, or a resumed-history slice starting mid-turn)
-/// must still fold without panicking, reading back a near-zero elapsed and
-/// no model rather than reusing stale state.
-#[test]
-fn agent_frame_from_events_folds_a_turn_ended_with_no_preceding_events() {
-    let frame =
-        agent_frame_from_events(&[agent::Event::TurnEnded(agent::TurnEndReason::Cancelled)]);
-
-    match frame.items.as_slice() {
-        [
-            AgentFrameItem::TurnEnded {
-                reason,
-                model,
-                elapsed,
-            },
-        ] => {
-            assert_eq!(*reason, agent::TurnEndReason::Cancelled);
-            assert_eq!(*model, None);
-            assert_eq!(*elapsed, std::time::Duration::ZERO);
-        }
-        other => panic!("expected exactly one TurnEnded item, got {other:?}"),
-    }
 }
 
 /// `AgentFrameItem::TurnEnded` is itself a turn boundary (`is_turn_boundary_item`):

@@ -9,7 +9,6 @@
 
 mod fold;
 mod queries;
-mod status;
 mod tool_calls;
 mod types;
 
@@ -18,7 +17,6 @@ mod test_support;
 
 // --- Re-exports (original `frame.rs` public surface) ---
 
-pub use status::SessionStatus;
 pub use types::{AgentFrame, AgentFrameItem};
 
 pub(crate) use fold::TurnClock;
@@ -28,10 +26,6 @@ pub(crate) use fold::{
     apply_tool_call_progress_to_frame,
 };
 
-pub use queries::{
-    actionable_pending_approval_call_ids_in, actionable_pending_approval_identities_in,
-    halted_awaiting_continue, state_indicates_turn_in_flight,
-};
 pub(crate) use tool_calls::tool_call_occurrences;
 
 #[cfg(test)]
