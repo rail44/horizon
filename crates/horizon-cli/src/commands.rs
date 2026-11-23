@@ -34,6 +34,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::ContinueTurn { .. } => "continue-turn",
         Subcommand::Send { .. } => "send",
         Subcommand::SetModel { .. } => "set-model",
+        Subcommand::SetEffort { .. } => "set-effort",
         Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
         Subcommand::ReloadTerminalRuntime => "reload-terminal-runtime",
         Subcommand::ReloadConfig => "reload-config",
@@ -179,6 +180,10 @@ pub fn to_request(
                 "provider": provider,
                 "model": model
             }),
+        ),
+        Subcommand::SetEffort { session_id, level } => invoke(
+            command_name,
+            serde_json::json!({ "session_id": session_id, "level": level }),
         ),
         Subcommand::ReloadAgentRuntime => invoke(command_name, serde_json::json!({})),
         Subcommand::ReloadTerminalRuntime => invoke(command_name, serde_json::json!({})),

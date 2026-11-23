@@ -58,6 +58,18 @@ impl Shell {
                     });
                 });
             }
+            Some(Command::SetEffort { session_id, level }) => {
+                let Some(models) = self.kept().models.clone() else {
+                    reply(error_body("the agent runtime is not running"));
+                    return;
+                };
+                std::thread::spawn(move || {
+                    reply(match models.set_effort(session_id, &level) {
+                        Ok(()) => EnvelopeBody::Ok { session_id: None },
+                        Err(error) => error_body(format!("effort switch failed: {error}")),
+                    });
+                });
+            }
             // (Answered once the components are read, off the UI thread.)
             Some(Command::ExtensionUse { file }) => {
                 self.use_extension(file, move |shell, used| {

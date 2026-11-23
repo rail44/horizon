@@ -19,10 +19,10 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
 use horizon_acp::{
-    DrainRequest, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, HostToolRequest,
-    InitializeMeta, ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID,
-    MemoryNotification, ProviderSummary, ReloadProviderConfigRequest, SessionEventNotification,
-    SessionId, SessionInfoMeta, SessionNewMeta, TaskProgressNotification,
+    DrainRequest, EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION,
+    HostToolRequest, InitializeMeta, ListProviderModelsRequest, ListProvidersRequest,
+    MODEL_CONFIG_ID, MemoryNotification, ProviderSummary, ReloadProviderConfigRequest,
+    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, TaskProgressNotification,
     ToolCallProgressNotification, WatchBoardRequest, read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -101,6 +101,12 @@ pub(super) enum Op {
         session_id: SessionId,
         provider: String,
         model: String,
+        reply: crossbeam_channel::Sender<Result<(), String>>,
+    },
+    SetSessionEffort {
+        session_id: SessionId,
+        /// The level's word.
+        level: String,
         reply: crossbeam_channel::Sender<Result<(), String>>,
     },
     WatchBoard {
@@ -703,6 +709,23 @@ fn handle_op(
             let routes = routes.clone();
             tokio::spawn(async move {
                 let result = call(&routes, OP_TIMEOUT, "set session model", request).await;
+                let _ = reply.send(result.map(|_| ()));
+            });
+        }
+        Op::SetSessionEffort {
+            session_id,
+            level,
+            reply,
+        } => {
+            let request = v2::SetSessionConfigOptionRequest::new(
+                acp_session_id(session_id),
+                EFFORT_CONFIG_ID,
+                v2::SessionConfigOptionValue::id(level),
+            );
+            let request = send(connection, request);
+            let routes = routes.clone();
+            tokio::spawn(async move {
+                let result = call(&routes, OP_TIMEOUT, "set session effort", request).await;
                 let _ = reply.send(result.map(|_| ()));
             });
         }

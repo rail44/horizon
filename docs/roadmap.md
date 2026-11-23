@@ -31,10 +31,11 @@ migration design](ui-foundation-migration-design.md), [the research
 record](research/ui-foundation-candidates-2026-11-11.md)). What that left
 open: macOS, where the new shell has not been run.
 
-A conversation's reasoning effort becomes a per-session setting beside its
-model, sent through rig-core's own generation options. First stage done:
-`[[providers]]` entries name a rig `vendor` and model facts come from rig's
-catalog; open: the effort setting itself.
+A conversation's reasoning effort is a per-session setting beside its model,
+sent through rig-core's own generation options: `[[providers]]` entries name
+a rig `vendor`, model facts come from rig's catalog, and the effort is an ACP
+config option the model picker and `horizon set-effort` switch. Open: whether
+`max` turns need more than the fixed 32,768 output tokens.
 See [the effort design](agent-reasoning-effort-design.md).
 
 Subagents become one delegation tool with a read and a write mode: `task`

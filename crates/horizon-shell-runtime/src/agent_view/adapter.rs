@@ -97,11 +97,7 @@ pub fn adapt(
     };
     Adapted {
         transcript: Transcript {
-            model: model
-                .selection
-                .as_ref()
-                .map(|selection| selection.model.clone())
-                .unwrap_or_default(),
+            model: model_label(model),
             status: status(state, unreachable),
             units,
             tasks: task_lines(model, &pending, now_ms),
@@ -596,6 +592,17 @@ fn body(items: &[AgentFrameItem], view: &ToolCallView) -> Option<CallBody> {
         CallBody::Text(text) => text.is_empty(),
     };
     (!empty).then_some(body)
+}
+
+/// The composer chip's label: the session's model, and the effort its
+/// requests send when its model takes one (`model · high`).
+fn model_label(model: &AgentModel) -> String {
+    let name = (model.selection.as_ref()).map(|selection| selection.model.clone());
+    match (name, &model.effort) {
+        (Some(name), Some(effort)) => format!("{name} · {}", effort.current),
+        (Some(name), None) => name,
+        (None, _) => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -1237,8 +1244,12 @@ mod tests {
             activity: Some("compiling".to_string()),
             started_at_epoch_ms: 1_000,
         });
+        session.effort = Some(crate::agent_model::EffortSelection {
+            current: "high".to_string(),
+            choices: vec!["high".to_string()],
+        });
         let adapted = adapt(&session, true, 64_000);
-        assert_eq!(adapted.transcript.model, "gpt-x");
+        assert_eq!(adapted.transcript.model, "gpt-x · high");
         assert_eq!(adapted.transcript.status, Status::Unreachable);
         assert_eq!(
             adapted.transcript.tasks,

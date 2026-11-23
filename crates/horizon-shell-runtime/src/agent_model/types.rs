@@ -208,3 +208,12 @@ pub struct AgentFrame {
 pub struct ModelSelection {
     pub model: String,
 }
+
+/// The session's reasoning effort, read from the `effort` config option:
+/// the level its requests send, and the levels its model takes, lowest
+/// first, as their words (`"none"`, `"minimal"`, ... `"max"`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortSelection {
+    pub current: String,
+    pub choices: Vec<String>,
+}

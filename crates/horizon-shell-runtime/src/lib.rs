@@ -419,6 +419,24 @@ impl AgentdHandle {
         })?
     }
 
+    /// Call from a background task: the effort picker's confirm path, as
+    /// [`Self::set_session_model`] is the model picker's. `level` is the
+    /// level's word.
+    pub fn set_session_effort(&self, session_id: SessionId, level: String) -> Result<(), String> {
+        request(&self.ops, |reply| agent::Op::SetSessionEffort {
+            session_id,
+            level,
+            reply,
+        })
+        .map_err(|error| {
+            error.describe(
+                "session runtime stopped before the effort switch was sent",
+                "the effort switch did not complete in time",
+                "session runtime stopped before the effort switch completed",
+            )
+        })?
+    }
+
     /// Call from a background task: the model picker's confirm path. The
     /// reply carries the daemon's synchronous validation error (unknown
     /// provider, unknown session, empty model id) when the switch was

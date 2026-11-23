@@ -77,7 +77,10 @@ impl Shell {
         kept.reloading.set(Some(Reloading::Agents));
         // The session the model picker is for, and the list it shows, go
         // with the runtime.
-        if matches!(self.modal.get_untracked(), Some(Modal::Models(_))) {
+        if matches!(
+            self.modal.get_untracked(),
+            Some(Modal::Models(_) | Modal::Effort(_))
+        ) {
             self.modal.set(None);
         }
         // The sessions are let go of without a word to them: they are

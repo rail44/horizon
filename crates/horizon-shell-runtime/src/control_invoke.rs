@@ -51,6 +51,11 @@ pub enum Command {
         provider: String,
         model: String,
     },
+    SetEffort {
+        session_id: SessionId,
+        /// The level's word.
+        level: String,
+    },
     /// Takes the extension whose component is `file` in place of the one
     /// of its name, until it is reset or the app restarts.
     ExtensionUse {
@@ -106,6 +111,10 @@ pub fn parse(invoke: &Invoke) -> Result<Command, String> {
             session_id: session_id_arg(args, "session_id")?,
             provider: nonempty_string_arg(args, "provider")?,
             model: nonempty_string_arg(args, "model")?,
+        },
+        "set-effort" => Command::SetEffort {
+            session_id: session_id_arg(args, "session_id")?,
+            level: nonempty_string_arg(args, "level")?,
         },
         "extension-use" => Command::ExtensionUse {
             file: nonempty_string_arg(args, "file")?.into(),

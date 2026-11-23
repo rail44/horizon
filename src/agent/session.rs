@@ -195,6 +195,11 @@ impl AgentSession {
         }
     }
 
+    /// The session's reasoning effort, when its model takes one.
+    pub fn effort(&self) -> Option<horizon_shell_runtime::agent_model::EffortSelection> {
+        self.folded.lock().unwrap().model.effort.clone()
+    }
+
     pub fn standing(&self) -> Standing {
         let folded = self.folded.lock().unwrap();
         let frame = &folded.model.frame;

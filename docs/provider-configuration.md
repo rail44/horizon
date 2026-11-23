@@ -92,6 +92,14 @@ provider is called, no model is reported for the session, and its first message
 says that `default_model` selects no model. The model picker marks no entry as
 the default in that case.
 
+The pair also takes `effort`, the reasoning effort a session starts with:
+`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"`
+(`medium` when unset; a word outside these is warned about and unset). A
+session can switch it like its model; what a request sends is that level
+fitted to the levels the model takes
+([the effort design](agent-reasoning-effort-design.md)). `small_model` and
+`decision_model` take no `effort`.
+
 ## `small_model`
 
 The model titles run on, and automatic approval judgments when no decision

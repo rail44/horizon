@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    MODEL_CONFIG_ID, MemoryEvent, MessageMeta, ModelOptionMeta, STOP_REASON_DOOM_LOOP,
-    STOP_REASON_FAILED, SessionEventNotification, TaskProgressNotification, TaskProgressState,
-    ToolCallMeta, ToolCallProgressEvent, decode_model_option_id, read_horizon_meta,
+    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MemoryEvent, MessageMeta, ModelOptionMeta,
+    STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED, SessionEventNotification, TaskProgressNotification,
+    TaskProgressState, ToolCallMeta, ToolCallProgressEvent, decode_model_option_id,
+    read_horizon_meta,
 };
 
 use super::types::*;
@@ -41,6 +42,8 @@ struct TurnClock {
 pub struct AgentModel {
     pub frame: AgentFrame,
     pub selection: Option<ModelSelection>,
+    /// The session's reasoning effort, when its model takes one.
+    pub effort: Option<EffortSelection>,
     /// Running background-task rows in launch order.
     pub tasks: Vec<TaskProgressNotification>,
     clock: TurnClock,
@@ -158,6 +161,9 @@ impl AgentModel {
                 if let Some(selection) = model_selection(&update.config_options) {
                     self.selection = Some(selection);
                 }
+                // Every update carries the whole set: a model that takes
+                // no effort comes without the option.
+                self.effort = effort_selection(&update.config_options);
             }
             _ => {}
         }
@@ -475,6 +481,31 @@ fn block_text(block: &v2::ContentBlock) -> String {
 
 fn blocks_text(blocks: &[v2::ContentBlock]) -> String {
     blocks.iter().map(block_text).collect()
+}
+
+/// The `effort` config option's current level and entries, if the set
+/// carries one.
+pub fn effort_selection(options: &[v2::SessionConfigOption]) -> Option<EffortSelection> {
+    let option = options
+        .iter()
+        .find(|option| option.config_id.0.as_ref() == EFFORT_CONFIG_ID)?;
+    let v2::SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let choices = match &select.options {
+        v2::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+        v2::SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(EffortSelection {
+        current: select.current_value.0.to_string(),
+        choices: (choices.into_iter())
+            .map(|entry| entry.value.0.to_string())
+            .collect(),
+    })
 }
 
 /// The provider and model of the `model` config option, if the set carries

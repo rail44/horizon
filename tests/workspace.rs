@@ -1016,6 +1016,10 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
             (self.0.lock().unwrap()).push((session, provider.to_string(), model.to_string()));
             Ok(())
         }
+        fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String> {
+            (self.0.lock().unwrap()).push((session, "effort".to_string(), level.to_string()));
+            Ok(())
+        }
     }
 
     let switched = Arc::new(Switched::default());
@@ -1052,6 +1056,27 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
     std::assert_matches!(
         &answer, EnvelopeBody::Error(error) if error.message.contains("no such model"),
         "{answer:?}"
+    );
+
+    // The effort goes the same way.
+    let (reply, answer) = mpsc::channel();
+    opened.shell.control_answering(
+        &ControlRequest::Invoke(Invoke {
+            command: "set-effort".to_string(),
+            args: serde_json::json!({
+                "session_id": session.as_uuid().to_string(),
+                "level": "high",
+            }),
+        }),
+        move |body| reply.send(body).unwrap(),
+    );
+    let answer = answer
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("an answer");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+    assert_eq!(
+        switched.0.lock().unwrap().last(),
+        Some(&(session, "effort".to_string(), "high".to_string()))
     );
 }
 
