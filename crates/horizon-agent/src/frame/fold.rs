@@ -52,7 +52,6 @@ pub(crate) fn apply_agent_event_to_frame(
                 | SessionState::WaitingForApproval => None,
                 SessionState::Failed => Some(TurnEndReason::Failed),
                 SessionState::Cancelled => Some(TurnEndReason::Cancelled),
-                SessionState::Completed => Some(TurnEndReason::Completed),
                 SessionState::Created
                 | SessionState::WaitingForUser
                 | SessionState::Terminated

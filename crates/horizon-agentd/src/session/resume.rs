@@ -110,13 +110,10 @@ pub(crate) fn resume_persisted_sessions_from_projection(
     let mut candidates = Vec::new();
     for session in store.session_liveness(through_sequence)? {
         if session.dead && !tail_sessions.contains(&session.session_id) {
-            // The full mode checks the role before liveness, so a retired
-            // role's session never counts as a terminated skip there either.
-            if !session
-                .role_id
-                .as_ref()
-                .is_some_and(|role| retired_role(&role.0))
-            {
+            // The full mode checks the role before liveness, so an
+            // unavailable role's session never counts as a terminated skip
+            // there either.
+            if !session.role_id.as_ref().is_some_and(unavailable_role) {
                 tally.skipped_terminated += 1;
             }
             continue;
@@ -241,7 +238,7 @@ fn resume_one_session(
         .iter()
         .rev()
         .find_map(|record| record.role_id.clone());
-    if role_id.as_ref().is_some_and(|role| retired_role(&role.0)) {
+    if role_id.as_ref().is_some_and(unavailable_role) {
         return ResumeOutcome::NotResumed;
     }
     let recorded_events: Vec<_> = session_records
@@ -521,10 +518,7 @@ pub(crate) fn resume_session(
         .iter()
         .rev()
         .find_map(|record| record.role_id.clone());
-    if role_id
-        .as_ref()
-        .is_some_and(|role| retired_role(&role.0) || horizon_agent::roles::resolve(role).is_none())
-    {
+    if role_id.as_ref().is_some_and(unavailable_role) {
         return Err("Historical role is retired or unavailable".into());
     }
     let context = records
@@ -597,11 +591,12 @@ pub(crate) fn resume_session(
     Ok(())
 }
 
-fn retired_role(id: &str) -> bool {
-    matches!(
-        id,
-        "keeper" | "milestone-planner" | "milestone-worker" | "milestone-verifier"
-    )
+/// A role no longer defined (one retired since the session ran, like the
+/// board keeper): its sessions are not resumed, since a provider refuses
+/// to start a session on a role it cannot resolve. Built-in and registered
+/// roles are all in place before the resume task starts (`main.rs`).
+fn unavailable_role(role: &horizon_agent::roles::RoleId) -> bool {
+    horizon_agent::roles::resolve(role).is_none()
 }
 
 /// Settle only inputs that had actually entered work before the process died;
@@ -1531,7 +1526,6 @@ mod projection_resume_tests {
             SessionState::WaitingForApproval,
             SessionState::ToolRunning,
             SessionState::Cancelled,
-            SessionState::Completed,
             SessionState::Failed,
             SessionState::Terminated,
         ]
