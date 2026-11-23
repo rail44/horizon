@@ -137,13 +137,8 @@ impl SessionEnvironment<'_> {
         };
 
         // A session's judge retains the decision connection accepted at
-        // spawn, or the small_model connection when no decision model is
-        // available.
-        let judge = JudgeHandle::new(
-            agent_config.decision.as_ref(),
-            agent_config.auxiliary.as_ref(),
-            state.writer(),
-        );
+        // spawn; without one, every approval candidate goes to the human.
+        let judge = JudgeHandle::new(agent_config.decision.as_ref(), state.writer());
 
         // `task`'s daemon capability (`docs/agent-explore-design.md`).
         // Withheld from an exploration session itself: its role allowlist

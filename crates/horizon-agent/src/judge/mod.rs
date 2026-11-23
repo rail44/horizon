@@ -1,7 +1,6 @@
 //! The inline approval judge -- `docs/agent-approval-design.md`'s "Judge
 //! design" section, run on a decision model as
-//! `docs/agent-decision-model-design.md`'s "The judge" describes, or on the
-//! `small_model` connection when no decision model is available: an
+//! `docs/agent-decision-model-design.md`'s "The judge" describes: an
 //! asynchronous enforcing gate for every approval candidate. A safe verdict
 //! follows the ordinary approved execution/retry path without exposing a
 //! transient prompt; every failure or escalation preserves the ordinary
@@ -9,35 +8,23 @@
 //!
 //! ## Shape
 //!
-//! - [`JudgeHandle`] is the per-session-installed bundle (model id, backend,
-//!   rate limiter, event-log writer) `ToolSessionBuilder::with_judge`
-//!   carries -- see `handle`'s module doc. The backend is chosen once, at
-//!   session start: the decision connection when one is available,
-//!   otherwise the `small_model` connection, otherwise no judge at all.
-//! - [`run_judge`] dispatches one candidate to the session's backend.
+//! - [`JudgeHandle`] is the per-session-installed bundle (model id, decision
+//!   client and ask threshold, rate limiter, event-log writer)
+//!   `ToolSessionBuilder::with_judge` carries -- see `handle`'s module doc.
+//!   A session without a usable decision connection has no judge, and every
+//!   approval candidate goes to the human.
 //! - [`run_decision_judge`] places one decision call: a single `noul`
 //!   question, `ask_human`, whose answer is the probability that a human
 //!   must approve the call. At or below the ask threshold the call
 //!   auto-approves; above it, it escalates. There is no second stage: the
 //!   gray zone belongs to the human. It takes a `&dyn DecisionClient`, so
-//!   tests drive it against a mock.
-//! - [`chat::run_chat_judge`] is the fallback backend's two-stage cascade:
-//!   stage 1 (single-token, err-toward-block, cheap) auto-approves or flags;
-//!   a flagged call runs stage 2 (chain-of-thought in the visible reply,
-//!   provider-side reasoning off) for a final, parseable verdict. It takes a
-//!   `&dyn ModelClient`, so tests drive it against a mock.
-//! - Either backend escalates on a client error, an unreadable answer, or
-//!   the timeout (fail-closed).
+//!   tests drive it against a mock. A client error, an unreadable answer,
+//!   or the timeout escalates (fail-closed).
 //! - [`request`] assembles the decision question's fixed instructions and
-//!   the JSON state (prior user messages plus the raw arguments); [`prompt`]
-//!   assembles the cascade's prompts (fixed system text, a
-//!   per-call-id-delimited untrusted args region); [`parse`] turns each
-//!   cascade stage's raw text back into a [`JudgeDecision`] (lenient
-//!   parsing, never `logit_bias`); [`client`] is the cascade's mockable
-//!   seam over rig's OpenAI-completions client; [`ratelimit`] is the
-//!   judge-call budget; [`record`] is the durable verdict record;
-//!   [`runtime`] is the dedicated tokio runtime judge calls are spawned
-//!   onto.
+//!   the JSON state (prior user messages plus the raw arguments);
+//!   [`ratelimit`] is the judge-call budget; [`record`] is the durable
+//!   verdict record; [`runtime`] is the dedicated tokio runtime judge calls
+//!   are spawned onto.
 //!
 //! ## Wiring at the seam
 //!
@@ -46,11 +33,7 @@
 //! the session's normal async-results channel, while unavailable or
 //! rate-limited work falls back to the human prompt synchronously.
 
-mod chat;
-mod client;
 mod handle;
-mod parse;
-mod prompt;
 mod ratelimit;
 mod record;
 mod request;
@@ -67,69 +50,23 @@ use crate::tools::ToolSessionState;
 
 pub use handle::JudgeHandle;
 
-use client::ModelClient;
-
-/// The model a session's judge runs on, chosen once at session start --
-/// see [`JudgeHandle::new`].
-enum JudgeBackend {
-    /// One `ask_human` question on the `decision_model` connection;
-    /// `threshold` is the ask probability at or below which a call
-    /// auto-approves.
-    Decision {
-        client: Arc<dyn DecisionClient>,
-        threshold: f64,
-    },
-    /// The two-stage chat cascade on the `small_model` connection.
-    Chat { client: Arc<dyn ModelClient> },
+/// The decision connection a session's judge asks, and the ask
+/// probability at or below which a call auto-approves -- see
+/// [`JudgeHandle::new`].
+struct JudgeBackend {
+    client: Arc<dyn DecisionClient>,
+    threshold: f64,
 }
 
-impl JudgeBackend {
-    fn kind(&self) -> JudgeBackendKind {
-        match self {
-            Self::Decision { .. } => JudgeBackendKind::Decision,
-            Self::Chat { .. } => JudgeBackendKind::Chat,
-        }
-    }
-
-    /// The ask threshold; only the decision backend has one.
-    fn threshold(&self) -> Option<f64> {
-        match self {
-            Self::Decision { threshold, .. } => Some(*threshold),
-            Self::Chat { .. } => None,
-        }
-    }
-}
-
-/// Which backend produced a verdict, recorded as `judge_backend`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum JudgeBackendKind {
-    Decision,
-    Chat,
-}
-
-impl JudgeBackendKind {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Decision => "decision",
-            Self::Chat => "chat",
-        }
-    }
-}
-
-/// The judge's per-call verdict -- see the module doc. `stage` is the
-/// cascade stage that decided (chat verdicts only). `ask_probability` is
-/// the decision model's raw `noul` for `ask_human` (decision verdicts
-/// only). `confidence` is, for a decision verdict, the probability of the
-/// verdict taken (`1 - p` for an auto-approval, `p` for an escalation); for
-/// a chat verdict, stage 1's logprob-derived value when stage 1 decided,
-/// and `None` after stage 2. Both are `None` on a fallback.
-/// `fallback_error` carries the failure text when the fallback came from an
-/// error, bounded by [`FALLBACK_ERROR_MAX_CHARS`].
+/// The judge's per-call verdict -- see the module doc. `ask_probability` is
+/// the decision model's raw `noul` for `ask_human`; `confidence` is the
+/// probability of the verdict taken (`1 - p` for an auto-approval, `p` for
+/// an escalation). Both are `None` on a fallback. `fallback_error` carries
+/// the failure text when the fallback came from an error, bounded by
+/// [`FALLBACK_ERROR_MAX_CHARS`].
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct JudgeVerdict {
     pub decision: JudgeDecision,
-    pub backend: JudgeBackendKind,
-    pub stage: Option<u8>,
     pub ask_probability: Option<f64>,
     pub confidence: Option<f64>,
     pub fallback_reason: Option<JudgeFallbackReason>,
@@ -138,15 +75,9 @@ pub(crate) struct JudgeVerdict {
 
 impl JudgeVerdict {
     /// A fail-closed escalation with no model answer behind it.
-    fn fallback(
-        backend: JudgeBackendKind,
-        reason: JudgeFallbackReason,
-        error: Option<String>,
-    ) -> Self {
+    fn fallback(reason: JudgeFallbackReason, error: Option<String>) -> Self {
         Self {
             decision: JudgeDecision::Escalate,
-            backend,
-            stage: None,
             ask_probability: None,
             confidence: None,
             fallback_reason: Some(reason),
@@ -235,14 +166,9 @@ pub(crate) struct JudgeApprovalContext {
     host_execution_requested: bool,
 }
 
-/// One judgment on the session's backend.
+/// One judgment on the session's decision connection.
 async fn run_judge(model: &str, backend: &JudgeBackend, input: &JudgeInput) -> JudgeVerdict {
-    match backend {
-        JudgeBackend::Decision { client, threshold } => {
-            run_decision_judge(model, client.as_ref(), input, *threshold).await
-        }
-        JudgeBackend::Chat { client } => chat::run_chat_judge(model, client.as_ref(), input).await,
-    }
+    run_decision_judge(model, backend.client.as_ref(), input, backend.threshold).await
 }
 
 /// One decision call for one candidate. Never panics or propagates a
@@ -260,18 +186,13 @@ async fn run_decision_judge(
         Ok(response) => response,
         Err(error) => {
             return JudgeVerdict::fallback(
-                JudgeBackendKind::Decision,
                 JudgeFallbackReason::ClientError,
                 Some(bounded_fallback_error(&format!("{error:#}"))),
             );
         }
     };
     let Some(Answer::Noul { noul }) = response.answers.get(request::ASK_HUMAN) else {
-        return JudgeVerdict::fallback(
-            JudgeBackendKind::Decision,
-            JudgeFallbackReason::Unparseable,
-            None,
-        );
+        return JudgeVerdict::fallback(JudgeFallbackReason::Unparseable, None);
     };
     let noul = *noul;
     let (decision, confidence) = if noul <= threshold {
@@ -281,8 +202,6 @@ async fn run_decision_judge(
     };
     JudgeVerdict {
         decision,
-        backend: JudgeBackendKind::Decision,
-        stage: None,
         ask_probability: Some(noul),
         confidence: Some(confidence),
         fallback_reason: None,
@@ -816,65 +735,6 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// A chat client that answers every stage-1 call with a clean `N`.
-    struct ApprovingChatClient;
-
-    #[async_trait]
-    impl ModelClient for ApprovingChatClient {
-        async fn complete(
-            &self,
-            _model: &str,
-            _request: client::RawCompletionRequest,
-        ) -> anyhow::Result<client::RawCompletionResponse> {
-            Ok(client::RawCompletionResponse {
-                text: "N".to_string(),
-                logprobs: Some(
-                    serde_json::json!({ "content": [{ "token": "N", "logprob": 0.0 }] }),
-                ),
-            })
-        }
-    }
-
-    #[test]
-    fn the_chat_backend_gate_delivers_a_stage1_auto_approval_and_records_it() {
-        let path = temp_event_log("chat-auto");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-        let judge =
-            JudgeHandle::for_test_chat("small-chat", Arc::new(ApprovingChatClient), writer.clone());
-        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-            .with_judge(Some(judge))
-            .build();
-        let (tx, rx) = crossbeam_channel::unbounded();
-        assert_eq!(
-            start_approval_gate(
-                &tool_state,
-                SessionId::new(),
-                candidate(ApprovalKind::Standard),
-                tx,
-            ),
-            ApprovalGate::Pending
-        );
-        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("judge completion")
-        else {
-            panic!("unexpected completion");
-        };
-        assert_eq!(judgment.decision, JudgeDecision::AutoApprove);
-        writer.flush().expect("flush chat audit");
-        let report = crate::persistence::event_log::read(&path).expect("read chat audit");
-        let payload = report.records[0]
-            .provider_payload
-            .as_ref()
-            .expect("chat payload");
-        assert_eq!(payload["judge_backend"], "chat");
-        assert_eq!(payload["judge_model"], "small-chat");
-        assert_eq!(payload["judge_stage"], 1);
-        assert_eq!(payload["judge_threshold"], serde_json::Value::Null);
-        assert_eq!(payload["judge_ask_probability"], serde_json::Value::Null);
-        let _ = std::fs::remove_file(path);
-    }
-
     #[test]
     fn enforcing_gate_delivers_escalation_on_model_error() {
         let path = temp_event_log("error");
@@ -923,7 +783,7 @@ mod tests {
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
         let judge = JudgeHandle::for_test_with_limits(
             "test-judge-model",
-            JudgeBackend::Decision {
+            JudgeBackend {
                 client: Arc::new(SlowClient),
                 threshold: DEFAULT_THRESHOLD,
             },
@@ -965,7 +825,6 @@ mod tests {
         assert_eq!(payload["judge_ask_probability"], serde_json::Value::Null);
         assert_eq!(payload["judge_confidence"], serde_json::Value::Null);
         assert_eq!(payload["judge_threshold"], DEFAULT_THRESHOLD);
-        assert_eq!(payload["judge_backend"], "decision");
         let _ = std::fs::remove_file(path);
     }
 
@@ -975,7 +834,7 @@ mod tests {
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
         let judge = JudgeHandle::for_test_with_limits(
             "test-judge-model",
-            JudgeBackend::Decision {
+            JudgeBackend {
                 client: Arc::new(SlowClient),
                 threshold: DEFAULT_THRESHOLD,
             },

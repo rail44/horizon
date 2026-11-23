@@ -61,14 +61,11 @@ The URL is not joined onto `base_url`: Ollama cloud serves the route at
 `https://api.deepinfra.com/v1/decisions`, outside its `/v1/openai` chat
 base, and a derived `/v1/openai/systemone` answered 404 on every call
 (2026-11-07). The pair absent or invalid, the key variable unset, or the
-entry without a `decision_url` is warned at startup. The judge then falls
-back to the `small_model` two-stage chat judge when that pair is available
-(without it, every approval candidate goes to the human), and the
-turn-continuation check is off: a turn ends where the model ended it.
-Reload Config affects new sessions; a running session keeps the connection
-it captured at start, the same rule the judge's `small_model` connection
-followed before. `small_model` serves titles, and approval judgments when
-no decision model is available.
+entry without a `decision_url` is warned at startup. Every approval
+candidate then goes to the human, and the turn-continuation check is off:
+a turn ends where the model ended it. Reload Config affects new sessions;
+a running session keeps the connection it captured at start.
+`small_model` serves titles.
 
 ## The judge
 
@@ -85,7 +82,7 @@ candidate instead of a two-stage chat cascade.
   approval grants one host execution get their framing appended. The git
   framing describes what the grant permits (the metadata trees minus their
   `hooks`/`config` exclusion) and asks about the command's effect, not the
-  shape of the shell line; the fallback chat judge states the same text.
+  shape of the shell line.
   The `criteria` descriptions spell out both outcomes.
 - **State.** A JSON object: `user_messages` (prior user messages, oldest
   first), `tool_call` (`tool`, the built-in tool's static description,
@@ -108,18 +105,17 @@ candidate instead of a two-stage chat cascade.
 - **Audit.** `judge_verdict` records keep their carrier and keys and gain
   `judge_ask_probability` (the raw `noul`) and `judge_threshold`;
   `judge_confidence` is the probability of the verdict taken (`1 - p` for
-  an auto-approval, `p` for an escalation); `judge_stage` is null. Every
-  record carries `judge_backend` (`"decision"` or `"chat"`); on a chat
-  verdict `judge_ask_probability` and `judge_threshold` are null. A
+  an auto-approval, `p` for an escalation). A
   verdict row and the human's decision on the same candidate are the
   calibration pair the research doc's §4 protocol needs, and the threshold
   can be moved without a code change (below).
-- **Fallback.** When no decision connection is available at session start
-  (the pair absent or invalid, or its key variable unset), the judge runs
-  the previous two-stage chat cascade on the `small_model` connection
-  (`docs/agent-approval-design.md`'s "Judge design"). The backend is chosen
-  once per session and recorded as `judge_backend`. A decision call that
-  fails at runtime still escalates; it does not switch backends.
+- **No fallback.** When no decision connection is available at session
+  start (the pair absent or invalid, or its key variable unset), the
+  session has no judge and every approval candidate goes to the human. The
+  two-stage chat cascade on the `small_model` connection that served this
+  case was removed 2026-11-24 (owner approval): every one of the 319
+  recorded verdicts carrying `judge_backend` had come from the decision
+  model. A decision call that fails at runtime escalates.
 
 ## The turn-continuation check
 
