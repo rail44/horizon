@@ -1,4 +1,3 @@
-use crate::contract::FoldedLogRange;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -167,19 +166,4 @@ pub(crate) struct SandboxAreaGranted {
     pub granted: Vec<String>,
     /// Why the session asked, as the approver saw it.
     pub reason: String,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub(crate) enum MemoryUpdated {
-    Skipped {
-        ok: bool,
-        no_update: bool,
-        reason: String,
-    },
-    Updated {
-        ok: bool,
-        fields_updated: Vec<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        folded_log_range: Option<FoldedLogRange>,
-    },
 }

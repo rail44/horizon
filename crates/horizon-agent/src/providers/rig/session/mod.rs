@@ -26,7 +26,6 @@ use crate::{
         Command, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionState,
         StartSession,
     },
-    persistence::projection::duckdb::{DuckdbStoreState, SharedDuckdbStore},
     registry::SessionHandle,
     roles::RoleDefinition,
     runtime_panic::catch_runtime_panic,
@@ -45,7 +44,6 @@ mod continuation;
 mod environment;
 mod input;
 mod interaction;
-mod memory;
 mod progress;
 mod settlement;
 mod state;
@@ -62,7 +60,6 @@ pub(super) fn spawn_rig_session(
     request: StartSession,
     config: RigAgentConfig,
     role: Option<&'static RoleDefinition>,
-    duckdb_cell: SharedDuckdbStore,
 ) -> SessionHandle {
     let (commands_tx, commands_rx) = unbounded();
     let (events_tx, events_rx) = unbounded::<ProviderEvent>();
@@ -91,57 +88,17 @@ pub(super) fn spawn_rig_session(
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
         let outcome = catch_runtime_panic(move || {
-            // Reads the shared projection slot without waiting: while the
-            // writer's first full rebuild is still running the slot is
-            // `Pending`, and the session starts anyway with no store (owner
-            // decision, 2026-10-11). History does not change for it: every
-            // fresh spawn passes an empty history, which the store would
-            // answer with nothing either, and a resume passes the session's
-            // own records, whose `StateChanged` events send
-            // `load_rig_session_history` down the event-log path before the
-            // store is consulted. Never a fresh `Store::open` of the same
-            // path -- see `SharedDuckdbStore`'s doc comment.
-            let (duckdb_store, store_unavailable) = match duckdb_cell.current() {
-                DuckdbStoreState::Ready(store) => (Some(store), false),
-                DuckdbStoreState::Pending => (None, false),
-                DuckdbStoreState::Unavailable => (None, true),
+            let persisted = match load_rig_session_history(&fallback_events) {
+                Ok(history) => history,
+                Err(message) => {
+                    let _ = events_tx.send(Event::Error(crate::contract::Error { message }).into());
+                    let _ = events_tx
+                        .send(Event::StateChanged(crate::contract::SessionState::Failed).into());
+                    return;
+                }
             };
-            let persisted =
-                match load_rig_session_history(duckdb_store.as_ref(), session_id, &fallback_events)
-                {
-                    Ok(history) => history,
-                    Err(message) => {
-                        let _ =
-                            events_tx.send(Event::Error(crate::contract::Error { message }).into());
-                        let _ = events_tx.send(
-                            Event::StateChanged(crate::contract::SessionState::Failed).into(),
-                        );
-                        return;
-                    }
-                };
             let rig_history = persisted.messages;
             let cleared_occurrence_ids = persisted.cleared_occurrence_ids;
-            let memory_document = persisted.memory_document;
-            let seed_from_fallback = persisted.seed_from_fallback;
-            // Issue 012: when the DuckDB projection store is unavailable and
-            // the JSONL event log also yielded no reconstructable history for
-            // a resumed session (events were present but produced no
-            // messages), don't proceed silently — surface the failure as a
-            // visible error in the frame so the operator knows the session
-            // resumed without its provider history. Only a decided
-            // `Unavailable` qualifies: a still-pending rebuild is not a
-            // failure.
-            if store_unavailable && !fallback_events.is_empty() && rig_history.is_empty() {
-                let _ = events_tx.send(
-                    Event::Error(crate::contract::Error {
-                        message: "Provider history could not be loaded: the DuckDB \
-                                  projection store is unavailable and the event log \
-                                  yielded no reconstructable history."
-                            .to_string(),
-                    })
-                    .into(),
-                );
-            }
             let extra_sections =
                 session_extra_sections(&environment, &config, role, trusted_project);
 
@@ -177,13 +134,6 @@ pub(super) fn spawn_rig_session(
                 super::reasoning_selection(&config),
             ));
 
-            // Board #41 observation (4): emit an observable event when the
-            // session was seeded from a prior keeper's MemoryDigest sequence,
-            // so the event log proves the seed was applied.
-            if seed_from_fallback {
-                let _ = events_tx.send(Event::MemorySeeded.into());
-            }
-
             runtime.block_on(async {
                 let mut state = state::SessionLoopState::new(
                     session_id,
@@ -195,7 +145,6 @@ pub(super) fn spawn_rig_session(
                     role,
                     rig_history,
                     cleared_occurrence_ids,
-                    memory_document,
                 )
                 .await;
                 state.inputs = restored_inputs;

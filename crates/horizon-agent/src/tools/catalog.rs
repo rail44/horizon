@@ -454,19 +454,6 @@ fn build_definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
-        SynchronousTool::UpdateMemory.definition(
-            "Update Memory Document".to_string(),
-            "Update your memory document — the structured summary of project \
-                state that carries your context across turns. Each call edits individual \
-                fields incrementally (set/append/clear); never regenerate the whole document. \
-                Every turn must end with either a memory_update call or a `no_update` \
-                declaration — the harness enforces this checkpoint. Fields: goal, decisions, \
-                completed, in_progress, stuck, next_step, related (files and symbols). \
-                `folded_log_range` optionally records the raw event-log sequence range \
-                this update condenses, so recall_read can fetch the originals."
-                .to_string(),
-
-        ),
     ]
 }
 

@@ -13,10 +13,8 @@ use crate::{
     contract::{Command, OccurrenceId, ProviderEvent, SessionId},
     prompt::SessionEnvironment,
     roles::RoleDefinition,
-    tools::MemoryDocument,
 };
 
-use super::memory::StandingMemory;
 use super::{ClearingState, TurnLoopGuard};
 
 /// What the session loop woke up for: an inbound command, or a background
@@ -53,13 +51,6 @@ pub(crate) struct SessionLoopState {
     /// Iteration-cap + doom-loop guard.
     pub(crate) guard: TurnLoopGuard,
 
-    // --- Standing-agent memory (`docs/standing-agent-memory-design.md`) ----
-    /// The current memory document, maintained incrementally as
-    /// `memory_update` results arrive. Seeded from the event log at spawn;
-    /// the provider-view projection prepends it (replacing old history) for
-    /// standing roles. `None` for non-standing roles (no memory mechanism).
-    pub(in crate::providers::rig) memory: Option<StandingMemory>,
-
     /// The turn-continuation check and its per-turn inputs
     /// (`docs/agent-decision-model-design.md`).
     pub(crate) continuation: super::continuation::ContinuationState,
@@ -88,7 +79,6 @@ impl Default for SessionLoopState {
             inbox: VecDeque::new(),
             execution: Default::default(),
             guard: TurnLoopGuard::new(Some(0), 0),
-            memory: None,
             continuation: Default::default(),
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
@@ -119,22 +109,10 @@ impl SessionLoopState {
         role: Option<&'static RoleDefinition>,
         rig_history: ConversationHistory,
         cleared_occurrence_ids: Vec<OccurrenceId>,
-        memory_document: Option<MemoryDocument>,
     ) -> Self {
         let mut clearing = super::discover_clearing_state(&config).await;
         clearing.seed_cleared(cleared_occurrence_ids);
-        // A standing role seeds its memory document from the event log; a
-        // non-standing role has no memory mechanism, so `memory` stays `None`
-        // and the projection skips the memory prepend entirely.
-        let memory = if role.is_some_and(|r| r.standing) {
-            Some(StandingMemory {
-                document: memory_document.unwrap_or_default(),
-                ..Default::default()
-            })
-        } else {
-            None
-        };
-        // Built like `memory`: only where the config and role call for it.
+        // Only where the config and role call for it.
         let continuation = super::continuation::ContinuationState {
             check: super::continuation::ContinuationCheck::for_session(&config, role),
             ..Default::default()
@@ -150,7 +128,6 @@ impl SessionLoopState {
             clearing,
             execution: Default::default(),
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
-            memory,
             continuation,
             config,
             environment,

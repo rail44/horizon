@@ -32,10 +32,6 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
             json!({"id": "example", "description": "Example", "body": "hello", "sources": ["session:example"]}),
         ),
         (
-            "memory_update",
-            json!({"goal": {"op": "set", "content": "hello"}}),
-        ),
-        (
             "task",
             json!({"description": "Example task", "prompt": "Read the requested source"}),
         ),
@@ -230,35 +226,9 @@ fn nested_fields_and_cross_field_rules_are_checked_before_dispatch() {
             "sources",
         ),
         (
-            "memory_update",
-            json!({"goal": {"op": "set", "content": "hello", "extra": 1}}),
-            "goal",
-        ),
-        (
-            "memory_update",
-            json!({"goal": {"op": "set", "content": "hello"}, "folded_log_range": {"from_seq": "1", "to_seq": 2}}),
-            "from_seq",
-        ),
-        (
             "fs_edit",
             json!({"edits": [["/tmp/example", "old", "new", false]]}),
             "edits",
-        ),
-        (
-            "memory_update",
-            json!({"no_update": ["reason"]}),
-            "no_update",
-        ),
-        (
-            "memory_update",
-            json!({"goal": {"op": "set", "content": "hello"}, "folded_log_range": [1, 2]}),
-            "folded_log_range",
-        ),
-        ("memory_update", json!({"goal": ["set", "hello"]}), "goal"),
-        (
-            "memory_update",
-            json!({"goal": {"op": "set", "content": "hello"}, "no_update": {"reason": "none"}}),
-            "no_update",
         ),
     ] {
         assert!(

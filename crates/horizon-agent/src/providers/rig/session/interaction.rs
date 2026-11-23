@@ -84,7 +84,7 @@ impl SessionLoopState {
 
     /// Settle a guard-halted result before the next request, so every tool
     /// call in provider history has a result. Fresh interactions also reset
-    /// the tool-loop guards, standing-memory checkpoint, and the
+    /// the tool-loop guards and the
     /// continuation check's per-turn inputs (`request` is what started it).
     fn begin_interaction(&mut self, request: &str) -> bool {
         if let Some((result, tool_id)) = self.execution.take_halted()
@@ -95,9 +95,6 @@ impl SessionLoopState {
         self.rig_history.open_turn(&self.events_tx);
         self.guard.reset();
         self.continuation.begin_turn(request);
-        if let Some(memory) = &mut self.memory {
-            memory.begin_interaction();
-        }
         let _ = self.events_tx.send(
             crate::contract::Event::StateChanged(crate::contract::SessionState::Running).into(),
         );

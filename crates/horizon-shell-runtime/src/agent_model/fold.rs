@@ -5,10 +5,9 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MemoryEvent, MessageMeta, ModelOptionMeta,
-    STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED, SessionEventNotification, TaskProgressNotification,
-    TaskProgressState, ToolCallMeta, ToolCallProgressEvent, decode_model_option_id,
-    read_horizon_meta,
+    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_DOOM_LOOP,
+    STOP_REASON_FAILED, SessionEventNotification, TaskProgressNotification, TaskProgressState,
+    ToolCallMeta, ToolCallProgressEvent, decode_model_option_id, read_horizon_meta,
 };
 
 use super::types::*;
@@ -19,7 +18,6 @@ pub enum AgentEvent {
     Update(Box<v2::SessionUpdate>),
     TaskProgress(TaskProgressNotification),
     ToolCallProgress(ToolCallProgressEvent),
-    Memory(MemoryEvent),
     Session(SessionEventNotification),
     /// A `session/request_permission` the attachment now holds a responder for.
     PermissionRequested(Permission),
@@ -79,13 +77,6 @@ impl AgentModel {
             AgentEvent::Update(update) => self.apply_update(*update),
             AgentEvent::TaskProgress(progress) => apply_task_progress(&mut self.tasks, progress),
             AgentEvent::ToolCallProgress(progress) => self.apply_tool_call_progress(progress),
-            AgentEvent::Memory(MemoryEvent::Digest(digest)) => {
-                self.frame.items.push(AgentFrameItem::MemoryDigest(digest))
-            }
-            AgentEvent::Memory(MemoryEvent::CheckpointMissed) => self
-                .frame
-                .items
-                .push(AgentFrameItem::MemoryCheckpointMissed),
             AgentEvent::Session(event) => self.apply_session_event(event),
             AgentEvent::PermissionRequested(permission) => {
                 let existing = self.frame.items.iter().position(|item| {

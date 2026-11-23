@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use horizon_acp::{MemoryDigest, ToolCallMeta, ToolOutcome};
+use horizon_acp::{ToolCallMeta, ToolOutcome};
 
 /// One execution attempt of a tool call: the provider's call id plus the
 /// daemon's occurrence id (the ACP `toolCallId`).
@@ -138,8 +138,6 @@ pub enum AgentFrameItem {
     Permission(Permission),
     ToolCallPreparing(ToolCallPreparing),
     HistoryCleared(HistoryCleared),
-    MemoryDigest(MemoryDigest),
-    MemoryCheckpointMissed,
     ProviderRateLimited(ProviderRateLimited),
     Error(String),
     Exited(String),

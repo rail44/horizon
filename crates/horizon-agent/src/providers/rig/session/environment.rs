@@ -63,14 +63,13 @@ mod tests {
     use rig_core::completion::Message;
 
     #[tokio::test]
-    async fn prepared_environment_preserves_history_model_memory_and_answer_route() {
+    async fn prepared_environment_preserves_history_model_and_answer_route() {
         let (commands, receive) = tokio::sync::mpsc::unbounded_channel();
         let mut state = SessionLoopState {
             commands: receive,
             ..Default::default()
         };
         state.config.model = "spawn-model".into();
-        state.memory = Some(Default::default());
         state
             .rig_history
             .append_prompt(
@@ -104,7 +103,6 @@ mod tests {
         state.activate_environment().await;
         assert_eq!(state.environment.cwd, root);
         assert_eq!(state.config.model, "spawn-model");
-        assert!(state.memory.is_some());
         assert_eq!(
             state.rig_history.messages(),
             [Message::user("retained consultation")]

@@ -164,68 +164,6 @@ pub enum ToolCallProgressEvent {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
-#[notification(method = "_horizon/memory")]
-pub struct MemoryNotification {
-    pub session_id: SessionId,
-    #[serde(flatten)]
-    pub event: MemoryEvent,
-}
-
-/// Mirrors `contract::Event::{MemoryDigest, MemoryCheckpointMissed}`
-/// (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MemoryEvent {
-    Digest(MemoryDigest),
-    CheckpointMissed,
-}
-
-/// Mirrors `contract::MemoryDigest` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct MemoryDigest {
-    pub updates: Vec<MemoryFieldUpdate>,
-    pub folded_log_range: Option<FoldedLogRange>,
-    pub no_update_reason: Option<String>,
-}
-
-/// Mirrors `contract::MemoryFieldUpdate` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct MemoryFieldUpdate {
-    pub field: MemoryField,
-    pub op: MemoryOp,
-    pub content: String,
-}
-
-/// Mirrors `contract::MemoryField` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryField {
-    Goal,
-    Decisions,
-    Completed,
-    InProgress,
-    Stuck,
-    NextStep,
-    Related,
-}
-
-/// Mirrors `contract::MemoryOp` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum MemoryOp {
-    Set,
-    Append,
-    Clear,
-}
-
-/// Mirrors `contract::FoldedLogRange` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct FoldedLogRange {
-    pub from_seq: u64,
-    pub to_seq: u64,
-}
-
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
 /// HistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),
 /// `hosting::AgentWireEvent::AttachmentClosed`
@@ -378,25 +316,6 @@ mod tests {
         ] {
             message_round_trip(&ToolCallProgressNotification { session_id, event });
         }
-        message_round_trip(&MemoryNotification {
-            session_id,
-            event: MemoryEvent::Digest(MemoryDigest {
-                updates: vec![MemoryFieldUpdate {
-                    field: MemoryField::NextStep,
-                    op: MemoryOp::Append,
-                    content: "ship it".into(),
-                }],
-                folded_log_range: Some(FoldedLogRange {
-                    from_seq: 3,
-                    to_seq: 9,
-                }),
-                no_update_reason: None,
-            }),
-        });
-        message_round_trip(&MemoryNotification {
-            session_id,
-            event: MemoryEvent::CheckpointMissed,
-        });
         for event in [
             SessionEventNotification::SessionResumed { session_id },
             SessionEventNotification::ProviderRateLimited {
@@ -502,12 +421,6 @@ mod tests {
             }
             .method()
             .to_owned(),
-            MemoryNotification {
-                session_id,
-                event: MemoryEvent::CheckpointMissed,
-            }
-            .method()
-            .to_owned(),
             SessionEventNotification::SessionResumed { session_id }
                 .method()
                 .to_owned(),
@@ -525,7 +438,6 @@ mod tests {
                 "_horizon/host_tool",
                 "_horizon/task_progress",
                 "_horizon/tool_call_progress",
-                "_horizon/memory",
                 "_horizon/session_event",
             ]
         );

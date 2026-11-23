@@ -1,5 +1,14 @@
 # 常設エージェントの記憶モデル — ターン毎の「要約+本文」集約
 
+> **撤去(2026-11-24、オーナー承認)**: この仕組み(role の `standing`、
+> `memory_update`、ターン終わりの checkpoint、記憶文書の前置き、
+> `MemoryDigest`/`MemoryCheckpointMissed`/`MemorySeeded`、ACP の
+> `_horizon/memory`)はコードから取り除いた。設計の相手だった keeper は
+> 8e057dd7 で消えており、残っていた standing の role(board-organizer)は
+> digest を一度も書かず、オーナーのイベントログには checkpoint の
+> 取りこぼし(`memory_checkpoint_missed`)だけが 35 件記録されていた。
+> 以下は当時の記録として残す。
+
 Status: **decided 2026-08-15(オーナー承認 — board #36)**。判断3点
 すべて確定。判断点2(集約を書く主体)は外部実績の定量調査
 (`docs/research/standing-agent-memory-evidence-2026-08-15.md`、以下

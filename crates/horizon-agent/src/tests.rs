@@ -3,11 +3,18 @@ use crate::prompt::{SessionEnvironment, system_prompt};
 use crate::registry;
 use crate::{contract as agent, frame::*, tools::test_support::policy_events};
 
+/// The next conversation event, past the ephemeral ones (the session's
+/// reasoning selection and the like) a provider sends beside them.
 fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::Event {
-    rx.recv_timeout(std::time::Duration::from_secs(1))
-        .expect("expected a provider event within timeout")
-        .into_event()
-        .expect("conversation event")
+    loop {
+        if let Some(event) = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("expected a provider event within timeout")
+            .into_event()
+        {
+            return event;
+        }
+    }
 }
 
 #[test]
@@ -49,7 +56,6 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
                 api_key_present: false,
                 ..Default::default()
             },
-            crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )),
     ];
     for provider in providers {

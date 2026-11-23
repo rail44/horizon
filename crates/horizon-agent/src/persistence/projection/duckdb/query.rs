@@ -16,13 +16,15 @@ use crate::persistence::event_log::{
 use crate::roles::RoleId;
 
 #[cfg(test)]
+use super::AgentStoredEvent;
+#[cfg(test)]
 use super::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
     AgentStoredToolCall, AgentStoredToolResult, AgentStoredTurn,
 };
 use super::{
-    AgentStoredEvent, RecallEntry, RecallEntryKind, RecallSearchReport, RecallSessionSummary,
-    SessionLiveness, Store, schema::PROJECTION_SCHEMA_VERSION, session_id_text,
+    RecallEntry, RecallEntryKind, RecallSearchReport, RecallSessionSummary, SessionLiveness, Store,
+    schema::PROJECTION_SCHEMA_VERSION, session_id_text,
 };
 
 /// How many characters of `text`/`input_json`/`output_json` `search_history`
@@ -389,6 +391,7 @@ impl Store {
             .context("query session history summaries")
     }
 
+    #[cfg(test)]
     pub(crate) fn events_for_session(
         &self,
         session_id: SessionId,

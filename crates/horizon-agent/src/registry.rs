@@ -64,32 +64,16 @@ pub fn named_rig_provider_id(name: &str) -> ProviderId {
 }
 
 impl ProviderRegistry {
-    /// Test-only convenience: no real event-log writer exists behind this
-    /// registry, so the rig provider gets an already-resolved-to-`None`
-    /// [`crate::persistence::projection::duckdb::SharedDuckdbStore`]
-    /// (`SharedDuckdbStore::unavailable`) -- reads through it return
-    /// immediately with no history, and never block, exactly like the
-    /// pre-recall behavior of a provider constructed with no DuckDB path.
+    /// Test-only convenience: the built-in providers over the default
+    /// configuration.
     #[cfg(test)]
     pub(crate) fn builtin() -> Self {
-        Self::builtin_with_config(
-            AgentConfig::from_env_and_providers(
-                vec![crate::config::NamedProviderConfig::default()],
-                None,
-            ),
-            crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
-        )
+        Self::builtin_with_config(AgentConfig::from_env_and_providers(
+            vec![crate::config::NamedProviderConfig::default()],
+            None,
+        ))
     }
 
-    /// `duckdb_cell` is shared with (a clone of) whatever else in the
-    /// process needs the same live DuckDB projection handle once it exists
-    /// (`horizon-agentd`'s `AgentdState`, for the recall tools) -- see
-    /// `persistence::projection::duckdb::SharedDuckdbStore`'s doc comment.
-    /// It's threaded in here (rather than resolved internally) because this
-    /// registry -- and the rig providers it constructs -- is built at
-    /// process startup, before the event log's writer thread (and
-    /// therefore any real DuckDB store) exists yet.
-    ///
     /// One rig provider per resolved `[[providers]]` entry, registered under
     /// its own id, plus the mock provider. The default entry is ALSO
     /// registered under the standing shell-facing id
@@ -102,10 +86,7 @@ impl ProviderRegistry {
     /// entry whose key variable is unset still registers (available=false
     /// to `list_providers`, deterministic fallback turns) -- "registered
     /// but unavailable", never a failed startup.
-    pub fn builtin_with_config(
-        config: AgentConfig,
-        duckdb_cell: crate::persistence::projection::duckdb::SharedDuckdbStore,
-    ) -> Self {
+    pub fn builtin_with_config(config: AgentConfig) -> Self {
         let mut registry = Self::default();
         registry.insert(Arc::new(crate::providers::mock::MockProvider::new()));
         let table = config.providers.clone();
@@ -122,7 +103,6 @@ impl ProviderRegistry {
             let provider = Arc::new(crate::providers::rig::Provider::for_entry(
                 id.clone(),
                 provider_config,
-                duckdb_cell.clone(),
             ));
             registry.insert_under(id, provider.clone());
             if is_default {
@@ -142,7 +122,6 @@ impl ProviderRegistry {
                         decision: config.decision.clone(),
                         ..config.rig.clone()
                     },
-                    duckdb_cell.clone(),
                 )),
             );
         }
@@ -242,7 +221,6 @@ impl ProviderRegistry {
 mod tests {
     use super::*;
     use crate::config::{AgentPersistenceConfig, NamedProviderConfig, ProvidersTable, Vendor};
-    use crate::persistence::projection::duckdb::SharedDuckdbStore;
 
     fn named_entry(
         name: &str,
@@ -298,8 +276,7 @@ mod tests {
             tools: crate::config::AgentToolsConfig::default(),
         };
 
-        let registry =
-            ProviderRegistry::builtin_with_config(agent_config, SharedDuckdbStore::unavailable());
+        let registry = ProviderRegistry::builtin_with_config(agent_config);
         // Both entries registered under their own named ids, plus the mock.
         for name in ["openai", "claude"] {
             assert!(

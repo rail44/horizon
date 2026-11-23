@@ -45,7 +45,6 @@ impl SessionLoopState {
                 }) if received == id => {
                     for result in results {
                         if let Some(descriptor) = calls.get(&result.call_id) {
-                            self.record_tool_effects(&result, descriptor);
                             if let Err(message) =
                                 self.rig_history.append_result(&result, &descriptor.tool_id)
                             {
@@ -286,14 +285,6 @@ mod tests {
                 .unwrap()
                 .skipped,
             0
-        );
-        let database = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
-        assert_eq!(
-            crate::providers::rig::history::load_rig_session_history(Some(&database), session, &[])
-                .unwrap()
-                .messages
-                .messages(),
-            state.rig_history.messages()
         );
         let succeeded_edits = crate::frame::tool_call_occurrences(&live.frame().items)
             .into_iter()

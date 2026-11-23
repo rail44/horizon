@@ -51,7 +51,6 @@ pub(crate) fn register() {
             writes: horizon_agent::roles::RoleWrites::Anywhere,
             include_repository_instructions: true,
             skill_ids: agent::THREAD_ROLE_SKILLS,
-            standing: false,
             unattended: true,
         }]);
         horizon_agent::skills::register_external_skill_sources(vec![

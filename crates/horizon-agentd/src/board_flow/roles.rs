@@ -8,12 +8,12 @@ pub(super) const REVIEWER: &str = "board-reviewer";
 
 pub(crate) fn register() {
     let definitions = [
-        (ORGANIZER, "Board Organizer", "board-organizer", true),
-        (TASK, "Board Task", "board-task", false),
-        (REVIEWER, "Board Reviewer", "board-reviewer", false),
+        (ORGANIZER, "Board Organizer", "board-organizer"),
+        (TASK, "Board Task", "board-task"),
+        (REVIEWER, "Board Reviewer", "board-reviewer"),
     ]
     .into_iter()
-    .map(|(id, title, skill, standing)| RoleDefinition {
+    .map(|(id, title, skill)| RoleDefinition {
         id,
         title,
         prompt_section: match skill {
@@ -33,7 +33,6 @@ pub(crate) fn register() {
             "board-task" => &["board-task", "board-integration"],
             _ => &["board-reviewer"],
         },
-                standing,
         // What the judge leaves to a human is refused instead of parked;
         // board #100.
         unattended: true,

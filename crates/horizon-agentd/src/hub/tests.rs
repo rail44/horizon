@@ -146,10 +146,7 @@ async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
 
     let agent_config =
         crate::providers::agent_config(&horizon_config::reload_from_path(Some(&config)).unwrap());
-    let providers = ProviderRegistry::builtin_with_config(
-        agent_config.clone(),
-        SharedDuckdbStore::unavailable(),
-    );
+    let providers = ProviderRegistry::builtin_with_config(agent_config.clone());
     let state = Arc::new(AgentdState::new(
         providers,
         agent_config,

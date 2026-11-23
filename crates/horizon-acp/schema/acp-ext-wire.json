@@ -297,26 +297,6 @@
       ],
       "type": "string"
     },
-    "FoldedLogRange": {
-      "description": "Mirrors `contract::FoldedLogRange` (crates/horizon-agent/src/contract.rs).",
-      "properties": {
-        "from_seq": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "to_seq": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "from_seq",
-        "to_seq"
-      ],
-      "type": "object"
-    },
     "HostToolRequest": {
       "description": "Mirrors `hosting::HostToolRequest` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
@@ -406,118 +386,6 @@
         "providers"
       ],
       "type": "object"
-    },
-    "MemoryDigest": {
-      "description": "Mirrors `contract::MemoryDigest` (crates/horizon-agent/src/contract.rs).",
-      "properties": {
-        "folded_log_range": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FoldedLogRange"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "no_update_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updates": {
-          "items": {
-            "$ref": "#/$defs/MemoryFieldUpdate"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "updates"
-      ],
-      "type": "object"
-    },
-    "MemoryField": {
-      "description": "Mirrors `contract::MemoryField` (crates/horizon-agent/src/contract.rs).",
-      "enum": [
-        "goal",
-        "decisions",
-        "completed",
-        "in_progress",
-        "stuck",
-        "next_step",
-        "related"
-      ],
-      "type": "string"
-    },
-    "MemoryFieldUpdate": {
-      "description": "Mirrors `contract::MemoryFieldUpdate` (crates/horizon-agent/src/contract.rs).",
-      "properties": {
-        "content": {
-          "type": "string"
-        },
-        "field": {
-          "$ref": "#/$defs/MemoryField"
-        },
-        "op": {
-          "$ref": "#/$defs/MemoryOp"
-        }
-      },
-      "required": [
-        "field",
-        "op",
-        "content"
-      ],
-      "type": "object"
-    },
-    "MemoryNotification": {
-      "description": "Mirrors `contract::Event::{MemoryDigest, MemoryCheckpointMissed}`\n(crates/horizon-agent/src/contract.rs).",
-      "oneOf": [
-        {
-          "$ref": "#/$defs/MemoryDigest",
-          "properties": {
-            "type": {
-              "const": "digest",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "checkpoint_missed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
-      "type": "object"
-    },
-    "MemoryOp": {
-      "description": "Mirrors `contract::MemoryOp` (crates/horizon-agent/src/contract.rs).",
-      "enum": [
-        "set",
-        "append",
-        "clear"
-      ],
-      "type": "string"
     },
     "MessageMeta": {
       "description": "Mirrors the non-human `contract::MessageRole` variants (crates/horizon-agent/src/contract.rs).",
@@ -1191,9 +1059,6 @@
     }
   },
   "notifications": {
-    "_horizon/memory": {
-      "$ref": "#/$defs/MemoryNotification"
-    },
     "_horizon/session_event": {
       "$ref": "#/$defs/SessionEventNotification"
     },
@@ -1209,5 +1074,5 @@
     "_horizon/doom_loop"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 7
+  "x-session-protocol-version": 8
 }

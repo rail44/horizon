@@ -113,7 +113,6 @@ ACP に居場所が無い。線を越える必要があるかどうかの選別�
   `InputQueuePaused`、`InputOutcome`、`DeliveryAcknowledged`、
   `SessionInputSent`
 - `TaskProgress`
-- `MemoryDigest`、`MemoryCheckpointMissed`、`MemorySeeded`
 - `ActivateWorktree` と `EnvironmentReady`、`EnvironmentActivated`、
   `EnvironmentActivationFailed`
 - `SessionResumed`
