@@ -48,11 +48,17 @@ An entry with no `base_url` talks to the vendor's own endpoint (`ollama`'s
 is a local daemon, so Ollama Cloud is `vendor = "ollama"` with
 `base_url = "https://ollama.com/v1"`), and an entry with no `api_key_env`
 reads the vendor's own variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`OLLAMA_API_KEY`, ...).
+`OLLAMA_API_KEY`, ...). A conversation goes on the route the vendor's dialect
+takes for its model: OpenAI's own endpoint (`vendor = "openai"` with no
+`base_url`) is the Responses API, since its chat-completions endpoint
+refuses tools while some of its models reason; the other vendors' dialects
+speak chat completions. Titles and the judge go on chat completions
+everywhere.
 
 An endpoint rig has no vendor for -- DeepInfra, synthetic.new -- is
-`vendor = "openai"` with its own `base_url`. rig then spells its requests as
-OpenAI's own and, for a model OpenAI's catalog does not list, checks nothing
+`vendor = "openai"` with its own `base_url`, on chat completions. rig then
+spells its requests as OpenAI's own and, for a model OpenAI's catalog does
+not list, checks nothing
 about them; DeepInfra was measured to take OpenAI's `reasoning_effort` that
 way (`docs/agent-reasoning-effort-design.md`). A vendor rig does not know, a
 provider rig's catalog lists but rig cannot connect to, and a vendor on a

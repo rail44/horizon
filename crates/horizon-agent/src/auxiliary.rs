@@ -89,7 +89,7 @@ impl AuxiliaryClient {
             .get_or_init(|| {
                 let api_key = std::env::var(&self.config.api_key_env).ok()?;
                 let connection = (self.config.vendor)
-                    .connection(api_key, self.config.base_url.as_deref())
+                    .chat_connection(api_key, self.config.base_url.as_deref())
                     .ok()?;
                 match connection {
                     ProviderConfig::OpenAi(config) => Some(config.client()),

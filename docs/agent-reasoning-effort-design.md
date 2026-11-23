@@ -18,9 +18,14 @@ effort そのもの。
   vendor の無いエンドポイント(DeepInfra、synthetic.new)は `vendor = "openai"`
   と `base_url` で接続する。
 - **接続**: vendor の preset(`ProviderId::config`)に鍵と `base_url` を与え、
-  OpenAI の wire は chat completions に固定し、
   `ProviderConfig::completion_model(model, rig_reqwest::shared(), facts)` で
-  ターンのモデルを作る(`providers/rig/completion.rs`)。
+  ターンのモデルを作る(`providers/rig/completion.rs`)。経路は dialect が
+  モデルに選ぶもの(OpenAI 本体は Responses。OpenAI の新しいモデルは、
+  推論中は chat completions でツールを受け付けない)。`vendor = "openai"` で
+  `base_url` を書いた entry(rig に dialect の無い互換 gateway)だけは
+  chat completions に固定する。タイトルとジャッジはどの vendor でも
+  chat completions(ジャッジは chat の応答の logprobs を読む)
+  (`Vendor::connection` / `Vendor::chat_connection`)。
 - **モデル情報**: rig の組み込み catalog に、取ってきた models.dev の写しを
   `Catalog::with_models_dev` で重ねたもの(`providers/rig/model_catalog.rs`)。
   vendor とモデル ID で引く。ターンの `facts` と、Tier 1 clearing の

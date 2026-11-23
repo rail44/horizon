@@ -96,26 +96,52 @@ impl Vendor {
             })
     }
 
-    /// The configuration requests go out on: the vendor's own preset with
-    /// `api_key`, sent to `base_url` when the entry names one, on OpenAI's
-    /// chat-completions endpoint for the OpenAI family (rig routes OpenAI's
-    /// own dialect to `/responses`; every endpoint Horizon talks to speaks
-    /// `/chat/completions`).
+    /// The configuration a conversation's requests go out on: the vendor's
+    /// own preset with `api_key`, sent to `base_url` when the entry names
+    /// one, on the route rig's dialect takes for the model -- Responses for
+    /// OpenAI's own models, whose chat-completions endpoint refuses tools
+    /// while some of them reason. An entry on OpenAI's vendor that names a
+    /// `base_url` of its own is an OpenAI-compatible gateway rig has no
+    /// dialect for, which speaks chat completions: it goes there.
     pub(crate) fn connection(
         &self,
         api_key: String,
         base_url: Option<&str>,
     ) -> anyhow::Result<ProviderConfig> {
-        let config = self
-            .id
-            .config(api_key)
-            .ok_or_else(|| anyhow::anyhow!("rig cannot configure vendor {:?}", self.name()))?;
-        let config = match config {
+        let config = self.preset(api_key, base_url)?;
+        Ok(match config {
+            ProviderConfig::OpenAi(config)
+                if base_url.is_some() && self.name() == super::DEFAULT_VENDOR =>
+            {
+                ProviderConfig::OpenAi(config.with_route(openai::Route::Chat))
+            }
+            other => other,
+        })
+    }
+
+    /// [`Self::connection`], always on chat completions for the OpenAI
+    /// family: what the auxiliary calls read is a chat completion's shape
+    /// (the judge reads its logprobs).
+    pub(crate) fn chat_connection(
+        &self,
+        api_key: String,
+        base_url: Option<&str>,
+    ) -> anyhow::Result<ProviderConfig> {
+        Ok(match self.preset(api_key, base_url)? {
             ProviderConfig::OpenAi(config) => {
                 ProviderConfig::OpenAi(config.with_route(openai::Route::Chat))
             }
             other => other,
-        };
+        })
+    }
+
+    /// The vendor's own preset with `api_key`, sent to `base_url` when the
+    /// entry names one.
+    fn preset(&self, api_key: String, base_url: Option<&str>) -> anyhow::Result<ProviderConfig> {
+        let config = self
+            .id
+            .config(api_key)
+            .ok_or_else(|| anyhow::anyhow!("rig cannot configure vendor {:?}", self.name()))?;
         Ok(match base_url {
             Some(base_url) => config.with_base_url(base_url),
             None => config,
@@ -167,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn the_openai_family_goes_out_on_chat_completions_to_the_entrys_url() {
+    fn a_gateway_on_openais_vendor_goes_out_on_chat_completions_to_its_url() {
         let ProviderConfig::OpenAi(config) = Vendor::openai()
             .connection("key".into(), Some("https://gateway.invalid/v1"))
             .unwrap()
@@ -176,6 +202,34 @@ mod tests {
         };
         assert_eq!(config.completion_route(), openai::Route::Chat);
         assert_eq!(config.base_url, "https://gateway.invalid/v1");
+    }
+
+    #[test]
+    fn openai_itself_goes_out_on_responses_and_auxiliary_calls_on_chat() {
+        let route = |config: ProviderConfig| match config {
+            ProviderConfig::OpenAi(config) => config.completion_route(),
+            _ => panic!("OpenAI's vendor is OpenAI-shaped"),
+        };
+        let openai = Vendor::openai();
+        assert_eq!(
+            route(openai.connection("key".into(), None).unwrap()),
+            openai::Route::Responses
+        );
+        assert_eq!(
+            route(openai.chat_connection("key".into(), None).unwrap()),
+            openai::Route::Chat
+        );
+        // Another vendor's entry keeps its dialect's own route, its own
+        // base URL or not.
+        let ollama = Vendor::resolve("ollama").unwrap();
+        assert_eq!(
+            route(
+                ollama
+                    .connection("key".into(), Some("https://ollama.com/v1"))
+                    .unwrap()
+            ),
+            route(ollama.connection("key".into(), None).unwrap())
+        );
     }
 
     #[test]
