@@ -3,7 +3,7 @@
 //! rig's to say, so the entries are resolved here, in the crate that has
 //! rig, rather than in `horizon-config`; what does not resolve is said on
 //! stderr, as `horizon-config` says the file's own warnings.
-use horizon_agent::config::{ModelPair, NamedProviderConfig, Vendor};
+use horizon_agent::config::{ModelPair, NamedProviderConfig, ReasoningLevel, Vendor};
 
 /// One resolved entry as the runtime holds it, or why it cannot serve.
 fn named_provider_config(
@@ -42,9 +42,22 @@ pub(crate) fn named_provider_configs(
                 .ok()
         })
         .collect();
-    let default_model = resolution.default_model.map(|pair| ModelPair {
-        provider: pair.provider,
-        model: pair.model,
+    let default_model = resolution.default_model.map(|pair| {
+        let effort = pair.effort.as_deref().and_then(|word| {
+            ReasoningLevel::parse(word)
+                .map_err(|error| {
+                    warnings.push(format!(
+                        "default_model: {error} — sessions start at {}",
+                        ReasoningLevel::default().as_str()
+                    ))
+                })
+                .ok()
+        });
+        ModelPair {
+            provider: pair.provider,
+            model: pair.model,
+            effort,
+        }
     });
     (entries, default_model, warnings)
 }
@@ -143,6 +156,7 @@ mod tests {
         no_decision.decision_model = Some(horizon_config::RawModelPair {
             provider: "chat".into(),
             model: "clef:cloud".into(),
+            effort: None,
         });
         let without = agent_config(&no_decision);
         assert!(without.decision.is_none());
@@ -163,6 +177,7 @@ mod tests {
         changed.small_model = Some(horizon_config::RawModelPair {
             provider: "chat".into(),
             model: "small".into(),
+            effort: None,
         });
         assert!(agent_config(&changed).auxiliary.is_none());
         changed.small_model = None;

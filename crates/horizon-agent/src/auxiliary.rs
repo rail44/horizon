@@ -5,6 +5,7 @@
 
 use std::sync::OnceLock;
 
+use rig_core::completion::{GenerationOptions, OnUnsupported, Reasoning};
 use rig_core::providers::{openai, registry::ProviderConfig};
 
 use crate::config::{Vendor, Wire};
@@ -48,6 +49,21 @@ impl AuxiliaryConfig {
             model,
         })
     }
+}
+
+/// The generation options every call on this connection carries: reasoning
+/// off, spelled by the vendor's dialect (`reasoning_effort: "none"` on
+/// OpenAI's and Ollama's, `thinking: disabled` on DeepSeek's). A
+/// reasoning-first model otherwise spends a small call's whole token budget
+/// in its think block and never emits the answer: every stage-2 judge call
+/// parsed as unparseable that way (8/8 escalations in the 2026-07-28
+/// event-log investigation), and a title call cannot afford it either. A
+/// model whose catalog row says it cannot turn reasoning off is sent the
+/// call without the option rather than refused.
+pub(crate) fn reasoning_off() -> GenerationOptions {
+    GenerationOptions::default()
+        .reasoning(Reasoning::Off)
+        .on_unsupported(OnUnsupported::Ignore)
 }
 
 pub struct AuxiliaryClient {

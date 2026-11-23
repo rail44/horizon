@@ -111,12 +111,7 @@ pub fn summarize_session_title(
                     CompletionRequest::new(Message::user(user_content))
                         .preamble(SYSTEM_PROMPT.to_string())
                         .max_tokens(MAX_TOKENS)
-                        // `reasoning_effort: none`, the former chat-completions
-                        // judge's hard-won lesson: a reasoning-first model burns its
-                        // whole token budget in its think block and never emits
-                        // the answer -- the exact failure mode this one-shot
-                        // call cannot afford.
-                        .additional_params(serde_json::json!({ "reasoning_effort": "none" })),
+                        .options(crate::auxiliary::reasoning_off()),
                 )
                 .await
         })

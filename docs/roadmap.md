@@ -34,7 +34,7 @@ open: macOS, where the new shell has not been run.
 A conversation's reasoning effort becomes a per-session setting beside its
 model, sent through rig-core's own generation options. First stage done:
 `[[providers]]` entries name a rig `vendor` and model facts come from rig's
-catalog; open: the effort setting itself, and what `max_tokens` to send.
+catalog; open: the effort setting itself.
 See [the effort design](agent-reasoning-effort-design.md).
 
 Subagents become one delegation tool with a read and a write mode: `task`

@@ -93,6 +93,7 @@ pub(crate) fn state_with_rig_config(api_key_present: bool, model: &str) -> Arc<A
     config.providers.default_model = Some(horizon_agent::config::ModelPair {
         provider: "default".into(),
         model: model.to_string(),
+        effort: None,
     });
     state_from_config(config, Vec::new())
 }

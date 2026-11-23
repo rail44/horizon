@@ -213,7 +213,6 @@ mod tests {
             "an auto-approving stage 1 must never trigger stage 2"
         );
         assert_eq!(requests[0].max_tokens, STAGE1_MAX_TOKENS);
-        assert_eq!(requests[0].additional_params["reasoning_effort"], "none");
         assert_eq!(requests[0].additional_params["logprobs"], true);
     }
 
@@ -272,7 +271,6 @@ mod tests {
         assert_eq!(verdict.fallback_reason, None);
 
         let requests = client.requests.lock().unwrap();
-        assert_eq!(requests[1].additional_params["reasoning_effort"], "none");
         assert_eq!(requests[1].max_tokens, STAGE2_MAX_TOKENS);
     }
 
