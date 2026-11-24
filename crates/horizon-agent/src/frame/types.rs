@@ -12,8 +12,6 @@ pub struct AgentFrame {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentFrameItem {
     Message(Message),
-    ReasoningDelta(MessageDelta),
-    AssistantTextDelta(MessageDelta),
     ToolCallRequested(ToolCallRequest),
     ToolCallStarted(ToolCallIdentity),
     ToolCallFinished(ToolCallResult),

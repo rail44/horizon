@@ -175,182 +175,10 @@ fn agent_frame_keeps_state_and_structured_messages() {
     );
 }
 
+/// Streamed text and reasoning reach a client through its own fold of the
+/// events; the frame keeps only what was committed.
 #[test]
-fn agent_frame_coalesces_consecutive_reasoning_deltas() {
-    let frame = agent_frame_from_events(&[
-        agent::Event::ReasoningDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "think ".to_string(),
-        }),
-        agent::Event::ReasoningDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "more".to_string(),
-        }),
-    ]);
-
-    assert_eq!(
-        frame.items,
-        vec![AgentFrameItem::ReasoningDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "think more".to_string(),
-        })]
-    );
-}
-
-#[test]
-fn agent_frame_coalesces_consecutive_assistant_text_deltas() {
-    let frame = agent_frame_from_events(&[
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "hello ".to_string(),
-        }),
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "world".to_string(),
-        }),
-    ]);
-
-    assert_eq!(
-        frame.items,
-        vec![AgentFrameItem::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "hello world".to_string(),
-        })]
-    );
-}
-
-/// A provider response that streams assistant text *and then* requests a
-/// tool call emits the `AssistantTextDelta`(s) during the stream but the
-/// `MessageCommitted` (full text) only after the stream ends -- *after* the
-/// `ToolCallRequested`/`Started`/`Finished` events. The commit must promote
-/// the pre-tool delta into a `Message` at the delta's original position
-/// (before the tool call), not push a second copy after it. This is the
-/// regression test for the duplicate-message-before-and-after-a-tool bug:
-/// the text should appear once, before the tool.
-#[test]
-fn message_committed_promotes_pre_tool_delta_across_tool_call_boundary() {
-    let frame = agent_frame_from_events(&[
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "Let me check.".to_string(),
-        }),
-        agent::Event::ToolCallRequested(agent::ToolCallRequest {
-            call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-            tool_id: "fs_read".to_string(),
-            input: serde_json::json!({ "path": "/tmp/x" }).into(),
-            occurrence_id: crate::contract::OccurrenceId(
-                (agent::ToolCallId("call-1".to_string())).0.clone(),
-            ),
-        }),
-        agent::Event::ToolCallStarted(crate::test_support::tool_identity(&agent::ToolCallId(
-            "call-1".to_string(),
-        ))),
-        agent::Event::ToolCallFinished(agent::ToolCallResult::new(
-            (agent::ToolCallId("call-1".to_string())).clone(),
-            crate::contract::OccurrenceId((agent::ToolCallId("call-1".to_string())).0.clone()),
-            serde_json::json!({ "ok": true }),
-        )),
-        agent::Event::MessageCommitted(agent::Message {
-            role: agent::MessageRole::Assistant,
-            text: "Let me check.".to_string(),
-        }),
-    ]);
-
-    // The delta is promoted to a Message at its original index (before the
-    // tool call), and no second Message is pushed after the tool.
-    let assistant_messages: Vec<&str> = frame
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            AgentFrameItem::Message(m) if m.role == agent::MessageRole::Assistant => {
-                Some(m.text.as_str())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        assistant_messages,
-        vec!["Let me check."],
-        "assistant text should appear exactly once, not duplicated after the tool"
-    );
-    // The Message sits before the tool-call items, not after.
-    let message_idx = frame
-        .items
-        .iter()
-        .position(|item| matches!(item, AgentFrameItem::Message(_)))
-        .expect("a Message item");
-    let tool_idx = frame
-        .items
-        .iter()
-        .position(|item| matches!(item, AgentFrameItem::ToolCallRequested(_)))
-        .expect("a ToolCallRequested item");
-    assert!(
-        message_idx < tool_idx,
-        "the Message must precede the tool call, not follow it"
-    );
-    // No orphaned AssistantTextDelta remains.
-    assert!(
-        !frame
-            .items
-            .iter()
-            .any(|item| matches!(item, AgentFrameItem::AssistantTextDelta(_))),
-        "no orphaned AssistantTextDelta should remain after promotion"
-    );
-}
-
-/// The rare "text → tool → text" shape: one provider response streams text,
-/// then a tool call, then *more* text, all before the single
-/// `MessageCommitted` carrying the full accumulated text. The commit must
-/// place one `Message` at the first delta's position (before the tool) and
-/// drop the post-tool delta -- its content is already in the full text --
-/// so the text appears once, before the tool, not duplicated after it.
-#[test]
-fn message_committed_promotes_first_delta_and_drops_post_tool_delta() {
-    let frame = agent_frame_from_events(&[
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "before ".to_string(),
-        }),
-        agent::Event::ToolCallRequested(agent::ToolCallRequest {
-            call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-            tool_id: "fs_read".to_string(),
-            input: serde_json::json!({ "path": "/tmp/x" }).into(),
-            occurrence_id: crate::contract::OccurrenceId(
-                (agent::ToolCallId("call-1".to_string())).0.clone(),
-            ),
-        }),
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "after".to_string(),
-        }),
-        agent::Event::MessageCommitted(agent::Message {
-            role: agent::MessageRole::Assistant,
-            text: "before after".to_string(),
-        }),
-    ]);
-
-    assert_eq!(
-        frame.items,
-        vec![
-            AgentFrameItem::Message(agent::Message {
-                role: agent::MessageRole::Assistant,
-                text: "before after".to_string(),
-            }),
-            AgentFrameItem::ToolCallRequested(agent::ToolCallRequest {
-                call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-                tool_id: "fs_read".to_string(),
-                input: serde_json::json!({ "path": "/tmp/x" }).into(),
-                occurrence_id: crate::contract::OccurrenceId(
-                    (agent::ToolCallId("call-1".to_string())).0.clone()
-                ),
-            }),
-        ],
-        "one Message before the tool, no orphaned deltas, no duplicate after"
-    );
-}
-
-#[test]
-fn agent_frame_coalesces_interleaved_stream_deltas_within_turn() {
+fn streamed_text_and_reasoning_leave_no_frame_item() {
     let frame = agent_frame_from_events(&[
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
@@ -358,19 +186,15 @@ fn agent_frame_coalesces_interleaved_stream_deltas_within_turn() {
         }),
         agent::Event::ReasoningDelta(agent::MessageDelta {
             role: agent::MessageRole::Assistant,
-            text: "think ".to_string(),
+            text: "think".to_string(),
         }),
         agent::Event::AssistantTextDelta(agent::MessageDelta {
             role: agent::MessageRole::Assistant,
-            text: "answer ".to_string(),
+            text: "answer".to_string(),
         }),
-        agent::Event::ReasoningDelta(agent::MessageDelta {
+        agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::Assistant,
-            text: "more".to_string(),
-        }),
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "done".to_string(),
+            text: "answer".to_string(),
         }),
     ]);
 
@@ -381,16 +205,54 @@ fn agent_frame_coalesces_interleaved_stream_deltas_within_turn() {
                 role: agent::MessageRole::User,
                 text: "question".to_string(),
             }),
-            AgentFrameItem::ReasoningDelta(agent::MessageDelta {
+            AgentFrameItem::Message(agent::Message {
                 role: agent::MessageRole::Assistant,
-                text: "think more".to_string(),
-            }),
-            AgentFrameItem::AssistantTextDelta(agent::MessageDelta {
-                role: agent::MessageRole::Assistant,
-                text: "answer done".to_string(),
+                text: "answer".to_string(),
             }),
         ]
     );
+}
+
+/// A response that streams text and then calls a tool commits its text
+/// only after the tool-call events: the text appears once, after them.
+#[test]
+fn a_message_committed_after_its_tool_calls_appears_once() {
+    let call = agent::ToolCallId("call-1".to_string());
+    let occurrence = crate::contract::OccurrenceId(call.0.clone());
+    let frame = agent_frame_from_events(&[
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "Let me check.".to_string(),
+        }),
+        agent::Event::ToolCallRequested(agent::ToolCallRequest {
+            call_id: call.clone(),
+            tool_id: "fs_read".to_string(),
+            input: serde_json::json!({ "path": "/tmp/x" }).into(),
+            occurrence_id: occurrence.clone(),
+        }),
+        agent::Event::ToolCallStarted(crate::test_support::tool_identity(&call)),
+        agent::Event::ToolCallFinished(agent::ToolCallResult::new(
+            call.clone(),
+            occurrence,
+            serde_json::json!({ "ok": true }),
+        )),
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text: "Let me check.".to_string(),
+        }),
+    ]);
+
+    let assistant_messages: Vec<&str> = frame
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            AgentFrameItem::Message(m) if m.role == agent::MessageRole::Assistant => {
+                Some(m.text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(assistant_messages, vec!["Let me check."]);
 }
 
 #[test]
@@ -599,36 +461,32 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
         AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs_write");
 }
 
-/// `AgentFrameItem::TurnEnded` is itself a turn boundary (`is_turn_boundary_item`):
-/// content folded after it must not coalesce backward across it into
-/// whatever was accumulating before the turn ended.
+/// `AgentFrameItem::TurnEnded` is itself a turn boundary
+/// (`is_turn_boundary_item`): a message committed after it is added, not
+/// put in place of the one before the turn ended.
 #[test]
-fn turn_ended_is_a_turn_boundary_for_coalescing() {
+fn turn_ended_is_a_turn_boundary_for_a_committed_message() {
+    let committed = |text: &str| {
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text: text.to_string(),
+        })
+    };
     let frame = agent_frame_from_events(&[
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "before".to_string(),
-        }),
+        committed("before"),
         agent::Event::TurnEnded(agent::TurnEndReason::Completed),
-        agent::Event::AssistantTextDelta(agent::MessageDelta {
-            role: agent::MessageRole::Assistant,
-            text: "after".to_string(),
-        }),
+        committed("after"),
     ]);
 
-    let deltas: Vec<&str> = frame
+    let messages: Vec<&str> = frame
         .items
         .iter()
         .filter_map(|item| match item {
-            AgentFrameItem::AssistantTextDelta(delta) => Some(delta.text.as_str()),
+            AgentFrameItem::Message(message) => Some(message.text.as_str()),
             _ => None,
         })
         .collect();
-    assert_eq!(
-        deltas,
-        vec!["before", "after"],
-        "the post-TurnEnded delta must not merge into the pre-TurnEnded one"
-    );
+    assert_eq!(messages, vec!["before", "after"]);
 }
 
 /// `docs/agent-output-ui-amendment.md`'s decision 5 (failure display) needs

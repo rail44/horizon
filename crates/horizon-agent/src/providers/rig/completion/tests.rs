@@ -619,7 +619,7 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
                 1
             );
             let frame = crate::frame::agent_frame_from_events(&events);
-            assert!(!frame.items.iter().any(|item| matches!(item, crate::frame::AgentFrameItem::AssistantTextDelta(delta) if delta.text.contains("discarded attempt"))));
+            assert!(!frame.items.iter().any(|item| matches!(item, crate::frame::AgentFrameItem::Message(message) if message.text.contains("discarded attempt"))));
             assert!(
                 !serde_json::to_string(&history.messages())
                     .unwrap()

@@ -68,6 +68,8 @@ board のツールが `BoardHost` という別の口で入っている形もこ�
 - **組み立て**: 一つの葉から根へたどった列が、その枝の会話である。プロバイダに送る履歴は、この列から組み立てる。
 - **保存**: 記録は今と同じ JSONL に追記する。entry が親を指すので、event log の版は上がる(v5)。親が無い record(judge の verdict)と、親が読めなかった record(読み飛ばした行を指すもの)は、同じセッションの sequence で一つ前の record に続くものとして読む。DuckDB の projection も親を持ち(projection の schema 3)、incremental resume は projection から同じ枝をたどる。
 
+agentd と horizon-agent の側の frame(`frame::AgentFrame`)は、確定したもの(メッセージ、tool call、承認、状態)だけを持つ。streaming の delta は記録には残るが、frame の item にはしない。delta を並べて画面に描くのは、shell の fold と ACP の mapper がそれぞれ event から行う。
+
 ### セッション
 
 セッションは、会話の一つの葉に付いて動く実行である。持つものは worktree、ツールの状態、入力の待ち行列、承認待ち、モデルの選択。セッション ID と worktree の名前の結びつきは今のまま保つ。
@@ -128,4 +130,3 @@ compaction の要約(Tier 2)は、`docs/agent-compaction-design.md` が保留と
 ## 未決
 
 - 分岐を操作する UI(エージェントの view のどこで、どの節を選ぶか)。
-- agentd の `frame` が streaming の delta を item として持ち続けるか。確定したメッセージを tool call の前に置く並び順をこの item が決めているが、agentd 側にその順序に頼る読み手がいるかは確かめていない。
