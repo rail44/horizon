@@ -18,7 +18,7 @@ pub fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> V
                     .edits
                     .into_iter()
                     .filter_map(|receipt| {
-                        let EditOutcome::Applied { occurrences } = receipt.outcome else {
+                        let EditOutcome::Applied { occurrences, .. } = receipt.outcome else {
                             return None;
                         };
                         let edit = inputs

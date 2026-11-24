@@ -52,6 +52,8 @@ serde_path_to_error = "0.1"
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"
+# NFKC for fs_edit's normalized match (`tools::fs::edit`).
+unicode-normalization = "0.1"
 toml = "1"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 

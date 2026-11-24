@@ -91,9 +91,9 @@ for a built-in outcome. External board/host adapters retain their own JSON
 convention. The provider still receives `{outcome, output}` from the recorded
 `ToolCallResult`, both live and on resume.
 
-`fs_edit` records each entry as `Applied { occurrences }`, `Failed { message }`,
-or `NotAttempted`. Completed views count only recorded applied edits, including
-those before a later failure. Expanded rows label failed/unattempted entries and
+`fs_edit` records each entry as `Applied { occurrences, normalized }`,
+`Failed { message }`, or `NotAttempted`. Completed views count only recorded
+applied edits; a failed call applied none. Expanded rows label failed/unattempted entries and
 show only applied replacement diffs. Line totals remain reconstructed replacement
 statistics weighted by occurrences, not a net file/session diff (multiple matches
 on one line can contribute more than once). Pending approval previews remain
@@ -172,17 +172,23 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
   35-round Python bulk-edit workaround rather than reach for either
   batching tool. The shape matches kimi-cli's native `edit: Edit |
   list[Edit]` dialect minus the scalar branch.
-- **Sequential, stop at the first failure, no rollback.** Edits apply in
-  list order; edits to the same file compose (a later edit reads what an
-  earlier one wrote, and a path this call already wrote is exempt from the
-  staleness gate for the rest of the call). The first failing edit ends
-  the call: already-applied edits stay on disk — rolling other files back
-  would fabricate state — and the result reports every edit's outcome in
-  order (`applied` with its `occurrences`, `failed` with its reason,
-  `not_attempted`) plus `failed_index`, so the model can fix that one edit
-  and resend from there. A malformed `edits` list is rejected before any
-  file is touched, so a shape error never leaves a partial application.
-- `old_string` must match **exactly**. Zero matches and multiple matches are
+- **Placed against the original, all or nothing** (2026-11-24, the form pi
+  and eve converge on — `research/agent-frameworks-core-and-extension-2026-11-23.md`
+  §4). Every edit is placed against its file as it was before the call, so
+  no edit sees another's result, and two edits of one file that overlap are
+  refused. Every edit is placed before any file is written: if one cannot
+  be, nothing is written, and the result names every edit that could not
+  be (`failed` with its reason) and marks the rest `not_attempted`, with
+  `failed_index` the first failure. A file's CRLF line endings and
+  byte-order mark are kept. Until 2026-11-24 edits applied in list order,
+  composed, and stopped at the first failure with earlier edits left on
+  disk.
+- `old_string` is matched **exactly** first. When it matches nowhere, it is
+  looked for once more with both sides normalized line by line (NFKC,
+  trailing whitespace, typographic quotes and dashes, unusual spaces — pi's
+  set); a single such match rewrites only the lines it covers, in their
+  normalized form, and the receipt carries `normalized: true`.
+  `replace_all` matches exactly only. Zero matches and multiple matches are
   `is_error` results with actionable text. By default, `old_string` must also
   match **uniquely** ("found 3 matches — include more surrounding context");
   set `replace_all: true` to replace every occurrence instead. A successful
@@ -203,9 +209,11 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
   nineteen days did not justify novel surface area, and the quality gate
   catches the consequence downstream. The knowledge stays; the mechanism
   does not.
-- No fuzzy-match fallback in v1. Gemini ships a four-tier fuzzy cascade;
-  Claude Code deliberately ships none. Start strict, collect failure data,
-  add leniency only if the data demands it.
+- The normalized fallback above replaced "no fuzzy-match fallback" on
+  2026-11-24. The failure data behind it (2026-07-05..11-20, 3,136 edits):
+  53 `old_string`-not-found failures; pi's normalization would have found
+  none of the 12 a whitespace-tolerant match would have, which differed in
+  indentation or spacing inside lines.
 - A process-wide per-path lock serializes `fs_write` and `fs_edit`
   mutations that target the same file, including calls from different
   sessions. An `fs_edit` call holds every path in its list for the whole

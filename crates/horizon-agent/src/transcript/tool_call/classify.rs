@@ -73,11 +73,10 @@ fn classify_tool(
                 "Edit".to_string(),
                 target,
                 Some(match output.and_then(decode::<FileEdits>) {
-                    Some(result) if result.failed_index.is_some() => format!(
-                        "{} applied, failed at edit {} · +{added} -{removed}",
-                        result.applied_count,
-                        result.failed_index.unwrap() + 1
-                    ),
+                    Some(FileEdits {
+                        failed_index: Some(failed),
+                        ..
+                    }) => format!("failed at edit {}, nothing written", failed + 1),
                     _ => format!("+{added} -{removed}"),
                 }),
             )

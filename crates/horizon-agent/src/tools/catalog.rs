@@ -152,12 +152,14 @@ fn build_definitions() -> Vec<Definition> {
             legend_after(
                 "Apply one or more string replacements in a single call. Batch related \
                 edits -- several files, or several hunks of one file -- into one list instead \
-                of one call each. Each `old_string` must match exactly once unless \
+                of one call each. Every edit is matched against the file as it was before \
+                the call, so no edit sees another's result, and two edits of one file must \
+                not overlap. Each `old_string` must match exactly once unless \
                 `replace_all: true` is set for that edit, and every file must have been read \
-                in this session with no changes on disk since. Edits apply in list order and \
-                later edits see earlier ones' effects. If an edit fails, the call stops \
-                there: earlier edits stay applied and the rest are not attempted, so you can \
-                fix that edit and resend from it.",
+                in this session with no changes on disk since. Text that differs only in \
+                trailing whitespace, typographic quotes or dashes is still found. If any \
+                edit fails, no file is written and every failing edit is named, so fix them \
+                and resend the whole list.",
                 super::output_legend::legend::<super::output::FileEdits>("FileEdits"),
             ),
         ),

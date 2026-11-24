@@ -43,7 +43,10 @@ pub(crate) mod test_support {
             edits: vec![EditReceipt {
                 index: 0,
                 path: path.into(),
-                outcome: EditOutcome::Applied { occurrences: 1 },
+                outcome: EditOutcome::Applied {
+                    occurrences: 1,
+                    normalized: false,
+                },
             }],
             applied_count: 1,
             file_count: 1,

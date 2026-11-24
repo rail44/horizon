@@ -171,7 +171,7 @@ fn provider_results_preserve_outcome_separately_from_arbitrary_tool_data() {
 }
 
 #[test]
-fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
+fn a_refused_edit_batch_survives_log_database_provider_and_change_projection() {
     use crate::contract::tool_output::{EditOutcome, FileEdits, decode};
     use crate::contract::{SessionId, ToolOutcome};
     use crate::live::LiveState;
@@ -229,17 +229,16 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
         ]}),
     );
     assert_eq!(result.outcome, ToolOutcome::Failed);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\nnew\n");
+    // One edit that cannot be placed keeps every file as it was.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\nold\n");
     assert_eq!(std::fs::read_to_string(&untouched).unwrap(), "keep\n");
     let facts = decode::<FileEdits>(&result.output).unwrap();
-    assert_eq!(facts.applied_count, 1);
+    assert_eq!(facts.applied_count, 0);
     assert_eq!(facts.failed_index, Some(1));
-    std::assert_matches!(
-        facts.edits[0].outcome,
-        EditOutcome::Applied { occurrences: 2 }
-    );
+    assert_eq!(facts.edits[0].outcome, EditOutcome::NotAttempted);
     std::assert_matches!(facts.edits[1].outcome, EditOutcome::Failed { .. });
-    assert_eq!(facts.edits[2].outcome, EditOutcome::NotAttempted);
+    // Every edit that cannot be placed is named, here one on a file never read.
+    std::assert_matches!(facts.edits[2].outcome, EditOutcome::Failed { .. });
 
     writer.flush().unwrap();
     let records = event_log::read(&log).unwrap().records;
@@ -260,7 +259,7 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
             &last.request.input,
             Some(&finished.output.0),
         );
-        assert!(call.summary.as_ref().unwrap().contains("1 applied"));
+        assert!(call.summary.as_ref().unwrap().contains("nothing written"));
     }
     let messages = rig_messages_from_horizon_events(&replay);
     assert_eq!(

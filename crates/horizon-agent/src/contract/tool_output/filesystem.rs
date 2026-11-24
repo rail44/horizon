@@ -70,14 +70,13 @@ pub struct FileWritten {
 pub struct FileEdits {
     /// One receipt per edit, in the order they were submitted.
     pub edits: Vec<EditReceipt>,
-    /// How many edits were applied before any failure.
+    /// How many edits were applied: all of them, or none when one failed.
     pub applied_count: usize,
     /// How many distinct files the edits touched.
     pub file_count: usize,
-    /// The index of the edit that failed, when one did; later edits are then
-    /// not attempted.
+    /// The first edit that failed, when one did; then no edit was applied.
     pub failed_index: Option<usize>,
-    /// Why the failing edit failed.
+    /// What happened to the call, when it failed.
     pub message: Option<String>,
 }
 
@@ -94,7 +93,15 @@ pub struct EditReceipt {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum EditOutcome {
-    Applied { occurrences: usize },
-    Failed { message: String },
+    Applied {
+        occurrences: usize,
+        /// The match was found only once whitespace and punctuation were
+        /// normalized; the lines it covers were written in that form.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        normalized: bool,
+    },
+    Failed {
+        message: String,
+    },
     NotAttempted,
 }

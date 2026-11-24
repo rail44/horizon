@@ -1337,20 +1337,14 @@ fn fs_edit_applies_a_batch_across_several_files_in_one_call() {
 }
 
 #[test]
-fn fs_edit_composes_edits_to_the_same_file_without_tripping_the_staleness_gate() {
-    // The second edit's `old_string` only exists because the first one
-    // wrote it, and no `fs_read` runs in between: same-call sequencing must
-    // see the evolving content and must not read this call's own write as
-    // an external modification.
-    let root = temp_workspace("edit-batch-compose");
+fn fs_edit_places_every_edit_against_the_file_as_it_was() {
+    // The second edit names text the first one removes: each is placed
+    // against the file before the call, so both apply.
+    let root = temp_workspace("edit-batch-original");
     let target = root.join("file.txt");
-    fs::write(&target, "hello world").unwrap();
+    fs::write(&target, "hello world\nsecond line\n").unwrap();
     let tool_state = ToolSessionState::new(root);
-    sync_tools::execute_auto(
-        &tool_state,
-        "fs_read",
-        &json!({ "path": target.display().to_string() }),
-    );
+    read_files(&tool_state, &[&target]);
 
     let output = sync_tools::execute_approved(
         &tool_state,
@@ -1358,7 +1352,7 @@ fn fs_edit_composes_edits_to_the_same_file_without_tripping_the_staleness_gate()
         &json!({
             "edits": [
                 { "path": target.display().to_string(), "old_string": "world", "new_string": "there" },
-                { "path": target.display().to_string(), "old_string": "hello there", "new_string": "goodbye there" },
+                { "path": target.display().to_string(), "old_string": "second", "new_string": "2nd" },
             ],
         }),
     );
@@ -1366,12 +1360,55 @@ fn fs_edit_composes_edits_to_the_same_file_without_tripping_the_staleness_gate()
     assert!(!is_error(&output), "{output}");
     assert_eq!(output["applied_count"], 2);
     assert_eq!(output["file_count"], 1);
-    assert_eq!(fs::read_to_string(&target).unwrap(), "goodbye there");
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "hello there\n2nd line\n"
+    );
 }
 
 #[test]
-fn fs_edit_stops_at_the_first_failure_and_reports_every_edits_outcome() {
-    let root = temp_workspace("edit-batch-partial");
+fn fs_edit_refuses_two_edits_of_one_file_that_overlap() {
+    let root = temp_workspace("edit-batch-overlap");
+    let target = root.join("file.txt");
+    fs::write(&target, "hello world").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    read_files(&tool_state, &[&target]);
+
+    let output = sync_tools::execute_approved(
+        &tool_state,
+        "fs_edit",
+        &json!({
+            "edits": [
+                { "path": target.display().to_string(), "old_string": "hello world", "new_string": "a" },
+                { "path": target.display().to_string(), "old_string": "world", "new_string": "b" },
+            ],
+        }),
+    );
+
+    assert!(is_error(&output), "{output}");
+    assert_eq!(output["failed_index"], 1);
+    assert!(
+        output["edits"][1]["message"]
+            .as_str()
+            .unwrap()
+            .contains("overlaps the edit at index 0")
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "hello world");
+}
+
+fn read_files(tool_state: &ToolSessionState, paths: &[&std::path::Path]) {
+    for path in paths {
+        sync_tools::execute_auto(
+            tool_state,
+            "fs_read",
+            &json!({ "path": path.display().to_string() }),
+        );
+    }
+}
+
+#[test]
+fn fs_edit_writes_nothing_when_an_edit_fails_and_names_each_failure() {
+    let root = temp_workspace("edit-batch-all-or-nothing");
     let first = root.join("first.txt");
     let second = root.join("second.txt");
     let third = root.join("third.txt");
@@ -1379,13 +1416,7 @@ fn fs_edit_stops_at_the_first_failure_and_reports_every_edits_outcome() {
     fs::write(&second, "two\n").unwrap();
     fs::write(&third, "three\n").unwrap();
     let tool_state = ToolSessionState::new(root);
-    for path in [&first, &second, &third] {
-        sync_tools::execute_auto(
-            &tool_state,
-            "fs_read",
-            &json!({ "path": path.display().to_string() }),
-        );
-    }
+    read_files(&tool_state, &[&first, &second, &third]);
 
     let output = sync_tools::execute_approved(
         &tool_state,
@@ -1394,28 +1425,86 @@ fn fs_edit_stops_at_the_first_failure_and_reports_every_edits_outcome() {
             "edits": [
                 { "path": first.display().to_string(), "old_string": "one", "new_string": "ONE" },
                 { "path": second.display().to_string(), "old_string": "absent", "new_string": "x" },
-                { "path": third.display().to_string(), "old_string": "three", "new_string": "THREE" },
+                { "path": third.display().to_string(), "old_string": "missing", "new_string": "y" },
             ],
         }),
     );
 
     assert!(is_error(&output), "{output}");
     assert_eq!(output["failed_index"], 1);
-    assert_eq!(output["applied_count"], 1);
-    assert_eq!(output["edits"][0]["status"], "applied");
+    assert_eq!(output["applied_count"], 0);
+    assert_eq!(output["edits"][0]["status"], "not_attempted");
     assert_eq!(output["edits"][1]["status"], "failed");
-    assert!(
-        output["edits"][1]["message"]
-            .as_str()
-            .unwrap()
-            .contains("not found")
-    );
-    assert_eq!(output["edits"][2]["status"], "not_attempted");
-    // No rollback: the applied edit stays on disk, the not-attempted one
-    // never ran.
-    assert_eq!(fs::read_to_string(first).unwrap(), "ONE\n");
+    assert_eq!(output["edits"][2]["status"], "failed");
+    let message = output["message"].as_str().unwrap();
+    assert!(message.contains("edit at index 1 failed"), "{message}");
+    assert!(message.contains("edit at index 2 failed"), "{message}");
+    assert!(message.contains("No file was written"), "{message}");
+    assert_eq!(fs::read_to_string(first).unwrap(), "one\n");
     assert_eq!(fs::read_to_string(second).unwrap(), "two\n");
     assert_eq!(fs::read_to_string(third).unwrap(), "three\n");
+}
+
+#[test]
+fn fs_edit_finds_text_that_differs_only_in_trailing_space_quotes_or_dashes() {
+    let root = temp_workspace("edit-normalized");
+    let target = root.join("notes.md");
+    fs::write(
+        &target,
+        "keep this   \nsay \u{201c}hello\u{201d} \u{2014} twice  \nkeep that\n",
+    )
+    .unwrap();
+    let tool_state = ToolSessionState::new(root);
+    read_files(&tool_state, &[&target]);
+
+    let output = sync_tools::execute_approved(
+        &tool_state,
+        "fs_edit",
+        &json!({
+            "edits": [{
+                "path": target.display().to_string(),
+                "old_string": "say \"hello\" - twice",
+                "new_string": "say \"bye\" - once",
+            }],
+        }),
+    );
+
+    assert!(!is_error(&output), "{output}");
+    assert_eq!(output["edits"][0]["normalized"], true);
+    // Only the line the match covers is rewritten; the others keep their
+    // bytes, trailing spaces included.
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "keep this   \nsay \"bye\" - once\nkeep that\n"
+    );
+}
+
+#[test]
+fn fs_edit_keeps_crlf_line_endings_and_a_byte_order_mark() {
+    let root = temp_workspace("edit-crlf-bom");
+    let target = root.join("windows.txt");
+    fs::write(&target, "\u{feff}first\r\nsecond\r\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    read_files(&tool_state, &[&target]);
+
+    let output = sync_tools::execute_approved(
+        &tool_state,
+        "fs_edit",
+        &json!({
+            "edits": [{
+                "path": target.display().to_string(),
+                "old_string": "first\nsecond",
+                "new_string": "one\ntwo",
+            }],
+        }),
+    );
+
+    assert!(!is_error(&output), "{output}");
+    assert_eq!(output["edits"][0]["normalized"], serde_json::Value::Null);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "\u{feff}one\r\ntwo\r\n"
+    );
 }
 
 #[test]
