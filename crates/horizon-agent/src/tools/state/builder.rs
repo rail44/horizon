@@ -68,7 +68,6 @@ impl ToolSessionBuilder {
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
                 mach_services: RefCell::new(Vec::new()),
-                judge: None,
                 verdict_modules: crate::modules::verdict_modules(),
                 exploration: None,
                 board: None,
@@ -155,9 +154,14 @@ impl ToolSessionBuilder {
         self
     }
 
-    /// Install the enforcing judge, or retain human approval when unavailable.
+    /// Install the enforcing judge as a verdict module, or retain human
+    /// approval when unavailable.
     pub fn with_judge(mut self, judge: Option<Arc<JudgeHandle>>) -> Self {
-        self.inner.judge = judge;
+        if let Some(handle) = judge {
+            self.inner
+                .verdict_modules
+                .push(Arc::new(crate::judge::JudgeModule { handle }));
+        }
         self
     }
 

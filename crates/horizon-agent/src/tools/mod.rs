@@ -94,23 +94,6 @@ pub(crate) use state::live_frame_for_session;
 
 pub use crate::judge::{ApprovalCandidate, ApprovalGate, ApprovalJudgment, JudgeDecision};
 
-/// Starts the enforcing approval gate for a fully-derived candidate.
-/// Missing runtime/judge configuration fails closed to the human path.
-pub fn start_approval_gate(
-    session_id: crate::contract::SessionId,
-    candidate: ApprovalCandidate,
-) -> ApprovalGate {
-    let Some(runtime) = state::session_runtime(session_id) else {
-        return ApprovalGate::Human(Box::new(candidate));
-    };
-    crate::judge::start_approval_gate(
-        &runtime.tool_state,
-        session_id,
-        candidate,
-        runtime.async_results.clone(),
-    )
-}
-
 /// Executes a Horizon-approved (`RequireApproval`) tool once the user has
 /// approved it -- `tools::approval`'s single entry point for the tools this
 /// crate itself executes (as opposed to `bash`, which runs on its own

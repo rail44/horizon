@@ -109,7 +109,7 @@ pub fn reissue(
 
 fn offer(session_id: SessionId, live: &LiveState, candidate: ApprovalCandidate) -> GateStep {
     let gate = match session_runtime(session_id) {
-        Some(runtime) => crate::judge::start_approval_gate(
+        Some(runtime) => review(
             &runtime.tool_state,
             session_id,
             candidate,
@@ -120,6 +120,30 @@ fn offer(session_id: SessionId, live: &LiveState, candidate: ApprovalCandidate) 
     match gate {
         ApprovalGate::Pending => GateStep::Pending,
         ApprovalGate::Human(candidate) => leave_to_a_person(session_id, live, *candidate),
+    }
+}
+
+/// Puts `candidate` to the session's verdict modules that review calls
+/// before a person is asked (the judge): pending when one takes it.
+pub(crate) fn review(
+    tool_state: &super::ToolSessionState,
+    session_id: SessionId,
+    candidate: ApprovalCandidate,
+    results: crossbeam_channel::Sender<super::ToolCompletion>,
+) -> ApprovalGate {
+    let cx = crate::modules::ReviewContext {
+        session_id,
+        candidate: &candidate,
+        results: &results,
+    };
+    if tool_state
+        .verdict_modules()
+        .iter()
+        .any(|module| module.review(&cx))
+    {
+        ApprovalGate::Pending
+    } else {
+        ApprovalGate::Human(Box::new(candidate))
     }
 }
 

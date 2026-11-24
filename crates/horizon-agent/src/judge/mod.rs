@@ -28,9 +28,10 @@
 //!
 //! ## Wiring at the seam
 //!
-//! [`start_approval_gate`] is called only after the approval kind and reason
-//! have been derived. It returns immediately: accepted work completes on
-//! the session's normal async-results channel, while unavailable or
+//! [`JudgeModule`] reviews a call for the verdict stage's gate
+//! (`tools::gate`) only after the approval kind and reason have been
+//! derived. It returns immediately: accepted work completes on the
+//! session's normal async-results channel, while unavailable or
 //! rate-limited work falls back to the human prompt synchronously.
 
 mod handle;
@@ -42,12 +43,9 @@ mod runtime;
 
 use std::sync::Arc;
 
-use crate::contract::{
-    ApprovalKind, ApprovalRequest, Message, MessageRole, SessionId, ToolCallRequest,
-};
+use crate::contract::{ApprovalKind, ApprovalRequest, Message, MessageRole, ToolCallRequest};
 use crate::decision::{Answer, DecisionClient};
 use crate::frame::{AgentFrame, AgentFrameItem};
-use crate::tools::ToolSessionState;
 
 pub use handle::JudgeHandle;
 
@@ -213,29 +211,26 @@ async fn run_decision_judge(
 /// Starts one enforcing judgment without blocking the session loop.
 /// Missing judge configuration and rate-limit exhaustion preserve the
 /// human approval flow immediately.
-pub(crate) fn start_approval_gate(
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    candidate: ApprovalCandidate,
-    result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
-) -> ApprovalGate {
-    let Some(judge) = tool_state.judge_handle() else {
-        return ApprovalGate::Human(Box::new(candidate));
-    };
-    let prior_user_messages = crate::tools::live_frame_for_session(session_id)
-        .map(|frame| prior_user_messages_from_frame(&frame))
-        .unwrap_or_default();
-    let context = trusted_approval_context(&candidate.approval.kind, &candidate.request.tool_id);
-    if judge.start(
-        session_id,
-        candidate.clone(),
-        prior_user_messages,
-        context,
-        result_tx,
-    ) {
-        ApprovalGate::Pending
-    } else {
-        ApprovalGate::Human(Box::new(candidate))
+/// The judge as a module of the verdict stage: it takes a call about to be
+/// put to a person and answers it later, unless the judge's budget is spent.
+pub(crate) struct JudgeModule {
+    pub(crate) handle: Arc<JudgeHandle>,
+}
+
+impl crate::modules::SessionModule for JudgeModule {
+    fn review(&self, cx: &crate::modules::ReviewContext<'_>) -> bool {
+        let prior_user_messages = crate::tools::live_frame_for_session(cx.session_id)
+            .map(|frame| prior_user_messages_from_frame(&frame))
+            .unwrap_or_default();
+        let context =
+            trusted_approval_context(&cx.candidate.approval.kind, &cx.candidate.request.tool_id);
+        self.handle.start(
+            cx.session_id,
+            cx.candidate.clone(),
+            prior_user_messages,
+            context,
+            cx.results.clone(),
+        )
     }
 }
 
@@ -325,6 +320,8 @@ fn builtin_tool_description(tool_id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::SessionId;
+    use crate::tools::ToolSessionState;
     use async_trait::async_trait;
     use std::sync::Mutex;
 
@@ -717,7 +714,7 @@ mod tests {
         let expected = candidate(ApprovalKind::Standard);
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(&tool_state, session_id, expected.clone(), tx,),
+            crate::tools::gate::review(&tool_state, session_id, expected.clone(), tx,),
             ApprovalGate::Pending
         );
         let completion = rx
@@ -749,7 +746,7 @@ mod tests {
             .build();
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(
+            crate::tools::gate::review(
                 &tool_state,
                 SessionId::new(),
                 candidate(ApprovalKind::Standard),
@@ -773,7 +770,7 @@ mod tests {
         let expected = candidate(ApprovalKind::Standard);
         let (tx, _rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(&tool_state, SessionId::new(), expected.clone(), tx,),
+            crate::tools::gate::review(&tool_state, SessionId::new(), expected.clone(), tx,),
             ApprovalGate::Human(Box::new(expected))
         );
     }
@@ -798,7 +795,7 @@ mod tests {
             .build();
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(
+            crate::tools::gate::review(
                 &tool_state,
                 SessionId::new(),
                 candidate(ApprovalKind::DomainGrant {
@@ -862,7 +859,7 @@ mod tests {
         });
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(&tool_state, SessionId::new(), expected.clone(), tx,),
+            crate::tools::gate::review(&tool_state, SessionId::new(), expected.clone(), tx,),
             ApprovalGate::Human(Box::new(expected))
         );
         assert!(rx.try_recv().is_err());
@@ -914,7 +911,7 @@ mod tests {
         let candidate = git_candidate("git commit -m test");
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(&tool_state, SessionId::new(), candidate.clone(), tx),
+            crate::tools::gate::review(&tool_state, SessionId::new(), candidate.clone(), tx),
             ApprovalGate::Pending
         );
         let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
@@ -933,7 +930,7 @@ mod tests {
         let candidate = git_candidate("git commit -m test");
         let (tx, _rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(&tool_state, SessionId::new(), candidate.clone(), tx),
+            crate::tools::gate::review(&tool_state, SessionId::new(), candidate.clone(), tx),
             ApprovalGate::Human(Box::new(candidate))
         );
     }
@@ -982,7 +979,7 @@ mod tests {
             let call = candidate.request.identity();
             let (tx, rx) = crossbeam_channel::unbounded();
             assert_eq!(
-                start_approval_gate(&tools, session, candidate, tx),
+                crate::tools::gate::review(&tools, session, candidate, tx),
                 ApprovalGate::Pending
             );
             started.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -1036,12 +1033,12 @@ mod tests {
         second.request.occurrence_id = crate::contract::OccurrenceId::new();
         second.approval.occurrence_id = second.request.occurrence_id.clone();
         assert_eq!(
-            start_approval_gate(&tools, session, first, tx.clone()),
+            crate::tools::gate::review(&tools, session, first, tx.clone()),
             ApprovalGate::Pending
         );
         started.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(
-            start_approval_gate(&tools, session, second.clone(), tx),
+            crate::tools::gate::review(&tools, session, second.clone(), tx),
             ApprovalGate::Pending
         );
         dropped.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -1077,7 +1074,7 @@ mod tests {
         let session = SessionId::new();
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
-            start_approval_gate(&tools, session, candidate(ApprovalKind::Standard), tx),
+            crate::tools::gate::review(&tools, session, candidate(ApprovalKind::Standard), tx),
             ApprovalGate::Pending
         );
         let result = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();

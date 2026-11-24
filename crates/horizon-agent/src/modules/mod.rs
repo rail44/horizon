@@ -61,6 +61,15 @@ pub(crate) enum Containment {
     Package,
 }
 
+/// A call put to the verdict stage's reviewers before a person is asked:
+/// one that takes it answers later on `results` as
+/// `ToolCompletion::ApprovalJudged`.
+pub(crate) struct ReviewContext<'a> {
+    pub(crate) session_id: crate::contract::SessionId,
+    pub(crate) candidate: &'a crate::judge::ApprovalCandidate,
+    pub(crate) results: &'a crossbeam_channel::Sender<crate::tools::ToolCompletion>,
+}
+
 /// What the verdict stage knows about a call.
 pub(crate) struct CallContext<'a> {
     pub(crate) state: &'a crate::tools::ToolSessionState,
@@ -113,6 +122,12 @@ pub(crate) trait SessionModule: Send + Sync {
     /// is refused; `None` when this module has no say.
     fn verdict(&self, _cx: &CallContext<'_>) -> Option<crate::policy::ToolPlan> {
         None
+    }
+
+    /// The verdict stage, for a call about to be put to a person: whether
+    /// this module takes the call and decides it itself, later.
+    fn review(&self, _cx: &ReviewContext<'_>) -> bool {
+        false
     }
 
     /// The continue stage: `None` when this module has no say.

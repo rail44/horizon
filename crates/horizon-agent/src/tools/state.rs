@@ -14,7 +14,6 @@ use std::{
 use crate::config::{AgentToolsConfig, BashToolConfig};
 use crate::contract::SessionId;
 use crate::frame::AgentFrame;
-use crate::judge::JudgeHandle;
 use crate::live::LiveState;
 use crate::persistence::projection::duckdb::SharedDuckdbStore;
 use crate::skills::SkillRegistry;
@@ -227,8 +226,8 @@ struct Inner {
     /// (`horizon-agentd`'s `session::run_session`) is the only place that
     /// has both this session's resolved provider `base_url` and the
     /// process's event-log writer handle.
-    judge: Option<Arc<JudgeHandle>>,
-    /// The verdict stage's modules (`modules::verdict`).
+    /// The verdict stage's modules (`modules::verdict`): the tiers, and
+    /// the judge when the session has one.
     verdict_modules: Vec<Arc<dyn crate::modules::SessionModule>>,
     /// This session's handle onto the daemon's spawn/subscribe/terminate
     /// capability for parallel exploration sessions (`tools::explore`,
@@ -419,10 +418,6 @@ impl ToolSessionState {
     /// This session's enforcing judge handle, if one is installed.
     pub(crate) fn verdict_modules(&self) -> &[Arc<dyn crate::modules::SessionModule>] {
         &self.inner.verdict_modules
-    }
-
-    pub(crate) fn judge_handle(&self) -> Option<Arc<JudgeHandle>> {
-        self.inner.judge.clone()
     }
 
     /// This session's exploration host, if one is installed -- what
