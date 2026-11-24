@@ -1455,31 +1455,21 @@ fn output_cap_truncated_ignores_a_cancelled_turn() {
     assert!(!output_cap_truncated(Some(32_768), 32_768, true));
 }
 
-/// A cap-truncated turn enters the same recovery loop as a tool-call
-/// truncation: the harness emits an `Error` naming the output limit, closes
-/// the turn as `Failed`, and auto-continues with a synthetic prompt — reusing
-/// the same consecutive-continue guard (`record_truncation_continue`), not a
-/// new one. The fallback turn (non-truncated) lets the loop exit and the
-/// return the recovered round for checkpoint processing before finalization.
+/// A response stopped at the output-token limit with no unfinished call is
+/// not continued: the harness emits an `Error` naming the limit, closes the
+/// turn as `Failed`, and returns to `WaitingForUser` without a synthetic
+/// prompt.
 #[tokio::test]
-async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
+async fn a_cap_truncated_turn_fails_and_waits_for_the_user() {
     let cap = RigAgentConfig::default().max_output_tokens;
     let (tx, rx) = crossbeam_channel::unbounded();
     let (_commands_tx, commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
-    let config = RigAgentConfig::default();
-    let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);
-    let extra_sections: Vec<String> = Vec::new();
-
     let mut state = SessionLoopState {
         commands,
-        config,
-        environment,
-        extra_sections,
         events_tx: tx,
         guard: TurnLoopGuard::new(None),
         ..SessionLoopState::default()
     };
-
     let outcome = TurnCompletion {
         output_tokens: Some(cap),
         stop: crate::providers::rig::completion::CompletionStop::Truncated(
@@ -1488,68 +1478,34 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
         ..TurnCompletion::default()
     };
 
-    let result = state.handle_truncation_recovery(outcome).await;
+    assert!(state.handle_truncation_recovery(outcome).await.is_none());
 
-    let recovered =
-        result.expect("recovered round must still pass through final checkpoint processing");
-    std::assert_matches!(
-        recovered.stop,
-        crate::providers::rig::completion::CompletionStop::Finished { .. }
-    );
-    assert!(recovered.final_text().is_some());
-
-    let events: Vec<_> = rx.try_iter().collect();
-
-    // The first event is the cap-truncation error, naming the output limit
-    // and the token count that hit it.
-    match &events[0].clone().into_event().expect("conversation event") {
+    let events: Vec<_> = rx
+        .try_iter()
+        .filter_map(|event| event.into_event())
+        .collect();
+    match &events[0] {
         Event::Error(error) => {
-            assert!(
-                error.message.contains("output limit"),
-                "error must mention the output limit: {}",
-                error.message
-            );
+            assert!(error.message.contains("output limit"), "{}", error.message);
             assert!(
                 error.message.contains(&cap.to_string()),
-                "error must include the cap value ({}): {}",
-                cap,
+                "{}",
                 error.message
             );
         }
         other => panic!("first event should be an Error, got {other:?}"),
     }
-
-    // The turn is closed as Failed, not Completed.
-    assert_eq!(
-        events[1].clone().into_event().expect("conversation event"),
-        Event::TurnEnded(TurnEndReason::Failed)
-    );
-
-    // The harness auto-continues: signals Running and injects an
-    // AutoContinue prompt, same as tool-call truncation recovery.
+    assert_eq!(events[1], Event::TurnEnded(TurnEndReason::Failed));
+    assert!(events.contains(&Event::StateChanged(SessionState::WaitingForUser)));
     assert!(
-        events.iter().any(|e| matches!(
-            &e.clone().into_event().expect("conversation event"),
-            Event::StateChanged(SessionState::Running)
-        )),
-        "must signal Running for the auto-continue"
-    );
-    assert!(
-        events.iter().any(|e| matches!(
-            &e.clone().into_event().expect("conversation event"),
+        !events.iter().any(|event| matches!(
+            event,
             Event::MessageCommitted(AgentMessage {
                 role: MessageRole::AutoContinue,
                 ..
             })
         )),
-        "must inject an AutoContinue prompt"
-    );
-
-    // The guard's consecutive-truncation counter was bumped once (the
-    // auto-continue ran) then reset (the follow-up turn was not truncated).
-    assert!(
-        state.guard.record_truncation_continue(),
-        "counter should have reset after the follow-up turn completed"
+        "a cap-truncated turn is not continued"
     );
 }
 

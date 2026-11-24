@@ -255,15 +255,14 @@ impl SessionLoopState {
         }
     }
 
-    /// Handles a turn outcome that may be truncated: if the provider started
-    /// streaming tool calls but never finalized them (unfinished tool calls), or
-    /// if the turn's output hit the configured token ceiling
-    /// (output cap), the turn is closed as `Failed` and the
-    /// harness automatically continues with a synthetic prompt, up to
-    /// [`MAX_CONSECUTIVE_TRUNCATION_CONTINUES`] times before falling back to
-    /// `WaitingForUser`. Both truncation modes share the same
-    /// consecutive-continue cap (one counter, not two) per the issue's
-    /// instruction to reuse the existing guard rather than mint a new one.
+    /// Handles a turn outcome that may be truncated; either way the turn is
+    /// closed as `Failed`. Tool calls the provider started streaming but
+    /// never finalized are not run: the harness continues with a prompt
+    /// asking the model to re-issue them, up to
+    /// [`MAX_CONSECUTIVE_TRUNCATION_CONTINUES`] times in a row before falling
+    /// back to `WaitingForUser`. A response stopped at the output-token
+    /// limit with no unfinished call is not continued: the session waits
+    /// for the user.
     ///
     /// Returns `None` when the truncation was fully handled (the caller should
     /// do nothing further), or `Some(outcome)` when the turn was not truncated
@@ -304,6 +303,15 @@ impl SessionLoopState {
                 .events_tx
                 .send(Event::TurnEnded(TurnEndReason::Failed).into());
 
+            let Truncation::Tools { unfinished, .. } = reason else {
+                self.finish_input(crate::contract::InputResult::Failure {
+                    message: "The provider stopped the response at the output-token limit.".into(),
+                });
+                let _ = self
+                    .events_tx
+                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
+                return None;
+            };
             if !self.guard.record_truncation_continue() {
                 self.finish_input(crate::contract::InputResult::Failure {
                     message: "Provider truncation recovery exhausted.".into(),
@@ -318,7 +326,7 @@ impl SessionLoopState {
 
             // Auto-continue: inject the synthetic continuation prompt and run
             // the next turn, mirroring the TaskWake auto-start seam.
-            let text = truncation_continuation_prompt_for(reason, self.config.max_output_tokens);
+            let text = truncation_continuation_prompt(unfinished.get());
             let _ = self
                 .events_tx
                 .send(Event::StateChanged(SessionState::Running).into());
@@ -439,24 +447,6 @@ fn truncation_error_message(reason: Truncation, output_tokens: Option<u64>, cap:
              {output_tokens} tokens were generated and the turn did not complete \
              (the output budget was exhausted before a tool call or text reply).",
             output_tokens = output_tokens.unwrap_or(0),
-        )
-    }
-}
-
-/// The synthetic continuation prompt for a truncated turn, tailored to the
-/// truncation mode. Tool-call truncation asks the model to re-issue the cut
-/// calls; output-cap truncation asks it to be more concise so the next turn
-/// does not exhaust the budget the same way.
-fn truncation_continuation_prompt_for(reason: Truncation, cap: u64) -> String {
-    if let Truncation::Tools { unfinished, .. } = reason {
-        truncation_continuation_prompt(unfinished.get())
-    } else {
-        format!(
-            "The provider cut your previous response short at the output-token \
-             limit ({cap} tokens generated) — you used the entire output budget \
-             without producing a tool call or text reply. Continue the work you \
-             described in your reasoning, but be more concise: go straight to the \
-             action instead of re-deriving it."
         )
     }
 }
