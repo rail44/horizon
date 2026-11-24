@@ -122,8 +122,13 @@ pub(crate) fn upgrade_conversation_records(records: &[Value]) -> Result<Vec<Valu
             .unwrap();
         close_pending(session, template, &mut output)?;
     }
+    // Each session's records follow one another, as the appender chains them.
+    let mut tips: HashMap<String, Value> = HashMap::new();
     for (index, row) in output.iter_mut().enumerate() {
         row["sequence"] = (index as u64 + 1).into();
+        let session = row["session_id"].as_str().unwrap_or_default().to_owned();
+        row["parent_id"] = tips.get(&session).cloned().unwrap_or(Value::Null);
+        tips.insert(session, row["event_id"].clone());
     }
     validate_conversation_records(&output)?;
     Ok(output)

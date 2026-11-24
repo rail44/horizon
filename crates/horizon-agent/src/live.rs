@@ -207,12 +207,15 @@ impl LiveState {
             writer,
             None,
             history,
+            None,
         )
     }
 
     /// Production counterpart to [`Self::with_event_log_and_history`]: the
     /// session host supplies its authoritative placement so every new
-    /// record can restore the same confinement after a daemon restart.
+    /// record can restore the same confinement after a daemon restart, and
+    /// the record `history` ends with (`parent`), which the session's next
+    /// record follows on its branch.
     pub fn with_event_log_context_and_history(
         session_id: SessionId,
         provider_id: Option<ProviderId>,
@@ -220,8 +223,10 @@ impl LiveState {
         writer: event_log::WriterHandle,
         session_context: Option<event_log::PersistedSessionContext>,
         history: Vec<Event>,
+        parent: Option<String>,
     ) -> Self {
-        let mut appender = event_log::Appender::new(writer, session_id, provider_id, role_id);
+        let mut appender =
+            event_log::Appender::new(writer, session_id, provider_id, role_id).with_parent(parent);
         if let Some(session_context) = session_context {
             appender = appender.with_session_context(session_context);
         }

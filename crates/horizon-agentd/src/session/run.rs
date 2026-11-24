@@ -55,6 +55,7 @@ pub(super) fn run_session(
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<crate::session::attachment::AttachRequest>,
     history: Vec<Event>,
+    parent: Option<String>,
     phase: &Cell<SessionLoopPhase>,
     retained_grants: Vec<horizon_sandbox::FilesystemGrant>,
 ) {
@@ -137,6 +138,7 @@ pub(super) fn run_session(
             writer,
             Some(persisted_context.clone()),
             history,
+            parent,
         ),
         None => LiveState::with_disabled_persistence(),
     };

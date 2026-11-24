@@ -88,11 +88,17 @@ impl Appender {
         self
     }
 
-    /// Starts this session's branch after `parent`: a record of the session
-    /// it is forked from.
+    /// Continues the branch after `parent`: the record the session's
+    /// history ends with, or a record of the session it is forked from.
     pub fn with_parent(mut self, parent: Option<String>) -> Self {
         self.parent = parent;
         self
+    }
+
+    /// The record the next one will follow: the last one this appender
+    /// wrote, or the parent it was given.
+    pub fn tip(&self) -> Option<String> {
+        self.parent.clone()
     }
 
     /// A provider can enter Running before its turn-opening message is

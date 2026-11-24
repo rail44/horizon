@@ -320,6 +320,7 @@ fn resume_one_session(
         restored.worktree,
         events,
         persisted_context,
+        appender.tip(),
     );
     ResumeOutcome::Spawned
 }
@@ -535,6 +536,7 @@ pub(crate) fn resume_session(
     for grant in &context.filesystem_grants {
         horizon_sandbox::revalidate_grant(grant).map_err(|error| error.to_string())?;
     }
+    let tip = records.last().map(|record| record.event_id.clone());
     let mut events: Vec<_> = records.into_iter().map(|record| record.event).collect();
     let identity = events.iter().rev().find_map(|event| match event {
         Event::EnvironmentActivated(identity) => Some(identity),
@@ -576,7 +578,8 @@ pub(crate) fn resume_session(
         Some(provider_id.clone()),
         role_id.clone(),
     )
-    .with_session_context(context.clone());
+    .with_session_context(context.clone())
+    .with_parent(tip);
     appender
         .commit_provider_events(transitions.iter().cloned().map(Into::into).collect())
         .map_err(|error| error.to_string())?;
@@ -593,6 +596,7 @@ pub(crate) fn resume_session(
         worktree,
         events,
         Some(context),
+        appender.tip(),
     );
     Ok(())
 }

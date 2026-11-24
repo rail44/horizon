@@ -129,6 +129,7 @@ pub(crate) fn spawn_session_thread(
         restored_worktree,
         history,
         None,
+        None,
     );
 }
 
@@ -143,6 +144,7 @@ pub(super) fn spawn_session_thread_with_context(
     restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
     retained_context: Option<horizon_agent::persistence::event_log::PersistedSessionContext>,
+    parent: Option<String>,
 ) {
     if let Some(message) = state.writer().and_then(|writer| writer.failure()) {
         super::events::report_persistence_failure(
@@ -195,6 +197,7 @@ pub(super) fn spawn_session_thread_with_context(
                 inbound_rx,
                 replay_rx,
                 history,
+                parent,
                 &phase,
                 retained_context
                     .map(|context| context.filesystem_grants)

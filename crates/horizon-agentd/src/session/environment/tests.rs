@@ -77,6 +77,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
                 writer.clone(),
                 Some(context),
                 Vec::new(),
+                None,
             )
         } else {
             LiveState::with_disabled_persistence()

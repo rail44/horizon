@@ -36,6 +36,7 @@
 mod handle;
 mod ratelimit;
 mod record;
+pub(crate) use record::JUDGE_VERDICT_EVENT_KIND;
 mod request;
 mod runtime;
 
