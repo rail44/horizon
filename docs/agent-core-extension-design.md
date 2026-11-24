@@ -100,14 +100,14 @@ ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_se
 調査の対照表(11247752 時点)と照らして、コアの部品に入れるものは次のとおり。
 
 - **プロンプトキャッシュ**: 上の「解決」の段の形と、Anthropic の `cache_control`。
-- **ツール**: 中断のシグナルを全ツールに渡す。途中経過を UI に流す。tool call の入力の部分 JSON を UI に流す(今は rig のプロバイダが捨てている)。
+- **ツール**: 中断のシグナルは、時間のかかるツール(bash・web・task)には background の登録を通じて届いている。外部のツールは host 側で時間の上限つきで動き、同期のツールは上限つきのローカルな処理である。途中経過を UI に流すことと、tool call の入力の部分 JSON を UI に流すこと(2026-10-20 の rig 0.44 への移行で、完成した tool call を一度だけ出す形にした)は、UI の段階で扱う。
 - **出力の上限で止まった場合**: その応答の tool call は実行せず、再発行を促すエラー結果を返す。
-- **モデルの情報**: catalog から max output と料金を読み、`max_tokens` を固定値(32768)からモデルの値にする。
+- **モデルの情報**: `max_tokens` は 32768 と、catalog がそのモデルの最大出力として載せる値の小さい方にした(`RigAgentConfig::output_cap`)。料金は usage の表示と一緒に扱う。
 - **usage と料金**: ACP に載せて UI に出す。今は記録するだけで、ACP への写しで捨てている。
 - **edit**: 各編集を元のファイルに当て、編集どうしの重なりを禁止する。完全一致で失敗したら、正規化して当て直す(pi と eve の形)。
 - **read**: 画像を読めるようにする。
 - **grep**: 位置だけでなく、行の内容も返す。
-- **skill**: Agent Skills 仕様の frontmatter を YAML として読む。リソースのファイルを読めるようにする。`.agents/skills` も探す。
+- **skill**: `.agents/skills` も探し、`skill_read` が repository の skill のディレクトリを返すようにした(本文が相対パスで参照するファイルは `fs_read` で読む)。frontmatter を YAML として読むことは、依存を足す判断と一緒に相談する。
 
 compaction の要約(Tier 2)は、`docs/agent-compaction-design.md` が保留としているので、ここには入れない。会話の木に compaction の entry を置ける形にしておく。
 
