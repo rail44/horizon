@@ -264,6 +264,8 @@ pub fn wheel(app: &App, at: (f32, f32), up: f64) {
     horizon_ui::testing::move_to(app, at.0, at.1);
     app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
         delta: BlitzWheelDelta::Pixels(0., up),
+        phase: Default::default(),
+        source: Default::default(),
         coords: PointerCoords {
             page_x: at.0,
             page_y: at.1,

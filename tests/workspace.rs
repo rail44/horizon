@@ -471,6 +471,27 @@ fn a_tab_dragged_by_its_label_selects_no_text() {
 }
 
 #[test]
+fn a_label_clicked_with_a_move_while_pressed_shows_its_tab() {
+    let opened = open();
+    opened.chord();
+    opened.character("t");
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    // A move in place while the button is down: the press on the label,
+    // whose default is prevented, is still where a drag is measured from,
+    // so the click that follows shows the tab.
+    let (x, y) = opened.middle(opened.all("tab-label")[0]);
+    pointer(&opened.app, x, y, Pointer::Move);
+    pointer(&opened.app, x, y, Pointer::Down);
+    pointer(&opened.app, x, y, Pointer::Drag);
+    pointer(&opened.app, x, y, Pointer::Up);
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+}
+
+#[test]
 fn a_tab_dragged_onto_another_groups_strip_goes_into_it() {
     use horizon_ui::testing::{Pointer, pointer};
     let opened = open();

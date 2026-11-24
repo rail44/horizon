@@ -91,6 +91,22 @@ pub(crate) fn frame_of(shared: &Rc<Shared>, seconds: f64) {
         run_effects(shared);
     }
     before_paint(shared, &mut shared.document.borrow_mut());
+    flush_pending_events(shared);
+}
+
+/// Dispatches the events the document queued outside a dispatch: those of
+/// a change made to it directly, as the focus moved by `set_focus_to`
+/// (blitz-dom queues them, and the embedder takes them out). Left in the
+/// queue, they would reach their targets only at the next input event,
+/// when what the targets were in may be gone.
+pub(crate) fn flush_pending_events(shared: &Rc<Shared>) {
+    if !shared.document.borrow().has_pending_events() {
+        return;
+    }
+    let mut document = shared.document.clone();
+    let handler = crate::dispatch::Dispatch(shared.clone());
+    blitz_dom::EventDriver::new(&mut document as &mut dyn blitz_dom::Document, handler)
+        .flush_pending_events();
 }
 
 /// The work that follows a layout, and the changes it asked for.

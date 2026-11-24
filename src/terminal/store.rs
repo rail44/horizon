@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::{Rc, Weak};
 
-use anyrender::{Paint, PaintScene, RenderContext, ResourceId};
+use anyrender::{AntiAliasing, Paint, PaintScene, RenderContext, ResourceId};
 use anyrender_vello::{DeviceHandle, VelloScenePainter};
 use horizon_terminal_core::TerminalLine;
 use kurbo::{Affine, Rect};
@@ -268,6 +268,7 @@ impl RowStore {
                 &image,
                 Some(from_slot),
                 &strip,
+                AntiAliasing::Enabled,
             );
         }
     }

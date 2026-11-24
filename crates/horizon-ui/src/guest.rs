@@ -23,7 +23,7 @@ use std::str::FromStr;
 use any_spawner::Executor;
 use blitz_traits::events::{
     BlitzInputEvent, BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData,
-    KeyState, MouseEventButton, MouseEventButtons, PointerCoords,
+    EventDispatchSource, KeyState, MouseEventButton, MouseEventButtons, PointerCoords,
 };
 use blitz_traits::node_id::NodeId;
 use keyboard_types::{Code, Key, Location, Modifiers, NamedKey};
@@ -562,7 +562,7 @@ fn event(name: &str, target: NodeId, data: &EventData) -> Option<DomEvent> {
         }
         _ => return None,
     };
-    Some(DomEvent::new(target, data))
+    Some(DomEvent::new(target, data, EventDispatchSource::Input))
 }
 
 /// Builds the view `view` makes, under an owner that is the plugin's for

@@ -202,6 +202,8 @@ impl Opened {
         move_to(&self.app, 300., 200.);
         self.app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
             delta: BlitzWheelDelta::Pixels(0., up),
+            phase: Default::default(),
+            source: Default::default(),
             coords: PointerCoords {
                 page_x: 300.,
                 page_y: 200.,
@@ -1115,6 +1117,8 @@ fn a_notch_of_the_wheel_is_one_report_to_a_program_that_asked_for_the_mouse() {
     move_to(&opened.app, 300., 200.);
     opened.app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
         delta: BlitzWheelDelta::Lines(0., 1.),
+        phase: Default::default(),
+        source: Default::default(),
         coords: PointerCoords {
             page_x: 300.,
             page_y: 200.,

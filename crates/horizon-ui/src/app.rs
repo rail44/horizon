@@ -157,6 +157,7 @@ impl App {
             Some((x, y, false)) => self.focus_from(x, y),
             _ => {}
         }
+        crate::frame::flush_pending_events(&self.shared);
         enter(&self.shared);
         let dispatched = std::mem::take(&mut *self.shared.dispatched.borrow_mut());
         for work in dispatched {

@@ -113,6 +113,8 @@ impl Opened {
         move_to(&self.app, 400., 300.);
         self.app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
             delta: BlitzWheelDelta::Pixels(0., -down),
+            phase: Default::default(),
+            source: Default::default(),
             coords,
             buttons: Default::default(),
             mods: Default::default(),

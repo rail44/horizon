@@ -15,8 +15,8 @@ pulldown-cmark = "0.13"
 [dev-dependencies]
 horizon-theme-css = { path = "../horizon-theme-css" }
 # The gallery painted into pixels, with no window and no GPU.
-anyrender = "0.14"
-anyrender_vello_cpu = "0.18"
+anyrender = "0.15"
+anyrender_vello_cpu = "0.19"
 blitz-paint = { workspace = true }
 
 [lints]

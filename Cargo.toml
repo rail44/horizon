@@ -72,28 +72,31 @@ blitz-dom = "=0.3.0-beta.4"
 blitz-traits = "=0.3.0-beta.4"
 blitz-paint = { version = "=0.3.0-beta.4", features = ["custom-widget"] }
 blitz-shell = "=0.3.0-beta.4"
-# The layout engine blitz-dom lays out with, at the revision the Blitz
+# The layout engine blitz-dom lays out with, at the version the Blitz
 # revision below takes: `horizon-ui` rounds its layout again with it
 # (`crates/horizon-ui/src/display_scale.rs`), so moving Blitz moves this too.
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "c25605620351786eb6a742b74ea4d289f59ebd84", default-features = false, features = ["std", "content_size"] }
+taffy = { version = "0.16.0", default-features = false, features = ["std", "content_size"] }
 reactive_graph = { version = "0.2", features = ["effects"] }
 any_spawner = { version = "0.3", features = ["futures-executor"] }
 
-# Blitz at the head of upstream's fix for hit testing through a clip
-# (DioxusLabs/blitz#1324, 58 commits past 0.3.0-beta.4): content scrolled
-# out of a box does not take the clicks meant for what is drawn over it.
+# Blitz at upstream's main (2026-11-23), past its handling of a cancelled
+# `pointerdown` (DioxusLabs/blitz#1641): a press whose default a handler
+# prevents is still recorded, so the click that follows is dispatched.
+# Upstream's fix for hit testing through a clip (DioxusLabs/blitz#1324)
+# is not in main: until it is, rows scrolled out of a list take the clicks
+# meant for what is drawn over them.
 # What Horizon needs of the window beyond blitz-shell is done around it,
 # in `src/application.rs`, which also holds copies of blitz-shell's
 # `View::redraw` and `View::complete_resume` at this revision: moving the
-# revision means comparing those copies with the new one's, and moving `taffy` above to the revision
-# the new one takes. Once upstream's own rounding to the display's
+# revision means comparing those copies with the new one's, and moving
+# `taffy` above to the version the new one takes. Once upstream's own rounding to the display's
 # pixels is in (DioxusLabs/blitz#902), `crates/horizon-ui/src/display_scale.rs`
 # rounds no more.
 [patch.crates-io]
-blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
-blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
-blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
-blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
 # winit at upstream's fix for Wayland clipboard text (rust-windowing/winit
 # db09864, "winit-wayland: fix some text not being copied due to missing
 # mime types"), not in a release yet. 0.31.0-beta.4 offers copied text as
@@ -132,11 +135,11 @@ horizon-wire = { path = "crates/horizon-wire" }
 horizon-theme = { path = "crates/horizon-theme" }
 horizon-shell-runtime = { path = "crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
-anyrender = "0.14"
-anyrender_vello = "0.15"
+anyrender = "0.15"
+anyrender_vello = "0.16"
 # A terminal draws the rows it keeps as pixels with Vello itself, on the
 # window's device (`src/terminal/store.rs`).
-vello = "0.11"
+vello = "0.12"
 # The hash a terminal's row store finds rows by (`src/terminal/slots.rs`).
 foldhash = "0.2"
 # The terminal's screen is a widget that paints itself: both crates draw
@@ -163,7 +166,7 @@ notify = "8"
 # `complex-scripts`: the word breaker with its dictionary for Chinese and
 # Japanese. Without it a debug build writes a warning to stderr for each
 # such run of text it shapes.
-parley = { version = "0.12", features = ["complex-scripts"] }
+parley = { version = "0.13", features = ["complex-scripts"] }
 peniko = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -191,7 +194,7 @@ wasmtime-wasi = "50"
 # The terminal view's tests run the terminal core over a PTY of their own.
 portable-pty = "0.9.0"
 # The view painted into pixels, with no window and no GPU.
-anyrender_vello_cpu = "0.18"
+anyrender_vello_cpu = "0.19"
 # The wiki a test of the wiki's extension is shown over.
 horizon-wiki = { path = "crates/horizon-wiki" }
 # An image larger than the window, written for the image viewer's test.

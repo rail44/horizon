@@ -13,7 +13,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use anyrender::PaintScene;
+use anyrender::{AntiAliasing, PaintScene};
 use horizon_terminal_core::{
     ClipboardDestination, KeyEventKind, NamedColor, TerminalColor, TerminalColorScheme,
     TerminalCommand, TerminalCursorShape, TerminalFrame, TerminalKeyInput, TerminalLine,
@@ -1029,6 +1029,7 @@ fn rules(
                 Color::from_rgb8(r, g, b),
                 None,
                 path,
+                AntiAliasing::Enabled,
             );
         };
         let middle = under + thick / 2.;
@@ -1129,6 +1130,7 @@ fn shapes(
                         Color::from_rgba8(*r, *g, *b, alpha),
                         None,
                         &rect,
+                        AntiAliasing::Enabled,
                     );
                 }
                 GlyphShape::RoundedCorner(spec) => {
@@ -1143,6 +1145,7 @@ fn shapes(
                         Color::from_rgb8(*r, *g, *b),
                         None,
                         &path,
+                        AntiAliasing::Enabled,
                     );
                 }
                 GlyphShape::Diagonal(spec) => {
@@ -1153,6 +1156,7 @@ fn shapes(
                         Color::from_rgb8(*r, *g, *b),
                         None,
                         &path,
+                        AntiAliasing::Enabled,
                     );
                 }
             },
@@ -1210,6 +1214,7 @@ fn fill(scene: &mut impl PaintScene, color: [u8; 3], rect: Rect) {
         Color::from_rgb8(r, g, b),
         None,
         &rect,
+        AntiAliasing::Enabled,
     );
 }
 
@@ -1266,6 +1271,7 @@ fn glyphs(
             Affine::translate((0., top)),
             leaned,
             placed,
+            AntiAliasing::Enabled,
         );
     }
 }
@@ -1603,6 +1609,7 @@ impl Screen {
                 Color::from_rgb8(r, g, b),
                 None,
                 &place.inset(-scale / 2.),
+                AntiAliasing::Enabled,
             );
         } else {
             let shape = match cursor.shape {
@@ -1620,6 +1627,7 @@ impl Screen {
                 Color::from_rgba8(r, g, b, 0xc0),
                 None,
                 &shape,
+                AntiAliasing::Enabled,
             );
         }
     }

@@ -296,6 +296,7 @@ fn boxes_and_thin_borders_land_on_the_display_pixels_at_a_fractional_scale() {
 }
 
 #[test]
+#[ignore = "hit testing through a clip waits for DioxusLabs/blitz#1324"]
 fn rows_scrolled_out_of_a_list_do_not_take_the_clicks_above_it() {
     use horizon_ui::blitz_dom::ScrollBehavior;
 

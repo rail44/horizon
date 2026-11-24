@@ -278,10 +278,11 @@ impl ApplicationHandler for Application {
 /// `Cargo.toml` pins, with `horizon_ui::frame` where that resolves the
 /// document, as [`redraw`] has it: compare it with the new revision's when
 /// Blitz is moved. The waker it gives the window is blitz-shell's
-/// `create_waker`'s, which blitz-shell does not export.
-fn complete_resume(view: &mut View<Renderer>) {
+/// `create_waker`'s, which blitz-shell does not export. False if the
+/// renderer is not ready yet.
+fn complete_resume(view: &mut View<Renderer>) -> bool {
     if !view.renderer.complete_resume() {
-        return;
+        return false;
     }
     let window_id = view.window_id();
 
@@ -319,6 +320,7 @@ fn complete_resume(view: &mut View<Renderer>) {
         proxy: view.proxy.clone(),
         window_id,
     })));
+    true
 }
 
 /// Wakes the window's document to be polled.
@@ -348,6 +350,15 @@ impl Wake for PollOnWake {
 /// once: when Blitz is moved to another revision, compare this with that
 /// revision's `View::redraw` and carry its changes over.
 fn redraw(view: &mut View<Renderer>) -> bool {
+    // A renderer that is polled rather than ready by `ResumeReady` is
+    // finished here.
+    if view.renderer.is_pending() {
+        if !complete_resume(view) {
+            view.window.request_redraw();
+        }
+        return false;
+    }
+
     let animation_time = view.current_animation_time();
     horizon_ui::frame(animation_time);
 
@@ -364,6 +375,12 @@ fn redraw(view: &mut View<Renderer>) -> bool {
     let is_animating = inner.is_animating();
     let is_blocked = inner.has_pending_critical_resources();
     let insets = view.safe_area_insets;
+
+    // The accessibility tree follows the document as laid out.
+    if !is_blocked && inner.has_changes() {
+        view.accessibility.update_tree(&inner);
+        inner.clear_changes();
+    }
 
     if !is_blocked && is_visible {
         view.renderer.render(|scene| {
