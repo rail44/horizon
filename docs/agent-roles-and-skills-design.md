@@ -276,6 +276,12 @@ directory whose `SKILL.md` doesn't parse warns on stderr and is skipped,
 never crashing the session (the config-file-style discipline
 `instructions::read_to_string_or_warn` already established).
 
+The same walk also reads `.agents/skills/<id>/SKILL.md`, the location the
+Agent Skills convention shares across agents; at one level a
+`.horizon/skills` skill wins over an `.agents/skills` one with the same id.
+`skill_read` names a repository skill's directory with its body, so a file
+the body refers to by a relative path is read from there with `fs_read`.
+
 **Override order: repository wins.** A repository skill sharing an embedded
 skill's id replaces it outright for that session (not just its body — its
 description too), and a repository skill discovered nearer the session's

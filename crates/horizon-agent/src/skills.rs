@@ -38,9 +38,15 @@
 //!    one skill's full body, re-read from disk at read time for a
 //!    repository skill (see [`Skill::body`]) so an edit followed by a fresh
 //!    `skill_read` in the same session sees the new content.
-//! 3. **Deeper resources**: not built -- no skill here references further
-//!    files/scripts yet (Part 3.2's third disclosure tier). Add it if a
-//!    future skill needs it.
+//! 3. **Deeper resources**: a repository skill's `skill_read` also names
+//!    its directory, so a file its instructions refer to by a relative path
+//!    is read from there with `fs_read` (Part 3.2's third disclosure tier).
+//!    A skill built into Horizon has no files beside its body.
+//!
+//! A repository keeps its skills in `.horizon/skills/<id>/SKILL.md` or, as
+//! the Agent Skills convention shared with other agents has it,
+//! `.agents/skills/<id>/SKILL.md`; where both have the same id at one
+//! level, `.horizon/skills` wins.
 //!
 //! `SKILL.md` format (hand-parsed below, no new dependency): a YAML-ish
 //! frontmatter block delimited by `---` lines, with `name:`/`description:`
@@ -84,6 +90,14 @@ impl Skill {
     /// repository skill. A repository skill whose file has since been
     /// deleted or no longer parses returns an explanatory placeholder
     /// rather than panicking or silently returning stale content.
+    /// Where a repository skill's files are; `None` for an embedded skill.
+    fn directory(&self) -> Option<&Path> {
+        match &self.source {
+            SkillBody::Embedded(_) => None,
+            SkillBody::Repository(path) => path.parent(),
+        }
+    }
+
     fn body(&self) -> String {
         match &self.source {
             SkillBody::Embedded(body) => body.clone(),
@@ -267,8 +281,16 @@ fn skills_prompt_section<'a>(skills: impl Iterator<Item = &'a Skill>) -> Option<
 /// `instructions::read_to_string_or_warn`).
 fn discover_repository_skills(cwd: &Path) -> Vec<Skill> {
     let mut skills = Vec::new();
-    for dir in ancestor_dirs_from_git_root(cwd) {
-        let skills_dir = dir.join(".horizon").join("skills");
+    // Later wins: at one level `.horizon/skills` over `.agents/skills`.
+    let skill_dirs = ancestor_dirs_from_git_root(cwd)
+        .into_iter()
+        .flat_map(|dir| {
+            [
+                dir.join(".agents").join("skills"),
+                dir.join(".horizon").join("skills"),
+            ]
+        });
+    for skills_dir in skill_dirs {
         let Ok(entries) = std::fs::read_dir(&skills_dir) else {
             continue;
         };
@@ -354,6 +376,9 @@ pub(crate) fn execute_read(registry: &SkillRegistry, id: &str) -> Response {
                 description: skill.description.clone(),
                 body,
                 truncated,
+                directory: skill
+                    .directory()
+                    .map(|directory| directory.display().to_string()),
             })
         }
         None => error_output(format!(
@@ -676,5 +701,50 @@ mod tests {
             .expect("must build a section for the external skill");
         assert!(section.contains("test-external-skill"));
         assert!(section.contains("skill_read"));
+    }
+
+    fn write_agents_skill(dir: &Path, id: &str, description: &str) {
+        let skill_dir = dir.join(".agents").join("skills").join(id);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {id}\ndescription: {description}\n---\nSee references/guide.md.\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn discover_finds_skills_under_agents_skills_and_prefers_horizon_skills() {
+        let directory = temp_repo("agents-skills");
+        let root = directory.path().to_path_buf();
+        write_agents_skill(&root, "shared", "From .agents.");
+        write_agents_skill(&root, "both", "From .agents.");
+        write_skill(&root, "both", "both", "From .horizon.", "Body.");
+
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
+        assert_eq!(registry.get("shared").unwrap().description, "From .agents.");
+        assert_eq!(registry.get("both").unwrap().description, "From .horizon.");
+    }
+
+    #[test]
+    fn reading_a_repository_skill_names_its_directory() {
+        let directory = temp_repo("skill-directory");
+        let root = directory.path().to_path_buf();
+        write_agents_skill(&root, "guided", "Has a guide.");
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
+
+        let read = execute_read(&registry, &serde_json::json!({"id": "guided"}));
+        let skill_dir = root.join(".agents").join("skills").join("guided");
+        assert_eq!(
+            read.pointer("/directory")
+                .and_then(serde_json::Value::as_str),
+            Some(skill_dir.display().to_string().as_str()),
+            "{read}"
+        );
+
+        let embedded = SkillRegistry::embedded(&crate::packages::Packages::default());
+        let id = embedded.ids()[0].to_string();
+        let read = execute_read(&embedded, &serde_json::json!({ "id": id }));
+        assert!(read.pointer("/directory").is_none(), "{read}");
     }
 }

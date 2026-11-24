@@ -10,6 +10,11 @@ pub(crate) struct SkillRead {
     pub body: String,
     /// Whether the instructions were cut short.
     pub truncated: bool,
+    /// The skill's directory, for a skill kept in the repository: a file
+    /// its instructions name by a relative path is there, read with
+    /// `fs_read`. Absent for a skill built into Horizon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct KnowledgeRead {
