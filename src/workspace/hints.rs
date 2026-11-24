@@ -63,9 +63,9 @@ impl Shell {
     /// The shell's own keys now.
     fn own_keys(&self) -> Vec<Kept> {
         if self.mode.get_untracked() {
-            // With no tab, what is typed searches the views the workspace
+            // With no pane, what is typed searches the views the workspace
             // shows; `:` is still the commands'.
-            if self.model.with_untracked(Workspace::tab_count) == 0 {
+            if self.model.with_untracked(Workspace::is_empty) {
                 return vec![kept(":", "commands", true)];
             }
             return (MODE.iter())

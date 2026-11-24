@@ -179,6 +179,14 @@ impl Workspace {
         self.panes.iter().map(|pane| pane.id).collect()
     }
 
+    /// Whether the workspace has no pane: its root is then a tab group
+    /// with no tab, the empty workspace. Not the same as no tab counted
+    /// by [`Self::tab_count`], which is also none for panes under no
+    /// group with no group left beside them.
+    pub fn is_empty(&self) -> bool {
+        self.panes.is_empty()
+    }
+
     pub fn active_terminal_session_id(&self) -> Option<SessionId> {
         self.terminal_session_id(self.focus?)
     }

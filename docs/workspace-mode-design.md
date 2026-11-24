@@ -284,6 +284,10 @@ letters of the search, and `:` alone is still the palette's. The list
 has a search state of its own (`picker::Search`), apart from the
 sheet's, so the palette opened over it does not change what it lists.
 
+Empty is no pane (`Workspace::is_empty`), not no tab counted
+(`tab_count`): panes under no group, with no group left beside them,
+count no tab, show no list, and keep the mode's keys (2026-11-25).
+
 Explicitly out of scope here (per issue 003's own resolution note): the
 pane-bound visual signals themselves (cursor-pane border, scrim dim) for
 a *non-empty* workspace are untouched.
