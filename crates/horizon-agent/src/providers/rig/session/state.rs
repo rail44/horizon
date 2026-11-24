@@ -425,7 +425,7 @@ mod tests {
         let (events_tx, _events_rx) = crossbeam_channel::unbounded();
         let mut state = SessionLoopState {
             events_tx,
-            clearing: ClearingState::new(Some(500_000), 60),
+            clearing: ClearingState::new(Some(500_000)),
             ..Default::default()
         };
         state

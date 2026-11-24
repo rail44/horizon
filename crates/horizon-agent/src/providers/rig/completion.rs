@@ -140,6 +140,7 @@ pub(super) async fn complete_rig_turn(
     prompt: Prompt,
     events_tx: &Sender<ProviderEvent>,
     clearing: &mut ClearingState,
+    modules: &[std::sync::Arc<dyn crate::modules::SessionModule>],
     fallback: impl FnOnce() -> Message,
     token: &CancellationToken,
 ) -> TurnCompletion {
@@ -166,7 +167,7 @@ pub(super) async fn complete_rig_turn(
     // the deterministic fallback responder stands in for a provider request
     // too, and a state that never sees reported usage can never cross the
     // threshold anyway (`ClearingState::over_threshold`).
-    if let Some(cleared) = clearing.run_pass(rig_history) {
+    for cleared in clearing.run_stage(rig_history, modules) {
         let _ = events_tx.send(Event::HistoryCleared(cleared).into());
     }
     let earlier = match config

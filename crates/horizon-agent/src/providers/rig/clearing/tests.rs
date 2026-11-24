@@ -89,24 +89,24 @@ fn measured_threshold_and_unknown_window_control_clearing() {
         (Some(200_000), 119_999, false),
         (Some(200_000), 120_000, true),
     ] {
-        let mut state = ClearingState::new(window, 60);
+        let mut state = ClearingState::new(window);
         state.record_input_tokens(usage);
-        assert_eq!(state.run_pass(&history()).is_some(), expected);
+        assert_eq!(state.run_pass_at(&history(), 60).is_some(), expected);
     }
-    let mut state = ClearingState::new(Some(200_000), 60);
+    let mut state = ClearingState::new(Some(200_000));
     state.record_input_tokens(100_000);
     state.adopt_window(Some(150_000));
-    assert!(state.run_pass(&history()).is_some());
+    assert!(state.run_pass_at(&history(), 60).is_some());
     state.adopt_window(None);
-    assert!(state.run_pass(&history()).is_none());
+    assert!(state.run_pass_at(&history(), 60).is_none());
 }
 #[test]
 fn floor_tail_and_current_batch_prevent_small_or_unsafe_passes() {
     let mut small = ConversationHistory::default();
     round(&mut small, "one", "one", "one.rs", 100);
-    let mut state = ClearingState::new(Some(1), 1);
+    let mut state = ClearingState::new(Some(1));
     state.record_input_tokens(1);
-    assert!(state.run_pass(&small).is_none());
+    assert!(state.run_pass_at(&small, 1).is_none());
     let history = history();
     let plan = plan_clearing_pass(&history, &ClearedResults::default());
     assert!(plan.cleared_occurrence_ids.contains(&id("occ-0")));
@@ -137,9 +137,9 @@ fn a_reused_id_keeps_the_original_calls_placeholder_description() {
 #[test]
 fn a_later_pass_can_clear_an_aged_result_whose_provider_id_was_reused() {
     let mut history = history();
-    let mut state = ClearingState::new(Some(1), 1);
+    let mut state = ClearingState::new(Some(1));
     state.record_input_tokens(1);
-    let first = state.run_pass(&history).unwrap();
+    let first = state.run_pass_at(&history, 1).unwrap();
     round(&mut history, "call-0", "later", "later.rs", 70_000);
     for index in 40..45 {
         round(
@@ -150,7 +150,7 @@ fn a_later_pass_can_clear_an_aged_result_whose_provider_id_was_reused() {
             20_000,
         );
     }
-    let second = state.run_pass(&history).unwrap();
+    let second = state.run_pass_at(&history, 1).unwrap();
     assert!(second.cleared_occurrence_ids.contains(&id("later")));
     assert!(
         second
@@ -158,15 +158,15 @@ fn a_later_pass_can_clear_an_aged_result_whose_provider_id_was_reused() {
             .iter()
             .all(|id| !first.cleared_occurrence_ids.contains(id))
     );
-    assert!(state.run_pass(&history).is_none());
+    assert!(state.run_pass_at(&history, 1).is_none());
 }
 #[test]
 fn projection_preserves_canonical_messages_and_freezes_exact_results_across_replay() {
     let history = history();
     let before = history.messages();
-    let mut state = ClearingState::new(Some(1), 1);
+    let mut state = ClearingState::new(Some(1));
     state.record_input_tokens(1);
-    let pass = state.run_pass(&history).unwrap();
+    let pass = state.run_pass_at(&history, 1).unwrap();
     let first = history_for_provider_request(
         &history,
         state.cleared(),

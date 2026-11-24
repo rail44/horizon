@@ -23,7 +23,7 @@ fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries()
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut live = ConversationHistory::default();
     let mut events = Vec::new();
-    let mut clearing = ClearingState::new(Some(1), 1);
+    let mut clearing = ClearingState::new(Some(1));
     clearing.record_input_tokens(1);
     for pass in 0..2 {
         live.open_turn(&tx);
@@ -45,7 +45,7 @@ fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries()
             live.append_result(&result, "fs_read").unwrap();
             events.push(Event::ToolCallFinished(result));
         }
-        let cleared = clearing.run_pass(&live).unwrap();
+        let cleared = clearing.run_pass_at(&live, 1).unwrap();
         assert!(!cleared.cleared_occurrence_ids.is_empty());
         events.push(Event::HistoryCleared(cleared));
     }

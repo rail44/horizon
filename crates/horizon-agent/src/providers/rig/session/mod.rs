@@ -181,10 +181,7 @@ pub(super) fn spawn_rig_session(
 /// `/models`-unavailable behavior, with no guessed fallback window (see
 /// `super::model_limits`' module doc).
 async fn discover_clearing_state(config: &mut RigAgentConfig) -> ClearingState {
-    ClearingState::new(
-        discover_effective_window(config).await,
-        config.clearing_threshold_pct,
-    )
+    ClearingState::new(discover_effective_window(config).await)
 }
 
 /// The effective window for `config`'s current `(kind, base_url,

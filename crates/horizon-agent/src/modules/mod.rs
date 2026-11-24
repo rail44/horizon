@@ -70,6 +70,19 @@ pub(crate) struct ReviewContext<'a> {
     pub(crate) results: &'a crossbeam_channel::Sender<crate::tools::ToolCompletion>,
 }
 
+/// What the context stage knows before a request is built: the session's
+/// history, the tool results already hidden from what is sent, and how
+/// full the model's window was at the last request.
+pub(crate) struct ContextContext<'a> {
+    pub(crate) history: &'a crate::providers::rig::conversation::ConversationHistory,
+    pub(crate) cleared: &'a crate::providers::rig::ClearedResults,
+    /// The model's window less the output it is asked for; `None` when
+    /// it is not known.
+    pub(crate) window: Option<u64>,
+    /// The input the last request sent, in tokens.
+    pub(crate) input_tokens: u64,
+}
+
 /// What the verdict stage knows about a call.
 pub(crate) struct CallContext<'a> {
     pub(crate) state: &'a crate::tools::ToolSessionState,
@@ -128,6 +141,12 @@ pub(crate) trait SessionModule: Send + Sync {
     /// this module takes the call and decides it itself, later.
     fn review(&self, _cx: &ReviewContext<'_>) -> bool {
         false
+    }
+
+    /// The context stage, before a request is built: more tool results to
+    /// hide from what is sent (the record keeps them); `None` for none.
+    fn context(&self, _cx: &ContextContext<'_>) -> Option<crate::contract::HistoryCleared> {
+        None
     }
 
     /// The continue stage: `None` when this module has no say.
@@ -194,8 +213,8 @@ impl Modules {
     }
 }
 
-/// The prompt-section and continue-stage modules every session starts
-/// with, in prompt order.
+/// The prompt-section, context-stage and continue-stage modules every
+/// session starts with, the sections in prompt order.
 pub(crate) fn builtin(
     config: &RigAgentConfig,
     role: Option<&'static RoleDefinition>,
@@ -206,6 +225,9 @@ pub(crate) fn builtin(
         Arc::new(sections::Skills),
         Arc::new(sections::RepositoryInstructions),
         Arc::new(sections::KnowledgeIndex),
+        Arc::new(crate::providers::rig::TierOneClearing {
+            threshold_pct: config.clearing_threshold_pct,
+        }),
     ];
     if let Some(check) = ContinuationCheck::for_session(config, role) {
         modules.push(Arc::new(DecisionContinuation::new(check)));

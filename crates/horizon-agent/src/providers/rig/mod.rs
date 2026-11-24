@@ -18,6 +18,7 @@ mod stream;
 pub(crate) use model_limits::list_model_ids;
 
 use clearing::ClearingState;
+pub(crate) use clearing::{ClearedResults, TierOneClearing};
 #[expect(unused_imports)]
 use completion::{ToolCallDescriptor, TurnCompletion, complete_rig_turn};
 #[cfg(test)]

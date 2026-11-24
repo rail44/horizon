@@ -184,6 +184,7 @@ impl SessionLoopState {
             prompt,
             &self.events_tx,
             &mut self.clearing,
+            &self.modules,
             fallback,
             &token,
         );

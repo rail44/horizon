@@ -13,15 +13,16 @@ use rig_core::completion::{
 };
 use std::collections::HashSet;
 
+/// What the session has hidden from the requests it sends, and what the
+/// context stage's modules decide more from (`modules::ContextContext`).
 #[derive(Clone, Debug)]
 pub(super) struct ClearingState {
     effective_window_tokens: Option<u64>,
-    threshold_pct: u32,
     latest_input_tokens: u64,
     cleared: ClearedResults,
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct ClearedResults {
+pub(crate) struct ClearedResults {
     occurrences: HashSet<OccurrenceId>,
 }
 impl ClearedResults {
@@ -31,21 +32,20 @@ impl ClearedResults {
             occurrences: ids.into_iter().collect(),
         }
     }
-    pub(super) fn contains(&self, id: &OccurrenceId) -> bool {
+    pub(crate) fn contains(&self, id: &OccurrenceId) -> bool {
         self.occurrences.contains(id)
     }
 }
 impl ClearingState {
-    pub(super) fn new(effective_window_tokens: Option<u64>, threshold_pct: u32) -> Self {
+    pub(super) fn new(effective_window_tokens: Option<u64>) -> Self {
         Self {
             effective_window_tokens,
-            threshold_pct,
             latest_input_tokens: 0,
             cleared: ClearedResults::default(),
         }
     }
     pub(super) fn disabled() -> Self {
-        Self::new(None, crate::config::DEFAULT_CLEARING_TRIGGER_PCT)
+        Self::new(None)
     }
     pub(super) fn seed_cleared(&mut self, ids: impl IntoIterator<Item = OccurrenceId>) {
         self.cleared.occurrences.extend(ids);
@@ -67,18 +67,63 @@ impl ClearingState {
     pub(super) fn cleared(&self) -> &ClearedResults {
         &self.cleared
     }
-    pub(super) fn run_pass(&mut self, history: &ConversationHistory) -> Option<HistoryCleared> {
-        let window = self.effective_window_tokens?;
-        if self.latest_input_tokens.saturating_mul(100)
+    /// One pass of Tier 1 clearing at `threshold_pct`, as the context
+    /// stage runs it.
+    #[cfg(test)]
+    pub(super) fn run_pass_at(
+        &mut self,
+        history: &ConversationHistory,
+        threshold_pct: u32,
+    ) -> Option<HistoryCleared> {
+        let tier_one: std::sync::Arc<dyn crate::modules::SessionModule> =
+            std::sync::Arc::new(TierOneClearing { threshold_pct });
+        self.run_stage(history, &[tier_one]).pop()
+    }
+
+    /// Asks the context stage's `modules` for more results to hide, hides
+    /// them, and returns each module's pass for the record.
+    pub(super) fn run_stage(
+        &mut self,
+        history: &ConversationHistory,
+        modules: &[std::sync::Arc<dyn crate::modules::SessionModule>],
+    ) -> Vec<HistoryCleared> {
+        let mut passes = Vec::new();
+        for module in modules {
+            let cx = crate::modules::ContextContext {
+                history,
+                cleared: &self.cleared,
+                window: self.effective_window_tokens,
+                input_tokens: self.latest_input_tokens,
+            };
+            if let Some(pass) = module.context(&cx) {
+                self.seed_cleared(pass.cleared_occurrence_ids.iter().cloned());
+                passes.push(pass);
+            }
+        }
+        passes
+    }
+}
+
+/// Tier 1 clearing (`docs/agent-compaction-design.md`) as a module of the
+/// context stage: once the last request filled `threshold_pct` of the
+/// model's window, the oldest tool results outside a recent tail are
+/// hidden, when that recovers enough to matter.
+pub(crate) struct TierOneClearing {
+    pub(crate) threshold_pct: u32,
+}
+
+impl crate::modules::SessionModule for TierOneClearing {
+    fn context(&self, cx: &crate::modules::ContextContext<'_>) -> Option<HistoryCleared> {
+        let window = cx.window?;
+        if cx.input_tokens.saturating_mul(100)
             < window.saturating_mul(u64::from(self.threshold_pct))
         {
             return None;
         }
-        let plan = plan_clearing_pass(history, &self.cleared);
+        let plan = plan_clearing_pass(cx.history, cx.cleared);
         if plan.recovered_chars / CLEARING_CHARS_PER_TOKEN < CLEARING_RECOVERY_FLOOR_TOKENS {
             return None;
         }
-        self.seed_cleared(plan.cleared_occurrence_ids.iter().cloned());
         Some(plan)
     }
 }
