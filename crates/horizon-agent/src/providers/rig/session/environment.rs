@@ -1,5 +1,10 @@
 //! Provider half of the serialized environment handoff. No provider request
 //! or tool execution can start while the host publishes replacement resources.
+//!
+//! The session keeps sending the system prompt and tools it started with
+//! (`docs/agent-core-extension-design.md`, "段": the fixed prefix a
+//! provider's prompt cache reads): what the new environment changes in them
+//! is told to the model in the conversation instead.
 use super::state::SessionLoopState;
 use crate::contract::{Command, Event};
 
@@ -32,11 +37,13 @@ impl SessionLoopState {
                             self.role,
                             trusted_project,
                         );
-                        self.environment = environment;
-                        self.resolved = resolved;
+                        let changes = prefix_changes(&self.resolved, &resolved);
                         self.config = config;
                         self.inputs
                             .note_environment_ready(&workspace_root, &branch, &base);
+                        if let Some(changes) = changes {
+                            self.inputs.note_prefix_changes(changes);
+                        }
                         break;
                     }
                     Command::EnvironmentActivationFailed { message } => {
@@ -55,6 +62,47 @@ impl SessionLoopState {
             }
         }
     }
+}
+
+/// What `now` changes in the prefix a session sent (`sent`), told in words:
+/// the sections that now apply in full, the ones that no longer apply by
+/// their first line, and the tools no longer to be used. `None` when
+/// nothing changed.
+fn prefix_changes(
+    sent: &super::super::session_prompt::Resolved,
+    now: &super::super::session_prompt::Resolved,
+) -> Option<String> {
+    let added: Vec<&String> = (now.sections.iter())
+        .filter(|section| !sent.sections.contains(section))
+        .collect();
+    let gone: Vec<&str> = (sent.sections.iter())
+        .filter(|section| !now.sections.contains(section))
+        .map(|section| section.lines().next().unwrap_or_default())
+        .collect();
+    let withdrawn: Vec<String> = (sent.tools.iter())
+        .filter(|tool| !now.tools.iter().any(|now| now.name == tool.name))
+        .map(|tool| format!("`{}`", tool.name))
+        .collect();
+    if added.is_empty() && gone.is_empty() && withdrawn.is_empty() {
+        return None;
+    }
+    let mut text = String::from(
+        "What applies to this session changed with its environment; the system prompt still \
+         shows what applied at its start.",
+    );
+    for section in added {
+        text.push_str("\n\n");
+        text.push_str(section);
+    }
+    if !gone.is_empty() {
+        text.push_str("\n\nNo longer applies here: ");
+        text.push_str(&gone.join("; "));
+    }
+    if !withdrawn.is_empty() {
+        text.push_str("\n\nNo longer to be used here: ");
+        text.push_str(&withdrawn.join(", "));
+    }
+    Some(text)
 }
 
 #[cfg(test)]
@@ -101,8 +149,12 @@ mod tests {
                 trusted_project: false,
             })
             .unwrap();
+        let sent = state.environment.clone();
         state.activate_environment().await;
-        assert_eq!(state.environment.cwd, root);
+        assert_eq!(
+            state.environment, sent,
+            "the prefix sent at the start stays"
+        );
         assert_eq!(state.config.model, "spawn-model");
         assert_eq!(
             state.rig_history.messages(),
@@ -121,6 +173,36 @@ mod tests {
         assert!(note.contains(&root.display().to_string()), "{note}");
         assert!(note.contains("horizon/selected"), "{note}");
         assert!(note.contains("selected-base"), "{note}");
+    }
+
+    /// A section the new environment no longer gives is told in the
+    /// conversation, and the prefix keeps it.
+    #[tokio::test]
+    async fn a_changed_section_is_told_and_the_prefix_kept() {
+        let (commands, receive) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = SessionLoopState {
+            commands: receive,
+            ..Default::default()
+        };
+        state.resolved.sections = vec!["Old instructions\nfrom the first root.".into()];
+        state.activation.push_back("base".into());
+        commands
+            .send(Command::EnvironmentPrepared {
+                workspace_root: std::env::current_dir().unwrap(),
+                branch: "horizon/worktree".into(),
+                trusted_project: false,
+            })
+            .unwrap();
+        state.activate_environment().await;
+        assert_eq!(
+            state.resolved.sections,
+            ["Old instructions\nfrom the first root."]
+        );
+        let note = state.inputs.take_additions().unwrap();
+        assert!(
+            note.contains("No longer applies here: Old instructions"),
+            "{note}"
+        );
     }
 
     #[tokio::test]

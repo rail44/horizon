@@ -174,6 +174,12 @@ impl Inputs {
         ));
     }
 
+    /// What a new environment changes in the session's fixed prefix
+    /// (`environment::prefix_changes`).
+    pub(super) fn note_prefix_changes(&mut self, changes: String) {
+        self.additions.push(changes);
+    }
+
     pub(super) fn has_additions(&self) -> bool {
         !self.additions.is_empty()
     }
