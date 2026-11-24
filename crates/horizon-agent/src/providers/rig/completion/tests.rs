@@ -188,6 +188,17 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                     assert!(headers.to_lowercase().contains("x-api-key: local-test-key"));
                     assert!(request.get("parallel_tool_calls").is_none());
                     assert_eq!(request["tools"][0]["name"], "fs_read");
+                    // The fixed prefix is marked for caching: the last tool
+                    // and the system prompt.
+                    assert!(
+                        request["tools"][0].get("cache_control").is_some(),
+                        "{request}"
+                    );
+                    let system = request["system"].as_array().expect("system blocks");
+                    assert!(
+                        system.last().unwrap().get("cache_control").is_some(),
+                        "{request}"
+                    );
                 }
             }
             let events: Vec<_> = rx

@@ -536,7 +536,19 @@ fn completion_model(config: &RigAgentConfig) -> anyhow::Result<DynModel<Completi
         .vendor
         .connection(api_key, config.base_url.as_deref())?;
     let facts = super::model_catalog::current().facts(config.vendor.id(), &config.model);
-    Ok(connection.completion_model(&config.model, rig_reqwest::shared(), facts))
+    Ok(match connection {
+        // Anthropic caches a request's prefix only where it is marked: the
+        // system prompt, the last tool and the last message, which a
+        // session's fixed prefix keeps the same from request to request.
+        rig_core::providers::registry::ProviderConfig::Anthropic(provider) => {
+            let mut model = provider
+                .connect(rig_reqwest::shared())
+                .completion(&config.model);
+            model.wire = model.wire.with_facts(facts).with_prompt_caching();
+            model.erase()
+        }
+        other => other.completion_model(&config.model, rig_reqwest::shared(), facts),
+    })
 }
 
 /// Decodes a double-encoded tool-call `arguments` value in place: a JSON
