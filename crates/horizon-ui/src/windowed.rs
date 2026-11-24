@@ -175,6 +175,16 @@ pub fn windowed<T, K>(
             state.heights.retain(|key, _| order.contains(key));
         }
 
+        // The offset as the last layout left it, unless scrolled by hand.
+        // The document keeps it in the box's range, so content that shrank
+        // takes it back to the new end: that is not a scroll by hand.
+        let end_of_scroll = node.final_layout().scroll_height() as f64;
+        let kept_in_range = at < state.seen.0 && (at - end_of_scroll).abs() <= 0.5;
+        let scrolled_by_hand = (at - state.seen.0).abs() > 0.5 && !kept_in_range;
+        if scrolled_by_hand && follow_tail {
+            state.following = at >= state.seen.1 - 1.;
+        }
+
         // The blanks, as tall as what they stand for.
         let guess = state.guess();
         let sum = |from: usize, to: usize| -> f64 {
@@ -188,15 +198,13 @@ pub fn windowed<T, K>(
             let mut mutator = document.mutate();
             mutator.set_style_property(above.0, "height", &format!("{}px", blanks.0));
             mutator.set_style_property(below.0, "height", &format!("{}px", blanks.1));
+            if kept_in_range {
+                state.seen = (at, end_of_scroll);
+            }
             relayout();
             return;
         }
 
-        let scrolled_by_hand = (at - state.seen.0).abs() > 0.5;
-        if scrolled_by_hand && follow_tail {
-            state.following = at >= state.seen.1 - 1.;
-        }
-        let end_of_scroll = node.final_layout().scroll_height() as f64;
         if state.following {
             if (end_of_scroll - at).abs() > 0.5 {
                 document.scroll_to(scroller.0, 0., end_of_scroll, ScrollBehavior::Instant);
