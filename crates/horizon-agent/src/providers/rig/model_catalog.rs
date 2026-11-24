@@ -73,9 +73,10 @@ pub(super) async fn catalog() -> Arc<Catalog> {
 
 /// The context window `catalog` lists for `vendor`'s `model`.
 fn window(catalog: &Catalog, vendor: Vendor, model: &str) -> Option<ModelLimits> {
-    let context = catalog.get(vendor.id(), model)?.spec.context_window?;
+    let spec = catalog.get(vendor.id(), model)?.spec;
     Some(ModelLimits {
-        context_length: u64::from(context),
+        context_length: u64::from(spec.context_window?),
+        max_output_tokens: spec.max_output_tokens.map(u64::from),
     })
 }
 
@@ -226,6 +227,14 @@ mod tests {
             "deepinfra": {"models": {"deepseek-ai/DeepSeek-V4.1-Flash-1017": row(1_048_576)}}
         })
         .to_string()
+    }
+
+    #[test]
+    fn a_model_s_output_limit_is_read_with_its_window() {
+        let (fetched, _) = Catalog::from_models_dev(&document()).unwrap();
+        let catalog = Catalog::builtin().with_models_dev(&fetched);
+        let limits = window(&catalog, vendor("ollama"), "horizon-test-model").unwrap();
+        assert_eq!(limits.max_output_tokens, Some(8192));
     }
 
     #[test]

@@ -514,11 +514,18 @@ pub struct RigAgentConfig {
     /// spawn_rig_session` when it builds that section via
     /// `instructions::extra_sections`.
     pub repository_instructions_cap_chars: usize,
-    /// Explicit `max_tokens` sent on every agent completion request via
-    /// `rig_core`'s `CompletionRequestBuilder::max_tokens` -- see
+    /// The most `max_tokens` an agent completion request sends -- see
     /// [`DEFAULT_AGENT_MAX_OUTPUT_TOKENS`] for why this exists and how
-    /// 32,768 was chosen. Always that constant.
+    /// 32,768 was chosen. Always that constant; a model that declares less
+    /// is asked for less ([`Self::output_cap`]).
     pub max_output_tokens: u64,
+    /// The most output the session's current model declares it produces
+    /// (the model catalog's `limit.output`), once its limits are
+    /// discovered; `None` until then and for a model the catalog does not
+    /// know. Requests ask for no more than this ([`Self::output_cap`]): a
+    /// model that cannot produce [`Self::max_output_tokens`] must not be
+    /// asked to, nor have that much of its window held back for it.
+    pub model_output_tokens: Option<u64>,
     /// Percentage of the effective context window at which Tier 1 history
     /// clearing fires (`providers::rig::clearing`). Always
     /// [`DEFAULT_CLEARING_TRIGGER_PCT`] unless
@@ -571,6 +578,7 @@ impl Default for RigAgentConfig {
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
             max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
+            model_output_tokens: None,
             clearing_threshold_pct: DEFAULT_CLEARING_TRIGGER_PCT,
             allowed_tool_ids: None,
             trusted_project: false,
@@ -580,6 +588,15 @@ impl Default for RigAgentConfig {
 }
 
 impl RigAgentConfig {
+    /// The `max_tokens` a request sends: [`Self::max_output_tokens`], or the
+    /// model's own declared maximum when that is smaller.
+    pub fn output_cap(&self) -> u64 {
+        self.model_output_tokens
+            .map_or(self.max_output_tokens, |model| {
+                model.min(self.max_output_tokens)
+            })
+    }
+
     /// Whether a turn calls the provider at all: the key variable is set
     /// and a model is configured. Otherwise the deterministic fallback
     /// responder answers and no request is made.
@@ -603,6 +620,7 @@ pub(crate) fn apply_provider_entry(
     config.base_url = entry.base_url.clone();
     config.api_key_present = std::env::var_os(&entry.api_key_env).is_some();
     config.model = model.to_string();
+    config.model_output_tokens = None;
 }
 
 /// Pure resolution for the Tier 1 clearing trigger percentage: a parseable
@@ -1071,5 +1089,27 @@ mod tests {
             api_key_present: true,
         };
         assert_eq!(entry.discovery_base_url(), "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn a_request_asks_for_no_more_output_than_the_model_declares() {
+        let mut config = RigAgentConfig::default();
+        assert_eq!(config.output_cap(), DEFAULT_AGENT_MAX_OUTPUT_TOKENS);
+        config.model_output_tokens = Some(8_192);
+        assert_eq!(config.output_cap(), 8_192);
+        config.model_output_tokens = Some(131_072);
+        assert_eq!(config.output_cap(), DEFAULT_AGENT_MAX_OUTPUT_TOKENS);
+        let entry = NamedProviderConfig {
+            name: "other".into(),
+            vendor: Vendor::resolve("ollama").unwrap(),
+            base_url: None,
+            api_key_env: "UNSET_FOR_THIS_TEST".into(),
+            api_key_present: false,
+        };
+        apply_provider_entry(&mut config, &entry, "another-model");
+        assert_eq!(
+            config.model_output_tokens, None,
+            "a new model's limit is not known yet"
+        );
     }
 }

@@ -440,7 +440,7 @@ async fn run_provider_stream(
             config.trusted_project,
         ))
         .preamble(system_prompt(environment, extra_sections))
-        .max_tokens(config.max_output_tokens)
+        .max_tokens(config.output_cap())
         .options(generation_options(config));
     let mut stream = match await_provider_phase(
         async { model.stream(request) },

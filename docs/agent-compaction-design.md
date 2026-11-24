@@ -83,7 +83,7 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
 | `CLEARING_RECOVERY_FLOOR_TOKENS` | 16,384 |
 | `CLEARING_TAIL_BUDGET_TOKENS` | 16,384 |
 | `CLEARING_CHARS_PER_TOKEN` | 4 |
-| 有効窓 | `context_length − 32,768`（送信中の `max_tokens`） |
+| 有効窓 | `context_length − 送信中の max_tokens`（32,768 と、モデルカタログがそのモデルの最大出力として載せる値の小さい方） |
 
 設計からの確定事項・差分:
 

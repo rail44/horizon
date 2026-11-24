@@ -114,7 +114,8 @@ impl SessionLoopState {
         rig_history: ConversationHistory,
         cleared_occurrence_ids: Vec<OccurrenceId>,
     ) -> Self {
-        let mut clearing = super::discover_clearing_state(&config).await;
+        let mut config = config;
+        let mut clearing = super::discover_clearing_state(&mut config).await;
         clearing.seed_cleared(cleared_occurrence_ids);
         // Only where the config and role call for it.
         let continuation = super::continuation::ContinuationState::default();
@@ -298,7 +299,7 @@ impl SessionLoopState {
     /// that puts the trigger above its whole window, so the session runs to
     /// its context ceiling instead of clearing.
     pub(crate) async fn rediscover_clearing_window(&mut self) {
-        let window = super::discover_effective_window(&self.config).await;
+        let window = super::discover_effective_window(&mut self.config).await;
         self.clearing.adopt_window(window);
     }
 }

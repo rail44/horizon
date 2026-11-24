@@ -82,7 +82,7 @@ impl ResponseCollector {
             input_tokens: None,
             cached_input_tokens: None,
             output_tokens: None,
-            max_output_tokens: config.max_output_tokens,
+            max_output_tokens: config.output_cap(),
         }
     }
 

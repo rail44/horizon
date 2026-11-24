@@ -294,7 +294,7 @@ impl SessionLoopState {
                     message: truncation_error_message(
                         reason,
                         outcome.output_tokens,
-                        self.config.max_output_tokens,
+                        self.config.output_cap(),
                     ),
                 })
                 .into(),

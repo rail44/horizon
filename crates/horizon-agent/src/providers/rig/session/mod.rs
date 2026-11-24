@@ -176,7 +176,7 @@ pub(super) fn spawn_rig_session(
 /// limits, clearing stays off and says so on stderr -- the design's
 /// `/models`-unavailable behavior, with no guessed fallback window (see
 /// `super::model_limits`' module doc).
-async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
+async fn discover_clearing_state(config: &mut RigAgentConfig) -> ClearingState {
     ClearingState::new(
         discover_effective_window(config).await,
         config.clearing_threshold_pct,
@@ -190,13 +190,16 @@ async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
 /// switches models keeps clearing against the model it is now talking to.
 /// `model_limits` caches per key, so a re-discovery of an already-seen
 /// combination costs no request.
-async fn discover_effective_window(config: &RigAgentConfig) -> Option<u64> {
+///
+/// Also takes the model's declared maximum output into `config`
+/// ([`RigAgentConfig::output_cap`]), which the window is reckoned with.
+async fn discover_effective_window(config: &mut RigAgentConfig) -> Option<u64> {
     if !config.model_in_play() {
         return None;
     }
-    let window = model_limits(config)
-        .await
-        .and_then(|limits| limits.effective_window_tokens(config.max_output_tokens));
+    let limits = model_limits(config).await;
+    config.model_output_tokens = limits.and_then(|limits| limits.max_output_tokens);
+    let window = limits.and_then(|limits| limits.effective_window_tokens(config.output_cap()));
     if window.is_none() {
         eprintln!(
             "horizon-agent: `{}` declares no context_length at /models and the model catalog \

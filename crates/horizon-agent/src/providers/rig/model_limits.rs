@@ -58,6 +58,9 @@ const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ModelLimits {
     pub(super) context_length: u64,
+    /// The most output the model declares it produces, when the source says
+    /// (the model catalog does; a `/models` listing is not read for it).
+    pub(super) max_output_tokens: Option<u64>,
 }
 
 impl ModelLimits {
@@ -153,7 +156,10 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
         .get("context_length")
         .or_else(|| entry.get("metadata")?.get("context_length"))?
         .as_u64()?;
-    Some(ModelLimits { context_length })
+    Some(ModelLimits {
+        context_length,
+        max_output_tokens: None,
+    })
 }
 
 /// The provider's live model-id listing, for the picker's discovery: the
@@ -660,6 +666,7 @@ mod tests {
     fn effective_window_subtracts_the_output_budget_horizon_actually_sends() {
         let limits = ModelLimits {
             context_length: 262_144,
+            max_output_tokens: None,
         };
         assert_eq!(
             limits.effective_window_tokens(crate::config::DEFAULT_AGENT_MAX_OUTPUT_TOKENS),
@@ -671,6 +678,7 @@ mod tests {
     fn effective_window_is_none_when_the_output_budget_swallows_the_context() {
         let limits = ModelLimits {
             context_length: 8_192,
+            max_output_tokens: None,
         };
         assert_eq!(limits.effective_window_tokens(32_768), None);
         assert_eq!(limits.effective_window_tokens(8_192), None);
