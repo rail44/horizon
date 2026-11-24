@@ -148,6 +148,15 @@ impl super::tool::Tool for Registered {
         &self.definition
     }
 
+    /// Registering a tool declares it contained: it runs without asking.
+    fn plan(
+        &self,
+        _state: &super::ToolSessionState,
+        _call: &super::input::PreparedCall<'_>,
+    ) -> crate::policy::ToolPlan {
+        crate::policy::ToolPlan::Automatic
+    }
+
     /// A failure is returned in the external adapters' JSON error shape.
     fn run(
         &self,

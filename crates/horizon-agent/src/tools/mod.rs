@@ -9,11 +9,9 @@ pub(crate) mod background;
 mod execution;
 pub(crate) mod explore;
 mod external;
+pub(crate) use external::requires_trusted_project as external_requires_trust;
 pub use external::{
     ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor, register_external_tools,
-};
-pub(crate) use external::{
-    is_registered as is_external_tool, requires_trusted_project as external_requires_trust,
 };
 mod fs;
 pub(crate) mod input;

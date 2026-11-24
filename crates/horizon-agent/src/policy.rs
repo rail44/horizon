@@ -103,10 +103,32 @@ pub(crate) enum ToolPlan {
     Reject(crate::tools::output::Response),
 }
 
+/// How a call to whichever tool it names runs: the tool's own plan, or a
+/// refusal naming the tools there are when no tool has that id.
 pub(crate) fn plan_prepared_call(
     tool_state: &ToolSessionState,
     request: &PreparedCall<'_>,
 ) -> ToolPlan {
+    match crate::tools::tool::find(&request.tool_id) {
+        Some(tool) => tool.plan(tool_state, request),
+        None => {
+            let available = crate::tools::definitions()
+                .into_iter()
+                .map(|definition| definition.id)
+                .collect::<Vec<_>>()
+                .join(", ");
+            ToolPlan::Reject(crate::tools::output::error(format!(
+                "Unknown tool `{}`; available: {available}.",
+                request.tool_id
+            )))
+        }
+    }
+}
+
+/// The built-in tools' plan: the containment tiers
+/// (`docs/agent-approval-design.md`) and the checks that come before them,
+/// in one table keyed by tool id.
+pub(crate) fn plan_builtin(tool_state: &ToolSessionState, request: &PreparedCall<'_>) -> ToolPlan {
     let approval = |reason, kind| {
         ToolPlan::Approval(Box::new(ApprovalRequest {
             call_id: request.call_id.clone(),
@@ -120,10 +142,6 @@ pub(crate) fn plan_prepared_call(
     // for this same primary-checkout approval after the fact
     // (`ApprovalKind::PrimaryCheckoutRetry`). Only the fs tools, which run
     // outside the OS sandbox, need this pre-execution gate.
-    // A registered tool's package declared it contained (`tools::external`).
-    if crate::tools::is_external_tool(&request.tool_id) {
-        return ToolPlan::Automatic;
-    }
     if let Some(read_only) = tool_state.read_only()
         && writes_without_containment(&request.tool_id, horizon_sandbox::sandbox_ready())
     {
@@ -221,17 +239,10 @@ pub(crate) fn plan_prepared_call(
             "Tool `{}` is denied by Horizon policy.",
             request.tool_id
         ))),
-        None => {
-            let available = crate::tools::definitions()
-                .into_iter()
-                .map(|definition| definition.id)
-                .collect::<Vec<_>>()
-                .join(", ");
-            ToolPlan::Reject(crate::tools::output::error(format!(
-                "Unknown tool `{}`; available: {available}.",
-                request.tool_id
-            )))
-        }
+        None => ToolPlan::Reject(crate::tools::output::error(format!(
+            "Tool `{}` has no catalog permission.",
+            request.tool_id
+        ))),
     }
 }
 
