@@ -40,10 +40,11 @@ pub(super) struct Skills;
 
 impl SessionModule for Skills {
     fn sections(&self, cx: &ResolveContext<'_>) -> Vec<Section> {
+        let packages = &cx.config.packages;
         let skills = if cx.trusted_project {
-            crate::skills::SkillRegistry::discover(&cx.environment.cwd)
+            crate::skills::SkillRegistry::discover(&cx.environment.cwd, packages)
         } else {
-            crate::skills::SkillRegistry::embedded()
+            crate::skills::SkillRegistry::embedded(packages)
         };
         let section = match cx.role {
             Some(role) => skills.prompt_section_for_ids(role.skill_ids),

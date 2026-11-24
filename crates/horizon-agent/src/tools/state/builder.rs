@@ -61,6 +61,7 @@ impl ToolSessionBuilder {
                 tools,
                 recall,
                 skills: SkillRegistry::default(),
+                packages: Default::default(),
                 unattended: false,
                 read_only: None,
                 network: None,
@@ -107,6 +108,12 @@ impl ToolSessionBuilder {
     /// Install the host-discovered skill registry.
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
         self.inner.skills = skills;
+        self
+    }
+
+    /// Install what packages add: the tools a call can name.
+    pub fn with_packages(mut self, packages: crate::packages::Packages) -> Self {
+        self.inner.packages = packages;
         self
     }
 

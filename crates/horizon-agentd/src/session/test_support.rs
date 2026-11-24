@@ -17,7 +17,10 @@ pub(crate) fn test_config() -> AgentConfig {
     use horizon_agent::config::{
         AgentPersistenceConfig, NamedProviderConfig, ProvidersTable, RigAgentConfig,
     };
-    let rig = RigAgentConfig::default();
+    let rig = RigAgentConfig {
+        packages: crate::compose_packages(),
+        ..RigAgentConfig::default()
+    };
     AgentConfig {
         auxiliary: None,
         decision: None,

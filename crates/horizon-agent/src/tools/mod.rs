@@ -10,9 +10,7 @@ mod execution;
 pub(crate) mod explore;
 mod external;
 pub(crate) use external::requires_trusted_project as external_requires_trust;
-pub use external::{
-    ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor, register_external_tools,
-};
+pub use external::{ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor};
 mod fs;
 pub(crate) mod input;
 mod knowledge;
@@ -37,7 +35,10 @@ pub use bash::exclude_git_metadata;
 #[cfg(test)]
 pub(crate) use bash::metadata_grants;
 pub(crate) use bash::metadata_writable_roots;
-pub(crate) use catalog::{Definition, definitions, permission_for_tool};
+pub(crate) use catalog::{
+    Definition, builtin_definitions, definitions, is_builtin as is_builtin_tool, is_valid_tool_id,
+    permission_for_tool,
+};
 pub use completion::{BashCompletion, ToolCompletion, should_fold_completion};
 pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_refusal};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`

@@ -838,7 +838,7 @@ fn read_entries_carry_is_error_on_tool_results() {
 
 #[test]
 fn catalog_lists_recall_tools_as_auto_allow_read() {
-    let definitions = crate::tools::definitions();
+    let definitions = crate::tools::definitions(&crate::packages::Packages::default());
     for id in ["recall_search", "recall_read"] {
         let definition = definitions
             .iter()
@@ -857,7 +857,7 @@ fn catalog_lists_recall_tools_as_auto_allow_read() {
 
 #[test]
 fn catalog_advertises_recall_search_session_id() {
-    let definitions = crate::tools::definitions();
+    let definitions = crate::tools::definitions(&crate::packages::Packages::default());
     let definition = definitions
         .iter()
         .find(|definition| definition.id == "recall_search")

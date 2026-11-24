@@ -261,76 +261,19 @@ fn is_exploration_id(id: &str) -> bool {
 /// minimal rather than data-driven.
 static ROLES: &[&RoleDefinition] = &[&EXPLORE_ROLE, &WRITE_TASK_ROLE];
 
-/// Roles registered at runtime by the composition root (`horizon-agentd`)
-/// from external crates (the board's roles, the wiki's thread role) -- see
-/// [`register_external`]. Each package registers its own, so registrations
-/// add up; a registered definition is leaked to `'static`, which
-/// [`resolve`]'s callers hold on to.
-static EXTERNAL_ROLES: std::sync::RwLock<Vec<&'static RoleDefinition>> =
-    std::sync::RwLock::new(Vec::new());
-
-fn external_roles() -> Vec<&'static RoleDefinition> {
-    EXTERNAL_ROLES
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+/// The built-in role `role_id` names. A role a package adds is found
+/// through [`crate::packages::Packages::resolve_role`].
+pub(crate) fn builtin(role_id: &RoleId) -> Option<&'static RoleDefinition> {
+    ROLES.iter().copied().find(|role| role.id == role_id.0)
 }
 
-/// Registers externally-provided roles (from crates `horizon-agent` does not
-/// depend on) so [`resolve`] can find them. Called once at `horizon-agentd`
-/// startup, before any session is spawned. Each `RoleDefinition`'s `&'static`
-/// fields come from `pub const` data in the providing crate (e.g.
-/// `horizon_board::agents`' skill texts, registered by `horizon-agentd`'s
-/// `board_flow::roles`), so the registration is a by-value copy of thin
-/// references -- no allocation, no lifetime extension. See
-/// `docs/board-keeper-design.md` §1 for why this indirection exists instead
-/// of a Cargo edge. Adds to earlier registrations; a role whose id is
-/// already known (built in or registered before) is ignored, so a package
-/// may register again.
-pub fn register_external(roles: Vec<RoleDefinition>) {
-    let mut external = EXTERNAL_ROLES
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for role in roles {
-        let known = ROLES.iter().any(|known| known.id == role.id)
-            || external.iter().any(|known| known.id == role.id);
-        if !known {
-            external.push(Box::leak(Box::new(role)));
-        }
-    }
+pub(crate) fn builtin_roles() -> &'static [&'static RoleDefinition] {
+    ROLES
 }
 
-/// Every role this build knows about that a user can launch directly —
-/// the built-in [`ROLES`] plus any registered via [`register_external`],
-/// minus exploration sessions ([`EXPLORE_ROLE`], spawned by the harness,
-/// never user-creatable). Called by
-/// the shell's view chooser (to populate the list of launchable roles) and
-/// its control-plane dispatch (to validate `--role` ids). Each process that
-/// links `horizon-agent` and wants to see externally-provided roles must
-/// call [`register_external`] at startup — `horizon-agentd` does this for
-/// the board keeper role, and the shell does the same so both processes see
-/// an identical set, sourced from the same `pub const` data in each
-/// providing crate.
-pub fn user_launchable() -> Vec<&'static RoleDefinition> {
-    let mut roles: Vec<&'static RoleDefinition> = ROLES.to_vec();
-    roles.extend(external_roles());
-    roles
-        .into_iter()
-        .filter(|role| !is_exploration_id(role.id) && !role.unattended)
-        .collect()
-}
-
-/// Resolves `role_id` to its static definition, or `None` if this build
-/// doesn't know it. Checks the compile-time [`ROLES`] slice first, then the
-/// runtime-registered [`EXTERNAL_ROLES`]. See the module doc: a `None` here
-/// must never be silently treated as "no role" by a session-starting caller.
-pub fn resolve(role_id: &RoleId) -> Option<&'static RoleDefinition> {
-    if let Some(role) = ROLES.iter().copied().find(|role| role.id == role_id.0) {
-        return Some(role);
-    }
-    external_roles()
-        .into_iter()
-        .find(|role| role.id == role_id.0)
+/// Whether `id` is one of the roles `task` delegates to.
+pub(crate) fn is_delegated(id: &str) -> bool {
+    is_exploration_id(id)
 }
 
 #[cfg(test)]
@@ -339,7 +282,7 @@ mod tests {
 
     #[test]
     fn resolve_returns_none_for_an_unknown_role() {
-        assert!(resolve(&RoleId("does-not-exist".to_string())).is_none());
+        assert!(builtin(&RoleId("does-not-exist".to_string())).is_none());
     }
 
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
@@ -348,7 +291,7 @@ mod tests {
     #[test]
     fn explore_role_allowlist_is_exactly_the_read_only_tools() {
         let role =
-            resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
+            builtin(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
         let allowed = role
             .allowed_tool_ids
             .expect("the explore role must restrict its tools");
@@ -408,7 +351,7 @@ mod tests {
     #[test]
     fn explore_role_runs_unbudgeted_read_only_and_with_repository_instructions() {
         let role =
-            resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
+            builtin(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
         assert!(role.unbudgeted, "a delegated child has no budget");
         assert_eq!(
             role.writes,
@@ -428,27 +371,27 @@ mod tests {
         assert!(!is_exploration(&RoleId("exploration".to_string())));
     }
 
-    // -- external role registration (docs/board-keeper-design.md §1) ---------
+    // -- roles a package adds (crate::packages) --------------------------------
 
-    /// A role registered via [`register_external`] must be findable by
-    /// [`resolve`], exactly like the compile-time [`ROLES`] entries. This is
-    /// the mechanism `horizon-agentd` uses to contribute `horizon-board`'s
-    /// keeper role without a Cargo edge between the two crates.
+    /// A role a package adds resolves like a built-in one.
     #[test]
-    fn register_external_makes_resolve_find_the_role() {
-        register_external(vec![RoleDefinition {
-            id: "test-external-role",
-            title: "Test External Role",
-            prompt_section: "You are a test role.",
-            allowed_tool_ids: Some(&["fs_read"]),
-            model: None,
-            unbudgeted: false,
-            writes: RoleWrites::Anywhere,
-            include_repository_instructions: false,
-            skill_ids: &[],
-            unattended: false,
-        }]);
-        let role = resolve(&RoleId("test-external-role".to_string()))
+    fn a_package_role_resolves() {
+        let packages = crate::packages::Packages::builder()
+            .roles(vec![RoleDefinition {
+                id: "test-external-role",
+                title: "Test External Role",
+                prompt_section: "You are a test role.",
+                allowed_tool_ids: Some(&["fs_read"]),
+                model: None,
+                unbudgeted: false,
+                writes: RoleWrites::Anywhere,
+                include_repository_instructions: false,
+                skill_ids: &[],
+                unattended: false,
+            }])
+            .build();
+        let role = packages
+            .resolve_role(&RoleId("test-external-role".to_string()))
             .expect("external role must resolve after registration");
         assert_eq!(role.id, "test-external-role");
         assert_eq!(
@@ -458,34 +401,47 @@ mod tests {
         );
     }
 
-    /// Built-in roles must still resolve after an external registration —
-    /// the external registry is additive, not a replacement.
+    /// Built-in roles still resolve beside the ones packages add.
     #[test]
-    fn builtin_roles_still_resolve_after_external_registration() {
-        register_external(vec![RoleDefinition {
-            id: "test-additive",
-            title: "Test Additive",
-            prompt_section: "",
-            allowed_tool_ids: None,
-            model: None,
-            unbudgeted: false,
-            writes: RoleWrites::Anywhere,
-            include_repository_instructions: false,
-            skill_ids: &[],
-            unattended: false,
-        }]);
+    fn builtin_roles_still_resolve_beside_package_roles() {
+        let packages = crate::packages::Packages::builder()
+            .roles(vec![RoleDefinition {
+                id: "test-additive",
+                title: "Test Additive",
+                prompt_section: "",
+                allowed_tool_ids: None,
+                model: None,
+                unbudgeted: false,
+                writes: RoleWrites::Anywhere,
+                include_repository_instructions: false,
+                skill_ids: &[],
+                unattended: false,
+            }])
+            .build();
         // Built-in roles must still be found.
-        assert!(resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).is_some());
+        assert!(
+            packages
+                .resolve_role(&RoleId(EXPLORE_ROLE_ID.to_string()))
+                .is_some()
+        );
         // The external one too.
-        assert!(resolve(&RoleId("test-additive".to_string())).is_some());
+        assert!(
+            packages
+                .resolve_role(&RoleId("test-additive".to_string()))
+                .is_some()
+        );
         // And a genuinely unknown id is still None.
-        assert!(resolve(&RoleId("no-such-role".to_string())).is_none());
+        assert!(
+            packages
+                .resolve_role(&RoleId("no-such-role".to_string()))
+                .is_none()
+        );
     }
 
-    /// Each package registers its own roles: a later registration adds to
-    /// the earlier ones, and a known id keeps its first definition.
+    /// Each package adds its own roles: a later addition adds to the earlier
+    /// ones, and a known id keeps its first definition.
     #[test]
-    fn registrations_add_up_and_a_known_id_is_kept() {
+    fn additions_add_up_and_a_known_id_is_kept() {
         let role = |id: &'static str, title: &'static str| RoleDefinition {
             id,
             title,
@@ -498,17 +454,23 @@ mod tests {
             skill_ids: &[],
             unattended: false,
         };
-        register_external(vec![role("test-first", "First")]);
-        register_external(vec![
-            role("test-second", "Second"),
-            role("test-first", "Replacement"),
-            role(EXPLORE_ROLE_ID, "Replacement"),
-        ]);
-        let title = |id: &str| resolve(&RoleId(id.to_string())).map(|role| role.title);
+        let packages = crate::packages::Packages::builder()
+            .roles(vec![role("test-first", "First")])
+            .roles(vec![
+                role("test-second", "Second"),
+                role("test-first", "Replacement"),
+                role(EXPLORE_ROLE_ID, "Replacement"),
+            ])
+            .build();
+        let title = |id: &str| {
+            packages
+                .resolve_role(&RoleId(id.to_string()))
+                .map(|role| role.title)
+        };
         assert_eq!(title("test-first"), Some("First"));
         assert_eq!(title("test-second"), Some("Second"));
         assert_eq!(title(EXPLORE_ROLE_ID), Some("Exploration Session"));
-        let launchable = user_launchable();
+        let launchable = packages.user_launchable();
         assert_eq!(
             launchable
                 .iter()

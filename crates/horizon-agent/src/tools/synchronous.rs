@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn catalog_and_local_execution_agree_on_ids_and_permissions() {
-        let definitions = super::super::definitions();
+        let definitions = super::super::definitions(&crate::packages::Packages::default());
         for tool in SynchronousTool::ALL {
             let matches: Vec<_> = definitions
                 .iter()

@@ -110,66 +110,34 @@ const HORIZON_DISTILL_SKILL_SOURCE: &str = include_str!("../skills/horizon-disti
 const GITHUB_PR_SKILL_SOURCE: &str = include_str!("../skills/github-pr/SKILL.md");
 
 /// Every skill this build embeds, parsed once and cached for the process's
-/// lifetime -- the input [`SkillRegistry::discover`] starts every session's
-/// composition from. Includes any externally-provided skill sources
-/// registered via [`register_external_skill_sources`] (e.g. the board
-/// keeper skill from `horizon-board`, contributed by `horizon-agentd` at
-/// startup) alongside this crate's own `include_str!`-loaded skills.
+/// lifetime. The skill sources packages add come on top of these
+/// (`shipped_skills`).
 fn embedded_skills() -> &'static [Skill] {
     static SKILLS: std::sync::OnceLock<Vec<Skill>> = std::sync::OnceLock::new();
     SKILLS.get_or_init(|| {
-        let mut sources: Vec<&'static str> = vec![
+        let sources: Vec<&'static str> = vec![
             HORIZON_CLI_SKILL_SOURCE,
             HORIZON_DISTILL_SKILL_SOURCE,
             GITHUB_PR_SKILL_SOURCE,
         ];
-        sources.extend(
-            EXTERNAL_SKILL_SOURCES
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .iter()
-                .copied(),
-        );
-        sources
-            .into_iter()
-            .map(|source| {
-                let parsed = parse_skill_md(source)
-                    .expect("crates/horizon-agent/skills/*/SKILL.md must parse");
-                Skill {
-                    name: parsed.name,
-                    description: parsed.description,
-                    source: SkillBody::Embedded(parsed.body),
-                }
-            })
-            .collect()
+        sources.into_iter().map(embedded_skill).collect()
     })
 }
 
-/// Externally-provided embedded skill sources, registered at runtime by the
-/// composition root (`horizon-agentd`) from crates `horizon-agent` does not
-/// depend on (e.g. `horizon_board::agents::TASK_SKILL`). Populated once at
-/// daemon startup, before any session is spawned; `embedded_skills` reads
-/// this lazily on first access, so registration must happen before the first
-/// `SkillRegistry` is composed (which happens at the first session spawn).
-/// See `docs/board-keeper-design.md` §1.
-static EXTERNAL_SKILL_SOURCES: std::sync::RwLock<Vec<&'static str>> =
-    std::sync::RwLock::new(Vec::new());
-
-/// Registers externally-provided embedded skill sources so
-/// [`embedded_skills`] includes them. Each source is a `&'static str`
-/// pointing at a `SKILL.md` file `include_str!`-loaded by the providing crate
-/// (e.g. `horizon_board::agents::TASK_SKILL`). Called once at
-/// `horizon-agentd` startup, once per providing package; registrations add
-/// up, and a source already registered is ignored.
-pub fn register_external_skill_sources(sources: Vec<&'static str>) {
-    let mut external = EXTERNAL_SKILL_SOURCES
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for source in sources {
-        if !external.contains(&source) {
-            external.push(source);
-        }
+fn embedded_skill(source: &'static str) -> Skill {
+    let parsed = parse_skill_md(source).expect("an embedded SKILL.md must parse");
+    Skill {
+        name: parsed.name,
+        description: parsed.description,
+        source: SkillBody::Embedded(parsed.body),
     }
+}
+
+/// This build's embedded skills, then the ones `packages` add.
+fn shipped_skills(packages: &crate::packages::Packages) -> Vec<Skill> {
+    let mut skills = embedded_skills().to_vec();
+    skills.extend(packages.skill_sources().iter().copied().map(embedded_skill));
+    skills
 }
 
 /// Bounds a skill's body as returned by `skill_read` -- a repository skill
@@ -201,8 +169,8 @@ impl SkillRegistry {
     /// repo-controlled, so they are always safe to advertise regardless of
     /// trust. Produces the same sorted set [`Self::discover`] starts from
     /// before overlaying repository skills.
-    pub fn embedded() -> Self {
-        let mut skills: Vec<Skill> = embedded_skills().to_vec();
+    pub fn embedded(packages: &crate::packages::Packages) -> Self {
+        let mut skills: Vec<Skill> = shipped_skills(packages);
         skills.sort_by(|a, b| a.name.cmp(&b.name));
         Self { skills }
     }
@@ -215,10 +183,10 @@ impl SkillRegistry {
     /// (and a `cwd`-nearer repository skill overrides a root-level one --
     /// mirroring `instructions::extra_sections`' "nested refines root"
     /// order).
-    pub fn discover(cwd: &Path) -> Self {
-        let mut by_id: HashMap<String, Skill> = embedded_skills()
-            .iter()
-            .map(|skill| (skill.name.clone(), skill.clone()))
+    pub fn discover(cwd: &Path, packages: &crate::packages::Packages) -> Self {
+        let mut by_id: HashMap<String, Skill> = shipped_skills(packages)
+            .into_iter()
+            .map(|skill| (skill.name.clone(), skill))
             .collect();
         for skill in discover_repository_skills(cwd) {
             by_id.insert(skill.name.clone(), skill);
@@ -450,7 +418,7 @@ mod tests {
 
     #[test]
     fn embedded_skills_parse_and_are_registered() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let cli_skill = registry
             .get("horizon-cli")
             .expect("horizon-cli must be registered");
@@ -484,13 +452,13 @@ mod tests {
 
     #[test]
     fn prompt_section_for_ids_is_none_for_an_empty_id_list() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         assert_eq!(registry.prompt_section_for_ids(&[]), None);
     }
 
     #[test]
     fn prompt_section_for_all_lists_every_skill_and_mentions_skill_read() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let section = registry
             .prompt_section_for_all()
             .expect("must build a section");
@@ -502,7 +470,7 @@ mod tests {
 
     #[test]
     fn prompt_section_for_ids_lists_only_the_given_ids() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let section = registry
             .prompt_section_for_ids(&["horizon-distill"])
             .expect("must build a section");
@@ -512,7 +480,7 @@ mod tests {
 
     #[test]
     fn prompt_section_for_ids_silently_skips_an_unknown_skill_id() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let section = registry
             .prompt_section_for_ids(&["horizon-cli", "does-not-exist"])
             .expect("must still build a section for the known entry");
@@ -526,7 +494,7 @@ mod tests {
         let root = directory.path().to_path_buf();
         write_skill(&root, "my-skill", "my-skill", "A repo skill.", "Body text.");
 
-        let registry = SkillRegistry::discover(&root);
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
         let skill = registry
             .get("my-skill")
             .expect("repo skill must be discovered");
@@ -542,7 +510,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         write_skill(&root, "my-skill", "my-skill", "A repo skill.", "Body text.");
 
-        let registry = SkillRegistry::discover(&nested);
+        let registry = SkillRegistry::discover(&nested, &crate::packages::Packages::default());
         assert!(registry.get("my-skill").is_some());
     }
 
@@ -554,7 +522,7 @@ mod tests {
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), "not a valid SKILL.md at all").unwrap();
 
-        let registry = SkillRegistry::discover(&root);
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
         assert!(registry.get("broken").is_none());
         // The build's embedded skills must still be present -- one bad
         // repository skill must not take down the whole registry.
@@ -575,7 +543,7 @@ mod tests {
             "x",
         );
 
-        let registry = SkillRegistry::discover(&nested);
+        let registry = SkillRegistry::discover(&nested, &crate::packages::Packages::default());
         assert!(registry.get("parent-only").is_none());
     }
 
@@ -591,7 +559,7 @@ mod tests {
             "Overridden body.",
         );
 
-        let registry = SkillRegistry::discover(&root);
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
         let skill = registry.get("horizon-cli").unwrap();
         assert_eq!(skill.description, "Overridden description.");
         assert_eq!(skill.body(), "Overridden body.");
@@ -606,7 +574,7 @@ mod tests {
         write_skill(&root, "dup", "dup", "root version", "root body");
         write_skill(&nested, "dup", "dup", "nested version", "nested body");
 
-        let registry = SkillRegistry::discover(&nested);
+        let registry = SkillRegistry::discover(&nested, &crate::packages::Packages::default());
         let skill = registry.get("dup").unwrap();
         assert_eq!(skill.description, "nested version");
     }
@@ -617,7 +585,7 @@ mod tests {
         let root = directory.path().to_path_buf();
         write_skill(&root, "repo-skill", "repo-skill", "A repo skill.", "Body.");
 
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         // Embedded skills are present.
         assert!(registry.get("horizon-cli").is_some());
         // Repository skill is NOT present — embedded() does no discovery.
@@ -626,7 +594,7 @@ mod tests {
 
     #[test]
     fn execute_read_returns_the_body_for_a_known_id() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let output = execute_read(&registry, &serde_json::json!({ "id": "horizon-cli" }));
         assert_eq!(output["id"], "horizon-cli");
         assert!(output["body"].as_str().unwrap().contains("horizon"));
@@ -638,7 +606,7 @@ mod tests {
         let directory = temp_repo("fresh-reread");
         let root = directory.path().to_path_buf();
         write_skill(&root, "my-skill", "my-skill", "desc", "original body");
-        let registry = SkillRegistry::discover(&root);
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
 
         let first = execute_read(&registry, &serde_json::json!({ "id": "my-skill" }));
         assert_eq!(first["body"], "original body");
@@ -653,7 +621,7 @@ mod tests {
 
     #[test]
     fn execute_read_lists_available_ids_for_an_unknown_id() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let output = execute_read(&registry, &serde_json::json!({ "id": "no-such-skill" }));
         assert_eq!(output["is_error"], true);
         assert!(output["message"].as_str().unwrap().contains("horizon-cli"));
@@ -661,7 +629,7 @@ mod tests {
 
     #[test]
     fn execute_read_errors_on_a_missing_id_argument() {
-        let registry = SkillRegistry::embedded();
+        let registry = SkillRegistry::embedded(&crate::packages::Packages::default());
         let output = execute_read(&registry, &serde_json::json!({}));
         assert_eq!(output["is_error"], true);
     }
@@ -672,7 +640,7 @@ mod tests {
         let root = directory.path().to_path_buf();
         let big_body = "x".repeat(SKILL_BODY_CAP_CHARS + 1_000);
         write_skill(&root, "big", "big", "desc", &big_body);
-        let registry = SkillRegistry::discover(&root);
+        let registry = SkillRegistry::discover(&root, &crate::packages::Packages::default());
 
         let output = execute_read(&registry, &serde_json::json!({ "id": "big" }));
         assert_eq!(output["truncated"], true);
@@ -681,16 +649,15 @@ mod tests {
 
     // -- external skill source registration (docs/board-keeper-design.md §1) -
 
-    /// A skill source registered via [`register_external_skill_sources`]
-    /// must appear in [`embedded_skills`] and be resolvable through a
-    /// [`SkillRegistry`]. This is the mechanism `horizon-agentd` uses to
-    /// contribute `horizon-board`'s keeper skill without a Cargo edge.
+    /// A skill source a package adds is listed beside the embedded skills.
     const TEST_EXTERNAL_SKILL_SOURCE: &str = "---\nname: test-external-skill\ndescription: An externally-registered test skill.\n---\nTest body.\n";
 
     #[test]
-    fn register_external_skill_sources_makes_the_skill_embedded() {
-        register_external_skill_sources(vec![TEST_EXTERNAL_SKILL_SOURCE]);
-        let registry = SkillRegistry::embedded();
+    fn a_package_skill_source_is_listed() {
+        let packages = crate::packages::Packages::builder()
+            .skill_sources(vec![TEST_EXTERNAL_SKILL_SOURCE])
+            .build();
+        let registry = SkillRegistry::embedded(&packages);
         let skill = registry
             .get("test-external-skill")
             .expect("external skill source must be embedded after registration");
@@ -700,8 +667,10 @@ mod tests {
 
     #[test]
     fn external_skill_appears_in_prompt_section_for_ids() {
-        register_external_skill_sources(vec![TEST_EXTERNAL_SKILL_SOURCE]);
-        let registry = SkillRegistry::embedded();
+        let packages = crate::packages::Packages::builder()
+            .skill_sources(vec![TEST_EXTERNAL_SKILL_SOURCE])
+            .build();
+        let registry = SkillRegistry::embedded(&packages);
         let section = registry
             .prompt_section_for_ids(&["test-external-skill"])
             .expect("must build a section for the external skill");

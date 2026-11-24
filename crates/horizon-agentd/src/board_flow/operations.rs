@@ -465,7 +465,6 @@ mod review_tests {
     fn organizer_open_reuses_and_resumes_without_submitting_work() {
         use horizon_agent::contract::{Command, Event, SessionState};
         use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
-        roles::register();
         let repository = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-q", "-b", "main"]);
         let state = crate::session::test_support::state_with_rig_config(false, "mock");

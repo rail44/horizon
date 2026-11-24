@@ -83,9 +83,9 @@ pub fn resolve_approval(
         return ApprovalOutcome::AlreadyResolved;
     }
     super::background::cancel_judgment(session_id, &request.identity());
-    if let Some(tool) = super::tool::find(&request.tool_id)
+    if let Some(runtime) = session_runtime(session_id)
+        && let Some(tool) = super::tool::find(runtime.tool_state.packages(), &request.tool_id)
         && tool.resolves_approvals()
-        && let Some(runtime) = session_runtime(session_id)
     {
         return dispatch_approval(
             session_id,
@@ -123,16 +123,18 @@ pub fn resolve_auto_approval(
     {
         return ApprovalOutcome::AlreadyResolved;
     }
-    if !super::tool::find(&request.tool_id).is_some_and(|tool| tool.resolves_approvals()) {
-        return ApprovalOutcome::Forward(Command::ApproveToolCall {
-            identity: request.identity(),
-        });
-    }
     let Some(runtime) = session_runtime(session_id) else {
         return ApprovalOutcome::Forward(Command::ApproveToolCall {
             identity: request.identity(),
         });
     };
+    if !super::tool::find(runtime.tool_state.packages(), &request.tool_id)
+        .is_some_and(|tool| tool.resolves_approvals())
+    {
+        return ApprovalOutcome::Forward(Command::ApproveToolCall {
+            identity: request.identity(),
+        });
+    }
 
     dispatch_approval(
         session_id,

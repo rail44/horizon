@@ -4,7 +4,7 @@
 //! are extensions the shell comes with); an extension that
 //! makes its pane on a file has the file found next.
 
-use horizon_agent::roles::{RoleId, user_launchable};
+use horizon_agent::roles::RoleId;
 use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_workspace::{PluginPane, SessionKind};
@@ -33,7 +33,7 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
             Choice::Session(SessionKind::Agent, None),
         ),
     ];
-    for role in user_launchable() {
+    for role in horizon_agent::packages::Packages::default().user_launchable() {
         let id = RoleId(role.id.to_string());
         let choice = Choice::Session(SessionKind::Agent, Some(id));
         choices.push((role.title.to_string(), choice));

@@ -161,6 +161,8 @@ struct Inner {
     /// recall`'s tests, Horizon's UI-side dummy-tool-state test helper) --
     /// stays unchanged.
     skills: SkillRegistry,
+    /// The roles, skills and tools packages add (`crate::packages`).
+    packages: crate::packages::Packages,
     /// Whether nobody is there to answer an approval prompt for this session
     /// (`roles::RoleDefinition::unattended`): a wiki thread, a board
     /// session. A call that would otherwise wait for a human resolves as a
@@ -535,6 +537,10 @@ impl ToolSessionState {
     /// what `tools::config`'s `skill_read` dispatch reads from.
     pub(crate) fn skill_registry(&self) -> &SkillRegistry {
         &self.inner.skills
+    }
+
+    pub(crate) fn packages(&self) -> &crate::packages::Packages {
+        &self.inner.packages
     }
 
     pub(crate) fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {

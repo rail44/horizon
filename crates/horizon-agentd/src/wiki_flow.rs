@@ -11,9 +11,10 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
 use horizon_agent::contract::{SessionId, SessionInput};
+use horizon_agent::packages::PackagesBuilder;
 use horizon_agent::roles::{RoleDefinition, RoleId};
 use horizon_agent::tools::{ExternalOutput, ExternalTool};
 use horizon_wiki::agent::{self, THREAD_ROLE_ID};
@@ -37,11 +38,10 @@ struct WikiAddress {
     parent: String,
 }
 
-/// Registers the wiki's tools, thread role and skill. Idempotent.
-pub(crate) fn register() {
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        horizon_agent::roles::register_external(vec![RoleDefinition {
+/// Adds the wiki's tools, thread role and skill.
+pub(crate) fn add(packages: PackagesBuilder) -> PackagesBuilder {
+    let packages = packages
+        .roles(vec![RoleDefinition {
             id: THREAD_ROLE_ID,
             title: agent::THREAD_ROLE_TITLE,
             prompt_section: agent::THREAD_ROLE_PROMPT,
@@ -52,41 +52,41 @@ pub(crate) fn register() {
             include_repository_instructions: true,
             skill_ids: agent::THREAD_ROLE_SKILLS,
             unattended: true,
-        }]);
-        horizon_agent::skills::register_external_skill_sources(vec![
-            horizon_wiki::skill::SKILL_SOURCE,
-        ]);
-        let tools = agent::tool_definitions()
-            .into_iter()
-            .map(|definition| {
-                let id = definition.id;
-                ExternalTool {
-                    id: id.into(),
-                    title: definition.title.into(),
-                    description: definition.description.into(),
-                    input_schema: definition.input_schema,
-                    // What a page says reaches the prompt, as knowledge does.
-                    requires_trusted_project: true,
-                    output: Some(ExternalOutput {
-                        type_name: definition.output_type.into(),
-                        schema: definition.output_schema,
-                    }),
-                    execute: Arc::new(move |call| {
-                        let root = call
-                            .project_root
-                            .as_deref()
-                            .ok_or("The session is not in a repository, so it has no wiki")?;
-                        let store =
-                            Store::for_project(root).ok_or("No data directory for the wiki")?;
-                        agent::run_tool(&store, id, call.input)
-                    }),
-                }
-            })
-            .collect();
-        if let Err(error) = horizon_agent::tools::register_external_tools(tools) {
-            eprintln!("horizon-agentd: wiki tools not registered: {error}");
+        }])
+        .skill_sources(vec![horizon_wiki::skill::SKILL_SOURCE]);
+    let tools = agent::tool_definitions()
+        .into_iter()
+        .map(|definition| {
+            let id = definition.id;
+            ExternalTool {
+                id: id.into(),
+                title: definition.title.into(),
+                description: definition.description.into(),
+                input_schema: definition.input_schema,
+                // What a page says reaches the prompt, as knowledge does.
+                requires_trusted_project: true,
+                output: Some(ExternalOutput {
+                    type_name: definition.output_type.into(),
+                    schema: definition.output_schema,
+                }),
+                execute: Arc::new(move |call| {
+                    let root = call
+                        .project_root
+                        .as_deref()
+                        .ok_or("The session is not in a repository, so it has no wiki")?;
+                    let store = Store::for_project(root).ok_or("No data directory for the wiki")?;
+                    agent::run_tool(&store, id, call.input)
+                }),
+            }
+        })
+        .collect();
+    match packages.tools(tools) {
+        Ok(packages) => packages,
+        Err((packages, error)) => {
+            eprintln!("horizon-agentd: wiki tools not added: {error}");
+            packages
         }
-    });
+    }
 }
 
 /// The wiki's trigger source for the project at `root` (the daemon's start

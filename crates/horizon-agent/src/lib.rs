@@ -27,6 +27,7 @@ pub mod judge;
 pub mod knowledge;
 pub mod live;
 pub(crate) mod modules;
+pub mod packages;
 pub mod persistence;
 pub(crate) mod policy;
 pub(crate) mod prompt;

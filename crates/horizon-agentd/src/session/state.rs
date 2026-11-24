@@ -186,6 +186,11 @@ impl AgentdState {
         lock_unpoisoned(&self.suspending).remove(&session_id)
     }
 
+    /// What packages add to the agent (`crate::compose_packages`).
+    pub(crate) fn packages(&self) -> horizon_agent::packages::Packages {
+        lock_unpoisoned(&self.agent_config).rig.packages.clone()
+    }
+
     pub(crate) fn register_board(&self, root: PathBuf) {
         lock_unpoisoned(&self.board_projects).insert(root);
     }
@@ -214,7 +219,8 @@ impl AgentdState {
     /// explicit model switch resolves the newly loaded catalog.
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
-        let new_agent_config = crate::providers::agent_config(&raw);
+        let mut new_agent_config = crate::providers::agent_config(&raw);
+        new_agent_config.rig.packages = self.packages();
         let new_providers = ProviderRegistry::builtin_with_config(new_agent_config.clone());
         *lock_unpoisoned(&self.agent_config) = new_agent_config;
         *lock_unpoisoned(&self.providers) = new_providers;

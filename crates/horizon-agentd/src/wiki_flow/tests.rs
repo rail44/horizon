@@ -200,13 +200,15 @@ async fn a_thread_with_a_newer_comment_is_not_suspended() {
 }
 
 #[test]
-fn registration_adds_the_role_skill_and_tools_once() {
-    register();
-    register();
-    let role = horizon_agent::roles::resolve(&RoleId(THREAD_ROLE_ID.into())).unwrap();
+fn the_wiki_adds_its_role_skill_and_tools() {
+    let packages = crate::compose_packages();
+    let role = packages
+        .resolve_role(&RoleId(THREAD_ROLE_ID.into()))
+        .unwrap();
     assert!(role.unattended);
     assert!(
-        !horizon_agent::roles::user_launchable()
+        !packages
+            .user_launchable()
             .iter()
             .any(|role| role.id == THREAD_ROLE_ID)
     );
@@ -222,7 +224,9 @@ fn registration_adds_the_role_skill_and_tools_once() {
             execute: Arc::new(|_| Ok(serde_json::Value::Null)),
         };
         assert!(
-            horizon_agent::tools::register_external_tools(vec![again]).is_err(),
+            add(horizon_agent::packages::Packages::builder())
+                .tools(vec![again])
+                .is_err(),
             "{tool}"
         );
     }
@@ -243,7 +247,6 @@ async fn a_thread_session_is_spawned_then_resumed_after_a_suspend() {
     let (writer, ready) = WriterHandle::open(&path);
     assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
     state.set_writer(Some(writer));
-    register();
     let session = SessionId::from_uuid(agent::thread_session(&question.id));
     let source = source_for(&dir, &store);
 

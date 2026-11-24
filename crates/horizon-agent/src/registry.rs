@@ -50,6 +50,8 @@ pub type MockStreamHold = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
     providers: HashMap<ProviderId, Arc<dyn Provider>>,
+    /// What packages add (`config.rig.packages`), for validating a role.
+    packages: crate::packages::Packages,
 }
 
 /// A named `[[providers]]` entry's registry id — the entry's `name`
@@ -86,7 +88,10 @@ impl ProviderRegistry {
     /// to `list_providers`, deterministic fallback turns) -- "registered
     /// but unavailable", never a failed startup.
     pub fn builtin_with_config(config: AgentConfig) -> Self {
-        let mut registry = Self::default();
+        let mut registry = Self {
+            packages: config.rig.packages.clone(),
+            ..Self::default()
+        };
         #[cfg(any(test, feature = "test-fixtures"))]
         registry.insert_under(
             crate::providers::mock::MockProvider::id(),
@@ -103,6 +108,7 @@ impl ProviderRegistry {
                 entry.resolved()
             };
             provider_config.decision = config.decision.clone();
+            provider_config.packages = config.rig.packages.clone();
             let provider = Arc::new(crate::providers::rig::Provider::for_entry(provider_config));
             registry.insert_under(id, provider.clone());
             if is_default {
@@ -189,7 +195,7 @@ impl ProviderRegistry {
         trusted_project: bool,
     ) -> Option<SessionHandle> {
         if let Some(role_id) = &role_id {
-            crate::roles::resolve(role_id)?;
+            self.packages.resolve_role(role_id)?;
         }
         self.providers.get(provider_id).map(|provider| {
             provider.start_session(StartSession {

@@ -435,6 +435,7 @@ async fn run_provider_stream(
     let request = CompletionRequest::new(prompt)
         .messages(history)
         .tools(rig_tool_definitions(
+            &config.packages,
             config.allowed_tool_ids.as_deref(),
             config.trusted_project,
         ))
@@ -673,6 +674,7 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
 /// gets no project-knowledge index in its prompt and no way to call
 /// through to the user-side store (see `knowledge`'s module doc).
 pub(super) fn rig_tool_definitions(
+    packages: &crate::packages::Packages,
     allowed_tool_ids: Option<&[String]>,
     trusted_project: bool,
 ) -> Vec<ToolDefinition> {
@@ -684,14 +686,15 @@ pub(super) fn rig_tool_definitions(
     let exa_configured = std::env::var(crate::config::EXA_API_KEY_VAR)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
-    definitions()
+    definitions(packages)
         .into_iter()
         .filter(|definition| {
             allows(&definition.id)
                 && (advertises_task || definition.id != crate::tools::TASK_OUTPUT_TOOL_ID)
                 && (exa_configured || definition.id != "web_search")
                 && (trusted_project || !is_knowledge_tool(&definition.id))
-                && (trusted_project || !crate::tools::external_requires_trust(&definition.id))
+                && (trusted_project
+                    || !crate::tools::external_requires_trust(packages, &definition.id))
         })
         .map(rig_tool_definition_from_horizon)
         .collect()
@@ -701,10 +704,11 @@ pub(super) fn rig_tool_definitions(
 /// module.
 #[cfg(test)]
 pub(crate) fn offered_tool_ids(
+    packages: &crate::packages::Packages,
     allowed_tool_ids: Option<&[String]>,
     trusted_project: bool,
 ) -> Vec<String> {
-    rig_tool_definitions(allowed_tool_ids, trusted_project)
+    rig_tool_definitions(packages, allowed_tool_ids, trusted_project)
         .into_iter()
         .map(|definition| definition.name.to_string())
         .collect()

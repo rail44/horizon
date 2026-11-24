@@ -113,7 +113,11 @@ pub(crate) fn resume_persisted_sessions_from_projection(
             // The full mode checks the role before liveness, so an
             // unavailable role's session never counts as a terminated skip
             // there either.
-            if !session.role_id.as_ref().is_some_and(unavailable_role) {
+            if !session
+                .role_id
+                .as_ref()
+                .is_some_and(|role| unavailable_role(&state.packages(), role))
+            {
                 tally.skipped_terminated += 1;
             }
             continue;
@@ -238,7 +242,10 @@ fn resume_one_session(
         .iter()
         .rev()
         .find_map(|record| record.role_id.clone());
-    if role_id.as_ref().is_some_and(unavailable_role) {
+    if role_id
+        .as_ref()
+        .is_some_and(|role| unavailable_role(&state.packages(), role))
+    {
         return ResumeOutcome::NotResumed;
     }
     let recorded_events: Vec<_> = session_records
@@ -518,7 +525,10 @@ pub(crate) fn resume_session(
         .iter()
         .rev()
         .find_map(|record| record.role_id.clone());
-    if role_id.as_ref().is_some_and(unavailable_role) {
+    if role_id
+        .as_ref()
+        .is_some_and(|role| unavailable_role(&state.packages(), role))
+    {
         return Err("Historical role is retired or unavailable".into());
     }
     let context = records
@@ -594,9 +604,12 @@ pub(crate) fn resume_session(
 /// A role no longer defined (one retired since the session ran, like the
 /// board keeper): its sessions are not resumed, since a provider refuses
 /// to start a session on a role it cannot resolve. Built-in and registered
-/// roles are all in place before the resume task starts (`main.rs`).
-fn unavailable_role(role: &horizon_agent::roles::RoleId) -> bool {
-    horizon_agent::roles::resolve(role).is_none()
+/// roles are composed before the resume task starts (`main.rs`).
+fn unavailable_role(
+    packages: &horizon_agent::packages::Packages,
+    role: &horizon_agent::roles::RoleId,
+) -> bool {
+    packages.resolve_role(role).is_none()
 }
 
 /// Settle only inputs that had actually entered work before the process died;

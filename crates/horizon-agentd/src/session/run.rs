@@ -96,7 +96,7 @@ pub(super) fn run_session(
         // which one actually failed rather than defaulting to a generic
         // "unknown provider" that would be misleading for a bad role.
         let message = match &role_id {
-            Some(role_id) if horizon_agent::roles::resolve(role_id).is_none() => {
+            Some(role_id) if state.packages().resolve_role(role_id).is_none() => {
                 format!("Unknown role `{}`.", role_id.0)
             }
             _ => format!("Unknown provider `{}`.", provider_id.0),

@@ -1,12 +1,14 @@
 //! Board policy is supplied by skills on ordinary agent sessions.
 
+use horizon_agent::packages::PackagesBuilder;
 use horizon_agent::roles::{RoleDefinition, RoleWrites};
 
 pub(super) const ORGANIZER: &str = "board-organizer";
 pub(super) const TASK: &str = "board-task";
 pub(super) const REVIEWER: &str = "board-reviewer";
 
-pub(crate) fn register() {
+/// Adds the board's roles and skills.
+pub(crate) fn add(packages: PackagesBuilder) -> PackagesBuilder {
     let definitions = [
         (ORGANIZER, "Board Organizer", "board-organizer"),
         (TASK, "Board Task", "board-task"),
@@ -38,10 +40,9 @@ pub(crate) fn register() {
         unattended: true,
     })
     .collect();
-    horizon_agent::roles::register_external(definitions);
-    horizon_agent::skills::register_external_skill_sources(vec![
+    packages.roles(definitions).skill_sources(vec![
         horizon_board::agents::ORGANIZER_SKILL,
         horizon_board::agents::TASK_SKILL,
         horizon_board::agents::REVIEWER_SKILL,
-    ]);
+    ])
 }

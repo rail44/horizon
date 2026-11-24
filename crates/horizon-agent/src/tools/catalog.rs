@@ -15,9 +15,9 @@ pub(crate) struct Definition {
 
 /// The built-in tools, then any registered from outside
 /// ([`super::external`]).
-pub(crate) fn definitions() -> Vec<Definition> {
+pub(crate) fn definitions(packages: &crate::packages::Packages) -> Vec<Definition> {
     let mut definitions = catalog().to_vec();
-    definitions.extend(super::external::definitions());
+    definitions.extend(super::external::definitions(packages));
     definitions
 }
 
@@ -423,7 +423,6 @@ pub(crate) fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
         .iter()
         .find(|definition| definition.id == tool_id)
         .map(|definition| definition.permission)
-        .or_else(|| super::external::is_registered(tool_id).then_some(ToolPermission::AutoAllowUi))
 }
 
 #[cfg(test)]
@@ -431,7 +430,7 @@ mod tests {
     use super::*;
 
     fn definition(id: &str) -> Definition {
-        definitions()
+        definitions(&crate::packages::Packages::default())
             .into_iter()
             .find(|definition| definition.id == id)
             .unwrap_or_else(|| panic!("`{id}` must be in the catalog"))
@@ -607,7 +606,9 @@ mod tests {
             "the old `session_id` follow-up field must stay unrepresentable"
         );
         assert!(
-            !definitions().iter().any(|d| d.id == "agent_explore"),
+            !definitions(&crate::packages::Packages::default())
+                .iter()
+                .any(|d| d.id == "agent_explore"),
             "the pre-rename id must be gone from the catalog"
         );
     }

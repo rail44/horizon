@@ -109,10 +109,10 @@ pub(crate) fn plan_prepared_call(
     tool_state: &ToolSessionState,
     request: &PreparedCall<'_>,
 ) -> ToolPlan {
-    match crate::tools::tool::find(&request.tool_id) {
+    match crate::tools::tool::find(tool_state.packages(), &request.tool_id) {
         Some(tool) => tool.plan(tool_state, request),
         None => {
-            let available = crate::tools::definitions()
+            let available = crate::tools::definitions(tool_state.packages())
                 .into_iter()
                 .map(|definition| definition.id)
                 .collect::<Vec<_>>()

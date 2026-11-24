@@ -407,6 +407,7 @@ impl NamedProviderConfig {
     /// caller sets the one it selected (`default_model` or a switch).
     pub(crate) fn resolved(&self) -> RigAgentConfig {
         RigAgentConfig {
+            packages: Default::default(),
             api_key_present: self.api_key_present,
             model: String::new(),
             base_url: self.base_url.clone(),
@@ -465,6 +466,9 @@ pub(crate) const DEFAULT_PROVIDER_NAME: &str = "default";
 /// [`DEFAULT_STREAM_FLUSH_CHARS`]) used by `providers::rig::stream`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RigAgentConfig {
+    /// The roles, skills and tools packages add (`crate::packages`), set on
+    /// every provider's config by the registry that builds it.
+    pub packages: crate::packages::Packages,
     /// Whether this entry's API-key variable (see [`Self::api_key_env`])
     /// is set. When `false`, the rig provider answers with a deterministic
     /// fallback responder instead of calling the provider (see
@@ -555,6 +559,7 @@ pub struct RigAgentConfig {
 impl Default for RigAgentConfig {
     fn default() -> Self {
         Self {
+            packages: Default::default(),
             api_key_present: false,
             vendor: Vendor::openai(),
             api_key_env: OPENAI_API_KEY_VAR.to_string(),

@@ -183,7 +183,7 @@ impl Connection {
             return Err(format!("Unknown agent provider {}", new.provider_id.0));
         }
         if let Some(role) = &new.role_id
-            && horizon_agent::roles::resolve(role).is_none()
+            && self.state.packages().resolve_role(role).is_none()
         {
             return Err(format!("Unknown role `{}`", role.0));
         }

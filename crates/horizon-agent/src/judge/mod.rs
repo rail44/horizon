@@ -315,10 +315,10 @@ fn prior_user_messages_from_frame(frame: &AgentFrame) -> Vec<String> {
 /// see [`JudgeInput::tool_description`]'s doc comment for the trust
 /// reasoning.
 fn builtin_tool_description(tool_id: &str) -> Option<String> {
-    crate::tools::definitions()
-        .into_iter()
+    crate::tools::builtin_definitions()
+        .iter()
         .find(|definition| definition.id == tool_id)
-        .map(|definition| definition.description)
+        .map(|definition| definition.description.clone())
 }
 
 #[cfg(test)]

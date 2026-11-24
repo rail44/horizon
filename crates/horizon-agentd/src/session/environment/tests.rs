@@ -238,7 +238,6 @@ fn a_board_session_writes_only_once_prepared_for_its_own_worktree() {
     use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallRequest};
     use horizon_agent::tools::{Execution, ToolUpdate, execute_agent_tool};
 
-    crate::board_flow::roles::register();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let note = root.join("note.txt");

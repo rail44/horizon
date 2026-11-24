@@ -21,7 +21,7 @@ use super::session::SessionLoopState;
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
 use crate::config::RigAgentConfig;
-use crate::roles::{RoleId, resolve};
+use crate::roles::{RoleId, builtin as resolve};
 
 use crate::contract::SessionId;
 use crate::contract::{
@@ -2131,9 +2131,9 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
     // assertion is independent of the host's environment.
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let all = crate::tools::definitions();
+    let all = crate::tools::definitions(&crate::packages::Packages::default());
 
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(&crate::packages::Packages::default(), None, true);
 
     assert_eq!(definitions.len(), all.len());
     for definition in &all {
@@ -2149,7 +2149,8 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
 fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
     let allowed = vec!["fs_read".to_string(), "fs_glob".to_string()];
 
-    let definitions = rig_tool_definitions(Some(&allowed), true);
+    let definitions =
+        rig_tool_definitions(&crate::packages::Packages::default(), Some(&allowed), true);
 
     assert_eq!(definitions.len(), 2);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -2164,7 +2165,8 @@ fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
 fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
     let allowed: Vec<String> = Vec::new();
 
-    let definitions = rig_tool_definitions(Some(&allowed), true);
+    let definitions =
+        rig_tool_definitions(&crate::packages::Packages::default(), Some(&allowed), true);
 
     assert!(definitions.is_empty());
 }
@@ -2181,7 +2183,7 @@ fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var(crate::config::EXA_API_KEY_VAR) };
 
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(&crate::packages::Packages::default(), None, true);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2201,7 +2203,7 @@ fn web_search_is_advertised_when_exa_api_key_is_set() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
 
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(&crate::packages::Packages::default(), None, true);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2250,10 +2252,11 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
     let allowed = config
         .allowed_tool_ids
         .expect("the explore role must set an allow list");
-    let advertised = rig_tool_definitions(Some(&allowed), true)
-        .into_iter()
-        .map(|definition| definition.name)
-        .collect::<Vec<_>>();
+    let advertised =
+        rig_tool_definitions(&crate::packages::Packages::default(), Some(&allowed), true)
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect::<Vec<_>>();
     assert_eq!(
         advertised,
         vec![
@@ -2644,7 +2647,7 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
 #[test]
 fn task_output_is_advertised_only_alongside_task() {
     let names = |allowed: Option<&[String]>| {
-        rig_tool_definitions(allowed, true)
+        rig_tool_definitions(&crate::packages::Packages::default(), allowed, true)
             .into_iter()
             .map(|definition| definition.name)
             .collect::<Vec<_>>()
@@ -2683,7 +2686,7 @@ fn task_output_is_advertised_only_alongside_task() {
 fn knowledge_tools_are_advertised_for_a_trusted_session() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let definitions = rig_tool_definitions(None, true);
+    let definitions = rig_tool_definitions(&crate::packages::Packages::default(), None, true);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
         names.contains("knowledge_read"),
@@ -2699,7 +2702,7 @@ fn knowledge_tools_are_advertised_for_a_trusted_session() {
 fn knowledge_tools_are_not_advertised_for_an_untrusted_session() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
-    let definitions = rig_tool_definitions(None, false);
+    let definitions = rig_tool_definitions(&crate::packages::Packages::default(), None, false);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
         !names.contains("knowledge_read"),

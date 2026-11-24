@@ -1,6 +1,5 @@
-//! Tools registered from crates `horizon-agent` does not depend on, the tool
-//! counterpart of `roles::register_external` and
-//! `skills::register_external_skill_sources`. A registering package supplies
+//! Tools a package outside `horizon-agent` adds (`crate::packages`),
+//! beside the roles and skills it adds. A package supplies
 //! each tool's definition and an executor written against plain types (a
 //! session id, the session's roots, JSON in and out), so the package needs no
 //! `horizon-agent` types; `horizon-agentd` is where packages are composed.
@@ -10,7 +9,7 @@
 //! for registered tools (`docs/project-wiki-design.md`, "Package layout").
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -68,49 +67,19 @@ impl std::fmt::Debug for ExternalTool {
     }
 }
 
-static EXTERNAL_TOOLS: RwLock<Vec<ExternalTool>> = RwLock::new(Vec::new());
-
-/// Registers tools from another crate. Called at process startup, before any
-/// session is spawned. Refuses the whole batch when an id is not a name a
-/// provider accepts ([`super::catalog::is_valid_tool_id`]), repeats within
-/// it, or is already taken by a built-in or a registered tool.
-pub fn register_external_tools(tools: Vec<ExternalTool>) -> Result<(), String> {
-    let mut registered = EXTERNAL_TOOLS.write().unwrap_or_else(|e| e.into_inner());
-    let mut seen = std::collections::HashSet::new();
-    for tool in &tools {
-        if !super::catalog::is_valid_tool_id(&tool.id) {
-            return Err(format!(
-                "tool id `{}` is not 1-64 of a-z, A-Z, 0-9, `_` and `-`",
-                tool.id
-            ));
-        }
-        let taken = super::catalog::is_builtin(&tool.id)
-            || registered.iter().any(|existing| existing.id == tool.id);
-        if taken || !seen.insert(tool.id.as_str()) {
-            return Err(format!("tool id `{}` is already taken", tool.id));
-        }
-    }
-    registered.extend(tools);
-    Ok(())
-}
-
-fn with_tool<T>(tool_id: &str, f: impl FnOnce(&ExternalTool) -> T) -> Option<T> {
-    let registered = EXTERNAL_TOOLS.read().unwrap_or_else(|e| e.into_inner());
-    registered.iter().find(|tool| tool.id == tool_id).map(f)
-}
-
-pub(crate) fn is_registered(tool_id: &str) -> bool {
-    with_tool(tool_id, |_| ()).is_some()
-}
-
-pub(crate) fn requires_trusted_project(tool_id: &str) -> bool {
-    with_tool(tool_id, |tool| tool.requires_trusted_project).unwrap_or(false)
+pub(crate) fn requires_trusted_project(
+    packages: &crate::packages::Packages,
+    tool_id: &str,
+) -> bool {
+    packages
+        .tools()
+        .iter()
+        .any(|tool| tool.id == tool_id && tool.requires_trusted_project)
 }
 
 /// The registered tools' catalog entries, in registration order.
-pub(crate) fn definitions() -> Vec<super::Definition> {
-    let registered = EXTERNAL_TOOLS.read().unwrap_or_else(|e| e.into_inner());
-    registered.iter().map(definition_of).collect()
+pub(crate) fn definitions(packages: &crate::packages::Packages) -> Vec<super::Definition> {
+    packages.tools().iter().map(definition_of).collect()
 }
 
 fn definition_of(tool: &ExternalTool) -> super::Definition {
@@ -130,8 +99,15 @@ fn definition_of(tool: &ExternalTool) -> super::Definition {
 }
 
 /// The registered tool `tool_id` names, as a [`super::tool::Tool`].
-pub(crate) fn find(tool_id: &str) -> Option<std::sync::Arc<dyn super::tool::Tool>> {
-    let tool = with_tool(tool_id, Clone::clone)?;
+pub(crate) fn find(
+    packages: &crate::packages::Packages,
+    tool_id: &str,
+) -> Option<std::sync::Arc<dyn super::tool::Tool>> {
+    let tool = packages
+        .tools()
+        .iter()
+        .find(|tool| tool.id == tool_id)?
+        .clone();
     Some(std::sync::Arc::new(Registered {
         definition: definition_of(&tool),
         tool,
@@ -197,7 +173,7 @@ mod tests {
         id: &str,
         input: Value,
     ) -> Option<Value> {
-        let tool = find(id)?;
+        let tool = find(state.packages(), id)?;
         let request = crate::contract::ToolCallRequest {
             call_id: crate::contract::ToolCallId("call".into()),
             occurrence_id: crate::contract::OccurrenceId::new(),
@@ -214,6 +190,14 @@ mod tests {
             super::super::tool::Dispatch::Done(output) => Some(output.output.to_json()),
             super::super::tool::Dispatch::Spawned => None,
         }
+    }
+
+    /// The packages that add `tools`, or why they are refused.
+    fn added(tools: Vec<ExternalTool>) -> Result<crate::packages::Packages, String> {
+        crate::packages::Packages::builder()
+            .tools(tools)
+            .map(|builder| builder.build())
+            .map_err(|(_, error)| error)
     }
 
     fn tool(id: &str, execute: ExternalToolExecutor) -> ExternalTool {
@@ -241,8 +225,8 @@ mod tests {
                 }
             }),
         });
-        register_external_tools(vec![documented]).unwrap();
-        let entry = crate::tools::definitions()
+        let packages = added(vec![documented]).unwrap();
+        let entry = crate::tools::definitions(&packages)
             .into_iter()
             .find(|definition| definition.id == "test_legend")
             .unwrap();
@@ -267,22 +251,21 @@ mod tests {
 
     #[test]
     fn a_registered_tool_joins_the_catalog() {
-        register_external_tools(vec![tool("test_catalog", echo())]).unwrap();
-        let entry = crate::tools::definitions()
+        let packages = added(vec![tool("test_catalog", echo())]).unwrap();
+        let entry = crate::tools::definitions(&packages)
             .into_iter()
             .find(|definition| definition.id == "test_catalog")
             .expect("registered tool is listed");
         assert_eq!(entry.description, "test_catalog description");
-        assert!(is_registered("test_catalog"));
-        assert!(requires_trusted_project("test_catalog"));
+        assert!(requires_trusted_project(&packages, "test_catalog"));
     }
 
     #[test]
     fn a_built_in_id_is_refused() {
-        let error = register_external_tools(vec![tool("fs_read", echo())]).unwrap_err();
+        let error = added(vec![tool("fs_read", echo())]).unwrap_err();
         assert!(error.contains("fs_read"), "{error}");
         assert!(
-            !crate::tools::definitions()
+            !crate::tools::definitions(&crate::packages::Packages::default())
                 .iter()
                 .any(|definition| definition.id == "fs_read"
                     && definition.description == "fs_read description")
@@ -292,33 +275,32 @@ mod tests {
     #[test]
     fn a_repeated_id_refuses_the_whole_batch() {
         let error =
-            register_external_tools(vec![tool("test_twice", echo()), tool("test_twice", echo())])
-                .unwrap_err();
+            added(vec![tool("test_twice", echo()), tool("test_twice", echo())]).unwrap_err();
         assert!(error.contains("test_twice"), "{error}");
-        assert!(!is_registered("test_twice"));
     }
 
     #[test]
     fn an_id_a_provider_refuses_refuses_the_whole_batch() {
-        let error = register_external_tools(vec![
+        let error = added(vec![
             tool("test_valid", echo()),
             tool("test.dotted", echo()),
         ])
         .unwrap_err();
         assert!(error.contains("test.dotted"), "{error}");
-        assert!(!is_registered("test_valid"));
     }
 
     #[test]
     fn a_registered_tool_is_planned_to_run_without_approval() {
-        register_external_tools(vec![tool("test_plan", echo())]).unwrap();
+        let packages = added(vec![tool("test_plan", echo())]).unwrap();
         let request = crate::contract::ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-ext".to_string()),
             tool_id: "test_plan".to_string(),
             input: json!({ "anything": true }).into(),
             occurrence_id: crate::contract::OccurrenceId("call-ext".to_string()),
         };
-        let state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
+        let state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_packages(packages)
+            .build();
         assert_eq!(
             crate::policy::plan_tool_call(&state, &request),
             crate::policy::ToolPlan::Automatic
@@ -329,9 +311,9 @@ mod tests {
     fn an_untrusted_project_is_not_offered_a_trust_requiring_tool() {
         let mut open = tool("test_open", echo());
         open.requires_trusted_project = false;
-        register_external_tools(vec![tool("test_gated", echo()), open]).unwrap();
+        let packages = added(vec![tool("test_gated", echo()), open]).unwrap();
         let offered = |trusted: bool| -> Vec<String> {
-            crate::providers::rig::offered_tool_ids(None, trusted)
+            crate::providers::rig::offered_tool_ids(&packages, None, trusted)
         };
         assert!(offered(true).contains(&"test_gated".to_string()));
         assert!(!offered(false).contains(&"test_gated".to_string()));
@@ -340,7 +322,7 @@ mod tests {
 
     #[test]
     fn execution_passes_the_session_and_roots_and_maps_errors() {
-        register_external_tools(vec![
+        let packages = added(vec![
             tool(
                 "test_roots",
                 Arc::new(|call| {
@@ -355,7 +337,9 @@ mod tests {
         ])
         .unwrap();
         let root = std::env::temp_dir();
-        let state = crate::tools::ToolSessionBuilder::new(root.clone()).build();
+        let state = crate::tools::ToolSessionBuilder::new(root.clone())
+            .with_packages(packages)
+            .build();
         let session = crate::contract::SessionId::from_uuid(uuid::Uuid::from_u128(7));
 
         let ok = run(&state, session, "test_roots", json!({ "a": 1 })).unwrap();

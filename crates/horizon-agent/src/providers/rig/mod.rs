@@ -61,7 +61,7 @@ impl AgentProvider for Provider {
     /// `docs/plans/agent-foundation/03-roles-and-config-agent.md` (removed in
     /// a8839fc1).
     fn start_session(&self, request: StartSession) -> SessionHandle {
-        let role = request.role_id.as_ref().and_then(crate::roles::resolve);
+        let role = (request.role_id.as_ref()).and_then(|id| self.config.packages.resolve_role(id));
         let config = role_adjusted_config(&self.config, role);
         spawn_rig_session(request, config, role)
     }
@@ -82,7 +82,7 @@ impl AgentProvider for Provider {
         if !self.config.model_in_play() {
             return None;
         }
-        let role = role_id.and_then(crate::roles::resolve);
+        let role = role_id.and_then(|id| self.config.packages.resolve_role(id));
         let model = role_adjusted_config(&self.config, role).model;
         if model.is_empty() {
             return None;

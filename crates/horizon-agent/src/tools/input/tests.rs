@@ -44,7 +44,7 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
 
 #[test]
 fn every_advertised_builtin_uses_its_typed_schema_and_rejects_unknown_fields() {
-    let catalog = crate::tools::definitions();
+    let catalog = crate::tools::definitions(&crate::packages::Packages::default());
     for (id, sample) in samples() {
         let schema = schema(id).expect(id);
         assert_eq!(

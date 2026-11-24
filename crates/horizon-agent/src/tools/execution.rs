@@ -94,7 +94,7 @@ fn execute_automatic(
 ) -> Result<ToolUpdate, String> {
     // Every dispatch, including a synchronous effect, starts beyond this acknowledged boundary.
     let started = ToolUpdate::start(live, request, None)?;
-    let Some(tool) = super::tool::find(&request.tool_id) else {
+    let Some(tool) = super::tool::find(tool_state.packages(), &request.tool_id) else {
         return started.complete(
             live,
             request.identity().finish(error_output(format!(

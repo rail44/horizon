@@ -163,7 +163,7 @@ impl SessionPlugin for AgentPlugin {
         let role = given
             .named("role")
             .map(|role| {
-                let known = horizon_agent::roles::user_launchable();
+                let known = horizon_agent::packages::Packages::default().user_launchable();
                 if !known.iter().any(|known| known.id == role) {
                     let available: Vec<&str> = known.iter().map(|known| known.title).collect();
                     return Err(format!(

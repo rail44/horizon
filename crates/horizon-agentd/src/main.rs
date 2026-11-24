@@ -132,6 +132,16 @@ fn wait_for_gate(gate: &Path) {
     }
 }
 
+/// What the board and the wiki add to the agent: their roles, skills and
+/// tools, composed once here and carried on the agent configuration
+/// (`RigAgentConfig::packages`) to the providers and every session.
+pub(crate) fn compose_packages() -> horizon_agent::packages::Packages {
+    wiki_flow::add(board_flow::roles::add(
+        horizon_agent::packages::Packages::builder(),
+    ))
+    .build()
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let socket_path = daemon::socket_path_from_args(std::env::args().skip(1))
@@ -139,7 +149,8 @@ async fn main() -> anyhow::Result<()> {
 
     // One accepted snapshot supplies conversation and auxiliary providers.
     let raw_config = horizon_config::load();
-    let agent_config = providers::agent_config(raw_config);
+    let mut agent_config = providers::agent_config(raw_config);
+    agent_config.rig.packages = compose_packages();
     // Resolved once at startup; a provider reload reads it again.
     let config_path = horizon_config::resolved_path();
     eprintln!(
@@ -172,8 +183,6 @@ async fn main() -> anyhow::Result<()> {
         horizon_config::trusted_projects(raw_config),
     ));
 
-    board_flow::roles::register();
-    wiki_flow::register();
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
     let start_dir = std::env::current_dir().ok();
     let mut sources = vec![board_flow::source(&state, start_dir.clone())];

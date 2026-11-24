@@ -139,6 +139,7 @@ impl SessionEnvironment<'_> {
         // A session's judge retains the decision connection accepted at
         // spawn; without one, every approval candidate goes to the human.
         let judge = JudgeHandle::new(agent_config.decision.as_ref(), state.writer());
+        let packages = state.packages();
 
         // `task`'s daemon capability (`docs/agent-explore-design.md`).
         // Withheld from an exploration session itself: its role allowlist
@@ -156,7 +157,7 @@ impl SessionEnvironment<'_> {
                     // A child's approval is shown through its requester, so
                     // a requester nobody watches has nobody to show it to.
                     requester_unattended: role_id
-                        .and_then(horizon_agent::roles::resolve)
+                        .and_then(|role| packages.resolve_role(role))
                         .is_some_and(|role| role.unattended),
                     forwarded: Default::default(),
                 }))
@@ -210,7 +211,7 @@ impl SessionEnvironment<'_> {
             // has nobody to answer an approval prompt raised for it.
             .with_unattended(
                 role_id
-                    .and_then(horizon_agent::roles::resolve)
+                    .and_then(|role| packages.resolve_role(role))
                     .is_some_and(|role| role.unattended),
             )
             // A role that may not write here gets a shell that writes
@@ -219,7 +220,7 @@ impl SessionEnvironment<'_> {
             // activation that makes the worktree prepares this again.
             .with_read_only(
                 match role_id
-                    .and_then(horizon_agent::roles::resolve)
+                    .and_then(|role| packages.resolve_role(role))
                     .map(|role| role.writes)
                 {
                     Some(RoleWrites::Nowhere) => Some(ReadOnly::Delegated),
@@ -233,10 +234,11 @@ impl SessionEnvironment<'_> {
             .with_own_worktree_grants(own_worktree_grants)
             .with_loopback_connect(loopback_connect)
             .with_skills(if trusted {
-                SkillRegistry::discover(&skill_root)
+                SkillRegistry::discover(&skill_root, &packages)
             } else {
-                SkillRegistry::embedded()
+                SkillRegistry::embedded(&packages)
             })
+            .with_packages(packages.clone())
             .with_mach_services(mach_services)
             .with_domain_policy(domains)
             .with_network_proxy(network)
