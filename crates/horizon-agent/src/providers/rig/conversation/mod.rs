@@ -228,6 +228,15 @@ impl ConversationHistory {
         }
         let slot = &mut self.response_mut(entry).calls[call].result;
         if let Some(previous) = slot {
+            // A declined retry offer is closed as cancelled after the
+            // attempt that ran has answered the call (`ToolUpdate::
+            // decline_retry`); the offer never ran, so it answers nothing.
+            if previous.occurrence_id != result.occurrence_id
+                && result.outcome == ToolOutcome::Cancelled
+            {
+                self.retired.insert(result.occurrence_id.clone());
+                return Ok(());
+            }
             if previous != result {
                 return Err("Conflicting conversation tool results".into());
             }

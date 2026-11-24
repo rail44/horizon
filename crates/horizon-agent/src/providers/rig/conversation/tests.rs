@@ -350,3 +350,35 @@ fn legacy_request_boundaries_keep_early_results_in_one_parallel_response() {
     );
     history.validate_ready().unwrap();
 }
+
+/// A retry offer a person declined leaves two finishes for one call: the
+/// attempt that ran, which answers the provider, and the offer, closed as
+/// cancelled without running. Both are on the log, and a resume reads them.
+#[test]
+fn a_declined_retry_offer_does_not_conflict_with_the_attempt_that_ran() {
+    let attempt = request(1);
+    let mut offer = attempt.clone();
+    offer.occurrence_id = OccurrenceId("offer".into());
+    let ran = attempt
+        .identity()
+        .result(json!({"is_error": true, "message": "refused"}));
+    let events = [
+        Event::ConversationRecorded(ConversationRecord::TurnOpened),
+        Event::ConversationRecorded(ConversationRecord::Input {
+            kind: ConversationInputKind::User,
+            text: "read it".into(),
+        }),
+        announcement(&attempt, "response"),
+        Event::ToolCallRequested(attempt.clone()),
+        Event::ToolCallRequested(offer.clone()),
+        Event::ToolCallFinished(ran),
+        Event::ToolCallFinished(ToolCallResult::cancelled(offer.identity())),
+    ];
+
+    let history = ConversationHistory::from_events(&events).unwrap();
+
+    assert!(history.pending_identities().is_empty());
+    assert!(interrupted_conversation_calls(&events).unwrap().is_empty());
+    let last = format!("{:?}", history.messages().last());
+    assert!(last.contains("refused"), "{last}");
+}
