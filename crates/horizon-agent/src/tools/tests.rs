@@ -1531,7 +1531,7 @@ fn fs_grep_rejects_invalid_regex() {
 }
 
 #[test]
-fn fs_grep_searches_one_file_and_returns_locations_only() {
+fn fs_grep_searches_one_file_and_returns_each_matching_line() {
     let root = temp_workspace("grep-one-file-context");
     let file = root.join("target.txt");
     fs::write(
@@ -1555,11 +1555,32 @@ fn fs_grep_searches_one_file_and_returns_locations_only() {
     assert_eq!(output["total_matches"], 1);
     assert_eq!(output["matches"][0]["path"], file.display().to_string());
     assert_eq!(output["matches"][0]["line_number"], 3);
-    // A location carries nothing else: no matching line, no surrounding
-    // context. `fs_read` answers what the line says.
-    assert!(output["matches"][0]["line"].is_null());
+    // The matching line, without the lines around it.
+    assert_eq!(output["matches"][0]["line"], "TODO: change this");
+    assert!(output["matches"][0]["line_truncated"].is_null());
     assert!(output["matches"][0]["context_before"].is_null());
     assert!(output["matches"][0]["context_after"].is_null());
+}
+
+#[test]
+fn fs_grep_cuts_a_long_matching_line() {
+    let root = temp_workspace("grep-long-line");
+    let file = root.join("minified.js");
+    let long = format!("TODO{}", "x".repeat(2_000));
+    fs::write(&file, &long).unwrap();
+    let tool_state = ToolSessionState::new(root);
+
+    let output = sync_tools::execute_auto(
+        &tool_state,
+        "fs_grep",
+        &json!({"base_path": file.display().to_string(), "pattern": "TODO"}),
+    )
+    .expect("fs_grep is auto-executed");
+
+    let line = output["matches"][0]["line"].as_str().unwrap();
+    assert_eq!(line.chars().count(), crate::tools::fs::GREP_MAX_LINE_CHARS);
+    assert!(long.starts_with(line));
+    assert_eq!(output["matches"][0]["line_truncated"], true);
 }
 
 #[test]

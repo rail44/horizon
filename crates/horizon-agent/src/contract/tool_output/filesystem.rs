@@ -49,6 +49,11 @@ pub struct Location {
     pub path: String,
     /// The line it is on, one-based.
     pub line_number: usize,
+    /// What the line says, cut at a fixed length (`truncated` says when).
+    pub line: String,
+    /// Whether `line` was cut short.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub line_truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

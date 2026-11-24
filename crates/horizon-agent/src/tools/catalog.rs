@@ -127,11 +127,12 @@ fn build_definitions() -> Vec<Definition> {
             legend_after(
                 &format!(
                     "Find where text occurs. Search one file or all files under a directory \
-                with a regular expression, optionally restricted by glob. Read what a \
-                location says with fs_read, passing offset and limit around the reported \
-                line. For an open-ended exploration that would take several rounds of \
+                with a regular expression, optionally restricted by glob. Each match comes \
+                with its line (cut at {} characters); read around it with fs_read, passing \
+                offset and limit near the reported line. For an open-ended exploration that would take several rounds of \
                 searching and reading, call task instead and keep only its report. \
                 Requires an absolute base path. Traversal stops at {} scanned files.",
+                    super::fs::GREP_MAX_LINE_CHARS,
                     crate::config::FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT
                 ),
                 super::output_legend::legend::<super::output::Matches<super::output::Location>>("Matches"),

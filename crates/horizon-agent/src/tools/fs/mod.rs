@@ -1,6 +1,7 @@
 mod edit;
 mod glob;
 mod grep;
+pub(in crate::tools) use grep::MAX_LINE_CHARS as GREP_MAX_LINE_CHARS;
 mod locks;
 mod read;
 mod safety;

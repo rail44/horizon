@@ -11,19 +11,15 @@ use super::traverse;
 use crate::config::FsToolConfig;
 use crate::tools::state::ToolSessionState;
 
-/// A match is reported as a location, never as content: `fs_grep` answers
-/// "where is this?" and `fs_read` answers "what does it say?". Returning
-/// the matching line (let alone surrounding context) makes the first
-/// question's answer cost as much as the second's — measured on this
-/// repository, one `WaitingForUser` search returns 5,008 bytes as
-/// locations, 12,948 with the matching lines, and 67,423 with three lines
-/// of context each — and in the session that motivated the change, only
-/// 16% of the context lines grep returned were ever revisited by a later
-/// read. Current harnesses draw the same line (Claude Code defaults to
-/// file paths, OpenCode returns bare matching lines); the fuller
-/// measurement record is `docs/research/` 2026-07-25 plus the roadmap's
-/// context-consumption entry.
+/// A match is reported with its line, as pi, eve and Flue report theirs
+/// (`docs/research/agent-frameworks-core-and-extension-2026-11-23.md`
+/// section 4), cut at [`MAX_LINE_CHARS`] as Flue cuts it. The whole result
+/// stays under [`MAX_OUTPUT_CHARS`].
 const MAX_OUTPUT_CHARS: usize = 50_000;
+
+/// A matching line longer than this is cut, so one minified file cannot
+/// fill the result.
+pub(in crate::tools) const MAX_LINE_CHARS: usize = 500;
 
 #[derive(Default)]
 struct GrepResults {
@@ -36,10 +32,13 @@ struct GrepResults {
     output_capped: bool,
 }
 
-fn render_location(path: &Path, line_number: usize) -> Location {
+fn render_location(path: &Path, line_number: usize, line: &str) -> Location {
+    let line_truncated = line.chars().count() > MAX_LINE_CHARS;
     Location {
         path: path.display().to_string(),
         line_number,
+        line: line.chars().take(MAX_LINE_CHARS).collect(),
+        line_truncated,
     }
 }
 
@@ -56,7 +55,7 @@ fn scan_file(path: &Path, regex: &Regex, limit: usize, results: &mut GrepResults
         if results.matches.len() >= limit || results.output_capped {
             continue;
         }
-        let candidate = render_location(path, index + 1);
+        let candidate = render_location(path, index + 1, line);
         let candidate_chars = serde_json::to_string(&candidate)
             .expect("location serializes")
             .chars()

@@ -123,16 +123,16 @@ returns `next_offset`, so a continuation is explicit rather than an
 accidental whole-file response. Each result carries a version derived from
 the file mtime and size.
 
-`fs_grep` accepts either one file or a directory and returns **locations
-only** — one `path` + `line_number` per match plus the total count, never
-the matching line or surrounding context (`d74a75e`, 2026-07-25; the
-measurement behind the reversal is in
-`research/agent-read-navigation-prior-art-2026-07-25.md` §1 and the
-follow-up session analysis: context lines cost ~5x the locations and only
-16% of them were ever revisited by later reads). The complete serialized
-result is capped at 50,000 characters. These are harness invariants rather
-than prompt-only conventions; content questions route to `fs_read` with a
-window around the reported line.
+`fs_grep` accepts either one file or a directory and returns one `path` +
+`line_number` + `line` per match plus the total count, the line cut at 500
+characters (`line_truncated` says so), and no surrounding context. That is
+the shape pi, eve and Flue converge on
+(`research/agent-frameworks-core-and-extension-2026-11-23.md` §4); from
+2026-07-25 until 2026-11-24 the line was left out
+(`research/agent-read-navigation-prior-art-2026-07-25.md` §1 has that
+measurement). The complete serialized result is capped at 50,000
+characters. Context around a match is read with `fs_read` with a window
+around the reported line.
 
 A provider request carries the session's canonical history verbatim. Horizon
 maintains no separate, lossily-projected view of it: nothing elides duplicate
