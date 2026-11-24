@@ -199,6 +199,10 @@ pub(super) fn dispatch_inbound_command(
         } => {
             super::input::send_input(state, live_state, session_id, recipient, input);
         }
+        command @ Command::UserMessage { .. } => {
+            super::input::checkpoint_a_settled_position(state, live_state, session_id);
+            let _ = commands_tx.send(command);
+        }
         Command::SessionInput(input) => {
             if super::input::accept_input(state, live_state, session_id, &input) {
                 let _ = commands_tx.send(Command::SessionInput(input));

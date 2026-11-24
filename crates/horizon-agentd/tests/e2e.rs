@@ -2723,22 +2723,32 @@ fn cursor_before_message(collected: &[Inbound], text: &str) -> v2::CursorId {
 }
 
 /// A session forked at the cursor before its second message holds the first
-/// exchange, goes on by itself while the source keeps its own, and comes
-/// back with that branch after the daemon restarts.
+/// exchange and the files as they were then, in a worktree of its own; it
+/// goes on by itself while the source keeps its own, and comes back with
+/// that branch and worktree after the daemon restarts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart() {
-    let mut daemon = spawn_agentd();
+    let (_outer, repo) = nested_session_fixture();
+    let mut daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+        .env_remove("HORIZON_AGENTD_TEST_NO_CHECKPOINTS")
+        .spawn();
     let log = daemon.event_log_path.clone();
     let mut client = connect(&daemon.socket_path).await;
     let source = SessionId::new();
-    open_session(&client, session_new(source)).await;
+    open_session(
+        &client,
+        new_session_request(source, &mock_provider_id().0, None, repo.clone()),
+    )
+    .await;
     prompt_and_settle(&mut client, source, "one").await;
+    std::fs::write(repo.join("notes.txt"), "after one\n").unwrap();
     let collected = prompt_and_settle(&mut client, source, "two").await;
+    std::fs::write(repo.join("notes.txt"), "after two\n").unwrap();
     let cursor = cursor_before_message(&collected, "two");
 
     let unknown = client
         .request(
-            v2::ForkSessionRequest::new(acp_id(source), test_cwd())
+            v2::ForkSessionRequest::new(acp_id(source), repo.clone())
                 .cursor_id(v2::CursorId::new("before-nowhere")),
         )
         .await
@@ -2749,11 +2759,32 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
     );
 
     let forked = client
-        .request(v2::ForkSessionRequest::new(acp_id(source), test_cwd()).cursor_id(cursor))
+        .request(v2::ForkSessionRequest::new(acp_id(source), repo.clone()).cursor_id(cursor))
         .await
         .expect("session/fork at an announced cursor succeeds");
     let fork = SessionId::from_uuid(forked.session_id.0.parse().unwrap());
     assert_ne!(fork, source);
+    let worktree = acp::read_horizon_meta::<acp::SessionInfoMeta>(forked.meta.as_ref())
+        .unwrap()
+        .unwrap()
+        .workspace_root
+        .expect("the fork works in a worktree of its own");
+    assert!(
+        worktree.starts_with(
+            std::fs::canonicalize(&repo)
+                .unwrap()
+                .join(".horizon/worktrees")
+        ),
+        "{worktree:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("notes.txt")).unwrap(),
+        "after one\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("notes.txt")).unwrap(),
+        "after two\n"
+    );
     prompt_and_settle(&mut client, fork, "three").await;
 
     assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
@@ -2766,12 +2797,8 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
     assert!(status.success(), "the drained daemon ended with {status:?}");
     daemon = daemon.respawn_at_same_paths();
     let mut client = connect(&daemon.socket_path).await;
-    let replayed: Vec<_> = resume(&mut client, fork)
-        .await
-        .unwrap()
-        .iter()
-        .filter_map(user_message)
-        .collect();
+    let bootstrap = resume(&mut client, fork).await.unwrap();
+    let replayed: Vec<_> = bootstrap.iter().filter_map(user_message).collect();
     assert_eq!(replayed, ["one", "three"]);
     let answered = prompt_and_settle(&mut client, fork, "four").await;
     assert!(
@@ -2780,6 +2807,12 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
             .any(|inbound| agent_message(inbound).as_deref() == Some("Mock response: four")),
         "{answered:?}"
     );
+    let listed = list_sessions(&client).await;
+    let fork_info = listed
+        .iter()
+        .find(|info| info.session_id == acp_id(fork))
+        .expect("the fork is listed");
+    assert_eq!(info_meta(fork_info).workspace_root, Some(worktree));
     assert_eq!(branch_user_messages(&log, fork), ["one", "three", "four"]);
     assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
 }

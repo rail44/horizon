@@ -132,6 +132,12 @@ pub(crate) struct AgentdState {
     /// once when the child's environment is first prepared
     /// (`docs/agent-subagent-design.md` decision 12).
     pub(crate) task_seeds: Mutex<HashMap<SessionId, TaskSeed>>,
+    /// Whether sessions' files are recorded at settled positions and a fork
+    /// gets a worktree of its own from them (`crate::checkpoint`). Off
+    /// unless [`Self::with_checkpoints`] turns it on: only the daemon's own
+    /// startup does, so a test's sessions leave the repository it runs in
+    /// alone.
+    checkpoints: bool,
 }
 
 impl AgentdState {
@@ -146,6 +152,7 @@ impl AgentdState {
     ) -> Self {
         Self {
             lifecycle: Mutex::new(()),
+            checkpoints: false,
             board_projects: Mutex::new(std::collections::HashSet::new()),
             suspending: Mutex::new(std::collections::HashSet::new()),
             providers: Mutex::new(providers),
@@ -184,6 +191,15 @@ impl AgentdState {
     /// mark. Called once by the thread's own exit cleanup.
     pub(super) fn take_suspending(&self, session_id: SessionId) -> bool {
         lock_unpoisoned(&self.suspending).remove(&session_id)
+    }
+
+    pub(crate) fn with_checkpoints(mut self, on: bool) -> Self {
+        self.checkpoints = on;
+        self
+    }
+
+    pub(crate) fn checkpoints(&self) -> bool {
+        self.checkpoints
     }
 
     /// What packages add to the agent (`crate::compose_packages`).

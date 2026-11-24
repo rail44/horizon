@@ -56,9 +56,19 @@ fn scrub_git_env(cmd: &mut std::process::Command) {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_in(dir, args, &[])
+}
+
+/// [`run_git`] with `envs` set for the command, after the scrub.
+pub(crate) fn run_git_in(
+    dir: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String, String> {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C").arg(dir).args(args);
     scrub_git_env(&mut cmd);
+    cmd.envs(envs.iter().copied());
     let output = cmd
         .output()
         .map_err(|error| format!("failed to run git {args:?} in {}: {error}", dir.display()))?;

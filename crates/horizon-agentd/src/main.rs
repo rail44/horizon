@@ -64,6 +64,7 @@
 //!   abandons it; the next start rebuilds again.
 
 mod board_flow;
+mod checkpoint;
 mod hub;
 mod outbox;
 mod providers;
@@ -111,6 +112,11 @@ const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_G
 /// (`ProviderRegistry::hold_mock_streams`), so a test can reattach while a
 /// turn is surely streaming. Never set in production.
 const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENTD_TEST_MOCK_STREAM_GATE";
+
+/// Test-only hook (`horizon-daemon-testkit`'s hermetic command): when set,
+/// sessions record no file checkpoints and a fork gets no worktree, so a
+/// test's sessions leave the repository they run in alone.
+const TEST_NO_CHECKPOINTS_VAR: &str = "HORIZON_AGENTD_TEST_NO_CHECKPOINTS";
 
 /// The file the variable `var` names, when it is set: a test's gate
 /// ([`TEST_RESUME_GATE_VAR`], [`TEST_DUCKDB_REBUILD_GATE_VAR`]). The
@@ -173,15 +179,20 @@ async fn main() -> anyhow::Result<()> {
     if let Some(gate) = test_gate(TEST_MOCK_STREAM_GATE_VAR) {
         providers.hold_mock_streams(Arc::new(move || wait_for_gate(&gate)));
     }
-    let state = Arc::new(AgentdState::new(
-        providers,
-        agent_config.clone(),
-        None,
-        duckdb_cell.clone(),
-        config_path,
-        horizon_config::project_grants(raw_config),
-        horizon_config::trusted_projects(raw_config),
-    ));
+    let checkpoints = !(horizon_agent::TEST_FIXTURES
+        && std::env::var_os(TEST_NO_CHECKPOINTS_VAR).is_some_and(|set| !set.is_empty()));
+    let state = Arc::new(
+        AgentdState::new(
+            providers,
+            agent_config.clone(),
+            None,
+            duckdb_cell.clone(),
+            config_path,
+            horizon_config::project_grants(raw_config),
+            horizon_config::trusted_projects(raw_config),
+        )
+        .with_checkpoints(checkpoints),
+    );
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
     let start_dir = std::env::current_dir().ok();

@@ -161,6 +161,9 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         std::env::set_var("HORIZON_DATA_HOME", directory.join("data"));
         std::env::set_var("XDG_RUNTIME_DIR", directory.join("run"));
         std::env::set_var("HORIZON_LOGD_SOCKET", directory.join("logd.sock"));
+        // The project directory may be inside a repository (a sandbox keeps
+        // its temporary files in the worktree): no checkpoints there.
+        std::env::set_var("HORIZON_AGENTD_TEST_NO_CHECKPOINTS", "1");
         // The model catalog is not fetched from the network: the stand-in
         // has none, and the copy kept is the test's own.
         std::env::set_var(

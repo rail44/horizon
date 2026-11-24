@@ -255,14 +255,31 @@ pub(super) fn spawn_session_thread_with_context(
         lock_unpoisoned(&thread_state.agent_subscribers).remove(&session_id);
         // A suspended session resumes into the worktree it owns.
         let suspended = thread_state.take_suspending(session_id);
-        if let Some(worktree) = entry
-            .and_then(|entry| entry.worktree)
-            .filter(|_| !suspended)
-            && (!work_settled || !worktree::remove_worktree_if_clean(&worktree))
+        // The session's checkpoints go with it: with the worktree it owns,
+        // once that is removed, or as it ends when it owns none.
+        let checkpoints_in = match entry.filter(|_| !suspended) {
+            Some(SessionEntry {
+                worktree: Some(worktree),
+                ..
+            }) => {
+                if work_settled && worktree::remove_worktree_if_clean(&worktree) {
+                    Some(worktree.repo_root)
+                } else {
+                    eprintln!(
+                        "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
+                        worktree.path.display()
+                    );
+                    None
+                }
+            }
+            Some(entry) => entry.workspace_root,
+            None => None,
+        };
+        if let Some(dir) = checkpoints_in
+            && let Err(error) = crate::checkpoint::remove_all(&dir, session_id.as_uuid())
         {
             eprintln!(
-                "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
-                worktree.path.display()
+                "horizon-agentd: could not remove the checkpoints of {session_id:?}: {error}"
             );
         }
     });

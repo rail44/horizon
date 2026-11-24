@@ -5,16 +5,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::config::ReasoningLevel;
+use horizon_agent::contract::Event;
 use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::hosting::{
     HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, ReasoningSelection,
     SessionNew, SessionSummary,
 };
-use horizon_agent::persistence::event_log::WriterHandle;
+use horizon_agent::persistence::event_log::{Appender, PersistedSessionContext, WriterHandle};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::spawn::spawn_session_thread;
 use super::state::{AgentdState, lock_unpoisoned};
+use crate::worktree::WorktreeInfo;
 
 /// A resumed session may still be waiting for its DuckDB projection.
 /// Timeout is an explicit failure, never a successful empty history.
@@ -248,24 +250,108 @@ impl Connection {
             return Err(ForkError::Failed(format!("Unknown role `{}`", role.0)));
         }
         let events: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
-        let (history, parent) = match point(&events).map_err(ForkError::Position)? {
+        let last = point(&events).map_err(ForkError::Position)?;
+        let (mut history, mut parent) = match last {
             Some(last) => (
                 events[..=last].to_vec(),
                 Some(records[last].event_id.clone()),
             ),
             None => (Vec::new(), None),
         };
+        let source_dir = lock_unpoisoned(&self.state.sessions)
+            .get(&source)
+            .and_then(|entry| {
+                (entry
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| worktree.path.clone()))
+                .or_else(|| entry.workspace_root.clone())
+            })
+            .or_else(|| {
+                own().find_map(|record| record.session_context.as_ref()?.workspace_root.clone())
+            });
         let session_id = SessionId::new();
+        let worktree = match source_dir.as_ref().filter(|_| self.state.checkpoints()) {
+            Some(dir) => {
+                // The files at the position: the checkpoint taken in the
+                // settled stretch it ends, or, for the whole of a session
+                // between turns, the files as they are.
+                let checkpoint = last.and_then(|last| {
+                    settled_stretch(&events, last)
+                        .rev()
+                        .find_map(|at| {
+                            let record = &records[at];
+                            crate::checkpoint::find(
+                                dir,
+                                record.session_id.as_uuid(),
+                                &record.event_id,
+                            )
+                        })
+                        .or_else(|| {
+                            let record = &records[last];
+                            (last + 1 == records.len())
+                                .then(|| {
+                                    crate::checkpoint::record(
+                                        dir,
+                                        record.session_id.as_uuid(),
+                                        &record.event_id,
+                                    )
+                                })
+                                .and_then(|recorded| recorded.ok().flatten())
+                        })
+                });
+                fork_worktree(dir, session_id, checkpoint).map_err(ForkError::Failed)?
+            }
+            None => None,
+        };
+        let Some(worktree) = worktree else {
+            super::spawn::spawn_session_thread_with_context(
+                self.state.clone(),
+                session_id,
+                provider_id,
+                role_id,
+                Some(workspace_root),
+                Some(source),
+                None,
+                history,
+                None,
+                parent,
+            );
+            return Ok(session_id);
+        };
+        // The fork's first record says which worktree it owns, so a restart
+        // restores that one.
+        let context = PersistedSessionContext {
+            workspace_root: Some(worktree.path.clone()),
+            isolated_worktree: true,
+            parent_session_id: Some(source),
+            filesystem_grants: Vec::new(),
+            spawn_source_session_id: Some(source),
+        };
+        let activated = Event::EnvironmentActivated(worktree.identity());
+        let mut appender = Appender::new(
+            writer.clone(),
+            session_id,
+            Some(provider_id.clone()),
+            role_id.clone(),
+        )
+        .with_session_context(context.clone())
+        .with_parent(parent);
+        appender
+            .commit_provider_events(vec![activated.clone().into()])
+            .map_err(|error| ForkError::Failed(error.to_string()))?;
+        history.push(activated);
+        parent = appender.tip();
         super::spawn::spawn_session_thread_with_context(
             self.state.clone(),
             session_id,
             provider_id,
             role_id,
-            Some(workspace_root),
+            Some(worktree.path.clone()),
             Some(source),
-            None,
+            Some(worktree),
             history,
-            None,
+            Some(context),
             parent,
         );
         Ok(session_id)
@@ -767,4 +853,47 @@ pub(crate) enum ForkError {
     Position(String),
     /// The fork could not be started.
     Failed(String),
+}
+
+/// A worktree of its own for the fork `session_id` of a session working in
+/// `dir`, holding the files of `checkpoint` (`crate::checkpoint`): branched
+/// at the commit the checkpoint was taken on, with what was not committed
+/// there not committed here either. Without a checkpoint it is branched at
+/// `dir`'s `HEAD`. `None` when `dir` is not in a git repository.
+fn fork_worktree(
+    dir: &std::path::Path,
+    session_id: SessionId,
+    checkpoint: Option<String>,
+) -> Result<Option<WorktreeInfo>, String> {
+    if crate::worktree::project_root(dir).is_none() {
+        return Ok(None);
+    }
+    let base = match &checkpoint {
+        Some(checkpoint) => crate::worktree::resolve_commit(dir, &format!("{checkpoint}^"))
+            .unwrap_or_else(|_| checkpoint.clone()),
+        None => "HEAD".to_string(),
+    };
+    let worktree = crate::worktree::create_isolated_worktree_at(dir, session_id.as_uuid(), &base)?;
+    if let Some(checkpoint) = &checkpoint {
+        crate::checkpoint::restore(&worktree.path, checkpoint)?;
+    }
+    Ok(Some(worktree))
+}
+
+/// The positions settled one after another up to `last` (itself settled):
+/// the event indexes after which a session sits between turns, from the
+/// first of that stretch to `last`.
+fn settled_stretch(
+    events: &[horizon_agent::contract::Event],
+    last: usize,
+) -> std::ops::RangeInclusive<usize> {
+    let mut settled = horizon_agent::persistence::event_log::Settled::new();
+    let mut start = 0;
+    for (index, event) in events[..=last].iter().enumerate() {
+        settled.apply(event);
+        if !settled.is_settled() {
+            start = index + 1;
+        }
+    }
+    start.min(last)..=last
 }

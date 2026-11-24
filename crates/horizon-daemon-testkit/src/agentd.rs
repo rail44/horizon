@@ -114,7 +114,11 @@ pub fn agentd_hermetic_command(binary: &Path, paths: &AgentdPaths) -> Command {
             paths.socket_path.with_extension("log.sock"),
         )
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        // Sessions run in whatever directory a test gives them, often this
+        // repository: no checkpoints or fork worktrees there. A test that
+        // wants them removes this and gives its sessions a fixture.
+        .env("HORIZON_AGENTD_TEST_NO_CHECKPOINTS", "1");
     command
 }
 

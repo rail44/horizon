@@ -304,6 +304,16 @@ impl LiveState {
     pub fn events(&self) -> Vec<Event> {
         self.inner.borrow().events.clone()
     }
+
+    /// The id of the record this session's history ends with on its branch,
+    /// which its next record will follow. `None` without persistence or
+    /// before any record.
+    pub fn tip(&self) -> Option<String> {
+        match self.persistence.as_deref() {
+            Some(Persistence::EventLog(appender)) => appender.borrow().tip(),
+            _ => None,
+        }
+    }
 }
 
 enum Persistence {

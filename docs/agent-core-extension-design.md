@@ -85,11 +85,13 @@ ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_se
 
 ### ファイル
 
-決着した位置ごとに、worktree の状態を git に記録する。
+決着した位置を離れるときに、セッションの作業場所の状態を git に記録する(`horizon-agentd` の `checkpoint`)。
 
-- **記録の作り方**: 一時的な index に `add -A` し、`write-tree` と `commit-tree` で commit を作る。commit は Horizon 専用の ref(`refs/horizon/checkpoints/<会話>/<entry>`)に置く。利用者のブランチ・index・作業中のファイルには触れない。
-- **葉を移すとき**: 「会話だけ戻す」か「ファイルも戻す」かを選べる。ファイルも戻す場合は、移り先の節の tree を worktree に展開する。
-- **新しいセッションを付けるとき**: その節の commit から worktree を作る。
+- **記録の時機**: 決着した位置にいるセッションが、入力か user メッセージを受け取ったとき。その時点で履歴の末尾にある record が、記録の鍵になる。その後の待ち時間に手で直したファイルも記録に入る。
+- **記録の作り方**: 一時的な index に `add -A` し、`write-tree` と `commit-tree` で commit を作る。親は記録した時点の `HEAD` である。commit は Horizon 専用の ref(`refs/horizon/checkpoints/<セッション>/<record>`)に置く。利用者のブランチ・index・作業中のファイルには触れない。
+- **新しいセッションを付けるとき**: 分岐する位置を含む、決着した位置の続く区間の中で、最も新しい記録を使う。cursor を省いてセッション全体を写すときは、その場で記録する。元のセッションの作業場所が git の管理下にあれば、新しいセッションは専用の worktree を持つ。記録の親の commit から worktree を作り、記録の tree を展開するので、元で commit されていなかった変更は、新しい worktree でも commit されていない変更として現れる。その worktree は、新しいセッションの最初の record(`EnvironmentActivated`)として記録する。
+- **葉を移すとき**: 「会話だけ戻す」か「ファイルも戻す」かを選べる。ファイルも戻す場合は、移り先の節の tree を worktree に展開する。`HEAD` とブランチは動かさない。
+- **記録を消すとき**: セッションが終わり、その worktree を片付けたときに、そのセッションの ref を消す。worktree に作業が残って片付けなかった場合は、ref も残す。worktree を持たないセッションは、終わったときに消す。
 
 戻らないものもある。worktree の外への副作用と、`.gitignore` に入っている物(`target/` など)である。また、git の管理下にないディレクトリでは、ファイルは分岐しない。
 
@@ -121,5 +123,4 @@ compaction の要約(Tier 2)は、`docs/agent-compaction-design.md` が保留と
 ## 未決
 
 - 分岐を操作する UI(エージェントの view のどこで、どの節を選ぶか)。
-- ファイルの記録の ref をいつ消すか。
 - agentd の `frame` が streaming の delta を item として持ち続けるか。確定したメッセージを tool call の前に置く並び順をこの item が決めているが、agentd 側にその順序に頼る読み手がいるかは確かめていない。
