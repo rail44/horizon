@@ -727,7 +727,7 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
 "#,
     )
     .unwrap();
-    let agentd = agentd_spawn(AgentdPaths::scratch("agentd-effort"))
+    let mut agentd = agentd_spawn(AgentdPaths::scratch("agentd-effort"))
         .env("HORIZON_CONFIG", &config_path)
         .env_remove("HORIZON_EFFORT_TEST_KEY")
         .spawn();
@@ -762,6 +762,22 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
             .any(|inbound| effort(inbound).is_some_and(|(current, _)| current == "low")),
         "a reattachment announces the applied effort: {replay:?}"
     );
+
+    // The choice is kept on the session's branch: after a restart the
+    // session runs at it again.
+    client.drain().await;
+    drop(client);
+    let status = wait_for_exit(&mut agentd.child).await;
+    assert!(status.success(), "the drained daemon ended with {status:?}");
+    let agentd = agentd.respawn_at_same_paths();
+    let mut client = connect(&agentd.socket_path).await;
+    let replay = resume(&mut client, session_id).await.unwrap();
+    if !replay
+        .iter()
+        .any(|inbound| effort(inbound).is_some_and(|(current, _)| current == "low"))
+    {
+        announced(&mut client, "low").await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

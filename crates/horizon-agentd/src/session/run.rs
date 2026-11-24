@@ -145,6 +145,7 @@ pub(super) fn run_session(
         &retained_grants,
     );
     horizon_agent::tools::restore_file_versions(&tool_state, &history);
+    let selections = super::model_selection::selections_in(&history);
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_context_and_history(
             session_id,
@@ -191,6 +192,7 @@ pub(super) fn run_session(
         provider_id: provider_id.clone(),
         role_id: role_id.clone(),
     }));
+    super::model_selection::restore(state, session_id, &commands_tx, selections);
 
     let mut provider_events = handle.events();
     let failure_subscription = state.writer().map(|writer| writer.subscribe_failure());

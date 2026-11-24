@@ -302,6 +302,18 @@ pub enum Event {
     Rewound {
         branch: String,
     },
+    /// The session's model was switched, as asked, to `model` on the
+    /// configured `provider` entry. A session started again over a history
+    /// with this on its branch switches to it again.
+    ModelSelected {
+        provider: String,
+        model: String,
+    },
+    /// The session's reasoning effort was set to `level`, as asked; like
+    /// [`Self::ModelSelected`], kept for a session started again.
+    ReasoningSelected {
+        level: crate::config::ReasoningLevel,
+    },
 
     InputOutcome(SessionInputOutcome),
     DeliveryAcknowledged(String),
@@ -466,6 +478,8 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::EnvironmentActivationFailed(_) => "environment_activation_failed",
         Event::SessionResumed => "session_resumed",
         Event::Rewound { .. } => "rewound",
+        Event::ModelSelected { .. } => "model_selected",
+        Event::ReasoningSelected { .. } => "reasoning_selected",
         Event::InputOutcome(_) => "input_outcome",
         Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
         Event::ConversationRecorded(_) => "conversation_recorded",

@@ -181,6 +181,8 @@ pub(crate) fn apply_agent_event_to_frame(
         | Event::EnvironmentActivationFailed(_)
         | Event::SessionResumed
         | Event::Rewound { .. }
+        | Event::ModelSelected { .. }
+        | Event::ReasoningSelected { .. }
         | Event::InputQueuePaused(_)
         | Event::InputStarted(_)
         | Event::InputAccepted(_)

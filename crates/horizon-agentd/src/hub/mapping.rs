@@ -537,6 +537,9 @@ impl Mapper {
                 self.branch = Some(branch.clone());
                 Vec::new()
             }
+            // What the session now runs reaches the client as the applied
+            // selection the provider announces.
+            Event::ModelSelected { .. } | Event::ReasoningSelected { .. } => Vec::new(),
             Event::ProviderRateLimited(limited) => {
                 session_event(acp::SessionEventNotification::ProviderRateLimited {
                     session_id,

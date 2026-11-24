@@ -138,6 +138,8 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
             | Event::EnvironmentActivationFailed(_)
             | Event::SessionResumed
             | Event::Rewound { .. }
+            | Event::ModelSelected { .. }
+            | Event::ReasoningSelected { .. }
             | Event::InputQueuePaused(_)
             | Event::InputStarted(_)
             | Event::InputAccepted(_)

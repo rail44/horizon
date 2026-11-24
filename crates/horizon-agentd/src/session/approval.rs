@@ -15,7 +15,8 @@ use horizon_agent::tools::gate::GateStep;
 use horizon_agent::tools::{ApprovalDecision, ApprovalOutcome, resolve_approval};
 
 use super::events::{
-    apply_and_send_session_events, report_persistence_failure, send_session_event,
+    apply_and_send_session_events, persist_and_send_session_event, report_persistence_failure,
+    send_session_event,
 };
 use super::state::AgentdState;
 
@@ -109,13 +110,24 @@ pub(super) fn dispatch_inbound_command(
         Command::SetSessionModel { provider, model } => {
             match super::model_selection::resolve(state, &provider, &model) {
                 Ok(command) => {
-                    let _ = commands_tx.send(command);
+                    // Kept on the session's branch, so a session started
+                    // again over it switches again (`model_selection::restore`).
+                    let selected = Event::ModelSelected { provider, model };
+                    if persist_and_send_session_event(state, live_state, session_id, selected) {
+                        let _ = commands_tx.send(command);
+                    }
                 }
                 Err(message) => send_session_event(
                     state,
                     session_id,
                     AgentWireEvent::Event(Event::Error(horizon_agent::contract::Error { message })),
                 ),
+            }
+        }
+        Command::SetSessionReasoning { level } => {
+            let selected = Event::ReasoningSelected { level };
+            if persist_and_send_session_event(state, live_state, session_id, selected) {
+                let _ = commands_tx.send(Command::SetSessionReasoning { level });
             }
         }
         Command::SendSessionInput {

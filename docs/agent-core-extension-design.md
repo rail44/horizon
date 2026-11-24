@@ -61,7 +61,7 @@ board のツールが `BoardHost` という別の口で入っている形もこ�
 会話は entry の木である。
 
 - **entry の識別**: 各 entry は `id` と `parent_id` を持つ。
-- **entry の種類**: 入力、応答、ツールの告知と結果、clearing、モデルと reasoning effort の変更を entry として持つ。モデルと effort は今は保存されず、起動のたびに role から決め直している。
+- **entry の種類**: 入力、応答、ツールの告知と結果、clearing、枝の移動(`Rewound`)、モデルと reasoning effort の変更(`ModelSelected`・`ReasoningSelected`)を entry として持つ。モデルと effort は利用者が選んだときに記録され、セッションを立て直したときは、枝の上の最後の選択を agentd が解決し直して provider に渡す(記録はし直さない)。
 - **組み立て**: 一つの葉から根へたどった列が、その枝の会話である。プロバイダに送る履歴は、この列から組み立てる。
 - **保存**: 記録は今と同じ JSONL に追記する。entry が親を指すので、event log の版は上がる(v5)。親が無い record(judge の verdict)と、親が読めなかった record(読み飛ばした行を指すもの)は、同じセッションの sequence で一つ前の record に続くものとして読む。DuckDB の projection も親を持ち(projection の schema 3)、incremental resume は projection から同じ枝をたどる。
 
