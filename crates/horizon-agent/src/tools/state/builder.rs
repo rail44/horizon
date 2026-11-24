@@ -68,7 +68,7 @@ impl ToolSessionBuilder {
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
                 mach_services: RefCell::new(Vec::new()),
-                verdict_modules: crate::modules::verdict_modules(),
+                modules: crate::modules::Modules::tiers_only(),
                 exploration: None,
                 board: None,
                 primary_checkout: None,
@@ -158,10 +158,18 @@ impl ToolSessionBuilder {
     /// approval when unavailable.
     pub fn with_judge(mut self, judge: Option<Arc<JudgeHandle>>) -> Self {
         if let Some(handle) = judge {
-            self.inner
-                .verdict_modules
-                .push(Arc::new(crate::judge::JudgeModule { handle }));
+            self.inner.modules = self
+                .inner
+                .modules
+                .with(Arc::new(crate::judge::JudgeModule { handle }));
         }
+        self
+    }
+
+    /// The session's modules (`modules::Modules::compose`), whose verdict
+    /// stage decides this session's tool calls.
+    pub fn with_modules(mut self, modules: crate::modules::Modules) -> Self {
+        self.inner.modules = modules;
         self
     }
 

@@ -77,6 +77,7 @@ pub(super) fn spawn_rig_session(
     let fallback_events = request.history;
     let restored_inputs = input::Inputs::restore(&fallback_events);
     let trusted_project = request.trusted_project;
+    let composed = request.modules;
     // Thread `trusted_project` into the per-session config so
     // `rig_tool_definitions` can filter the knowledge tools out of the
     // advertised catalog for untrusted sessions. `role_adjusted_config`
@@ -99,7 +100,10 @@ pub(super) fn spawn_rig_session(
             };
             let rig_history = persisted.messages;
             let cleared_occurrence_ids = persisted.cleared_occurrence_ids;
-            let modules = crate::modules::builtin(&config, role);
+            let modules = match composed {
+                Some(modules) => modules.as_slice().to_vec(),
+                None => crate::modules::builtin(&config, role),
+            };
             let extra_sections =
                 session_extra_sections(&modules, &environment, &config, role, trusted_project);
 

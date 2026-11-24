@@ -1734,6 +1734,7 @@ fn start_fallback_rig_session_with_history(
             workspace_root: None,
             history,
             trusted_project: true,
+            modules: None,
         },
     );
     let tx = handle.sender();
@@ -2365,6 +2366,7 @@ fn session_environment_uses_the_start_session_workspace_root_for_an_isolated_ses
         workspace_root: Some(isolated_root.clone()),
         history: Vec::new(),
         trusted_project: true,
+        modules: None,
     };
 
     let environment = session_environment(&request);
@@ -2386,6 +2388,7 @@ fn session_environment_falls_back_to_process_cwd_when_no_workspace_root_is_known
         workspace_root: None,
         history: Vec::new(),
         trusted_project: true,
+        modules: None,
     };
 
     let environment = session_environment(&request);

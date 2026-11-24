@@ -56,6 +56,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
             provider_id: &provider_id,
             role_id: None,
             agent_config: &config,
+            modules: &horizon_agent::modules::Modules::compose(&config.rig, None, None),
         };
         let PreparedEnvironment {
             mut tool_state,
@@ -206,6 +207,7 @@ fn environment_rebuild_retains_additional_grants_without_granting_the_old_root()
         provider_id: &ProviderId("builtin.agent.mock".into()),
         role_id: None,
         agent_config: &config,
+        modules: &horizon_agent::modules::Modules::compose(&config.rig, None, None),
     }
     .prepare(
         EnvironmentLocation {
@@ -254,6 +256,7 @@ fn a_board_session_writes_only_once_prepared_for_its_own_worktree() {
             provider_id: &provider_id,
             role_id: Some(&role),
             agent_config: &config,
+            modules: &horizon_agent::modules::Modules::compose(&config.rig, None, None),
         }
         .prepare(
             EnvironmentLocation {

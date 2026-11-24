@@ -77,15 +77,29 @@ pub(super) fn run_session(
     // to gate the tool-side skill registry.
     let trusted = project_is_trusted(state, workspace_root.as_deref());
 
+    // The session's modules, composed once for both halves of it: the
+    // provider's loop and the tool calls' gate. Its judge keeps the
+    // decision connection accepted here; without one, every approval
+    // candidate goes to a person.
+    let agent_config = lock_unpoisoned(&state.agent_config).clone();
+    let modules = horizon_agent::modules::Modules::compose(
+        &agent_config.rig,
+        role_id.as_ref(),
+        horizon_agent::judge::JudgeHandle::new(agent_config.decision.as_ref(), state.writer()),
+    );
+
     let handle = {
         let providers = lock_unpoisoned(&state.providers);
         providers.start_session(
             &provider_id,
-            session_id,
-            role_id.clone(),
-            workspace_root.clone(),
-            history.clone(),
-            trusted,
+            horizon_agent::registry::NewSession {
+                session_id,
+                role_id: role_id.clone(),
+                workspace_root: workspace_root.clone(),
+                history: history.clone(),
+                trusted_project: trusted,
+                modules: Some(modules.clone()),
+            },
         )
     };
     let Some(handle) = handle else {
@@ -110,13 +124,13 @@ pub(super) fn run_session(
         return;
     };
 
-    let agent_config = lock_unpoisoned(&state.agent_config).clone();
     let environment = SessionEnvironment {
         state,
         session_id,
         provider_id: &provider_id,
         role_id: role_id.as_ref(),
         agent_config: &agent_config,
+        modules: &modules,
     };
     let PreparedEnvironment {
         mut tool_state,
@@ -480,12 +494,14 @@ mod tests {
         let config = lock_unpoisoned(&state.agent_config).clone();
         let root = tempfile::tempdir().unwrap();
         let session_id = SessionId::new();
+        let modules = horizon_agent::modules::Modules::compose(&config.rig, None, None);
         let tools = SessionEnvironment {
             state: &state,
             session_id,
             provider_id: &ProviderId("builtin.agent.mock".into()),
             role_id: None,
             agent_config: &config,
+            modules: &modules,
         }
         .prepare(
             EnvironmentLocation {

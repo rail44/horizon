@@ -650,6 +650,7 @@ mod tests {
                 workspace_root: None,
                 history: Vec::new(),
                 trusted_project: true,
+                modules: None,
             });
             let commands = handle.sender();
             let events = handle.events();
@@ -711,6 +712,7 @@ mod tests {
             workspace_root: None,
             history: Vec::new(),
             trusted_project: true,
+            modules: None,
         });
         handle.sender().send(Command::Suspend).unwrap();
         let events = handle.events();

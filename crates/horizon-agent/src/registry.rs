@@ -26,6 +26,22 @@ impl SessionHandle {
     }
 }
 
+/// A session to start ([`ProviderRegistry::start_session`]).
+pub struct NewSession {
+    pub session_id: SessionId,
+    /// Validated against the registry's packages before any provider sees it.
+    pub role_id: Option<RoleId>,
+    /// The session's real working directory; `None` when it has none.
+    pub workspace_root: Option<PathBuf>,
+    /// What the session already did, for a resumed one.
+    pub history: Vec<Event>,
+    /// Whether the session's project is trusted to give it instructions.
+    pub trusted_project: bool,
+    /// The session's modules (`modules::Modules::compose`); `None` has the
+    /// provider compose the default ones.
+    pub modules: Option<crate::modules::Modules>,
+}
+
 pub(crate) trait Provider: Send + Sync {
     fn start_session(&self, request: StartSession) -> SessionHandle;
     /// The model id a session with this `role_id` would run with, resolved
@@ -188,23 +204,20 @@ impl ProviderRegistry {
     pub fn start_session(
         &self,
         provider_id: &ProviderId,
-        session_id: SessionId,
-        role_id: Option<RoleId>,
-        workspace_root: Option<PathBuf>,
-        history: Vec<Event>,
-        trusted_project: bool,
+        session: NewSession,
     ) -> Option<SessionHandle> {
-        if let Some(role_id) = &role_id {
+        if let Some(role_id) = &session.role_id {
             self.packages.resolve_role(role_id)?;
         }
         self.providers.get(provider_id).map(|provider| {
             provider.start_session(StartSession {
-                session_id,
+                session_id: session.session_id,
                 provider_id: provider_id.clone(),
-                role_id,
-                workspace_root,
-                history,
-                trusted_project,
+                role_id: session.role_id,
+                workspace_root: session.workspace_root,
+                history: session.history,
+                trusted_project: session.trusted_project,
+                modules: session.modules,
             })
         })
     }

@@ -29,6 +29,7 @@ fn mock_agent_emits_initial_session_events() {
             workspace_root: None,
             history: Vec::new(),
             trusted_project: true,
+            modules: None,
         },
     );
 
@@ -77,6 +78,7 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
             workspace_root: None,
             history: events.clone(),
             trusted_project: true,
+            modules: None,
         });
         let rx = handle.events();
         // Created, initialization message, then input readiness.
@@ -812,6 +814,7 @@ fn mock_agent_accepts_tool_call_result_command() {
             workspace_root: None,
             history: Vec::new(),
             trusted_project: true,
+            modules: None,
         },
     );
     let tx = handle.sender();
@@ -854,6 +857,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
             workspace_root: None,
             history: Vec::new(),
             trusted_project: true,
+            modules: None,
         },
     );
     let tx = handle.sender();
@@ -946,6 +950,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
             workspace_root: None,
             history: Vec::new(),
             trusted_project: true,
+            modules: None,
         },
     );
     let tx = handle.sender();
@@ -1001,6 +1006,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
             workspace_root: None,
             history: Vec::new(),
             trusted_project: true,
+            modules: None,
         },
     );
     let tx = handle.sender();
@@ -1319,7 +1325,17 @@ fn provider_registry_starts_builtin_provider() {
     let registry = registry::ProviderRegistry::builtin();
     let provider_id = registry.default_provider_id();
     let handle = registry
-        .start_session(&provider_id, SessionId::new(), None, None, Vec::new(), true)
+        .start_session(
+            &provider_id,
+            registry::NewSession {
+                session_id: SessionId::new(),
+                role_id: None,
+                workspace_root: None,
+                history: Vec::new(),
+                trusted_project: true,
+                modules: None,
+            },
+        )
         .expect("builtin provider");
 
     let first = handle.events().recv().expect("first event");

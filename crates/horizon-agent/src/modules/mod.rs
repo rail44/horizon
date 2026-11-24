@@ -4,8 +4,8 @@
 //! decision whether a turn the model ended goes on. The loop itself --
 //! sending the sections, carrying out a verdict, running another round,
 //! recording what happened -- stays in the core (`providers::rig::session`,
-//! `tools::gate`). A session's modules are composed when it starts
-//! ([`builtin`]).
+//! `tools::gate`). A session's modules are composed once when it starts
+//! ([`Modules::compose`], by `horizon-agentd`) and handed to both.
 
 pub(crate) mod continuation;
 mod sections;
@@ -136,7 +136,66 @@ pub(crate) trait SessionModule: Send + Sync {
     }
 }
 
-/// The modules every session starts with, in prompt order.
+/// A session's modules, composed once when it starts ([`Modules::compose`])
+/// and used by both halves of it: the provider's loop (prompt sections, the
+/// continue stage) and the tool calls' gate (the verdict stage).
+#[derive(Clone)]
+pub struct Modules(Arc<[Arc<dyn SessionModule>]>);
+
+impl std::fmt::Debug for Modules {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Modules({})", self.0.len())
+    }
+}
+
+/// The same composition, not equal contents: modules are code.
+impl PartialEq for Modules {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Modules {}
+
+impl Modules {
+    /// The modules a session on `config` in `role` starts with: the prompt
+    /// sections in prompt order, the decision-model continuation check when
+    /// there is a decision model, the containment tiers, and `judge` when
+    /// the session has one.
+    pub fn compose(
+        config: &RigAgentConfig,
+        role: Option<&crate::roles::RoleId>,
+        judge: Option<Arc<crate::judge::JudgeHandle>>,
+    ) -> Self {
+        let role = role.and_then(|id| config.packages.resolve_role(id));
+        let mut modules = builtin(config, role);
+        modules.push(Arc::new(TierPolicy));
+        if let Some(handle) = judge {
+            modules.push(Arc::new(crate::judge::JudgeModule { handle }));
+        }
+        Self(modules.into())
+    }
+
+    /// The containment tiers alone: what a tool state built without a
+    /// session's modules decides calls with.
+    pub(crate) fn tiers_only() -> Self {
+        Self(vec![Arc::new(TierPolicy) as Arc<dyn SessionModule>].into())
+    }
+
+    /// These modules and `module` after them.
+    pub(crate) fn with(&self, module: Arc<dyn SessionModule>) -> Self {
+        let mut modules = self.0.to_vec();
+        modules.push(module);
+        Self(modules.into())
+    }
+
+    pub(crate) fn as_slice(&self) -> &[Arc<dyn SessionModule>] {
+        &self.0
+    }
+}
+
+/// The prompt-section and continue-stage modules every session starts
+/// with, in prompt order.
 pub(crate) fn builtin(
     config: &RigAgentConfig,
     role: Option<&'static RoleDefinition>,
@@ -163,11 +222,6 @@ pub(crate) fn sections(
         .iter()
         .flat_map(|module| module.sections(cx))
         .collect()
-}
-
-/// The verdict stage's modules a session starts with.
-pub(crate) fn verdict_modules() -> Vec<Arc<dyn SessionModule>> {
-    vec![Arc::new(TierPolicy)]
 }
 
 /// The verdict `modules` give a call: the first that has a say; with none,

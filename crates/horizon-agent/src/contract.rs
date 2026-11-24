@@ -115,6 +115,11 @@ pub(crate) struct StartSession {
     /// `#[serde(default)]` defaults to `false` (untrusted) — fail-closed.
     #[serde(default)]
     pub trusted_project: bool,
+    /// The session's modules, composed by the host; `None` has the
+    /// provider compose the default ones itself. Code, not data: never
+    /// serialized.
+    #[serde(skip)]
+    pub modules: Option<crate::modules::Modules>,
 }
 
 /// Retained Git environment identity; base is the resolved commit, never an

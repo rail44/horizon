@@ -13,7 +13,6 @@ use crossbeam_channel::Sender;
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
 use horizon_agent::hosting::{AgentWireEvent, WorkspaceRootResolved};
-use horizon_agent::judge::JudgeHandle;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::PersistedSessionContext;
 use horizon_agent::roles::{RoleId, RoleWrites};
@@ -33,6 +32,9 @@ pub(super) struct SessionEnvironment<'a> {
     pub(super) provider_id: &'a ProviderId,
     pub(super) role_id: Option<&'a RoleId>,
     pub(super) agent_config: &'a AgentConfig,
+    /// The session's modules (`Modules::compose`), composed once when it
+    /// starts: every tool state prepared for it decides calls with them.
+    pub(super) modules: &'a horizon_agent::modules::Modules,
 }
 
 /// The resolved location and trust of one environment, after worktree selection.
@@ -66,6 +68,7 @@ impl SessionEnvironment<'_> {
             provider_id,
             role_id,
             agent_config,
+            modules: _,
         } = *self;
         let EnvironmentLocation {
             workspace_root,
@@ -136,9 +139,6 @@ impl SessionEnvironment<'_> {
             None
         };
 
-        // A session's judge retains the decision connection accepted at
-        // spawn; without one, every approval candidate goes to the human.
-        let judge = JudgeHandle::new(agent_config.decision.as_ref(), state.writer());
         let packages = state.packages();
 
         // `task`'s daemon capability (`docs/agent-explore-design.md`).
@@ -242,7 +242,7 @@ impl SessionEnvironment<'_> {
             .with_mach_services(mach_services)
             .with_domain_policy(domains)
             .with_network_proxy(network)
-            .with_judge(judge)
+            .with_modules(self.modules.clone())
             .with_exploration_host(exploration)
             .build()
             .with_board_host(board);

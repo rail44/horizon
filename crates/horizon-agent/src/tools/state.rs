@@ -228,7 +228,7 @@ struct Inner {
     /// process's event-log writer handle.
     /// The verdict stage's modules (`modules::verdict`): the tiers, and
     /// the judge when the session has one.
-    verdict_modules: Vec<Arc<dyn crate::modules::SessionModule>>,
+    modules: crate::modules::Modules,
     /// This session's handle onto the daemon's spawn/subscribe/terminate
     /// capability for parallel exploration sessions (`tools::explore`,
     /// `docs/agent-explore-design.md`). Injected post-construction the same
@@ -417,7 +417,7 @@ impl ToolSessionState {
 
     /// This session's enforcing judge handle, if one is installed.
     pub(crate) fn verdict_modules(&self) -> &[Arc<dyn crate::modules::SessionModule>] {
-        &self.inner.verdict_modules
+        self.inner.modules.as_slice()
     }
 
     /// This session's exploration host, if one is installed -- what
