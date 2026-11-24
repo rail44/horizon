@@ -95,6 +95,8 @@ pub(super) struct Mapper {
     /// A settled position came after the last user message: the next one
     /// gets a cursor before it.
     cursor_pending: bool,
+    /// The branch the session's leaf last moved to (`Event::Rewound`).
+    branch: Option<String>,
 }
 
 /// The cursor before the user message `message`: a settled position the
@@ -241,6 +243,7 @@ impl Mapper {
             replaying: true,
             settled: Settled::new(),
             cursor_pending: true,
+            branch: None,
         }
     }
 
@@ -358,7 +361,17 @@ impl Mapper {
     }
 
     fn next_message_id(&self) -> v2::MessageId {
-        v2::MessageId::new(format!("msg-{}", self.message_seq))
+        self.id("msg")
+    }
+
+    /// The id of the `kind` of entity at the counter: after the leaf moved,
+    /// with the branch it moved to, so no id on the new branch names what
+    /// one on the old branch did.
+    fn id(&self, kind: &str) -> v2::MessageId {
+        v2::MessageId::new(match &self.branch {
+            Some(branch) => format!("{kind}-{}@{branch}", self.message_seq),
+            None => format!("{kind}-{}", self.message_seq),
+        })
     }
 
     /// Drops the open assistant stream without a commit, moving the counter
@@ -424,18 +437,16 @@ impl Mapper {
             Event::AssistantTextDelta(delta) => {
                 let id = self
                     .open_stream
-                    .get_or_insert_with(|| v2::MessageId::new(format!("msg-{}", self.message_seq)))
-                    .clone();
+                    .clone()
+                    .unwrap_or_else(|| self.next_message_id());
+                self.open_stream = Some(id.clone());
                 vec![Outgoing::update(v2::SessionUpdate::AgentMessageChunk(
                     v2::ContentChunk::new(delta.text.clone().into(), id),
                 ))]
             }
             Event::ReasoningDelta(delta) => {
                 vec![Outgoing::update(v2::SessionUpdate::AgentThoughtChunk(
-                    v2::ContentChunk::new(
-                        delta.text.clone().into(),
-                        v2::MessageId::new(format!("thought-{}", self.message_seq)),
-                    ),
+                    v2::ContentChunk::new(delta.text.clone().into(), self.id("thought")),
                 ))]
             }
             Event::ToolCallRequested(request) => {
@@ -520,6 +531,11 @@ impl Mapper {
             }
             Event::SessionResumed => {
                 session_event(acp::SessionEventNotification::SessionResumed { session_id })
+            }
+            Event::Rewound { branch } => {
+                self.close_stream();
+                self.branch = Some(branch.clone());
+                Vec::new()
             }
             Event::ProviderRateLimited(limited) => {
                 session_event(acp::SessionEventNotification::ProviderRateLimited {

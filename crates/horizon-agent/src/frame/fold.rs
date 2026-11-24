@@ -180,6 +180,7 @@ pub(crate) fn apply_agent_event_to_frame(
         | Event::EnvironmentActivated(_)
         | Event::EnvironmentActivationFailed(_)
         | Event::SessionResumed
+        | Event::Rewound { .. }
         | Event::InputQueuePaused(_)
         | Event::InputStarted(_)
         | Event::InputAccepted(_)

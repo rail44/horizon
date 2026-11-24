@@ -290,6 +290,13 @@ pub enum Event {
     EnvironmentActivated(SessionWorktree),
     EnvironmentActivationFailed(String),
     SessionResumed,
+    /// The session's leaf moved: this record starts a new branch from an
+    /// earlier settled position (`docs/agent-core-extension-design.md`,
+    /// "二つの操作"). `branch` is new for every move, so what is announced
+    /// on the new branch is never named like what was on the old one.
+    Rewound {
+        branch: String,
+    },
 
     InputOutcome(SessionInputOutcome),
     DeliveryAcknowledged(String),
@@ -453,6 +460,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::EnvironmentActivated(_) => "environment_activated",
         Event::EnvironmentActivationFailed(_) => "environment_activation_failed",
         Event::SessionResumed => "session_resumed",
+        Event::Rewound { .. } => "rewound",
         Event::InputOutcome(_) => "input_outcome",
         Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
         Event::ConversationRecorded(_) => "conversation_recorded",

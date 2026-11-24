@@ -2816,3 +2816,127 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
     assert_eq!(branch_user_messages(&log, fork), ["one", "three", "four"]);
     assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
 }
+
+async fn rewind(
+    client: &AcpClient,
+    session_id: SessionId,
+    cursor: &v2::CursorId,
+    files: bool,
+) -> Result<acp::EmptyResponse, Error> {
+    client
+        .request(acp::RewindSessionRequest {
+            session_id,
+            cursor_id: cursor.0.to_string(),
+            files,
+        })
+        .await
+}
+
+/// The ids of the user messages in `inbounds`.
+fn user_message_ids(inbounds: &[Inbound]) -> Vec<String> {
+    inbounds
+        .iter()
+        .filter_map(|inbound| match update(inbound)? {
+            v2::SessionUpdate::UserMessage(message) => Some(message.message_id.0.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A session rewound to the cursor before its second message goes on from
+/// the first exchange, with the branch it left still in the log and no id
+/// of the new branch naming what one on the old did; in a worktree it owns
+/// it can take the files of that position back too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_rewound_to_a_cursor_goes_on_from_there() {
+    let (_outer, repo) = nested_session_fixture();
+    let daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+        .env_remove("HORIZON_AGENTD_TEST_NO_CHECKPOINTS")
+        .spawn();
+    let log = daemon.event_log_path.clone();
+    let mut client = connect(&daemon.socket_path).await;
+    let session = SessionId::new();
+    open_session(
+        &client,
+        new_session_request(session, &mock_provider_id().0, None, repo.clone()),
+    )
+    .await;
+    prompt_and_settle(&mut client, session, "one").await;
+    let collected = prompt_and_settle(&mut client, session, "two").await;
+    let before_two = cursor_before_message(&collected, "two");
+    let old_ids = user_message_ids(&collected);
+
+    let refused = rewind(&client, session, &before_two, true)
+        .await
+        .expect_err("files go back only in a worktree the session owns");
+    assert_eq!(
+        refused.code,
+        agent_client_protocol::ErrorCode::INVALID_PARAMS
+    );
+
+    rewind(&client, session, &before_two, false)
+        .await
+        .expect("rewinding to an announced cursor succeeds");
+    let replayed: Vec<_> = resume(&mut client, session)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(user_message)
+        .collect();
+    assert_eq!(replayed, ["one"]);
+    let collected = prompt_and_settle(&mut client, session, "three").await;
+    let new_ids = user_message_ids(&collected);
+    assert!(
+        new_ids.iter().all(|id| !old_ids.contains(id)),
+        "{old_ids:?} {new_ids:?}"
+    );
+    assert_eq!(branch_user_messages(&log, session), ["one", "three"]);
+    let all: Vec<_> = horizon_agent::persistence::event_log::read(&log)
+        .unwrap()
+        .records
+        .into_iter()
+        .filter_map(|record| match record.event {
+            Event::MessageCommitted(message) if message.role == MessageRole::User => {
+                Some(message.text)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        all,
+        ["one", "two", "three"],
+        "the left branch stays in the log"
+    );
+    horizon_agent::persistence::validate_history(&log).unwrap();
+
+    // In a worktree of its own (a fork's), the files go back too.
+    prompt_and_settle(&mut client, session, "four").await;
+    let forked = client
+        .request(v2::ForkSessionRequest::new(acp_id(session), repo.clone()))
+        .await
+        .expect("a session between turns forks whole");
+    let fork = SessionId::from_uuid(forked.session_id.0.parse().unwrap());
+    let worktree = acp::read_horizon_meta::<acp::SessionInfoMeta>(forked.meta.as_ref())
+        .unwrap()
+        .unwrap()
+        .workspace_root
+        .unwrap();
+    std::fs::write(worktree.join("notes.txt"), "before five\n").unwrap();
+    let collected = prompt_and_settle(&mut client, fork, "five").await;
+    let before_five = cursor_before_message(&collected, "five");
+    std::fs::write(worktree.join("notes.txt"), "after five\n").unwrap();
+    rewind(&client, fork, &before_five, true)
+        .await
+        .expect("a fork rewinds with its files");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("notes.txt")).unwrap(),
+        "before five\n"
+    );
+    let replayed: Vec<_> = resume(&mut client, fork)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(user_message)
+        .collect();
+    assert_eq!(replayed, ["one", "three", "four"]);
+}

@@ -1074,5 +1074,5 @@
     "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 9
+  "x-session-protocol-version": 10
 }

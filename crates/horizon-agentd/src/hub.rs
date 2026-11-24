@@ -419,6 +419,46 @@ impl Shared {
         Ok(())
     }
 
+    /// `_horizon/rewind_session`: the session goes on from a cursor it
+    /// announced, on a new branch.
+    fn rewind_session(
+        self: &Arc<Self>,
+        request: acp::RewindSessionRequest,
+        responder: Responder<acp::EmptyResponse>,
+        _cx: V2ConnectionTo<Client>,
+    ) -> Result<(), Error> {
+        if let Err(error) = self.gate() {
+            return responder.respond_with_error(error);
+        }
+        let session_id = request.session_id;
+        let cursor = v2::CursorId::new(request.cursor_id);
+        let files = request.files;
+        let connection = self.connection.clone();
+        tokio::spawn(async move {
+            connection.wait_until_resume_ready().await;
+            let moved = tokio::task::spawn_blocking(move || {
+                connection.handle_session_rewind(session_id, files, |events| {
+                    mapping::fork_point(events, Some(&cursor))
+                })
+            })
+            .await
+            .unwrap_or_else(|error| {
+                Err(ForkError::Failed(format!("Session rewind failed: {error}")))
+            });
+            let _ = match moved {
+                Ok(()) => responder.respond(acp::EmptyResponse {}),
+                Err(ForkError::Position(message)) => responder.respond_with_error(Error::new(
+                    agent_client_protocol::ErrorCode::INVALID_PARAMS,
+                    message,
+                )),
+                Err(ForkError::Failed(message)) => {
+                    responder.respond_with_error(call_error(message))
+                }
+            };
+        });
+        Ok(())
+    }
+
     fn resume_session(
         self: &Arc<Self>,
         request: v2::ResumeSessionRequest,
@@ -787,6 +827,7 @@ where
         set_config_option
     );
     let builder = on_request!(builder, acp::ContinueTurnRequest, continue_turn);
+    let builder = on_request!(builder, acp::RewindSessionRequest, rewind_session);
     let builder = on_request!(builder, acp::ListProvidersRequest, list_providers);
     let builder = on_request!(
         builder,
