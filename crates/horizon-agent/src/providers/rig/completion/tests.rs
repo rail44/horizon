@@ -152,7 +152,10 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                 complete_rig_turn(
                     &config,
                     &SessionEnvironment::for_workspace_root(None),
-                    &[],
+                    &crate::providers::rig::session_prompt::Resolved::from_config(
+                        Vec::new(),
+                        &config,
+                    ),
                     &mut history,
                     Prompt::input(ConversationInputKind::User, "read the file"),
                     &tx,
@@ -315,7 +318,7 @@ async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
             complete_rig_turn(
                 &config,
                 &SessionEnvironment::for_workspace_root(None),
-                &[],
+                &crate::providers::rig::session_prompt::Resolved::from_config(Vec::new(), &config),
                 &mut history,
                 Prompt::input(ConversationInputKind::User, "read the file"),
                 &tx,
@@ -410,7 +413,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
                 &config,
                 completion_model(&config).unwrap(),
                 &environment,
-                &[],
+                &crate::providers::rig::session_prompt::Resolved::from_config(Vec::new(), &config),
                 Message::user("read"),
                 vec![],
                 tx,
@@ -500,7 +503,7 @@ async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
             let completion = complete_rig_turn(
                 &config,
                 &SessionEnvironment::for_workspace_root(None),
-                &[],
+                &crate::providers::rig::session_prompt::Resolved::from_config(Vec::new(), &config),
                 &mut history,
                 Prompt::input(ConversationInputKind::User, "read"),
                 &events,
@@ -561,7 +564,10 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
                 complete_rig_turn(
                     &config,
                     &SessionEnvironment::for_workspace_root(None),
-                    &[],
+                    &crate::providers::rig::session_prompt::Resolved::from_config(
+                        Vec::new(),
+                        &config,
+                    ),
                     &mut history,
                     Prompt::input(ConversationInputKind::User, "read"),
                     &events,
@@ -684,7 +690,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
         let completion = complete_rig_turn(
             &config,
             &SessionEnvironment::for_workspace_root(None),
-            &[],
+            &crate::providers::rig::session_prompt::Resolved::from_config(Vec::new(), &config),
             &mut ConversationHistory::default(),
             Prompt::input(ConversationInputKind::User, "read both"),
             &events,
@@ -767,7 +773,7 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
         let outcome = complete_rig_turn(
             &config,
             &SessionEnvironment::for_workspace_root(None),
-            &[],
+            &crate::providers::rig::session_prompt::Resolved::from_config(Vec::new(), &config),
             &mut live,
             Prompt::input(ConversationInputKind::User, "read"),
             &tx,
@@ -801,7 +807,10 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
                 complete_rig_turn(
                     &config,
                     &SessionEnvironment::for_workspace_root(None),
-                    &[],
+                    &crate::providers::rig::session_prompt::Resolved::from_config(
+                        Vec::new(),
+                        &config,
+                    ),
                     history,
                     Prompt::input(ConversationInputKind::Notification, "task finished"),
                     &tx,
@@ -925,6 +934,8 @@ async fn openais_own_endpoint_runs_a_tool_turn_and_its_replay_over_responses() {
         (first, second)
     });
     let environment = SessionEnvironment::for_workspace_root(None);
+    let resolved =
+        crate::providers::rig::session_prompt::Resolved::from_config(Vec::new(), &config);
     let token = CancellationToken::new();
     let turn = |prompt: Message, history: Vec<Message>| {
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -932,7 +943,7 @@ async fn openais_own_endpoint_runs_a_tool_turn_and_its_replay_over_responses() {
             &config,
             model(),
             &environment,
-            &[],
+            &resolved,
             prompt,
             history,
             tx,

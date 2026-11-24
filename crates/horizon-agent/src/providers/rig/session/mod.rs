@@ -37,7 +37,7 @@ use super::completion::{
 use super::guards::TurnLoopGuard;
 use super::history::load_rig_session_history;
 use super::model_limits::model_limits;
-use super::session_prompt::{session_environment, session_extra_sections};
+use super::session_prompt::{resolve, session_environment};
 use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 
 mod continuation;
@@ -104,8 +104,7 @@ pub(super) fn spawn_rig_session(
                 Some(modules) => modules.as_slice().to_vec(),
                 None => crate::modules::builtin(&config, role),
             };
-            let extra_sections =
-                session_extra_sections(&modules, &environment, &config, role, trusted_project);
+            let resolved = resolve(&modules, &environment, &config, role, trusted_project);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -146,7 +145,7 @@ pub(super) fn spawn_rig_session(
                     events_tx,
                     config,
                     environment,
-                    extra_sections,
+                    resolved,
                     modules,
                     role,
                     rig_history,

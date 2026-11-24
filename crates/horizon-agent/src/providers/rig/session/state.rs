@@ -61,7 +61,7 @@ pub(crate) struct SessionLoopState {
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
     pub(crate) environment: SessionEnvironment,
-    pub(crate) extra_sections: Vec<String>,
+    pub(crate) resolved: super::super::session_prompt::Resolved,
     pub(crate) role: Option<&'static RoleDefinition>,
     pub(crate) events_tx: Sender<ProviderEvent>,
 }
@@ -86,7 +86,7 @@ impl Default for SessionLoopState {
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
             environment: SessionEnvironment::for_workspace_root(None),
-            extra_sections: Vec::new(),
+            resolved: Default::default(),
             role: None,
             events_tx,
         }
@@ -108,7 +108,7 @@ impl SessionLoopState {
         events_tx: Sender<ProviderEvent>,
         config: RigAgentConfig,
         environment: SessionEnvironment,
-        extra_sections: Vec<String>,
+        resolved: super::super::session_prompt::Resolved,
         modules: Vec<std::sync::Arc<dyn crate::modules::SessionModule>>,
         role: Option<&'static RoleDefinition>,
         rig_history: ConversationHistory,
@@ -134,7 +134,7 @@ impl SessionLoopState {
             modules,
             config,
             environment,
-            extra_sections,
+            resolved,
             role,
             events_tx,
         }

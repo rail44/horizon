@@ -135,7 +135,7 @@ pub(super) struct ToolCallDescriptor {
 pub(super) async fn complete_rig_turn(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
-    extra_sections: &[String],
+    resolved: &super::session_prompt::Resolved,
     rig_history: &mut ConversationHistory,
     prompt: Prompt,
     events_tx: &Sender<ProviderEvent>,
@@ -188,7 +188,7 @@ pub(super) async fn complete_rig_turn(
         match rig_provider_turn_with_retry(
             config,
             environment,
-            extra_sections,
+            resolved,
             &prompt,
             projected,
             events_tx,
@@ -339,7 +339,7 @@ fn publish_response_text(events: &Sender<ProviderEvent>, message: &Message) {
 async fn rig_provider_turn_with_retry(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
-    extra_sections: &[String],
+    resolved: &super::session_prompt::Resolved,
     prompt: &Message,
     history: Vec<Message>,
     events_tx: &Sender<ProviderEvent>,
@@ -354,7 +354,7 @@ async fn rig_provider_turn_with_retry(
                         config,
                         model,
                         environment,
-                        extra_sections,
+                        resolved,
                         prompt.clone(),
                         history.clone(),
                         events_tx.clone(),
@@ -419,7 +419,7 @@ async fn run_provider_stream(
     config: &RigAgentConfig,
     model: DynModel<Completion>,
     environment: &SessionEnvironment,
-    extra_sections: &[String],
+    resolved: &super::session_prompt::Resolved,
     prompt: Message,
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
@@ -435,12 +435,8 @@ async fn run_provider_stream(
     // `rig_history` itself still holds the originals.
     let request = CompletionRequest::new(prompt)
         .messages(history)
-        .tools(rig_tool_definitions(
-            &config.packages,
-            config.allowed_tool_ids.as_deref(),
-            config.trusted_project,
-        ))
-        .preamble(system_prompt(environment, extra_sections))
+        .tools(resolved.tools.clone())
+        .preamble(system_prompt(environment, &resolved.sections))
         .max_tokens(config.output_cap())
         .options(generation_options(config));
     let mut stream = match await_provider_phase(
@@ -676,29 +672,37 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
 /// through to the user-side store (see `knowledge`'s module doc).
 pub(super) fn rig_tool_definitions(
     packages: &crate::packages::Packages,
-    allowed_tool_ids: Option<&[String]>,
     trusted_project: bool,
 ) -> Vec<ToolDefinition> {
-    let allows = |id: &str| match allowed_tool_ids {
-        Some(allowed) => allowed.iter().any(|allowed| allowed == id),
-        None => true,
-    };
-    let advertises_task = allows(crate::tools::TASK_TOOL_ID);
     let exa_configured = std::env::var(crate::config::EXA_API_KEY_VAR)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     definitions(packages)
         .into_iter()
         .filter(|definition| {
-            allows(&definition.id)
-                && (advertises_task || definition.id != crate::tools::TASK_OUTPUT_TOOL_ID)
-                && (exa_configured || definition.id != "web_search")
-                && (trusted_project || !is_knowledge_tool(&definition.id))
+            (exa_configured || definition.id != "web_search")
                 && (trusted_project
                     || !crate::tools::external_requires_trust(packages, &definition.id))
         })
         .map(rig_tool_definition_from_horizon)
         .collect()
+}
+
+/// The tools a role-less session on `packages`, restricted to
+/// `allowed_tool_ids` as a role would be, is offered.
+#[cfg(test)]
+pub(crate) fn offered_definitions(
+    packages: &crate::packages::Packages,
+    allowed_tool_ids: Option<&[String]>,
+    trusted_project: bool,
+) -> Vec<ToolDefinition> {
+    let config = RigAgentConfig {
+        packages: packages.clone(),
+        allowed_tool_ids: allowed_tool_ids.map(<[String]>::to_vec),
+        trusted_project,
+        ..RigAgentConfig::default()
+    };
+    super::session_prompt::Resolved::from_config(Vec::new(), &config).tools
 }
 
 /// The tool ids [`rig_tool_definitions`] offers, for tests outside this
@@ -709,7 +713,7 @@ pub(crate) fn offered_tool_ids(
     allowed_tool_ids: Option<&[String]>,
     trusted_project: bool,
 ) -> Vec<String> {
-    rig_tool_definitions(packages, allowed_tool_ids, trusted_project)
+    offered_definitions(packages, allowed_tool_ids, trusted_project)
         .into_iter()
         .map(|definition| definition.name.to_string())
         .collect()
@@ -725,13 +729,6 @@ fn rig_tool_definition_from_horizon(definition: Definition) -> ToolDefinition {
         definition.description,
         definition.input_schema,
     )
-}
-
-/// Whether `tool_id` is one of the two knowledge tools that are
-/// withheld from untrusted sessions — see `rig_tool_definitions`'s
-/// filter.
-fn is_knowledge_tool(tool_id: &str) -> bool {
-    tool_id == "knowledge_read" || tool_id == "knowledge_write"
 }
 
 fn tool_call_requests_from_events(

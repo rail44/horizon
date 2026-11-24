@@ -23,6 +23,17 @@ impl SessionModule for DelegationRouting {
 pub(super) struct RoleSection;
 
 impl SessionModule for RoleSection {
+    /// A role that lists its tools is offered those alone, and `task_output`
+    /// only with `task`.
+    fn withholds_tool(&self, cx: &ResolveContext<'_>, tool_id: &str) -> bool {
+        let Some(allowed) = cx.config.allowed_tool_ids.as_deref() else {
+            return false;
+        };
+        let allows = |id: &str| allowed.iter().any(|allowed| allowed == id);
+        !allows(tool_id)
+            || (tool_id == crate::tools::TASK_OUTPUT_TOOL_ID && !allows(crate::tools::TASK_TOOL_ID))
+    }
+
     fn sections(&self, cx: &ResolveContext<'_>) -> Vec<Section> {
         match cx.role {
             Some(role) if !role.prompt_section.is_empty() => vec![Section {
@@ -101,6 +112,12 @@ impl SessionModule for RepositoryInstructions {
 pub(super) struct KnowledgeIndex;
 
 impl SessionModule for KnowledgeIndex {
+    /// The knowledge tools read and write the project's own records, so an
+    /// untrusted project's session is not offered them.
+    fn withholds_tool(&self, cx: &ResolveContext<'_>, tool_id: &str) -> bool {
+        !cx.trusted_project && matches!(tool_id, "knowledge_read" | "knowledge_write")
+    }
+
     fn sections(&self, cx: &ResolveContext<'_>) -> Vec<Section> {
         if !cx.trusted_project {
             return Vec::new();

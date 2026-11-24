@@ -131,6 +131,12 @@ pub(crate) trait SessionModule: Send + Sync {
         Vec::new()
     }
 
+    /// The resolve stage: whether this module keeps `tool_id` from the
+    /// tools offered to the model.
+    fn withholds_tool(&self, _cx: &ResolveContext<'_>, _tool_id: &str) -> bool {
+        false
+    }
+
     /// The verdict stage: whether the call runs, waits for an approval, or
     /// is refused; `None` when this module has no say.
     fn verdict(&self, _cx: &CallContext<'_>) -> Option<crate::policy::ToolPlan> {

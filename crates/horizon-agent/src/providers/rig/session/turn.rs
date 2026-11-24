@@ -179,7 +179,7 @@ impl SessionLoopState {
         let turn = complete_rig_turn(
             config,
             &self.environment,
-            &self.extra_sections,
+            &self.resolved,
             &mut self.rig_history,
             prompt,
             &self.events_tx,

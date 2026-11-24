@@ -36,6 +36,7 @@ pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment 
 /// disclose (it always does -- see `skills`' embedded builtins); it stays
 /// byte-identical only in the hypothetical case of an empty registry,
 /// exercised directly in `skills`' own tests.
+#[cfg(test)]
 pub(super) fn session_extra_sections(
     modules: &[std::sync::Arc<dyn crate::modules::SessionModule>],
     environment: &SessionEnvironment,
@@ -53,4 +54,56 @@ pub(super) fn session_extra_sections(
         .into_iter()
         .map(|section| section.text)
         .collect()
+}
+
+/// What the resolve stage gives a session's requests: the system prompt's
+/// sections and the tools offered.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Resolved {
+    pub(super) sections: Vec<String>,
+    pub(super) tools: Vec<rig_core::completion::ToolDefinition>,
+}
+
+/// The resolve stage: the sections `modules` add, and the core's tools less
+/// those a module withholds.
+pub(super) fn resolve(
+    modules: &[std::sync::Arc<dyn crate::modules::SessionModule>],
+    environment: &SessionEnvironment,
+    config: &RigAgentConfig,
+    role: Option<&'static RoleDefinition>,
+    trusted_project: bool,
+) -> Resolved {
+    let cx = crate::modules::ResolveContext {
+        environment,
+        config,
+        role,
+        trusted_project,
+    };
+    let sections = crate::modules::sections(modules, &cx)
+        .into_iter()
+        .map(|section| section.text)
+        .collect();
+    let tools = super::completion::rig_tool_definitions(&config.packages, trusted_project)
+        .into_iter()
+        .filter(|tool| {
+            !modules
+                .iter()
+                .any(|module| module.withholds_tool(&cx, tool.name.as_str()))
+        })
+        .collect();
+    Resolved { sections, tools }
+}
+
+impl Resolved {
+    /// What a session with `config` and no role would be offered, with
+    /// `sections` for its prompt.
+    #[cfg(test)]
+    pub(super) fn from_config(sections: Vec<String>, config: &RigAgentConfig) -> Self {
+        let environment = SessionEnvironment::for_workspace_root(None);
+        let modules = crate::modules::builtin(config, None);
+        Self {
+            sections,
+            ..resolve(&modules, &environment, config, None, config.trusted_project)
+        }
+    }
 }

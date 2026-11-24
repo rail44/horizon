@@ -25,7 +25,7 @@ impl SessionLoopState {
                         );
                         let mut config = self.config.clone();
                         config.trusted_project = trusted_project;
-                        let sections = super::super::session_prompt::session_extra_sections(
+                        let resolved = super::super::session_prompt::resolve(
                             &self.modules,
                             &environment,
                             &config,
@@ -33,7 +33,7 @@ impl SessionLoopState {
                             trusted_project,
                         );
                         self.environment = environment;
-                        self.extra_sections = sections;
+                        self.resolved = resolved;
                         self.config = config;
                         self.inputs
                             .note_environment_ready(&workspace_root, &branch, &base);
@@ -131,7 +131,7 @@ mod tests {
             ..Default::default()
         };
         let old_environment = state.environment.clone();
-        state.extra_sections = vec!["original instructions".into()];
+        state.resolved.sections = vec!["original instructions".into()];
         state.activation.push_back("missing".into());
         commands
             .send(Command::EnvironmentActivationFailed {
@@ -140,7 +140,7 @@ mod tests {
             .unwrap();
         state.activate_environment().await;
         assert_eq!(state.environment, old_environment);
-        assert_eq!(state.extra_sections, ["original instructions"]);
+        assert_eq!(state.resolved.sections, ["original instructions"]);
         assert!(
             state
                 .inputs
