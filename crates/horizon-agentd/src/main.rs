@@ -494,6 +494,13 @@ mod tests {
     /// log file is still empty when the assertion below reads it.
     const GATED_STARTUP_READ: Duration = Duration::from_millis(750);
 
+    /// Every skill a package adds parses: composing the registry panics on
+    /// one that does not, which would stop every session at startup.
+    #[test]
+    fn every_skill_the_packages_add_parses() {
+        let _ = horizon_agent::skills::SkillRegistry::embedded(&compose_packages());
+    }
+
     #[test]
     fn an_older_log_is_moved_aside_and_a_fresh_one_starts() {
         let dir = tempfile::tempdir().unwrap();

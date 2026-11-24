@@ -107,7 +107,7 @@ ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_se
 - **edit**: 各編集を元のファイルに当て、編集どうしの重なりを禁止する。完全一致で失敗したら、正規化して当て直す(pi と eve の形)。
 - **read**: 画像を読めるようにする。
 - **grep**: 位置だけでなく、行の内容も返す。
-- **skill**: `.agents/skills` も探し、`skill_read` が repository の skill のディレクトリを返すようにした(本文が相対パスで参照するファイルは `fs_read` で読む)。frontmatter を YAML として読むことは、依存を足す判断と一緒に相談する。
+- **skill**: `.agents/skills` も探し、`skill_read` が repository の skill のディレクトリを返すようにした(本文が相対パスで参照するファイルは `fs_read` で読む)。frontmatter は YAML として読む(`serde-saphyr`)。
 
 compaction の要約(Tier 2)は、`docs/agent-compaction-design.md` が保留としているので、ここには入れない。会話の木に compaction の entry を置ける形にしておく。
 

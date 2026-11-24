@@ -303,9 +303,9 @@ repository, this override direction is exactly what would need
 revisiting (see `docs/trust-boundaries.md`).
 
 **Discovery is cheap, reads are fresh.** Only frontmatter is consulted at
-session start (there's no cheaper way to reach just the frontmatter with
-this crate's hand-rolled parser, but the body is discarded immediately
-after parsing) — a repository skill's `Skill` value stores a path, not a
+session start (the whole file is read to reach the frontmatter, which is
+parsed as YAML per the Agent Skills spec since 2026-11-24, and the body is
+discarded immediately after parsing) — a repository skill's `Skill` value stores a path, not a
 cached body. `skill_read` re-reads and re-parses that path from disk on
 every call, so an edit followed by a fresh `skill_read` in the same
 session sees the new content without a session restart — the "edit,

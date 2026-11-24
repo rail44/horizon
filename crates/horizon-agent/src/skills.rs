@@ -48,10 +48,10 @@
 //! `.agents/skills/<id>/SKILL.md`; where both have the same id at one
 //! level, `.horizon/skills` wins.
 //!
-//! `SKILL.md` format (hand-parsed below, no new dependency): a YAML-ish
-//! frontmatter block delimited by `---` lines, with `name:`/`description:`
-//! keys, followed by the Markdown body. Identical for embedded and
-//! repository skills.
+//! `SKILL.md` format, per the Agent Skills spec: a YAML frontmatter block
+//! delimited by `---` lines with at least `name` and `description`,
+//! followed by the Markdown body. Identical for embedded and repository
+//! skills.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -333,32 +333,32 @@ struct ParsedSkillMd {
     body: String,
 }
 
-/// Hand-parses a `SKILL.md`'s frontmatter (`---\nname: ..\ndescription: ..\n---\n<body>`)
-/// with no YAML dependency -- the format is small enough that a real
-/// parser would be over-engineering. Returns `None` for anything that
-/// doesn't match the expected shape (missing delimiters, or a frontmatter
-/// missing `name`/`description`); [`embedded_skills`] `.expect()`s this to
-/// succeed for skills this crate ships itself (covered by this module's own
-/// test), while [`discover_repository_skills`] treats a `None` here as
-/// "skip and warn" for arbitrary repository content.
+/// The frontmatter fields a skill is listed by. The Agent Skills spec's
+/// other fields (`license`, `metadata`, `allowed-tools`, ...) are read past.
+#[derive(serde::Deserialize)]
+struct Frontmatter {
+    name: String,
+    description: String,
+}
+
+/// Parses a `SKILL.md`: a YAML frontmatter block between `---` lines, as
+/// the Agent Skills spec has it, then the Markdown body. Returns `None` for
+/// anything that doesn't match (missing delimiters, frontmatter that is not
+/// YAML or lacks `name`/`description`); [`embedded_skills`] `.expect()`s
+/// this to succeed for skills this crate ships itself (covered by this
+/// module's own test), while [`discover_repository_skills`] treats a `None`
+/// here as "skip and warn" for arbitrary repository content.
 fn parse_skill_md(source: &str) -> Option<ParsedSkillMd> {
+    let source = source.replace("\r\n", "\n");
     let after_open = source.strip_prefix("---\n")?;
-    let (frontmatter, body) = after_open.split_once("\n---\n")?;
-
-    let mut name = None;
-    let mut description = None;
-    for line in frontmatter.lines() {
-        let (key, value) = line.split_once(':')?;
-        match key.trim() {
-            "name" => name = Some(value.trim().to_string()),
-            "description" => description = Some(value.trim().to_string()),
-            _ => {}
-        }
-    }
-
+    let (frontmatter, body) = match after_open.split_once("\n---\n") {
+        Some(split) => split,
+        None => (after_open.strip_suffix("\n---")?, ""),
+    };
+    let fields: Frontmatter = serde_saphyr::from_str(frontmatter).ok()?;
     Some(ParsedSkillMd {
-        name: name?,
-        description: description?,
+        name: fields.name.trim().to_string(),
+        description: fields.description.trim().to_string(),
         body: body.trim_start_matches('\n').to_string(),
     })
 }
@@ -427,6 +427,23 @@ mod tests {
         assert_eq!(parsed.name, "example");
         assert_eq!(parsed.description, "An example skill.");
         assert_eq!(parsed.body, "# Body\n\nHello.\n");
+    }
+
+    #[test]
+    fn parses_frontmatter_the_agent_skills_spec_allows() {
+        let source = "---\r\nname: spec-skill\r\ndescription: >\r\n  Folded over\r\n  two lines: with a colon.\r\nlicense: MIT\r\nallowed-tools:\r\n  - Bash\r\n  - Read\r\nmetadata:\r\n  author: someone\r\n---\r\nBody.\r\n";
+        let parsed = parse_skill_md(source).expect("spec frontmatter must parse");
+        assert_eq!(parsed.name, "spec-skill");
+        assert_eq!(parsed.description, "Folded over two lines: with a colon.");
+        assert_eq!(parsed.body, "Body.\n");
+    }
+
+    #[test]
+    fn parses_a_skill_md_with_no_body() {
+        let parsed = parse_skill_md("---\nname: bare\ndescription: Nothing more.\n---")
+            .expect("a frontmatter-only file must parse");
+        assert_eq!(parsed.name, "bare");
+        assert_eq!(parsed.body, "");
     }
 
     #[test]
