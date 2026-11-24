@@ -29,13 +29,16 @@ MCP は範囲外とする。ツールの口(下の「ツール」)が、後か�
 
 コアは、ループの決まった位置でモジュールを呼ぶ。段の型は Rust の trait で表し、モジュールは使う段だけを実装する。段は、今あるカスタマイズが実際に使う位置から決めた。
 
-| 段 | いつ | モジュールが返すもの | 今の場所 |
+| 段 | いつ | モジュールが返すもの | 実装 |
 |---|---|---|---|
-| 解決 | モデル呼び出しの前に毎回 | system prompt の名前付きの節、提供するツールの定義 | `session_prompt::session_extra_sections`、`completion::rig_tool_definitions` の絞り込み |
-| context | プロバイダに渡す直前 | 送るメッセージ列の置き換え(元の記録は変えない) | `clearing::history_for_provider_request` |
-| 可否 | tool call ごと | 許可 / 拒否(理由つき)/ 人間に回す。人間に回す場合は保留する | `policy::plan_prepared_call`、`judge::start_approval_gate` |
-| 継続 | ラウンドがツール呼び出しなしで終わったとき | 終える / 続ける(追記するメッセージつき) | `session/continuation.rs`、`turn.rs` の truncation 回復 |
-| 観測 | イベントごと | なし(副作用のみ) | `persistence`、ACP への写し |
+| 解決 | セッションの開始時と、worktree に移ったとき | system prompt の名前付きの節、提供しないツール | `SessionModule::sections`・`withholds_tool`、まとめるのは `session_prompt::resolve` |
+| context | 要求を組み立てる前に毎回 | 新しく伏せるツールの結果(元の記録は変えない) | `SessionModule::context`(`TierOneClearing`)、伏せるのはコアの `ClearingState` |
+| 可否 | tool call ごと | 許可 / 拒否(理由つき)/ 人に回す(`verdict`)。人に回す前に引き受けて後で答える(`review`) | `TierPolicy`・`JudgeModule`、門は `tools::gate` |
+| 継続 | ラウンドがツール呼び出しなしで終わったとき | 終える / 続ける(追記するメッセージつき) | `SessionModule::after_round`(`DecisionContinuation`) |
+
+モジュールの一覧は、セッションを始めるときに agentd が一度だけ組み立て(`modules::Modules::compose`)、provider とツールの状態の両方に渡す。
+
+観測の段(イベントごとに副作用だけを持つ段)は置いていない。イベントの記録と ACP への写しはコアの持ち物で、モジュールとして差し替える必要が無い。イベントを見たいモジュールが現れたときに足す。
 
 「解決」の段では、モジュールは節とツールを宣言するだけで、system prompt やツール一覧を直接書き換えることはしない。コアは前回のモデル呼び出しとの差分を取る。最初に送った system prompt とツール一覧はそのまま送り続け、変わった分は会話の後ろに追記するメッセージとして伝える。こうすると送る先頭部分が毎回同じになり、プロバイダのプロンプトキャッシュが効く(調査の §2「プロンプトキャッシュと先頭部分の固定」。pi・eve・Flue が同じ形をとる)。Anthropic の wire では、system・最後のツール・最後のメッセージに `cache_control` を置く(rig の `with_prompt_caching`)。
 
