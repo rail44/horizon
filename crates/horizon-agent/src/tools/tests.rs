@@ -2216,6 +2216,47 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
 }
 
 #[test]
+fn a_denial_with_a_reason_tells_the_model_the_reason() {
+    let root = temp_workspace("approval-deny-reason");
+    let target = root.join("file.txt");
+    fs::write(&target, "hello world").unwrap();
+    let session_id = SessionId::new();
+    let live = LiveState::new();
+    register_session_runtime(
+        session_id,
+        ToolSessionState::new(root),
+        live.clone(),
+        dummy_bash_results(),
+    );
+    let call_id = ToolCallId("call-1".to_string());
+    let frame = requested_frame(&call_id, "fs_edit", one_edit(&target, "world", "there"));
+    live.extend_provider_events([Event::ToolCallRequested(
+        frame.tool_call_request(&call_id).unwrap().clone(),
+    )
+    .into()])
+        .unwrap();
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
+        ApprovalDecision::Deny {
+            reason: Some("  edit the copy under docs/ instead ".into()),
+        },
+    );
+
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
+        panic!("expected fs_edit denial to be resolved by Horizon");
+    };
+    assert_eq!(
+        result.output["message"],
+        "denied by user: edit the copy under docs/ instead"
+    );
+    assert!(result.is_denied());
+    unregister_session_runtime(session_id);
+}
+
+#[test]
 fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker() {
     // Distinguishes a genuine denial from an *approved* call that fails for
     // its own reasons (fs_edit's "old_string not found" here): both are
@@ -3714,6 +3755,23 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
     unregister_session_runtime(session_id);
 }
 
+/// A denied retry answers with the attempt that ran, plus the note that
+/// says the retry was denied; returns that note.
+fn assert_forwards_with_the_denial(result: &ToolCallResult, prior: &ToolCallResult) -> String {
+    let note = result.output["retry_denied"]
+        .as_str()
+        .expect("a denied retry says so")
+        .to_string();
+    let mut forwarded = result.clone();
+    forwarded
+        .output
+        .as_object_mut()
+        .unwrap()
+        .remove("retry_denied");
+    assert_eq!(&forwarded, prior);
+    note
+}
+
 #[test]
 fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
     let tool_state = dummy_tool_state();
@@ -3762,7 +3820,7 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
     match outcome {
         ApprovalOutcome::Applied(ToolUpdate::Finished { result, events }) => {
             let frame = live_state.frame();
-            assert_eq!(result, prior_result);
+            assert_forwards_with_the_denial(&result, &prior_result);
             assert!(frame.unfinished_tool_calls().is_empty());
             assert!(frame.pending_approval_call_ids().is_empty());
             std::assert_matches!(
@@ -4068,7 +4126,7 @@ fn a_denied_primary_checkout_retry_forwards_the_prior_result_and_keeps_the_check
     let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("deny must forward the first attempt's result: {outcome:?}");
     };
-    assert_eq!(result, prior_result);
+    assert_forwards_with_the_denial(&result, &prior_result);
     assert!(!tool_state.primary_checkout_writable());
     assert!(
         bash_results_rx
@@ -4263,10 +4321,10 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
 /// The domain-denial-retry flow's deny path (`docs/agent-approval-
 /// design.md` leg 4b): unlike an ordinary bash deny (which synthesizes a
 /// fresh "denied by user" marker), this forwards the already-computed
-/// `prior_result` unchanged -- the call already ran to completion, it just
-/// couldn't reach some host, and that outcome already reflects the denial.
+/// `prior_result` -- the call already ran to completion, it just couldn't
+/// reach some host -- with a note that the retry was denied and why.
 #[test]
-fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_unchanged() {
+fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_with_the_denial() {
     let tool_state = dummy_tool_state();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
@@ -4285,12 +4343,18 @@ fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_unchanged
         &frame,
         session_id,
         frame.tool_call_request(&call_id).unwrap().identity(),
-        ApprovalDecision::Deny { reason: None },
+        ApprovalDecision::Deny {
+            reason: Some("no network here".into()),
+        },
     );
     match outcome {
         ApprovalOutcome::Applied(ToolUpdate::Finished { result, events, .. }) => {
             assert!(events.iter().any(|event| matches!(event, Event::ToolCallFinished(result) if result.outcome == crate::contract::ToolOutcome::Cancelled)));
-            assert_eq!(result, prior_result);
+            let note = assert_forwards_with_the_denial(&result, &prior_result);
+            assert!(
+                note.ends_with("The user's reason: no network here"),
+                "{note}"
+            );
         }
         other => panic!("expected Finished forwarding the prior result, got {other:?}"),
     }

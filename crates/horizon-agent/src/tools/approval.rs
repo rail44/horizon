@@ -258,7 +258,7 @@ fn resolve_web_fetch(
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         crate::tools::web::clear_approved_domains(session_id, &request.identity());
-        return declined_result(runtime, &request.call_id, denied_output());
+        return declined_result(runtime, &request.call_id, denied_output(decision));
     }
     let ApprovalKind::DomainGrant { domains } = kind else {
         crate::tools::web::clear_approved_domains(session_id, &request.identity());
@@ -329,7 +329,7 @@ fn resolve_synchronous_tool(
             }))
         }
         ApprovalDecision::Deny { .. } => {
-            declined_result(runtime, &request.call_id, denied_output())
+            declined_result(runtime, &request.call_id, denied_output(decision))
         }
     }
 }
@@ -426,7 +426,7 @@ fn resolve_sandbox_area_grant(
     reason: String,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
-        return declined_result(runtime, &request.call_id, denied_output());
+        return declined_result(runtime, &request.call_id, denied_output(decision));
     }
     if grants.is_empty() {
         return unstarted_error(
@@ -488,7 +488,7 @@ fn resolve_standard_bash(
             outcome
         }
         ApprovalDecision::Deny { .. } => {
-            declined_result(runtime, &request.call_id, denied_output())
+            declined_result(runtime, &request.call_id, denied_output(decision))
         }
     }
 }
@@ -523,7 +523,7 @@ fn resolve_filesystem_denial_retry(
     approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
-        return forward_prior_result(runtime, prior_result);
+        return forward_prior_result(runtime, retry_denied(prior_result, decision));
     }
     if grants.is_empty() {
         return unstarted_error(
@@ -670,7 +670,9 @@ fn resolve_domain_denial_retry(
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
-        ApprovalDecision::Deny { .. } => forward_prior_result(runtime, prior_result),
+        ApprovalDecision::Deny { .. } => {
+            forward_prior_result(runtime, retry_denied(prior_result, decision))
+        }
         ApprovalDecision::Approve => {
             // Both should be impossible here -- a `DomainDenialRetry` is
             // only ever produced by a tier-1 sandboxed call, which requires
@@ -724,7 +726,9 @@ fn resolve_mach_service_grant(
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
-        ApprovalDecision::Deny { .. } => forward_prior_result(runtime, prior_result),
+        ApprovalDecision::Deny { .. } => {
+            forward_prior_result(runtime, retry_denied(prior_result, decision))
+        }
         ApprovalDecision::Approve => {
             // Both should be impossible here -- a mach service grant is
             // only ever produced by a tier-1 sandboxed call, which requires
@@ -769,7 +773,9 @@ fn resolve_primary_checkout_retry(
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
-        ApprovalDecision::Deny { .. } => forward_prior_result(runtime, prior_result),
+        ApprovalDecision::Deny { .. } => {
+            forward_prior_result(runtime, retry_denied(prior_result, decision))
+        }
         ApprovalDecision::Approve => {
             let Some(workspace_root) = runtime.tool_state.workspace_root() else {
                 return forward_prior_result(runtime, prior_result);
@@ -816,8 +822,39 @@ fn unstarted_error(
     forward_prior_result(runtime, result)
 }
 
-fn denied_output() -> Response {
-    error_output("denied by user")
+/// A person's denial of a call that did not run, with the reason they gave
+/// when they gave one: the model reads it as the call's result.
+fn denied_output(decision: &ApprovalDecision) -> Response {
+    match decision {
+        ApprovalDecision::Deny {
+            reason: Some(reason),
+        } if !reason.trim().is_empty() => {
+            error_output(format!("denied by user: {}", reason.trim()))
+        }
+        _ => error_output("denied by user"),
+    }
+}
+
+/// The attempt that ran, answering a retry a person denied: its result
+/// says the retry was denied, and why when the person said, so the model
+/// does not read the attempt's failure as something to try again.
+fn retry_denied(mut prior: ToolCallResult, decision: &ApprovalDecision) -> ToolCallResult {
+    let reason = match decision {
+        ApprovalDecision::Deny {
+            reason: Some(reason),
+        } if !reason.trim().is_empty() => format!(" The user's reason: {}", reason.trim()),
+        _ => String::new(),
+    };
+    if let Some(output) = prior.output.as_object_mut() {
+        output.insert(
+            "retry_denied".into(),
+            serde_json::Value::String(format!(
+                "Retrying this call needed an approval, and the user denied it; this is the \
+                 result of the attempt that ran.{reason}"
+            )),
+        );
+    }
+    prior
 }
 
 /// Settle an offer that did not execute, including denied or invalid grants.
