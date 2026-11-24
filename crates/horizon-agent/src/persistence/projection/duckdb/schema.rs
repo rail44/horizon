@@ -3,7 +3,7 @@
 /// a projection stamped with another version (or one whose stamp cannot be
 /// read at all) is rebuilt from the event log, and the rebuild drops and
 /// recreates every table ([`DROP_ALL_AGENT_STATE_SQL`]).
-pub(super) const PROJECTION_SCHEMA_VERSION: u32 = 2;
+pub(super) const PROJECTION_SCHEMA_VERSION: u32 = 3;
 
 pub(super) const INITIALIZE_SCHEMA_SQL: &str = "
 -- Invalidates this derived cache when event representation or this
@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 -- follows recreates every table.
 CREATE TABLE IF NOT EXISTS agent_events (
     event_id TEXT PRIMARY KEY,
+    -- `Record::parent_id`: the record before this one on its branch.
+    parent_event_id TEXT,
     session_id TEXT NOT NULL,
     turn_id TEXT,
     sequence BIGINT NOT NULL,

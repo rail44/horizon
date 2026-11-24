@@ -3,7 +3,7 @@
 
 mod environment;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -56,13 +56,9 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
         return;
     };
 
-    let mut by_session: HashMap<SessionId, Vec<Record>> = HashMap::new();
-    for record in records {
-        by_session
-            .entry(record.session_id)
-            .or_default()
-            .push(record);
-    }
+    // Each session's history is its branch, reaching into the session it
+    // was forked from.
+    let by_session = horizon_agent::persistence::event_log::Log::new(records).into_branches();
 
     let mut tally = ResumeTally::default();
     for (session_id, session_records) in by_session {
@@ -124,7 +120,7 @@ pub(crate) fn resume_persisted_sessions_from_projection(
         }
         candidates.push((
             session.session_id,
-            store.session_records(session.session_id, through_sequence)?,
+            store.session_branch(session.session_id, through_sequence)?,
         ));
     }
 
@@ -643,7 +639,7 @@ pub(super) fn interrupted_input_outcomes(events: &[Event]) -> Vec<Event> {
 }
 
 impl AgentdState {
-    /// One session's records in sequence order, for a caller that has just
+    /// One session's branch (`event_log::session_branch`), for a caller that has just
     /// flushed the writer. The writer projects each append before it takes
     /// the next command, so after a flush a ready DuckDB projection holds
     /// every record; while the projection is rebuilding, unavailable, or
@@ -653,7 +649,7 @@ impl AgentdState {
         session_id: SessionId,
     ) -> Result<Vec<Record>, String> {
         if let DuckdbStoreState::Ready(store) = self.duckdb_cell().current() {
-            match store.session_records(session_id, i64::MAX as u64) {
+            match store.session_branch(session_id, i64::MAX as u64) {
                 Ok(records) => return Ok(records),
                 Err(error) => eprintln!(
                     "horizon-agentd: reading a session from the projection failed ({error:#}); \
@@ -667,13 +663,7 @@ impl AgentdState {
             .clone();
         let report =
             horizon_agent::persistence::event_log::read(path).map_err(|error| error.to_string())?;
-        let mut records: Vec<_> = report
-            .records
-            .into_iter()
-            .filter(|record| record.session_id == session_id)
-            .collect();
-        records.sort_by_key(|record| record.sequence);
-        Ok(records)
+        Ok(horizon_agent::persistence::event_log::Log::new(report.records).branch(session_id))
     }
 
     /// The sessions of `role`, the one with the latest record first, each
@@ -957,6 +947,7 @@ mod tests {
     use super::*;
     use crate::session::test_support::test_state;
     use horizon_agent::contract::{Exit, ToolCallId};
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -1469,6 +1460,7 @@ mod projection_resume_tests {
     use crate::session::test_support::test_state;
     use horizon_agent::contract::{Exit, Message, MessageRole};
     use horizon_agent::persistence::event_log::{ReadReport, WriterInit};
+    use std::collections::HashMap;
     use std::path::Path;
     use std::time::Duration;
 

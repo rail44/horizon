@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::contract::{Event, ProviderId, SessionId};
 use crate::roles::RoleId;
@@ -106,6 +107,114 @@ pub struct Record {
     pub event: Event,
     pub provider_payload: Option<serde_json::Value>,
     pub created_at_unix_ms: u64,
+}
+
+/// The branch a session's history is: its latest record and every record
+/// before it, oldest first, reaching into the session it was forked from.
+/// `own` is the session's records in sequence order; `ancestor` returns the
+/// branch that ends at a record of another session, given its id (empty if
+/// there is none).
+///
+/// A record whose parent is `None`, or names a record not read (a line
+/// skipped as undecodable), follows the session's record just before it in
+/// sequence: the judge's verdicts are written outside the chain, and a
+/// skipped line must not cut the history short.
+pub fn session_branch(
+    own: Vec<Record>,
+    ancestor: &mut dyn FnMut(&str) -> Vec<Record>,
+) -> Vec<Record> {
+    let index: HashMap<String, usize> = own
+        .iter()
+        .enumerate()
+        .map(|(at, record)| (record.event_id.clone(), at))
+        .collect();
+    let mut own: Vec<Option<Record>> = own.into_iter().map(Some).collect();
+    let mut branch = Vec::new();
+    let mut fork = Vec::new();
+    let mut at = own.len().checked_sub(1);
+    while let Some(position) = at {
+        let Some(record) = own[position].take() else {
+            break; // a parent cycle
+        };
+        at = match record.parent_id.as_deref() {
+            Some(parent) => match index.get(parent) {
+                Some(&parent) => Some(parent),
+                None if position == 0 => {
+                    fork = ancestor(parent);
+                    None
+                }
+                None => position.checked_sub(1),
+            },
+            None => position.checked_sub(1),
+        };
+        branch.push(record);
+    }
+    branch.reverse();
+    fork.append(&mut branch);
+    fork
+}
+
+/// A whole log's records by session, for a reader that holds all of them
+/// and wants each session's branch ([`session_branch`]).
+pub struct Log {
+    sessions: HashMap<SessionId, Vec<Record>>,
+    /// Each record's session and position in it.
+    at: HashMap<String, (SessionId, usize)>,
+}
+
+impl Log {
+    pub fn new(records: Vec<Record>) -> Self {
+        let mut sessions: HashMap<SessionId, Vec<Record>> = HashMap::new();
+        for record in records {
+            sessions.entry(record.session_id).or_default().push(record);
+        }
+        let mut at = HashMap::new();
+        for (session_id, records) in &mut sessions {
+            records.sort_by_key(|record| record.sequence);
+            for (position, record) in records.iter().enumerate() {
+                at.insert(record.event_id.clone(), (*session_id, position));
+            }
+        }
+        Self { sessions, at }
+    }
+
+    /// The branch that ends at `event_id`.
+    fn branch_to(&self, event_id: &str) -> Vec<Record> {
+        let Some((session_id, position)) = self.at.get(event_id) else {
+            return Vec::new();
+        };
+        let own = self.sessions[session_id][..=*position].to_vec();
+        session_branch(own, &mut |id| self.branch_to(id))
+    }
+
+    /// One session's branch; empty for a session the log does not have.
+    pub fn branch(&self, session_id: SessionId) -> Vec<Record> {
+        match self.sessions.get(&session_id).and_then(|own| own.last()) {
+            Some(last) => self.branch_to(&last.event_id),
+            None => Vec::new(),
+        }
+    }
+
+    /// Every session's branch. A session's own records are moved, and only
+    /// what a fork reaches in another session is copied.
+    pub fn into_branches(self) -> Vec<(SessionId, Vec<Record>)> {
+        let mut forks: HashMap<SessionId, Vec<Record>> = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, own)| {
+                let parent = own.first()?.parent_id.as_deref()?;
+                Some((*session_id, self.branch_to(parent)))
+            })
+            .collect();
+        self.sessions
+            .into_iter()
+            .map(|(session_id, own)| {
+                let mut fork = forks.remove(&session_id).unwrap_or_default();
+                let branch = session_branch(own, &mut |_| std::mem::take(&mut fork));
+                (session_id, branch)
+            })
+            .collect()
+    }
 }
 
 /// [`Record`] with the `event` payload left raw — the first stage of
@@ -543,6 +652,111 @@ mod tolerant_read_tests {
         assert_eq!(report.corrupt_line_count, 1);
         assert!(report.records.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    use crate::contract::SessionState;
+
+    fn record(session_id: SessionId, sequence: u64, parent: Option<&Record>) -> Record {
+        Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: format!("{session_id:?}-{sequence}"),
+            parent_id: parent.map(|parent| parent.event_id.clone()),
+            sequence,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            role_id: None,
+            session_context: None,
+            event_kind: "state_changed".to_string(),
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            created_at_unix_ms: sequence,
+        }
+    }
+
+    fn sequences(branch: &[Record]) -> Vec<u64> {
+        branch.iter().map(|record| record.sequence).collect()
+    }
+
+    /// A session's records chained one after another, from `first`.
+    fn chain(
+        session_id: SessionId,
+        first: u64,
+        count: u64,
+        mut parent: Option<Record>,
+    ) -> Vec<Record> {
+        let mut records = Vec::new();
+        for sequence in first..first + count {
+            let next = record(session_id, sequence, parent.as_ref());
+            parent = Some(next.clone());
+            records.push(next);
+        }
+        records
+    }
+
+    #[test]
+    fn a_linear_session_is_its_records() {
+        let session = SessionId::new();
+        let log = Log::new(chain(session, 0, 4, None));
+        assert_eq!(sequences(&log.branch(session)), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_record_that_names_an_earlier_one_leaves_what_followed_it_off_the_branch() {
+        let session = SessionId::new();
+        let mut records = chain(session, 0, 4, None);
+        // Back to record 1: records 2 and 3 are an abandoned branch.
+        let retried = chain(session, 4, 2, Some(records[1].clone()));
+        records.extend(retried);
+        assert_eq!(sequences(&Log::new(records).branch(session)), [0, 1, 4, 5]);
+    }
+
+    #[test]
+    fn a_forked_session_reaches_into_its_source_up_to_the_fork() {
+        let source = SessionId::new();
+        let fork = SessionId::new();
+        let mut records = chain(source, 0, 4, None);
+        records.extend(chain(fork, 10, 2, Some(records[1].clone())));
+        let log = Log::new(records);
+        let branch = log.branch(fork);
+        assert_eq!(sequences(&branch), [0, 1, 10, 11]);
+        assert_eq!(branch[0].session_id, source);
+        assert_eq!(sequences(&log.branch(source)), [0, 1, 2, 3]);
+        let every: HashMap<_, _> = log.into_branches().into_iter().collect();
+        assert_eq!(every.len(), 2);
+        assert_eq!(sequences(&every[&fork]), [0, 1, 10, 11]);
+        assert_eq!(sequences(&every[&source]), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_fork_of_a_fork_reaches_through_both() {
+        let first = SessionId::new();
+        let second = SessionId::new();
+        let third = SessionId::new();
+        let mut records = chain(first, 0, 3, None);
+        records.extend(chain(second, 10, 3, Some(records[1].clone())));
+        let at = records[4].clone();
+        records.extend(chain(third, 20, 1, Some(at)));
+        assert_eq!(
+            sequences(&Log::new(records).branch(third)),
+            [0, 1, 10, 11, 20]
+        );
+    }
+
+    #[test]
+    fn a_skipped_line_or_a_record_beside_the_chain_does_not_cut_the_history() {
+        let session = SessionId::new();
+        let mut records = chain(session, 0, 4, None);
+        // Record 1 was skipped as undecodable: record 2 names it.
+        records.remove(1);
+        // A judge verdict, beside the chain, as the latest record.
+        records.push(record(session, 9, None));
+        assert_eq!(sequences(&Log::new(records).branch(session)), [0, 2, 3, 9]);
     }
 }
 

@@ -177,6 +177,49 @@ impl Store {
     /// One session's records at or below `through_sequence`, rebuilt from the
     /// projection in sequence order. Every record carries the session's
     /// latest stored `session_context` (the only value a resume reads).
+    /// `session_id`'s branch through `through_sequence`
+    /// (`event_log::session_branch`), with what it reaches in the session it
+    /// was forked from.
+    pub(crate) fn session_branch(
+        &self,
+        session_id: SessionId,
+        through_sequence: u64,
+    ) -> Result<Vec<Record>> {
+        let own = self.session_records(session_id, through_sequence)?;
+        let mut failed = None;
+        let branch = crate::persistence::event_log::session_branch(own, &mut |id| match self
+            .branch_to(id)
+        {
+            Ok(branch) => branch,
+            Err(error) => {
+                failed = Some(error);
+                Vec::new()
+            }
+        });
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(branch),
+        }
+    }
+
+    /// The branch that ends at the record `event_id` names (empty if none).
+    fn branch_to(&self, event_id: &str) -> Result<Vec<Record>> {
+        let found: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT session_id, sequence FROM agent_events WHERE event_id = ?",
+                params![event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((session, sequence)) = found else {
+            return Ok(Vec::new());
+        };
+        let session = SessionId::from_uuid(session.parse().context("stored session id")?);
+        let sequence = u64::try_from(sequence).context("stored sequence")?;
+        self.session_branch(session, sequence)
+    }
+
     pub(crate) fn session_records(
         &self,
         session_id: SessionId,
@@ -206,7 +249,8 @@ impl Store {
                 provider_id,
                 role_id,
                 provider_payload_json,
-                epoch_ms(event_at)
+                epoch_ms(event_at),
+                parent_event_id
              FROM agent_events
              WHERE session_id = ? AND sequence <= ?
              ORDER BY sequence",
@@ -219,7 +263,7 @@ impl Store {
                 schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
                 version: AGENT_EVENT_LOG_VERSION,
                 event_id: row.get(0)?,
-                parent_id: None,
+                parent_id: row.get(9)?,
                 sequence: row.get(2)?,
                 session_id,
                 turn_id: row.get(1)?,

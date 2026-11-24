@@ -1642,6 +1642,57 @@ fn session_records_rebuild_the_logged_records() {
 }
 
 #[test]
+fn session_branch_reads_the_same_branch_as_the_whole_log() {
+    let store = Store::open_in_memory().expect("store");
+    let source = SessionId::new();
+    let fork = SessionId::new();
+    let context = context_rooted_at("/tmp/branch-root");
+    let message = |text: &str| {
+        Event::MessageCommitted(Message {
+            role: MessageRole::User,
+            text: text.into(),
+        })
+    };
+    let mut records = vec![
+        label_record("s0", 0, source, None, None, message("a"), 1_700_000_000_000),
+        label_record("s1", 1, source, None, None, message("b"), 1_700_000_000_001),
+        label_record("s2", 2, source, None, None, message("c"), 1_700_000_000_002),
+        label_record(
+            "s3",
+            3,
+            source,
+            None,
+            None,
+            message("c again"),
+            1_700_000_000_003,
+        ),
+        label_record("f4", 4, fork, None, None, message("d"), 1_700_000_000_004),
+        label_record("f5", 5, fork, None, None, message("e"), 1_700_000_000_005),
+    ];
+    // s3 retries after s1 (s2 is left behind); the fork goes on from s3.
+    for (child, parent) in [(1, "s0"), (2, "s1"), (3, "s1"), (4, "s3"), (5, "f4")] {
+        records[child].parent_id = Some(parent.to_string());
+    }
+    for record in &mut records {
+        record.session_context = Some(context.clone());
+    }
+    store
+        .replace_from_event_log_records(records.clone())
+        .unwrap();
+
+    let log = crate::persistence::event_log::Log::new(records);
+    let ids = |branch: &[crate::persistence::event_log::Record]| {
+        branch
+            .iter()
+            .map(|record| record.event_id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&log.branch(fork)), ["s0", "s1", "s3", "f4", "f5"]);
+    assert_eq!(store.session_branch(fork, 5).unwrap(), log.branch(fork));
+    assert_eq!(store.session_branch(source, 5).unwrap(), log.branch(source));
+}
+
+#[test]
 fn an_event_this_build_cannot_read_is_passed_over_as_the_log_reader_does() {
     let store = Store::open_in_memory().expect("store");
     let session_id = SessionId::new();

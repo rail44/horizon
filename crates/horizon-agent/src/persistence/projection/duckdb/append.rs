@@ -133,6 +133,7 @@ impl Store {
         self.conn.execute(
             "INSERT INTO agent_events (
                 event_id,
+                parent_event_id,
                 session_id,
                 turn_id,
                 sequence,
@@ -142,9 +143,10 @@ impl Store {
                 role_id,
                 provider_payload_json,
                 event_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, epoch_ms(?))",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, epoch_ms(?))",
             params![
                 &record.event_id,
+                record.parent_id.as_deref(),
                 &session_id_text,
                 record.turn_id.as_deref(),
                 sequence,

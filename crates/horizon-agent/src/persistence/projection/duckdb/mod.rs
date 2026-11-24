@@ -110,6 +110,17 @@ impl DuckdbStoreHandle {
         self.query(|store| store.session_records(session_id, through_sequence))
     }
 
+    /// The branch `session_id`'s history is (`event_log::session_branch`),
+    /// through `through_sequence`, with the ancestors it reaches in other
+    /// sessions.
+    pub fn session_branch(
+        &self,
+        session_id: SessionId,
+        through_sequence: u64,
+    ) -> Result<Vec<crate::persistence::event_log::Record>> {
+        self.query(|store| store.session_branch(session_id, through_sequence))
+    }
+
     /// Forwards to `Mutex::lock` verbatim (same `LockResult` return shape)
     /// so every existing `store.lock().unwrap_or_else(|poisoned| ...)`
     /// call site keeps working unchanged.
