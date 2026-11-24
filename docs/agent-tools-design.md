@@ -340,28 +340,22 @@ passed through and binary or encoded bodies are rejected.
   crashes on tool errors. Error text says what went wrong and what to try.
 - The system prompt carries a one-line retry nudge (models otherwise tend to
   give up after a single tool failure — documented by OpenAI).
-- **Turn-loop guards are a built-in safety net, not a work limiter**
-  (revised 2026-07-18, `docs/issues/002-agent-iteration-cap-halts-real-
-  work.md`'s resolution — the original version of this section described a
-  25-turn cap tuned so tightly it fired on ordinary agentic work). Two
-  independent guards, both fixed built-in constants in `crates/horizon-
-  agent` (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`), no
-  longer configurable via the file at all — the entire `[agent]` section
-  (including `iteration_cap`/`doom_loop_window`) was removed from Horizon's
-  config schema in the 2026-07-18 config-narrowing wave (see AGENTS.md's
-  "Configuration" section):
-  - **Iteration cap (100).** Halts after 100 consecutive tool-driven turns
-    since the last user message — `providers::rig::session::TurnLoopGuard::
-    record_tool_turn`, incremented once per landed tool *batch*, not once
-    per call within it.
-  - **Doom-loop detection (window 5).** Halts once the last 5 consecutive
-    tool results fingerprint identically as (tool, args, output) —
-    `TurnLoopGuard::record_fingerprint`.
+- **The turn loop's guard is a token budget** (2026-11-24, replacing an
+  iteration cap of 100 consecutive tool-driven turns and a doom-loop
+  detector on 5 identical tool results). It counts the input tokens the
+  provider did not serve from its prompt cache, summed over every round
+  since the last user input, and pauses the turn once they reach
+  `config::DEFAULT_TURN_TOKEN_BUDGET` (1,000,000) —
+  `providers::rig::guards::TurnLoopGuard`. The owner's log at the change
+  held 948 turns: 99% spent under 820,700 such tokens, the doom-loop
+  detector had never fired, and the 42 turns the iteration cap had halted
+  spent anywhere from 58,000 to 1,411,000. The roles `task` delegates to
+  run with no budget (`roles::RoleDefinition::unbudgeted`,
+  `docs/agent-subagent-design.md` decision 2).
   - **A halt reads as a pause, not an error.** Neither guard emits
-    `Event::Error` anymore; both emit `Event::TurnEnded` with a specific
-    reason (`TurnEndReason::HaltedByIterationCap`/`HaltedByDoomLoop` —
-    `contract::TurnEndReason`'s doc comment covers the legacy bare
-    `Halted` variant kept only for pre-resolution persisted logs). The
+    `Event::Error`; it emits `Event::TurnEnded` with
+    `TurnEndReason::HaltedByTokenBudget` (ACP `stopReason`
+    `_horizon/token_budget`). The
     transcript renders the turn's receipt calmly (`src/agent/turns/
     receipt.rs`'s `receipt_status`: `is_error: false`, text naming the
     guard and its threshold, e.g. "paused after 100 consecutive

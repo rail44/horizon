@@ -144,22 +144,12 @@ pub(crate) const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
 /// Same idea as [`DEFAULT_FS_GREP_RESULT_LIMIT`], for `fs_glob`. Was
 /// `fs::glob`'s `DEFAULT_LIMIT`.
 pub(crate) const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
-/// Consecutive-tool-driven-turn safety-net cap
-/// (`docs/agent-tools-design.md`'s "Error Model and Loop Guards"). Fixed at
-/// 100 (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
-/// resolution, 2026-07-18): the previous default of 25 fired on ordinary
-/// agentic work well before anything resembling a real runaway loop. Not
-/// configurable at all any more -- the `[agent] iteration_cap` key it used
-/// to read (before that same resolution) was removed from the config
-/// schema entirely in the 2026-07-18 config-narrowing wave. `pub` so
-/// `src/agent/turns/receipt.rs` can render the exact number in a
-/// guard-halted turn's paused receipt text without duplicating it.
-pub const DEFAULT_ITERATION_CAP: u32 = 100;
-/// Doom-loop (identical-consecutive-tool-result) window, same section of
-/// the design doc and same fixed-not-configurable treatment as
-/// [`DEFAULT_ITERATION_CAP`]: fixed at 5 (was 3), no longer configurable
-/// via `[agent] doom_loop_window`.
-pub const DEFAULT_DOOM_LOOP_WINDOW: usize = 5;
+/// The uncached input tokens a run of provider rounds may spend without a
+/// person in between before the turn pauses (`providers::rig::guards`):
+/// just above the 99th percentile of the owner's recorded turns (820,700 of
+/// 948 turns, 2026-11-24). `pub` so the shell can say it in a paused
+/// turn's receipt.
+pub const DEFAULT_TURN_TOKEN_BUDGET: u64 = 1_000_000;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_INTERVAL`.
 pub(crate) const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
@@ -469,10 +459,8 @@ impl ProvidersTable {
 pub(crate) const DEFAULT_PROVIDER_NAME: &str = "default";
 
 /// Rig provider configuration: model/base-URL selection (`[[providers]]`, plus
-/// the env vars above), the turn-loop guard's fixed thresholds
-/// (`iteration_cap`/`doom_loop_window`, always [`DEFAULT_ITERATION_CAP`]/
-/// [`DEFAULT_DOOM_LOOP_WINDOW`] -- see `providers::rig::session`'s
-/// `TurnLoopGuard`, which this is threaded into unchanged) — and the
+/// the env vars above), the turn-loop guard's token budget (always
+/// [`DEFAULT_TURN_TOKEN_BUDGET`] -- see `providers::rig::guards`) — and the
 /// streamed-delta coalescing cadence (always [`DEFAULT_STREAM_FLUSH_INTERVAL_MS`]/
 /// [`DEFAULT_STREAM_FLUSH_CHARS`]) used by `providers::rig::stream`.
 #[derive(Clone, Debug, PartialEq)]
@@ -503,19 +491,10 @@ pub struct RigAgentConfig {
     /// The entry's base URL, if any. `None` means the vendor's own endpoint
     /// ([`Vendor::connection`]).
     pub base_url: Option<String>,
-    /// Consecutive-tool-turn iteration cap (`docs/agent-tools-design.md`,
-    /// "Error Model and Loop Guards"). Always [`DEFAULT_ITERATION_CAP`] --
-    /// kept as a field (rather than having `providers::rig::session` read
-    /// the constant directly) so tests can still construct a
-    /// `RigAgentConfig` with a small cap to exercise the guard without
-    /// looping to the real threshold. `None` is no cap at all: a `task`
-    /// child's (`roles::RoleDefinition::uncapped_turns`,
-    /// `docs/agent-subagent-design.md` decision 2).
-    pub iteration_cap: Option<u32>,
-    /// Doom-loop fingerprint window size, same section of the design doc
-    /// and same fixed-not-configurable treatment as `iteration_cap` --
-    /// always [`DEFAULT_DOOM_LOOP_WINDOW`].
-    pub doom_loop_window: usize,
+    /// The turn loop's token budget ([`DEFAULT_TURN_TOKEN_BUDGET`]); a
+    /// field so tests can drive the guard with a small one. `None` is no
+    /// budget.
+    pub turn_token_budget: Option<u64>,
     /// How often, in milliseconds, streamed deltas are coalesced into an
     /// emitted event. Was `providers::rig::stream`'s
     /// `STREAM_FLUSH_INTERVAL`. Always [`DEFAULT_STREAM_FLUSH_INTERVAL_MS`].
@@ -582,8 +561,7 @@ impl Default for RigAgentConfig {
             model: String::new(),
             reasoning: ReasoningLevel::default(),
             base_url: None,
-            iteration_cap: Some(DEFAULT_ITERATION_CAP),
-            doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
+            turn_token_budget: Some(DEFAULT_TURN_TOKEN_BUDGET),
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
@@ -879,8 +857,10 @@ mod tests {
         // No default_model pair: no model, so no provider call.
         assert_eq!(config.rig.model, "");
         assert!(!config.rig.model_in_play());
-        assert_eq!(config.rig.iteration_cap, Some(DEFAULT_ITERATION_CAP));
-        assert_eq!(config.rig.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
+        assert_eq!(
+            config.rig.turn_token_budget,
+            Some(DEFAULT_TURN_TOKEN_BUDGET)
+        );
         assert_eq!(config.rig.base_url, None);
         assert_eq!(
             config.rig.stream_flush_interval_ms,

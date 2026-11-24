@@ -721,7 +721,7 @@ fn a_child_that_stopped_early_delivers_a_partial_report_and_says_so_in_the_pane(
         .send(assistant("Found a.rs:10; c.rs remains unchecked."))
         .unwrap();
     events
-        .send(Event::TurnEnded(TurnEndReason::HaltedByDoomLoop))
+        .send(Event::TurnEnded(TurnEndReason::HaltedByTokenBudget))
         .unwrap();
 
     let drain = requester.await_drain();
@@ -740,7 +740,7 @@ fn a_child_that_stopped_early_delivers_a_partial_report_and_says_so_in_the_pane(
         drain.failures,
         vec![format!(
             "task \"map the module\" (session_id: {}) stopped before finishing (the task \
-             session repeated itself and was stopped) — its report is partial",
+             session spent its token budget and was stopped) — its report is partial",
             child_id.as_uuid()
         )]
     );

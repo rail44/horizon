@@ -358,7 +358,7 @@ fn turn_state(reason: TurnEndReason) -> TurnState {
         TurnEndReason::Cancelled => TurnState::Stopped,
         TurnEndReason::Failed
         | TurnEndReason::HaltedByIterationCap
-        | TurnEndReason::HaltedByDoomLoop => TurnState::Failed,
+        | TurnEndReason::HaltedByTokenBudget => TurnState::Failed,
     }
 }
 
@@ -938,7 +938,7 @@ mod tests {
             (TurnEndReason::Cancelled, TurnState::Stopped),
             (TurnEndReason::Failed, TurnState::Failed),
             (TurnEndReason::HaltedByIterationCap, TurnState::Failed),
-            (TurnEndReason::HaltedByDoomLoop, TurnState::Failed),
+            (TurnEndReason::HaltedByTokenBudget, TurnState::Failed),
         ] {
             let adapted = adapt(
                 &model(

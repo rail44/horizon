@@ -680,9 +680,9 @@ impl Outcome {
             Terminal::Completed => Some(detail(
                 "the task session ended its turn without producing a usable report",
             )),
-            Terminal::TurnEnded(Some(TurnEndReason::HaltedByDoomLoop)) => {
-                Some(detail("the task session repeated itself and was stopped"))
-            }
+            Terminal::TurnEnded(Some(TurnEndReason::HaltedByTokenBudget)) => Some(detail(
+                "the task session spent its token budget and was stopped",
+            )),
             Terminal::TurnEnded(None) => {
                 Some(detail("the task session's turn ended before it finished"))
             }

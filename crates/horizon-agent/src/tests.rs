@@ -1367,7 +1367,7 @@ fn operator_intervention_event_kind_discriminators_are_stable() {
     assert_eq!(event_kind(&approval), "approval_resolved");
 
     let continue_turn = agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
-        resumed_from: Some(agent::TurnEndReason::HaltedByIterationCap),
+        resumed_from: Some(agent::TurnEndReason::HaltedByTokenBudget),
     });
     assert_eq!(event_kind(&continue_turn), "continue_turn_requested");
 }
@@ -1427,12 +1427,12 @@ fn operator_intervention_events_round_trip_through_serde_json() {
 
     // ContinueTurnRequested: full payload.
     let continue_turn = agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
-        resumed_from: Some(agent::TurnEndReason::HaltedByDoomLoop),
+        resumed_from: Some(agent::TurnEndReason::HaltedByTokenBudget),
     });
     let json = serde_json::to_value(&continue_turn).expect("serialize ContinueTurnRequested");
     assert_eq!(
         json["ContinueTurnRequested"]["resumed_from"],
-        "HaltedByDoomLoop"
+        "HaltedByTokenBudget"
     );
     let round_tripped: agent::Event = serde_json::from_value(json).expect("deserialize");
     assert_eq!(round_tripped, continue_turn);
@@ -1463,7 +1463,7 @@ fn approval_decisions_are_retained_while_continue_remains_audit_only() {
     apply_agent_event_to_frame(
         &mut frame,
         &agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
-            resumed_from: Some(agent::TurnEndReason::HaltedByIterationCap),
+            resumed_from: Some(agent::TurnEndReason::HaltedByTokenBudget),
         }),
         &mut turn,
     );
@@ -1525,7 +1525,7 @@ fn last_turn_end_reason_finds_the_latest_turn_ended() {
     // the accessor naively took the last item; pin the `.rev()` walk.
     apply_agent_event_to_frame(
         &mut frame,
-        &agent::Event::TurnEnded(agent::TurnEndReason::HaltedByIterationCap),
+        &agent::Event::TurnEnded(agent::TurnEndReason::HaltedByTokenBudget),
         &mut turn,
     );
     apply_agent_event_to_frame(
@@ -1538,7 +1538,7 @@ fn last_turn_end_reason_finds_the_latest_turn_ended() {
     );
     assert_eq!(
         frame.last_turn_end_reason(),
-        Some(agent::TurnEndReason::HaltedByIterationCap),
+        Some(agent::TurnEndReason::HaltedByTokenBudget),
         "the halt must remain the latest TurnEnded even with a later MessageCommitted"
     );
 

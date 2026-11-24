@@ -1200,7 +1200,7 @@ mod recall_tests {
                 turn_id: Some("turn-halted".to_string()),
                 provider_id: None,
                 role_id: None,
-                event: Event::TurnEnded(TurnEndReason::HaltedByIterationCap),
+                event: Event::TurnEnded(TurnEndReason::HaltedByTokenBudget),
                 provider_payload: None,
             })
             .expect("append halted turn end");

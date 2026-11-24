@@ -124,17 +124,11 @@ impl Drop for ProviderRequestSpan {
 }
 
 /// What the session loop must remember about a requested tool call while
-/// its result is outstanding: the tool id and the call's arguments.
-/// Together with the eventual output they form the (tool, args, result)
-/// doom-loop fingerprint in `session.rs` — args included per the design
-/// doc, so distinct calls that happen to produce identical output (e.g.
-/// greps for different patterns, each with zero matches) are not mistaken
-/// for a loop.
+/// its result is outstanding: its identity and tool id.
 #[derive(Clone, Debug)]
 pub(super) struct ToolCallDescriptor {
     pub(super) identity: crate::contract::ToolCallIdentity,
     pub(super) tool_id: String,
-    pub(super) args: serde_json::Value,
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -310,6 +304,7 @@ pub(super) async fn complete_rig_turn(
         requested_tool_call_ids,
         requested_tool_calls,
         input_tokens: None,
+        cached_input_tokens: None,
         output_tokens: None,
     }
 }
@@ -746,7 +741,6 @@ fn tool_call_requests_from_events(
                 ToolCallDescriptor {
                     identity: request.identity(),
                     tool_id: request.tool_id.clone(),
-                    args: request.input.0.clone(),
                 },
             )),
             _ => None,

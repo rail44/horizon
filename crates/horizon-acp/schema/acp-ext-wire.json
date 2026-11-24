@@ -1071,8 +1071,8 @@
   },
   "stop_reasons": [
     "_horizon/failed",
-    "_horizon/doom_loop"
+    "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 8
+  "x-session-protocol-version": 9
 }

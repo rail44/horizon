@@ -118,7 +118,6 @@ mod tests {
                         ToolCallDescriptor {
                             identity: crate::test_support::tool_identity(&call_id),
                             tool_id: "fs_read".into(),
-                            args: json!({}),
                         },
                     )
                 })

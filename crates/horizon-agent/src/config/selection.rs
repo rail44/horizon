@@ -77,7 +77,7 @@ mod tests {
         table.entries.clear();
         let mut config = RigAgentConfig {
             model: "old-model".into(),
-            iteration_cap: Some(7),
+            turn_token_budget: Some(7),
             ..Default::default()
         };
         selection.apply(&mut config);
@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(config.vendor, Vendor::resolve("anthropic").unwrap());
         assert_eq!(config.api_key_env, "HORIZON_SELECTION_TEST_KEY");
         assert_eq!(
-            config.iteration_cap,
+            config.turn_token_budget,
             Some(7),
             "role policy survives the switch"
         );

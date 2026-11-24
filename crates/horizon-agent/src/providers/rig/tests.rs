@@ -6,7 +6,7 @@ use super::completion::{
     output_cap_truncated, partial_assistant_message, rig_tool_definitions,
 };
 use super::fixtures::MULTI_TOOL_TEST_BATCH_SIZE;
-use super::guards::{GuardHalt, TurnLoopGuard, tool_result_fingerprint};
+use super::guards::TurnLoopGuard;
 use super::mapping::{
     RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION, horizon_events_from_rig_message,
     horizon_provider_events_from_rig_message, horizon_tool_definition_from_rig,
@@ -23,12 +23,6 @@ use super::*;
 use crate::config::RigAgentConfig;
 use crate::roles::{RoleId, resolve};
 
-/// Mirrors the built-in defaults in `agent::config` (`DEFAULT_ITERATION_CAP`/
-/// `DEFAULT_DOOM_LOOP_WINDOW`) for these guard-logic unit tests, which
-/// exercise `TurnLoopGuard` directly rather than through config precedence
-/// (that precedence is covered in `agent::config`'s own tests).
-const TEST_ITERATION_CAP: u32 = 100;
-const TEST_DOOM_LOOP_WINDOW: usize = 5;
 use crate::contract::SessionId;
 use crate::contract::{
     Command, Event, Message as AgentMessage, MessageRole, ProviderEvent, ProviderId,
@@ -1422,151 +1416,6 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
 
 // --- Turn-loop guards -------------------------------------------------
 
-#[test]
-fn turn_loop_guard_iteration_cap_triggers_at_boundary() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-
-    for _ in 0..TEST_ITERATION_CAP {
-        assert_eq!(guard.record_tool_turn(), None);
-    }
-
-    assert_eq!(
-        guard.record_tool_turn(),
-        Some(GuardHalt::IterationCapExceeded)
-    );
-}
-
-/// A `task` child runs with no cap (`docs/agent-subagent-design.md`
-/// decision 2): the guard never halts it for its turn count.
-#[test]
-fn turn_loop_guard_without_a_cap_never_halts_on_turns() {
-    let mut guard = TurnLoopGuard::new(None, TEST_DOOM_LOOP_WINDOW);
-
-    for _ in 0..10_000 {
-        assert_eq!(guard.record_tool_turn(), None);
-    }
-}
-
-#[test]
-fn turn_loop_guard_iteration_cap_resets_on_reset() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-    for _ in 0..TEST_ITERATION_CAP {
-        guard.record_tool_turn();
-    }
-
-    guard.reset();
-
-    for _ in 0..TEST_ITERATION_CAP {
-        assert_eq!(guard.record_tool_turn(), None);
-    }
-    assert_eq!(
-        guard.record_tool_turn(),
-        Some(GuardHalt::IterationCapExceeded)
-    );
-}
-
-#[test]
-fn turn_loop_guard_fingerprint_triggers_at_the_window_boundary() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-    let fingerprint = 0xABCDu64;
-
-    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
-        assert_eq!(guard.record_fingerprint(fingerprint), None);
-    }
-    assert_eq!(
-        guard.record_fingerprint(fingerprint),
-        Some(GuardHalt::DoomLoopDetected)
-    );
-}
-
-#[test]
-fn turn_loop_guard_fingerprint_does_not_trigger_on_varying_fingerprints() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-
-    for fingerprint in 0..(TEST_DOOM_LOOP_WINDOW as u64 * 2) {
-        assert_eq!(guard.record_fingerprint(fingerprint), None);
-    }
-}
-
-#[test]
-fn turn_loop_guard_reset_clears_fingerprint_window() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-    let fingerprint = 42u64;
-    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
-        guard.record_fingerprint(fingerprint);
-    }
-
-    guard.reset();
-
-    // If the window had survived the reset, the next identical fingerprint
-    // at the boundary would immediately trip the guard; it must not.
-    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
-        assert_eq!(guard.record_fingerprint(fingerprint), None);
-    }
-    assert_eq!(
-        guard.record_fingerprint(fingerprint),
-        Some(GuardHalt::DoomLoopDetected)
-    );
-}
-
-/// The truncation auto-continue cap: `record_truncation_continue` returns
-/// `true` for the first three calls and `false` on the fourth.
-#[test]
-fn turn_loop_guard_truncation_continue_caps_at_three() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-
-    assert!(
-        guard.record_truncation_continue(),
-        "first truncation continue"
-    );
-    assert!(guard.record_truncation_continue(), "second");
-    assert!(guard.record_truncation_continue(), "third");
-    assert!(
-        !guard.record_truncation_continue(),
-        "fourth truncation must stop auto-continuing"
-    );
-}
-
-/// The truncation counter resets alongside the rest of the guard — a
-/// fresh interaction (`guard.reset()`) clears the streak.
-#[test]
-fn turn_loop_guard_truncation_counter_resets_on_reset() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-
-    guard.record_truncation_continue();
-    guard.record_truncation_continue();
-
-    guard.reset();
-
-    assert!(guard.record_truncation_continue(), "first after reset");
-    assert!(guard.record_truncation_continue(), "second after reset");
-    assert!(guard.record_truncation_continue(), "third after reset");
-    assert!(
-        !guard.record_truncation_continue(),
-        "fourth after reset must stop"
-    );
-}
-
-/// `reset_truncation_counter` alone (without resetting the whole guard)
-/// breaks the streak — called when a turn completes without truncation.
-#[test]
-fn turn_loop_guard_reset_truncation_counter_breaks_the_streak() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-
-    guard.record_truncation_continue();
-    guard.record_truncation_continue();
-
-    guard.reset_truncation_counter();
-
-    assert!(guard.record_truncation_continue(), "first after reset");
-    assert!(guard.record_truncation_continue(), "second after reset");
-    assert!(guard.record_truncation_continue(), "third after reset");
-    assert!(
-        !guard.record_truncation_continue(),
-        "fourth after reset must stop"
-    );
-}
-
 // --- Output-cap truncation detection (issue 016) -----------------------
 //
 // The provider can hit its output-token ceiling (`max_output_tokens`,
@@ -1627,7 +1476,7 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
         environment,
         extra_sections,
         events_tx: tx,
-        guard: TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW),
+        guard: TurnLoopGuard::new(None),
         ..SessionLoopState::default()
     };
 
@@ -1732,7 +1581,6 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         ToolCallDescriptor {
             identity: crate::test_support::tool_identity(&id_b),
             tool_id: "fs_read".to_string(),
-            args: serde_json::json!({ "path": "/x" }),
         },
     )]);
     let arrived = ToolCallResult::new(
@@ -1740,10 +1588,8 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         crate::contract::OccurrenceId(id_a.0.clone()),
         serde_json::json!({ "tab_count": 2 }),
     );
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-    for _ in 0..=TEST_ITERATION_CAP {
-        guard.record_tool_turn();
-    }
+    let mut guard = TurnLoopGuard::new(Some(100));
+    guard.record_round(100);
     let (tx, rx) = crossbeam_channel::unbounded();
     // Unused by this test: `role` is `None`, so `halt_turn_loop` never
     // reaches the code that would actually run a turn on these.
@@ -1765,11 +1611,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     };
 
     tokio::join!(
-        state.halt_turn_loop(
-            GuardHalt::IterationCapExceeded,
-            &arrived,
-            "workspace_snapshot"
-        ),
+        state.halt_turn_loop(&arrived, "workspace_snapshot"),
         async {
             let request = loop {
                 if let Ok(event) = rx.try_recv() {
@@ -1823,19 +1665,17 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     }
     assert_eq!(
         recv(&rx),
-        Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
+        Event::TurnEnded(TurnEndReason::HaltedByTokenBudget)
     );
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
     assert!(
         rx.try_recv().is_err(),
-        "halt must emit exactly one cancelled finish for B, TurnEnded(HaltedByIterationCap), \
+        "halt must emit exactly one cancelled finish for B, TurnEnded(HaltedByTokenBudget), \
          and WaitingForUser -- no Error event"
     );
 
-    // The guard was reset: a fresh allowance of tool turns is available.
-    for _ in 0..TEST_ITERATION_CAP {
-        assert_eq!(state.guard.record_tool_turn(), None);
-    }
+    // The guard was reset: a fresh budget is available.
+    assert!(!state.guard.exhausted());
 }
 
 /// Unit coverage for `Event::TurnEnded`'s fourth stop reason (`Failed`) --
@@ -1981,122 +1821,6 @@ fn start_fallback_rig_session_with_history(
     (tx, rx)
 }
 
-#[test]
-fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
-    let (tx, rx) = start_fallback_rig_session();
-
-    // "snapshot" makes the deterministic fallback request a tool call, so
-    // the session has a genuinely pending call to feed results into.
-    let _ = tx.send(Command::UserMessage {
-        text: "snapshot please".to_string(),
-    });
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            ..
-        })
-    );
-    let mut current_call = match recv(&rx) {
-        Event::ToolCallRequested(request) => request,
-        other => panic!("expected a tool call request, got {other:?}"),
-    };
-    let call_id = current_call.call_id.clone();
-
-    // Each result asks the fallback responder (via `loop_again`) to request
-    // the tool again — a self-sustaining tool loop, exactly what the cap
-    // exists to stop. Distinct outputs keep doom-loop detection out of the
-    // way so the iteration cap is what trips.
-    for i in 0..TEST_ITERATION_CAP {
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call_id.clone(),
-            current_call.occurrence_id.clone(),
-            serde_json::json!({ "loop_again": true, "n": i }),
-        )));
-        assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-        current_call = match recv(&rx) {
-            Event::ToolCallRequested(request) if request.call_id == call_id => request,
-            event => panic!("expected next call: {event:?}"),
-        };
-    }
-
-    // The next tool-driven turn exceeds the cap: the session halts instead
-    // of running it, as a pause rather than an error -- no `Event::Error`
-    // at all, just `TurnEnded(HaltedByIterationCap)` then `WaitingForUser`.
-    // The arrived result's REAL output is stashed, not folded into
-    // rig_history yet (asserted directly in the halt_turn_loop unit test —
-    // history is not observable through the session handle) and, since it
-    // already finished for real app-side, no contradictory cancelled
-    // ToolCallFinished may be emitted for it.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_id.clone(),
-        current_call.occurrence_id.clone(),
-        serde_json::json!({ "loop_again": true, "n": "final" }),
-    )));
-    assert_eq!(
-        recv(&rx),
-        Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
-    );
-    assert_eq!(
-        recv(&rx),
-        Event::StateChanged(SessionState::WaitingForUser),
-        "no cancelled ToolCallFinished may be emitted for the real, already-executed result"
-    );
-
-    // `Command::ContinueTurn` resumes without a new user message: the
-    // stashed result becomes the next turn's prompt. It still carries
-    // `loop_again: true`, so the fallback responder legitimately requests
-    // the tool again -- proving Continue actually re-entered the turn loop
-    // rather than just clearing the halt, exactly as if the guard had
-    // never intervened.
-    let _ = tx.send(Command::ContinueTurn);
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    current_call = match recv(&rx) {
-        Event::ToolCallRequested(request) if request.call_id == call_id => request,
-        event => panic!("expected next call: {event:?}"),
-    };
-
-    // Resolve that call with a plain (non-looping) result so the turn
-    // completes normally, proving the resumed session is fully healthy.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_id.clone(),
-        current_call.occurrence_id.clone(),
-        serde_json::json!({ "done": true }),
-    )));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::Assistant,
-            ..
-        })
-    );
-    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
-
-    // The session is still usable: a fresh user message runs a normal turn.
-    let _ = tx.send(Command::UserMessage {
-        text: "hello again".to_string(),
-    });
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            text,
-        }) if text == "hello again");
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::Assistant,
-            ..
-        })
-    );
-    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
-}
-
 /// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
 /// replay-safety requirement: a session that ended halted must not
 /// auto-resume once restarted/replayed. The halted continuation consumed by
@@ -2179,40 +1903,6 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
     );
     assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
-}
-
-#[test]
-fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-    let empty_matches = serde_json::json!({ "matches": [] });
-
-    // Three distinct greps that all found nothing: identical outputs, but
-    // different args — productive, non-looping calls per the design doc's
-    // (tool, args, result) fingerprint.
-    for pattern in ["alpha", "beta", "gamma"] {
-        let fingerprint = tool_result_fingerprint(
-            "fs_grep",
-            &serde_json::json!({ "pattern": pattern }),
-            &empty_matches,
-        );
-        assert_eq!(guard.record_fingerprint(fingerprint), None);
-    }
-}
-
-#[test]
-fn doom_loop_trips_on_identical_tool_args_output_fingerprints_at_the_window_boundary() {
-    let mut guard = TurnLoopGuard::new(Some(TEST_ITERATION_CAP), TEST_DOOM_LOOP_WINDOW);
-    let args = serde_json::json!({ "pattern": "alpha" });
-    let output = serde_json::json!({ "matches": [] });
-
-    let fingerprint = tool_result_fingerprint("fs_grep", &args, &output);
-    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
-        assert_eq!(guard.record_fingerprint(fingerprint), None);
-    }
-    assert_eq!(
-        guard.record_fingerprint(fingerprint),
-        Some(GuardHalt::DoomLoopDetected)
-    );
 }
 
 // --- Parallel tool-call batching ---------------------------------------
@@ -2472,101 +2162,6 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
-#[test]
-fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
-    // A large `doom_loop_window` keeps doom-loop detection out of the way:
-    // the deterministic multi-tool fallback repeats the same (tool, args)
-    // pairs batch after batch, which would otherwise trip doom-loop
-    // detection first and mask what this test is actually checking.
-    let (tx, rx) = start_fallback_rig_session_with_config(RigAgentConfig {
-        api_key_present: false,
-        model: "unused-in-fallback-mode".to_string(),
-        iteration_cap: Some(2),
-        doom_loop_window: 1000,
-        ..Default::default()
-    });
-
-    let _ = tx.send(Command::UserMessage {
-        text: "multi tool please".to_string(),
-    });
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            ..
-        })
-    );
-
-    // Two consecutive batches (2 tool-driven completions total) must both
-    // succeed under `iteration_cap: 2`. If the guard counted per *result*
-    // instead of per *batch*, the very first 4-call batch would already
-    // exceed the cap by its 3rd result, well before that batch even
-    // finishes.
-    for _ in 0..2 {
-        let mut call_ids = Vec::new();
-        for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-            match recv(&rx) {
-                Event::ToolCallRequested(request) => call_ids.push(request),
-                other => panic!("expected a tool call request, got {other:?}"),
-            }
-        }
-        for (index, call_id) in call_ids.iter().enumerate() {
-            let is_last = index == call_ids.len() - 1;
-            let output = if is_last {
-                serde_json::json!({ "loop_again_batch": MULTI_TOOL_TEST_BATCH_SIZE })
-            } else {
-                serde_json::json!({ "index": index })
-            };
-            let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-                call_id.call_id.clone(),
-                call_id.occurrence_id.clone(),
-                output,
-            )));
-            if is_last {
-                assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-            } else {
-                assert!(
-                    rx.recv_timeout(std::time::Duration::from_millis(200))
-                        .is_err(),
-                    "no completion should run while results are still outstanding"
-                );
-            }
-        }
-    }
-
-    // The 3rd tool-driven completion exceeds the cap: it must halt instead
-    // of running.
-    let mut call_ids = Vec::new();
-    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx) {
-            Event::ToolCallRequested(request) => call_ids.push(request),
-            other => panic!("expected a tool call request, got {other:?}"),
-        }
-    }
-    for (index, call_id) in call_ids.iter().enumerate() {
-        let is_last = index == call_ids.len() - 1;
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call_id.call_id.clone(),
-            call_id.occurrence_id.clone(),
-            serde_json::json!({ "index": index }),
-        )));
-        if !is_last {
-            assert!(
-                rx.recv_timeout(std::time::Duration::from_millis(200))
-                    .is_err(),
-                "no completion should run while results are still outstanding"
-            );
-        }
-    }
-    assert_eq!(
-        recv(&rx),
-        Event::TurnEnded(TurnEndReason::HaltedByIterationCap),
-        "a guard halt is a pause, not an Event::Error"
-    );
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
-}
-
 // --- rig_tool_definitions' allowed_tool_ids extension point ----------------
 //
 // `docs/research/agent-prompting.md` Part 2.5: a back-compatible allowlist
@@ -2717,7 +2312,7 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
         ]
     );
     assert_eq!(
-        config.iteration_cap, None,
+        config.turn_token_budget, None,
         "a delegated child has no turn budget (docs/agent-subagent-design.md decision 2)"
     );
     assert_eq!(

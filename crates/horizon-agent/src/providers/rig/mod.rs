@@ -110,8 +110,8 @@ fn role_adjusted_config(
     if let Some(model) = role.model {
         config.model = model.to_string();
     }
-    if role.uncapped_turns {
-        config.iteration_cap = None;
+    if role.unbudgeted {
+        config.turn_token_budget = None;
     }
     config
 }

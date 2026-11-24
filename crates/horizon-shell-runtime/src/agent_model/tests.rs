@@ -1,10 +1,9 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta,
-    STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED, SessionEventNotification, SessionId,
-    TaskProgressNotification, TaskProgressState, ToolCallMeta, ToolCallProgressEvent, ToolOutcome,
-    write_horizon_meta,
+    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
+    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, SessionId, TaskProgressNotification,
+    TaskProgressState, ToolCallMeta, ToolCallProgressEvent, ToolOutcome, write_horizon_meta,
 };
 use serde_json::json;
 
@@ -344,7 +343,7 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
         (v2::StopReason::Cancelled, SessionStatus::Cancelled),
         (v2::StopReason::MaxTurnRequests, SessionStatus::Paused),
         (
-            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_DOOM_LOOP)),
+            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_TOKEN_BUDGET)),
             SessionStatus::Paused,
         ),
         (
@@ -424,7 +423,7 @@ fn halted_detection_is_idle_on_a_guard_stop() {
     for (reason, halted) in [
         (v2::StopReason::MaxTurnRequests, true),
         (
-            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_DOOM_LOOP)),
+            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_TOKEN_BUDGET)),
             true,
         ),
         (v2::StopReason::EndTurn, false),

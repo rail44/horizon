@@ -138,7 +138,7 @@ fn a_turn_end_is_one_idle_with_its_stop_reason() {
             Event::StateChanged(SessionState::ToolRunning),
             Event::StateChanged(SessionState::WaitingForApproval),
             Event::StateChanged(SessionState::Running),
-            Event::TurnEnded(TurnEndReason::HaltedByDoomLoop),
+            Event::TurnEnded(TurnEndReason::HaltedByTokenBudget),
             Event::StateChanged(SessionState::WaitingForUser),
             Event::StateChanged(SessionState::Terminated),
         ],
@@ -154,7 +154,7 @@ fn a_turn_end_is_one_idle_with_its_stop_reason() {
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(v2::RunningStateUpdate::new())),
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(
                 v2::IdleStateUpdate::new().stop_reason(v2::StopReason::Other(
-                    acp::other_stop_reason(acp::STOP_REASON_DOOM_LOOP,)
+                    acp::other_stop_reason(acp::STOP_REASON_TOKEN_BUDGET,)
                 ))
             )),
         ]

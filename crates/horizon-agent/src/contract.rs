@@ -225,7 +225,7 @@ pub enum Command {
     },
     ToolCallResult(ToolCallResult),
     /// Resumes a turn the turn-loop guard halted (`TurnEndReason::
-    /// HaltedByIterationCap`/`HaltedByDoomLoop`), without composing a new
+    /// HaltedByTokenBudget`), without composing a new
     /// user message -- `docs/issues/002-agent-iteration-cap-halts-real-
     /// work.md`'s resolution, decision 3 ("Continue is one action"). The
     /// session loop (`providers::rig::session::SessionLoopState::run`) resets
@@ -368,8 +368,8 @@ pub enum Event {
     /// `resumed_from` carries the `TurnEndReason` of the most recent
     /// `TurnEnded` event in this session's frame at the moment of
     /// dispatch — `AgentFrame::last_turn_end_reason` is the accessor —
-    /// so an analyst can read "human resumed after an iteration-cap
-    /// halt" / "...after a doom-loop halt" from this row alone. A
+    /// so an analyst can read "human resumed after a token-budget halt"
+    /// from this row alone. A
     /// `ContinueTurn` arriving for a session with nothing halted (a
     /// no-op replay, or one sent to an idle session) still emits this
     /// event with `resumed_from = None`, so analytics can count
@@ -410,31 +410,17 @@ pub struct HistoryCleared {
     pub recovered_chars: u64,
 }
 
-/// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
-/// four stop reasons verbatim: "completed / cancelled / failed /
-/// halted-by-guard" -- `halted-by-guard` is now the two specific
-/// guard-sourced variants below rather than one bare `Halted`
-/// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
-/// decision 2): the UI needs to know *which* guard fired to render the
-/// right calm reason text ("paused after 100 consecutive tool-driven
-/// turns" vs. "...5 consecutive identical tool results"), and since the
-/// guard's thresholds are now fixed built-in constants
-/// (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than
-/// per-session config, the variant alone is enough for the UI to build
-/// that text without carrying a number on the wire.
+/// Why a turn ended — see [`Event::TurnEnded`]: completed, cancelled,
+/// failed, or paused by the turn loop's token budget
+/// (`config::DEFAULT_TURN_TOKEN_BUDGET`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum TurnEndReason {
     Completed,
     Cancelled,
     Failed,
-    /// The turn-loop guard's consecutive-tool-turn safety net stopped the
-    /// turn (`providers::rig::session`'s `TurnLoopGuard::record_tool_turn`)
-    /// -- see `docs/agent-tools-design.md`'s "Error Model and Loop Guards".
-    HaltedByIterationCap,
-    /// The turn-loop guard's doom-loop (identical-consecutive-tool-result)
-    /// detector stopped the turn (`TurnLoopGuard::record_fingerprint`).
-    /// Same section of the design doc.
-    HaltedByDoomLoop,
+    /// The rounds since the last user input spent the turn loop's token
+    /// budget (`providers::rig::guards`); `Command::ContinueTurn` resumes.
+    HaltedByTokenBudget,
 }
 
 pub fn event_kind(event: &Event) -> &'static str {
@@ -812,8 +798,7 @@ pub struct ApprovalResolved {
 /// of the most recent `TurnEnded` event in this session's frame at the
 /// moment the human resumed, recovered via
 /// [`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows
-/// which guard's halt the operator overrode (`HaltedByIterationCap` /
-/// `HaltedByDoomLoop`). `None` when no
+/// which halt the operator overrode. `None` when no
 /// preceding `TurnEnded` exists — the no-op-replay / idle-session case
 /// (see the `Event::ContinueTurnRequested` doc comment for why that
 /// distinction still matters operationally).

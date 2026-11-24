@@ -41,7 +41,7 @@ pub struct RoleId(pub String);
 /// on keeping the mechanism minimal until a second, differently-shaped role
 /// exists to prove out what more it would need. [`EXPLORE_ROLE`] is that
 /// second role; what it varies beyond the `config` role is its turn budget
-/// and its read-only sandbox ([`Self::uncapped_turns`],
+/// and its read-only sandbox ([`Self::unbudgeted`],
 /// [`Self::writes`]).
 pub struct RoleDefinition {
     /// Matches [`RoleId`]'s inner string exactly -- see [`resolve`].
@@ -65,13 +65,14 @@ pub struct RoleDefinition {
     /// Overrides `config::RigAgentConfig::model` for sessions with this
     /// role. `None` means "use the provider's configured model unchanged".
     pub model: Option<&'static str>,
-    /// Whether sessions with this role run with no turn-loop budget at all
-    /// (`config::RigAgentConfig::iteration_cap` set to `None` by
+    /// Whether sessions with this role run with no token budget at all
+    /// (`config::RigAgentConfig::turn_token_budget` set to `None` by
     /// `providers::rig::role_adjusted_config`). `false` keeps the built-in
-    /// [`crate::config::DEFAULT_ITERATION_CAP`]. Set for [`EXPLORE_ROLE`]:
-    /// a delegated child has no budget (`docs/agent-subagent-design.md`
-    /// decision 2) -- what stops it is what stops any session.
-    pub uncapped_turns: bool,
+    /// [`crate::config::DEFAULT_TURN_TOKEN_BUDGET`]. Set for the `task`
+    /// roles: a delegated child has no budget
+    /// (`docs/agent-subagent-design.md` decision 2) -- what stops it is
+    /// what stops any session.
+    pub unbudgeted: bool,
     /// Where sessions with this role may write. A session that may not
     /// write runs `bash` in a sandbox with no writable root, so the
     /// operating system keeps it from writing
@@ -134,7 +135,7 @@ pub const EXPLORE_ROLE_ID: &str = "explore";
 /// writable root ([`RoleDefinition::writes`]), so it can read Git
 /// history and run other read-only commands while the operating system
 /// keeps it from writing. It runs with no turn budget
-/// ([`RoleDefinition::uncapped_turns`]). The allowlist does not
+/// ([`RoleDefinition::unbudgeted`]). The allowlist does not
 /// keep approvals out of the session -- a read whose path escapes the
 /// workspace root is still routed to the approval gate -- and such a
 /// prompt is shown to the human through the requesting session
@@ -166,7 +167,7 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
         "bash",
     ]),
     model: None,
-    uncapped_turns: true,
+    unbudgeted: true,
     writes: RoleWrites::Nowhere,
     include_repository_instructions: true,
     skill_ids: &[],
@@ -217,7 +218,7 @@ pub(crate) const WRITE_TASK_ROLE: RoleDefinition = RoleDefinition {
         "request_sandbox_area",
     ]),
     model: None,
-    uncapped_turns: true,
+    unbudgeted: true,
     writes: RoleWrites::Anywhere,
     include_repository_instructions: true,
     skill_ids: &[],
@@ -408,7 +409,7 @@ mod tests {
     fn explore_role_runs_unbudgeted_read_only_and_with_repository_instructions() {
         let role =
             resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
-        assert!(role.uncapped_turns, "a delegated child has no budget");
+        assert!(role.unbudgeted, "a delegated child has no budget");
         assert_eq!(
             role.writes,
             RoleWrites::Nowhere,
@@ -441,7 +442,7 @@ mod tests {
             prompt_section: "You are a test role.",
             allowed_tool_ids: Some(&["fs_read"]),
             model: None,
-            uncapped_turns: false,
+            unbudgeted: false,
             writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
@@ -467,7 +468,7 @@ mod tests {
             prompt_section: "",
             allowed_tool_ids: None,
             model: None,
-            uncapped_turns: false,
+            unbudgeted: false,
             writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],
@@ -491,7 +492,7 @@ mod tests {
             prompt_section: "",
             allowed_tool_ids: Some(&[]),
             model: None,
-            uncapped_turns: false,
+            unbudgeted: false,
             writes: RoleWrites::Anywhere,
             include_repository_instructions: false,
             skill_ids: &[],

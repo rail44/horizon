@@ -118,7 +118,6 @@ mod tests {
                         ToolCallDescriptor {
                             identity,
                             tool_id: "fs_read".into(),
-                            args: json!({"path":"pending.txt"}),
                         },
                     )]),
                 ),
@@ -227,7 +226,6 @@ mod tests {
                         ToolCallDescriptor {
                             identity: request.identity(),
                             tool_id: request.tool_id.clone(),
-                            args: request.input.0.clone(),
                         },
                     )
                 })

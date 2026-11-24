@@ -48,6 +48,7 @@ pub(super) struct ResponseCollector {
     /// here — a second tally of parts could only disagree with it.
     unfinished_tool_calls: usize,
     input_tokens: Option<u64>,
+    cached_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     max_output_tokens: u64,
     text_buffer: StreamDeltaBuffer,
@@ -79,6 +80,7 @@ impl ResponseCollector {
             reasoning: Vec::new(),
             unfinished_tool_calls: 0,
             input_tokens: None,
+            cached_input_tokens: None,
             output_tokens: None,
             max_output_tokens: config.max_output_tokens,
         }
@@ -134,7 +136,6 @@ impl ResponseCollector {
             ToolCallDescriptor {
                 identity: request.identity(),
                 tool_id: request.tool_id.clone(),
-                args: request.input.0.clone(),
             },
         );
         let _ = self.events_tx.send(
@@ -235,6 +236,7 @@ impl ResponseCollector {
                 requested_tool_call_ids: self.requested_tool_call_ids,
                 requested_tool_calls: self.requested_tool_calls,
                 input_tokens: self.input_tokens,
+                cached_input_tokens: self.cached_input_tokens,
                 output_tokens: self.output_tokens,
             },
         )
@@ -251,6 +253,7 @@ impl ResponseCollector {
         let total_tokens = usage.total_tokens.unwrap_or(input_tokens + output_tokens);
         let cached_input_tokens = usage.cached_input_tokens.unwrap_or(0);
         self.input_tokens = Some(input_tokens);
+        self.cached_input_tokens = Some(cached_input_tokens);
         self.output_tokens = Some(output_tokens);
         let _ = self.events_tx.send(
             Event::ProviderRequestUsage(ProviderRequestUsage {

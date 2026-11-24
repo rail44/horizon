@@ -23,7 +23,7 @@ pub(crate) fn register() {
         },
         allowed_tool_ids: None,
         model: None,
-        uncapped_turns: false,
+        unbudgeted: false,
         // Writable once `board_session action=implement` (or a review
         // request) gives the session its own worktree; board #100.
         writes: RoleWrites::InOwnWorktree,

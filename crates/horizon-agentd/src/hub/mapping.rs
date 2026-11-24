@@ -556,12 +556,11 @@ fn stop_reason(reason: TurnEndReason) -> v2::StopReason {
     match reason {
         TurnEndReason::Completed => v2::StopReason::EndTurn,
         TurnEndReason::Cancelled => v2::StopReason::Cancelled,
-        TurnEndReason::HaltedByIterationCap => v2::StopReason::MaxTurnRequests,
         TurnEndReason::Failed => {
             v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_FAILED))
         }
-        TurnEndReason::HaltedByDoomLoop => {
-            v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_DOOM_LOOP))
+        TurnEndReason::HaltedByTokenBudget => {
+            v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_TOKEN_BUDGET))
         }
     }
 }

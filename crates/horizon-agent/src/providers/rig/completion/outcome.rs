@@ -107,6 +107,8 @@ pub(in crate::providers::rig) struct TurnCompletion {
     pub(in crate::providers::rig) requested_tool_call_ids: Vec<ToolCallId>,
     pub(in crate::providers::rig) requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
     pub(in crate::providers::rig) input_tokens: Option<u64>,
+    /// The part of `input_tokens` the provider served from its prompt cache.
+    pub(in crate::providers::rig) cached_input_tokens: Option<u64>,
     pub(in crate::providers::rig) output_tokens: Option<u64>,
 }
 

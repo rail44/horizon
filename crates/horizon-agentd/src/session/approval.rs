@@ -517,7 +517,7 @@ mod tests {
         // `tool_call_request`/`approval_kind`) rather than hard-coding anything.
         live_state
             .extend_provider_events([ProviderEvent::from(Event::TurnEnded(
-                TurnEndReason::HaltedByIterationCap,
+                TurnEndReason::HaltedByTokenBudget,
             ))])
             .unwrap();
 
@@ -540,7 +540,7 @@ mod tests {
                 _ => None,
             })
             .expect("a ContinueTurnRequested event recorded in the live state");
-        assert_eq!(resolved, Some(TurnEndReason::HaltedByIterationCap));
+        assert_eq!(resolved, Some(TurnEndReason::HaltedByTokenBudget));
 
         // The original command is forwarded to the provider unchanged so
         // the resume itself still happens.
@@ -596,7 +596,7 @@ mod tests {
 
         live_state
             .extend_provider_events([
-                ProviderEvent::from(Event::TurnEnded(TurnEndReason::HaltedByDoomLoop)),
+                ProviderEvent::from(Event::TurnEnded(TurnEndReason::HaltedByTokenBudget)),
                 ProviderEvent::from(Event::TurnEnded(TurnEndReason::Completed)),
             ])
             .unwrap();

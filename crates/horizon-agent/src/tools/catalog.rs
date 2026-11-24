@@ -238,7 +238,7 @@ fn build_definitions() -> Vec<Definition> {
                 context around a hit. Hits carry outcome labels: a tool_result hit has \
                 is_error, and every hit has turn_outcome (how the turn it belongs to ended, if \
                 it has). Use turn_outcome to find how past work ended -- e.g. search with \
-                turn_outcome: \"halted\" for doom-looped turns, or \"failed\" for turns that \
+                turn_outcome: \"halted\" for turns the token budget paused, or \"failed\" for turns that \
                 errored out. `query` can be omitted if `turn_outcome` is given, for listing \
                 mode: instead of matching a substring, this lists every hit with that outcome \
                 (still newest-first, still capped by limit) -- e.g. list how recent work ended \

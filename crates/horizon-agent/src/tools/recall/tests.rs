@@ -581,7 +581,7 @@ fn search_filters_by_turn_outcome() {
         session_id,
         "turn-halted",
         "widget beta",
-        TurnEndReason::HaltedByIterationCap,
+        TurnEndReason::HaltedByTokenBudget,
     );
 
     let recall = RecallContext {
@@ -718,7 +718,7 @@ fn search_without_query_but_with_turn_outcome_lists_matches() {
         session_id,
         "turn-halted",
         "widget beta",
-        TurnEndReason::HaltedByIterationCap,
+        TurnEndReason::HaltedByTokenBudget,
     );
 
     let recall = RecallContext {

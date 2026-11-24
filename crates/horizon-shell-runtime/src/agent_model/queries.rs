@@ -36,7 +36,7 @@ impl AgentFrame {
             SessionState::Idle => match self.turn_end_reason {
                 Some(TurnEndReason::Failed) => SessionStatus::Failed,
                 Some(TurnEndReason::Cancelled) => SessionStatus::Cancelled,
-                Some(TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop) => {
+                Some(TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByTokenBudget) => {
                     SessionStatus::Paused
                 }
                 Some(TurnEndReason::Completed) => SessionStatus::Completed,
@@ -108,13 +108,13 @@ impl AgentFrame {
     }
 
     /// Whether the session is idle on a guard-halted turn (`max_turn_requests`
-    /// or `_horizon/doom_loop`), i.e. `_horizon/continue_turn` has a turn to
+    /// or `_horizon/token_budget`), i.e. `_horizon/continue_turn` has a turn to
     /// resume.
     pub fn halted_awaiting_continue(&self) -> bool {
         self.phase == Some(SessionPhase::Idle)
             && matches!(
                 self.turn_end_reason,
-                Some(TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop)
+                Some(TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByTokenBudget)
             )
     }
 }

@@ -47,7 +47,7 @@ pub(crate) fn register() {
             prompt_section: agent::THREAD_ROLE_PROMPT,
             allowed_tool_ids: Some(agent::THREAD_ROLE_TOOLS),
             model: None,
-            uncapped_turns: false,
+            unbudgeted: false,
             writes: horizon_agent::roles::RoleWrites::Anywhere,
             include_repository_instructions: true,
             skill_ids: agent::THREAD_ROLE_SKILLS,

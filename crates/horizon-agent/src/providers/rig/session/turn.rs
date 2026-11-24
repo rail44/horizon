@@ -18,9 +18,7 @@ use crate::{
 
 use super::super::completion::{CompletionStop, Truncation};
 use super::state::SessionLoopState;
-use super::{
-    GuardHalt, ToolCallDescriptor, TurnCompletion, complete_rig_turn, deterministic_rig_response,
-};
+use super::{ToolCallDescriptor, TurnCompletion, complete_rig_turn, deterministic_rig_response};
 
 impl SessionLoopState {
     pub(super) fn retain_prompt(&mut self, prompt: Prompt) -> bool {
@@ -212,6 +210,10 @@ impl SessionLoopState {
             }
         };
         self.continuation.tool_calls += outcome.requested_tool_call_ids.len();
+        if let Some(input) = outcome.input_tokens {
+            self.guard
+                .record_round(input.saturating_sub(outcome.cached_input_tokens.unwrap_or(0)));
+        }
         outcome
     }
 
@@ -381,41 +383,17 @@ impl SessionLoopState {
             .send(Event::StateChanged(SessionState::WaitingForUser).into());
     }
 
-    /// Halts the turn loop in response to a tripped guard.
+    /// Pauses the turn loop once the rounds have spent the token budget
+    /// (`super::super::guards`): a `TurnEnded` with
+    /// `HaltedByTokenBudget`, and a return to `WaitingForUser` where a new
+    /// user message or `Command::ContinueTurn` resumes with a fresh budget.
     ///
-    /// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution
-    /// (decision 2): a guard halt now reads as a pause, not an error, so this
-    /// no longer emits `Event::Error` at all — only `Event::TurnEnded` with
-    /// the specific guard-kind reason (folded by `frame::apply_agent_event_to_frame`
-    /// into the turn's receipt, rendered calmly by `src/agent/turns/receipt.rs`
-    /// rather than as a danger-styled error block).
-    ///
-    /// The result that tripped the guard (`arrived_result`) is *real*: its
-    /// tool already executed (an `fs_write` is already on disk) and the app
-    /// already surfaced its genuine `ToolCallFinished`. Any *other*
-    /// still-pending calls in the batch (only possible on the doom-loop path —
-    /// see the module doc) are settled by the host through the same barrier
-    /// `Command::Cancel` uses, since those never get a second chance to
-    /// land.
-    ///
-    /// `arrived_result` is retained for Continue. History already owns the
-    /// real result; adding it again on Continue is idempotent.
-    /// `Execution::halt` retains the action needed to resume. A new owner
-    /// interaction consumes that action without changing the recorded result.
-    ///
-    /// Resets the guard and returns the session to `WaitingForUser` either way
-    /// (Continue re-enters the loop with a fresh guard, exactly like a new
-    /// `Command::UserMessage` would).
-    ///
-    /// The caller must have already removed `arrived_result`'s call id from
-    /// the pending batch (the session loop does this when it looks up the
-    /// call's descriptor).
-    pub(crate) async fn halt_turn_loop(
-        &mut self,
-        halt: GuardHalt,
-        arrived_result: &ToolCallResult,
-        tool_id: &str,
-    ) {
+    /// `arrived_result` (the batch's last result) is real -- its tool
+    /// already ran -- and is retained in `Execution::halt` for Continue;
+    /// history already owns it, so adding it again on Continue is
+    /// idempotent. The caller must have removed its call id from the
+    /// pending batch.
+    pub(crate) async fn halt_turn_loop(&mut self, arrived_result: &ToolCallResult, tool_id: &str) {
         self.cancel_outstanding_tool_calls().await;
 
         self.execution
@@ -423,7 +401,7 @@ impl SessionLoopState {
 
         self.guard.reset();
         self.end_interaction(
-            halt.turn_end_reason(),
+            crate::contract::TurnEndReason::HaltedByTokenBudget,
             crate::contract::InputResult::Interrupted,
         );
     }

@@ -86,7 +86,7 @@ fn generate_wire_schema() -> Value {
         "config_option": schema_of(sub::<ModelOptionMeta>),
     });
 
-    let stop_reasons = json!([STOP_REASON_FAILED, STOP_REASON_DOOM_LOOP]);
+    let stop_reasons = json!([STOP_REASON_FAILED, STOP_REASON_TOKEN_BUDGET]);
 
     let defs = Value::Object(generator.take_definitions(true));
 

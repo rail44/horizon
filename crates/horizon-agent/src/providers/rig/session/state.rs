@@ -48,7 +48,7 @@ pub(crate) struct SessionLoopState {
     /// Commands observed mid-turn and queued for replay after the turn.
     pub(crate) inbox: VecDeque<Command>,
     pub(crate) execution: super::progress::Execution,
-    /// Iteration-cap + doom-loop guard.
+    /// The token budget and the truncation-continue bound.
     pub(crate) guard: TurnLoopGuard,
 
     /// The turn-continuation check and its per-turn inputs
@@ -78,7 +78,7 @@ impl Default for SessionLoopState {
             task_wake,
             inbox: VecDeque::new(),
             execution: Default::default(),
-            guard: TurnLoopGuard::new(Some(0), 0),
+            guard: TurnLoopGuard::new(None),
             continuation: Default::default(),
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
@@ -127,7 +127,7 @@ impl SessionLoopState {
             rig_history,
             clearing,
             execution: Default::default(),
-            guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
+            guard: TurnLoopGuard::new(config.turn_token_budget),
             continuation,
             config,
             environment,
