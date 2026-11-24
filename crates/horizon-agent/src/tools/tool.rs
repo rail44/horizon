@@ -43,6 +43,13 @@ pub(crate) trait Tool: Send + Sync {
     /// Runs a call whose plan lets it run without asking
     /// (`policy::ToolPlan::Automatic`).
     fn run(&self, cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch;
+
+    /// Whether Horizon carries out an approved or denied call to this tool
+    /// itself (`tools::approval`), rather than forwarding the decision to
+    /// the provider that owns the call.
+    fn resolves_approvals(&self) -> bool {
+        false
+    }
 }
 
 /// The tool `tool_id` names: a built-in, then a registered one.
@@ -108,6 +115,10 @@ impl Tool for Builtin {
 
     fn run(&self, cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch {
         (self.run)(cx, call)
+    }
+
+    fn resolves_approvals(&self) -> bool {
+        super::approval::is_horizon_executed_tool(&self.definition.id)
     }
 }
 

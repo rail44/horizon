@@ -52,7 +52,7 @@ impl From<Result<ToolUpdate, String>> for ApprovalOutcome {
 /// whole effect is the grant this approval applies
 /// (`docs/sandbox-area-grants-design.md`): a provider-owned handshake would
 /// let it be approved without the grant ever reaching the session.
-fn is_horizon_executed_tool(tool_id: &str) -> bool {
+pub(crate) fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
         "fs_read"
@@ -83,7 +83,8 @@ pub fn resolve_approval(
         return ApprovalOutcome::AlreadyResolved;
     }
     super::background::cancel_judgment(session_id, &request.identity());
-    if is_horizon_executed_tool(&request.tool_id)
+    if let Some(tool) = super::tool::find(&request.tool_id)
+        && tool.resolves_approvals()
         && let Some(runtime) = session_runtime(session_id)
     {
         return dispatch_approval(
@@ -122,7 +123,7 @@ pub fn resolve_auto_approval(
     {
         return ApprovalOutcome::AlreadyResolved;
     }
-    if !is_horizon_executed_tool(&request.tool_id) {
+    if !super::tool::find(&request.tool_id).is_some_and(|tool| tool.resolves_approvals()) {
         return ApprovalOutcome::Forward(Command::ApproveToolCall {
             identity: request.identity(),
         });
