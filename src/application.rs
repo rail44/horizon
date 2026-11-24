@@ -260,6 +260,15 @@ impl ApplicationHandler for Application {
             }
         }
     }
+
+    /// blitz-shell's: macOS's standard key bindings (`deleteBackward:`,
+    /// the only way Backspace reaches a text input there) go to its windows.
+    #[cfg(target_os = "macos")]
+    fn macos_handler(
+        &mut self,
+    ) -> Option<&mut dyn winit::platform::macos::ApplicationHandlerExtMacOS> {
+        self.inner.macos_handler()
+    }
 }
 
 /// Finishes the window's renderer, once it is ready, and paints the first
