@@ -1,13 +1,15 @@
 //! What customizes a session, as modules that plug into fixed stages of
 //! the turn loop (`docs/agent-core-extension-design.md`, "段"): the prompt
-//! sections a model call is sent with, and the decision whether a turn the
-//! model ended goes on. The loop itself -- sending the sections, running
-//! another round, recording what happened -- stays in the core
-//! (`providers::rig::session`). A session's modules are composed when it
-//! starts ([`builtin`]).
+//! sections a model call is sent with, the verdict on a tool call, and the
+//! decision whether a turn the model ended goes on. The loop itself --
+//! sending the sections, carrying out a verdict, running another round,
+//! recording what happened -- stays in the core (`providers::rig::session`,
+//! `tools::gate`). A session's modules are composed when it starts
+//! ([`builtin`]).
 
 pub(crate) mod continuation;
 mod sections;
+mod tier;
 
 use std::sync::Arc;
 
@@ -19,6 +21,52 @@ use crate::prompt::SessionEnvironment;
 use crate::roles::RoleDefinition;
 
 pub(crate) use continuation::{ContinuationCheck, DecisionContinuation};
+pub(crate) use tier::TierPolicy;
+
+/// What a tool call reaches, as its tool says (`tools::tool::Tool::reach`):
+/// the facts the verdict stage decides from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Reach {
+    /// The catalog's permission for the tool; `None` for a tool the catalog
+    /// does not list.
+    pub(crate) permission: Option<crate::contract::ToolPermission>,
+    pub(crate) containment: Containment,
+    /// What a person would be asked, when the call is put to one.
+    pub(crate) ask: Option<(String, crate::contract::ApprovalKind)>,
+    /// Whether it writes where no containment can refuse after the fact
+    /// (the file tools, an area request, `bash` without a sandbox).
+    pub(crate) uncontained_write: bool,
+    /// The shared primary checkout it writes, which the session may not.
+    pub(crate) primary_checkout: Option<std::path::PathBuf>,
+    /// The repository Git metadata it writes.
+    pub(crate) git_metadata: Option<String>,
+}
+
+/// Where a call runs, as far as what contains it goes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Containment {
+    /// Reads inside what the session may read, or touches only the session.
+    Inside,
+    /// Reads outside the session's workspace root.
+    ReadsOutside,
+    /// Writes or runs inside a containment: the OS sandbox, or the file
+    /// tools' own root check.
+    Contained,
+    /// Reaches past the containment, as the network does; `allowed` when
+    /// the session already allows what it reaches.
+    CrossesBoundary { allowed: bool },
+    /// Runs with nothing to contain it.
+    Uncontained,
+    /// Runs code a package supplies, which answers for it.
+    Package,
+}
+
+/// What the verdict stage knows about a call.
+pub(crate) struct CallContext<'a> {
+    pub(crate) state: &'a crate::tools::ToolSessionState,
+    pub(crate) call: &'a crate::tools::input::PreparedCall<'a>,
+    pub(crate) reach: &'a Reach,
+}
 
 /// What the resolve stage knows about the session.
 pub(crate) struct ResolveContext<'a> {
@@ -61,6 +109,12 @@ pub(crate) trait SessionModule: Send + Sync {
         Vec::new()
     }
 
+    /// The verdict stage: whether the call runs, waits for an approval, or
+    /// is refused; `None` when this module has no say.
+    fn verdict(&self, _cx: &CallContext<'_>) -> Option<crate::policy::ToolPlan> {
+        None
+    }
+
     /// The continue stage: `None` when this module has no say.
     async fn after_round(&self, _cx: &RoundContext<'_>) -> Option<RoundDecision> {
         None
@@ -94,4 +148,31 @@ pub(crate) fn sections(
         .iter()
         .flat_map(|module| module.sections(cx))
         .collect()
+}
+
+/// The verdict stage's modules a session starts with.
+pub(crate) fn verdict_modules() -> Vec<Arc<dyn SessionModule>> {
+    vec![Arc::new(TierPolicy)]
+}
+
+/// The verdict `modules` give a call: the first that has a say; with none,
+/// the call is put to a person.
+pub(crate) fn verdict(
+    modules: &[Arc<dyn SessionModule>],
+    cx: &CallContext<'_>,
+) -> crate::policy::ToolPlan {
+    modules
+        .iter()
+        .find_map(|module| module.verdict(cx))
+        .unwrap_or_else(|| {
+            crate::policy::ToolPlan::Approval(Box::new(crate::contract::ApprovalRequest {
+                call_id: cx.call.call_id.clone(),
+                occurrence_id: cx.call.occurrence_id.clone(),
+                reason: format!(
+                    "`{}` requested Horizon approval for this tool call.",
+                    cx.call.tool_id
+                ),
+                kind: crate::contract::ApprovalKind::Standard,
+            }))
+        })
 }

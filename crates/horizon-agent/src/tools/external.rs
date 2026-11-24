@@ -124,13 +124,21 @@ impl super::tool::Tool for Registered {
         &self.definition
     }
 
-    /// Registering a tool declares it contained: it runs without asking.
-    fn plan(
+    /// A registered tool runs code its package supplies, which answers for
+    /// what it does: the tiers let it run without asking.
+    fn reach(
         &self,
         _state: &super::ToolSessionState,
         _call: &super::input::PreparedCall<'_>,
-    ) -> crate::policy::ToolPlan {
-        crate::policy::ToolPlan::Automatic
+    ) -> crate::modules::Reach {
+        crate::modules::Reach {
+            permission: None,
+            containment: crate::modules::Containment::Package,
+            ask: None,
+            uncontained_write: false,
+            primary_checkout: None,
+            git_metadata: None,
+        }
     }
 
     /// A failure is returned in the external adapters' JSON error shape.

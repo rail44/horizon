@@ -69,6 +69,7 @@ impl ToolSessionBuilder {
                 domains: SessionDomainPolicy::default(),
                 mach_services: RefCell::new(Vec::new()),
                 judge: None,
+                verdict_modules: crate::modules::verdict_modules(),
                 exploration: None,
                 board: None,
                 primary_checkout: None,

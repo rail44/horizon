@@ -8,6 +8,7 @@ use crate::tools::input::{PreparedCall, ToolInput};
 use serde_json::Value;
 
 use crate::contract::{ApprovalKind, ApprovalRequest, ToolCallRequest, ToolPermission};
+use crate::modules::{Containment, Reach};
 use crate::tools::ToolSessionState;
 use crate::tools::call_escapes_root;
 
@@ -103,14 +104,26 @@ pub(crate) enum ToolPlan {
     Reject(crate::tools::output::Response),
 }
 
-/// How a call to whichever tool it names runs: the tool's own plan, or a
-/// refusal naming the tools there are when no tool has that id.
+/// How a call to whichever tool it names runs: what the session's
+/// verdict modules decide from what the tool says it reaches
+/// (`modules::Reach`), or a refusal naming the tools there are when no tool
+/// has that id.
 pub(crate) fn plan_prepared_call(
     tool_state: &ToolSessionState,
     request: &PreparedCall<'_>,
 ) -> ToolPlan {
     match crate::tools::tool::find(tool_state.packages(), &request.tool_id) {
-        Some(tool) => tool.plan(tool_state, request),
+        Some(tool) => {
+            let reach = tool.reach(tool_state, request);
+            crate::modules::verdict(
+                tool_state.verdict_modules(),
+                &crate::modules::CallContext {
+                    state: tool_state,
+                    call: request,
+                    reach: &reach,
+                },
+            )
+        }
         None => {
             let available = crate::tools::definitions(tool_state.packages())
                 .into_iter()
@@ -125,124 +138,93 @@ pub(crate) fn plan_prepared_call(
     }
 }
 
-/// The built-in tools' plan: the containment tiers
-/// (`docs/agent-approval-design.md`) and the checks that come before them,
-/// in one table keyed by tool id.
-pub(crate) fn plan_builtin(tool_state: &ToolSessionState, request: &PreparedCall<'_>) -> ToolPlan {
-    let approval = |reason, kind| {
-        ToolPlan::Approval(Box::new(ApprovalRequest {
-            call_id: request.call_id.clone(),
-            occurrence_id: request.occurrence_id.clone(),
-            reason,
-            kind,
-        }))
-    };
-    // `bash` is not classified here: the sandbox makes the primary checkout
-    // read-only, so an attempt to write is a containment denial, which asks
-    // for this same primary-checkout approval after the fact
-    // (`ApprovalKind::PrimaryCheckoutRetry`). Only the fs tools, which run
-    // outside the OS sandbox, need this pre-execution gate.
-    if let Some(read_only) = tool_state.read_only()
-        && writes_without_containment(&request.tool_id, horizon_sandbox::sandbox_ready())
-    {
-        return ToolPlan::Reject(crate::tools::output::error(format!(
-            "`{}` was not run: {}.",
-            request.tool_id,
-            read_only.guidance()
-        )));
-    }
-    if matches!(request.tool_id.as_str(), "fs_write" | "fs_edit")
-        && let Some(root) = tool_state.primary_checkout_without_write_access()
-    {
-        return approval(
-            format!(
-                "`{}` would write inside the shared primary checkout `{}`. Allow direct \
-                     edits for this session, or call `worktree_enter` to work in a disposable \
-                     worktree instead?",
-                request.tool_id,
-                root.display()
-            ),
-            ApprovalKind::Standard,
-        );
-    }
-    match crate::tools::permission_for_tool(&request.tool_id) {
+/// What a call to a built-in tool reaches, in one table keyed by tool id.
+pub(crate) fn builtin_reach(tool_state: &ToolSessionState, request: &PreparedCall<'_>) -> Reach {
+    let tool_id = request.tool_id.as_str();
+    let sandbox = horizon_sandbox::sandbox_ready();
+    let permission = crate::tools::permission_for_tool(tool_id);
+    let primary_checkout = matches!(tool_id, "fs_write" | "fs_edit")
+        .then(|| tool_state.primary_checkout_without_write_access())
+        .flatten()
+        .map(std::path::Path::to_path_buf);
+    let (containment, ask) = match permission {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             if call_escapes_root(tool_state, &request.input) {
                 let path = request.input.read_path().expect("validated escaping path");
-                let verb = match request.tool_id.as_str() {
+                let verb = match tool_id {
                     "fs_grep" => "search",
                     "fs_glob" => "find files in",
                     _ => "read",
                 };
-                approval(
-                    format!(
-                        "`{}` requested to {verb} `{path}`, which is outside the session's workspace root. Allow this?",
-                        request.tool_id
-                    ),
-                    ApprovalKind::Standard,
+                (
+                    Containment::ReadsOutside,
+                    Some((
+                        format!(
+                            "`{tool_id}` requested to {verb} `{path}`, which is outside the \
+                             session's workspace root. Allow this?"
+                        ),
+                        ApprovalKind::Standard,
+                    )),
                 )
             } else {
-                ToolPlan::Automatic
+                (Containment::Inside, None)
             }
         }
-        Some(ToolPermission::RequireApproval) => {
-            if let Some(path) = crate::tools::call_writes_git_metadata(tool_state, &request.input) {
-                return approval(
-                    format!(
-                        "`{}` requested to write `{path}`, which is inside the repository's Git \
-                         metadata directory. Allow this?",
-                        request.tool_id
-                    ),
-                    ApprovalKind::Standard,
-                );
+        Some(ToolPermission::RequireApproval) => match classify_input(tool_id, sandbox) {
+            Classification::Contained => (Containment::Contained, None),
+            Classification::BoundaryCrossing
+                if boundary_input(tool_state, tool_id, &request.input)
+                    == BoundaryDisposition::Auto =>
+            {
+                (Containment::CrossesBoundary { allowed: true }, None)
             }
-            match classify_input(&request.tool_id, horizon_sandbox::sandbox_ready()) {
-                Classification::Contained => ToolPlan::Automatic,
-                Classification::BoundaryCrossing
-                    if boundary_input(tool_state, &request.tool_id, &request.input)
-                        == BoundaryDisposition::Auto =>
-                {
-                    ToolPlan::Automatic
-                }
-                Classification::BoundaryCrossing if request.tool_id == "web_fetch" => {
-                    let domain = match &request.input {
-                        ToolInput::WebFetch(input) => {
-                            crate::tools::web::domain_grant_from_input(input)
-                        }
-                        _ => None,
-                    };
-                    let reason = domain.as_ref().map_or_else(
-                        || "`web_fetch` requested an invalid or unavailable domain.".into(),
-                        |domain| {
-                            format!(
-                                "Allow `{domain}` for this session and fetch the requested URL?"
-                            )
-                        },
-                    );
-                    approval(
+            Classification::BoundaryCrossing if tool_id == "web_fetch" => {
+                let domain = match &request.input {
+                    ToolInput::WebFetch(input) => crate::tools::web::domain_grant_from_input(input),
+                    _ => None,
+                };
+                let reason = domain.as_ref().map_or_else(
+                    || "`web_fetch` requested an invalid or unavailable domain.".into(),
+                    |domain| {
+                        format!("Allow `{domain}` for this session and fetch the requested URL?")
+                    },
+                );
+                (
+                    Containment::CrossesBoundary { allowed: false },
+                    Some((
                         reason,
                         ApprovalKind::DomainGrant {
                             domains: domain.into_iter().collect(),
                         },
-                    )
-                }
-                Classification::BoundaryCrossing | Classification::AlwaysAsk => {
-                    let (reason, kind) =
-                        sandbox_area_approval(tool_state, request).unwrap_or_else(|| {
-                            (standard_approval_reason(request), ApprovalKind::Standard)
-                        });
-                    approval(reason, kind)
-                }
+                    )),
+                )
             }
-        }
-        Some(ToolPermission::Deny) => ToolPlan::Reject(crate::tools::output::error(format!(
-            "Tool `{}` is denied by Horizon policy.",
-            request.tool_id
-        ))),
-        None => ToolPlan::Reject(crate::tools::output::error(format!(
-            "Tool `{}` has no catalog permission.",
-            request.tool_id
-        ))),
+            classification => (
+                if classification == Classification::BoundaryCrossing {
+                    Containment::CrossesBoundary { allowed: false }
+                } else {
+                    Containment::Uncontained
+                },
+                Some(
+                    sandbox_area_approval(tool_state, request).unwrap_or_else(|| {
+                        (standard_approval_reason(request), ApprovalKind::Standard)
+                    }),
+                ),
+            ),
+        },
+        Some(ToolPermission::Deny) | None => (Containment::Uncontained, None),
+    };
+    let git_metadata = (permission == Some(ToolPermission::RequireApproval))
+        .then(|| crate::tools::call_writes_git_metadata(tool_state, &request.input))
+        .flatten()
+        .map(str::to_string);
+    Reach {
+        permission,
+        containment,
+        ask,
+        uncontained_write: writes_without_containment(tool_id, sandbox),
+        primary_checkout,
+        git_metadata,
     }
 }
 

@@ -11,7 +11,6 @@ use super::input::{PreparedCall, ToolInput};
 use super::output::{Response, annotate_auto_approval, error as error_output};
 use super::state::{ToolSessionState, session_runtime};
 use crate::contract::SessionId;
-use crate::policy::ToolPlan;
 
 /// What a run is given besides the call itself.
 pub(crate) struct RunContext<'a> {
@@ -36,11 +35,12 @@ impl<T: Into<ToolOutput>> From<T> for Dispatch {
 pub(crate) trait Tool: Send + Sync {
     fn definition(&self) -> &Definition;
 
-    /// Whether a call runs without asking, waits for an approval, or is
-    /// refused before it runs.
-    fn plan(&self, state: &ToolSessionState, call: &PreparedCall<'_>) -> ToolPlan;
+    /// What a call reaches (`modules::Reach`), for the verdict stage to
+    /// decide from whether it runs without asking, waits for an approval,
+    /// or is refused.
+    fn reach(&self, state: &ToolSessionState, call: &PreparedCall<'_>) -> crate::modules::Reach;
 
-    /// Runs a call whose plan lets it run without asking
+    /// Runs a call the verdict stage lets run without asking
     /// (`policy::ToolPlan::Automatic`).
     fn run(&self, cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch;
 
@@ -109,8 +109,8 @@ impl Tool for Builtin {
         &self.definition
     }
 
-    fn plan(&self, state: &ToolSessionState, call: &PreparedCall<'_>) -> ToolPlan {
-        crate::policy::plan_builtin(state, call)
+    fn reach(&self, state: &ToolSessionState, call: &PreparedCall<'_>) -> crate::modules::Reach {
+        crate::policy::builtin_reach(state, call)
     }
 
     fn run(&self, cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch {
