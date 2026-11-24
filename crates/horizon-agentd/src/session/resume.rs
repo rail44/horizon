@@ -225,8 +225,14 @@ fn resume_one_session(
     mut session_records: Vec<Record>,
 ) -> ResumeOutcome {
     session_records.sort_by_key(|record| record.sequence);
-    let provider_id = session_records
-        .iter()
+    // A forked session's branch begins in its source: what identifies this
+    // session and its environment comes from its own records only.
+    let own = || {
+        session_records
+            .iter()
+            .filter(|record| record.session_id == session_id)
+    };
+    let provider_id = own()
         .rev()
         .find_map(|record| record.provider_id.clone())
         .unwrap_or_else(|| lock_unpoisoned(&state.providers).default_provider_id());
@@ -234,10 +240,7 @@ fn resume_one_session(
     // for a session carries the same `role_id` (see
     // `event_log::Appender::new`), so the last one found scanning from
     // the tail is the session's role for its whole lifetime.
-    let role_id = session_records
-        .iter()
-        .rev()
-        .find_map(|record| record.role_id.clone());
+    let role_id = own().rev().find_map(|record| record.role_id.clone());
     if role_id
         .as_ref()
         .is_some_and(|role| unavailable_role(&state.packages(), role))
@@ -252,18 +255,17 @@ fn resume_one_session(
     if session_is_dead(&frame) {
         return ResumeOutcome::AlreadyDead;
     }
-    let persisted_context = session_records
-        .iter()
+    let persisted_context = own()
         .rev()
         .find_map(|record| record.session_context.clone());
-    let restored =
-        match environment::restore(session_id, &recorded_events, persisted_context.as_ref()) {
-            Ok(restored) => restored,
-            Err(error) => {
-                eprintln!("horizon-agentd: {error}");
-                return ResumeOutcome::NotResumed;
-            }
-        };
+    let own_events: Vec<_> = own().map(|record| record.event.clone()).collect();
+    let restored = match environment::restore(session_id, &own_events, persisted_context.as_ref()) {
+        Ok(restored) => restored,
+        Err(error) => {
+            eprintln!("horizon-agentd: {error}");
+            return ResumeOutcome::NotResumed;
+        }
+    };
     let mut events = recorded_events;
 
     let mut appender = Appender::new(
@@ -513,23 +515,23 @@ pub(crate) fn resume_session(
     }
     let _lifecycle = lifecycle;
 
-    let provider_id = records
-        .iter()
+    let own = || {
+        records
+            .iter()
+            .filter(|record| record.session_id == session_id)
+    };
+    let provider_id = own()
         .rev()
         .find_map(|record| record.provider_id.clone())
         .ok_or("Retained session has no provider identity")?;
-    let role_id = records
-        .iter()
-        .rev()
-        .find_map(|record| record.role_id.clone());
+    let role_id = own().rev().find_map(|record| record.role_id.clone());
     if role_id
         .as_ref()
         .is_some_and(|role| unavailable_role(&state.packages(), role))
     {
         return Err("Historical role is retired or unavailable".into());
     }
-    let context = records
-        .iter()
+    let context = own()
         .rev()
         .find_map(|record| record.session_context.clone())
         .ok_or("Retained session has no environment context")?;
@@ -537,17 +539,17 @@ pub(crate) fn resume_session(
         horizon_sandbox::revalidate_grant(grant).map_err(|error| error.to_string())?;
     }
     let tip = records.last().map(|record| record.event_id.clone());
-    let mut events: Vec<_> = records.into_iter().map(|record| record.event).collect();
-    let identity = events.iter().rev().find_map(|event| match event {
-        Event::EnvironmentActivated(identity) => Some(identity),
+    let identity = own().rev().find_map(|record| match &record.event {
+        Event::EnvironmentActivated(identity) => Some(identity.clone()),
         _ => None,
     });
+    let mut events: Vec<_> = records.into_iter().map(|record| record.event).collect();
     // Same rule as `resume::environment::restore`: an owned worktree is
     // restored from its activation identity, or adopted from the persisted
     // root for records that predate activation.
     let worktree = if context.isolated_worktree {
         Some(match identity {
-            Some(identity) => worktree::restore_worktree(identity, session_id.as_uuid())?,
+            Some(identity) => worktree::restore_worktree(&identity, session_id.as_uuid())?,
             None => worktree::adopt_isolated_worktree(
                 context
                     .workspace_root

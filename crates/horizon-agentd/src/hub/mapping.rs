@@ -26,6 +26,7 @@ use horizon_agent::contract::{
     self, ApprovalRequest, Event, MessageRole, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::hosting::{AgentWireEvent, ModelSelection, ReasoningSelection};
+use horizon_agent::persistence::event_log::Settled;
 
 /// Everything one mapped event can put on the connection.
 #[derive(Debug)]
@@ -88,6 +89,75 @@ pub(super) struct Mapper {
     /// While set, approvals are only recorded; the bootstrap asks for the
     /// still-pending ones after it has streamed.
     replaying: bool,
+    /// Whether the position after the events mapped so far is one the
+    /// conversation can branch from.
+    settled: Settled,
+    /// A settled position came after the last user message: the next one
+    /// gets a cursor before it.
+    cursor_pending: bool,
+}
+
+/// The cursor before the user message `message`: a settled position the
+/// session can be forked at.
+fn cursor_before(message: &v2::MessageId) -> v2::SessionUpdate {
+    v2::SessionUpdate::CursorUpdate(
+        v2::CursorUpdate::new(cursor_id_before(message))
+            .anchor(v2::CursorAnchor::UserMessage(v2::CursorMessageAnchor::new(
+                message.clone(),
+                v2::CursorAnchorPosition::Before,
+            )))
+            .capabilities(v2::CursorCapabilities::new().fork(v2::CursorForkCapabilities::new())),
+    )
+}
+
+fn cursor_id_before(message: &v2::MessageId) -> v2::CursorId {
+    v2::CursorId::new(format!("before-{}", message.0))
+}
+
+/// Where a fork of a session with `events` as its history ends the new
+/// session's history: the index of its last event, or `None` for none.
+/// At `cursor`, that is the last settled position before the user message
+/// the cursor was announced before; without one, the whole history, which
+/// must end settled. `Err` says why the position cannot be forked at.
+pub(super) fn fork_point(
+    events: &[Event],
+    cursor: Option<&v2::CursorId>,
+) -> Result<Option<usize>, String> {
+    let mut mapper = Mapper::new(
+        SessionId::new(),
+        SessionFacts {
+            provider_id: String::new(),
+            role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
+        },
+    );
+    let mut settled = Settled::new();
+    let mut last_settled = None;
+    for (index, event) in events.iter().enumerate() {
+        if let Some(cursor) = cursor {
+            let announced = mapper
+                .map(&AgentWireEvent::Event(event.clone()))
+                .into_iter()
+                .any(|outgoing| {
+                    matches!(outgoing, Outgoing::Update(update)
+                        if matches!(&*update, v2::SessionUpdate::CursorUpdate(announced)
+                            if &announced.cursor_id == cursor))
+                });
+            if announced {
+                return Ok(last_settled);
+            }
+        }
+        settled.apply(event);
+        if settled.is_settled() {
+            last_settled = Some(index);
+        }
+    }
+    match cursor {
+        Some(cursor) => Err(format!("No cursor {} in this session", cursor.0)),
+        None if settled.is_settled() => Ok(events.len().checked_sub(1)),
+        None => Err("The session is in the middle of a turn; fork it at a cursor".into()),
+    }
 }
 
 pub(super) fn acp_session_id(session_id: SessionId) -> v2::SessionId {
@@ -169,6 +239,8 @@ impl Mapper {
             state: None,
             pending_approvals: Vec::new(),
             replaying: true,
+            settled: Settled::new(),
+            cursor_pending: true,
         }
     }
 
@@ -230,7 +302,12 @@ impl Mapper {
     pub(super) fn map(&mut self, event: &AgentWireEvent) -> Vec<Outgoing> {
         let session_id = self.session_id;
         match event {
-            AgentWireEvent::Event(event) => self.map_event(event),
+            AgentWireEvent::Event(event) => {
+                let outgoing = self.map_event(event);
+                self.settled.apply(event);
+                self.cursor_pending |= self.settled.is_settled();
+                outgoing
+            }
             AgentWireEvent::ToolCallProgress(progress) => {
                 vec![Outgoing::ToolCallProgress(
                     acp::ToolCallProgressNotification {
@@ -316,6 +393,10 @@ impl Mapper {
                     }
                 };
                 self.message_seq += 1;
+                let mut outgoing = Vec::new();
+                if message.role == MessageRole::User && std::mem::take(&mut self.cursor_pending) {
+                    outgoing.push(Outgoing::update(cursor_before(&id)));
+                }
                 let content = vec![v2::ContentBlock::from(message.text.clone())];
                 let update = match message.role {
                     MessageRole::Assistant => {
@@ -337,7 +418,8 @@ impl Mapper {
                         )
                     }
                 };
-                vec![Outgoing::update(update)]
+                outgoing.push(Outgoing::update(update));
+                outgoing
             }
             Event::AssistantTextDelta(delta) => {
                 let id = self

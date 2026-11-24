@@ -200,6 +200,77 @@ impl Connection {
         Ok(())
     }
 
+    /// Starts a session whose history is `source`'s branch up to the event
+    /// `point` picks from it (`None`: none of it), in `workspace_root`. Its
+    /// first record follows that event's record, so its own branch reaches
+    /// into `source`'s.
+    pub(crate) fn handle_session_fork(
+        &self,
+        source: SessionId,
+        workspace_root: std::path::PathBuf,
+        point: impl FnOnce(&[horizon_agent::contract::Event]) -> Result<Option<usize>, String>,
+    ) -> Result<SessionId, ForkError> {
+        let _lifecycle = lock_unpoisoned(&self.state.lifecycle);
+        let writer = (self.state.writer()).ok_or(ForkError::Failed(
+            "Session persistence is unavailable".into(),
+        ))?;
+        if let Some(failure) = writer.failure() {
+            return Err(ForkError::Failed(format!(
+                "Cannot start session: event log failed: {failure}"
+            )));
+        }
+        writer
+            .flush()
+            .map_err(|error| ForkError::Failed(error.to_string()))?;
+        let records = self
+            .state
+            .flushed_session_records(source)
+            .map_err(ForkError::Failed)?;
+        let own = || {
+            records
+                .iter()
+                .rev()
+                .filter(|record| record.session_id == source)
+        };
+        let provider_id = own()
+            .find_map(|record| record.provider_id.clone())
+            .ok_or_else(|| ForkError::Position(format!("Unknown agent session {source:?}")))?;
+        let role_id = own().find_map(|record| record.role_id.clone());
+        if !lock_unpoisoned(&self.state.providers).contains(&provider_id) {
+            return Err(ForkError::Failed(format!(
+                "Unknown agent provider {}",
+                provider_id.0
+            )));
+        }
+        if let Some(role) = &role_id
+            && self.state.packages().resolve_role(role).is_none()
+        {
+            return Err(ForkError::Failed(format!("Unknown role `{}`", role.0)));
+        }
+        let events: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
+        let (history, parent) = match point(&events).map_err(ForkError::Position)? {
+            Some(last) => (
+                events[..=last].to_vec(),
+                Some(records[last].event_id.clone()),
+            ),
+            None => (Vec::new(), None),
+        };
+        let session_id = SessionId::new();
+        super::spawn::spawn_session_thread_with_context(
+            self.state.clone(),
+            session_id,
+            provider_id,
+            role_id,
+            Some(workspace_root),
+            Some(source),
+            None,
+            history,
+            None,
+            parent,
+        );
+        Ok(session_id)
+    }
+
     /// Routes an incoming `Control::HostToolResponse` back to whichever
     /// session thread's `host_tools::AgentdHostTools::execute_auto` call is blocked
     /// waiting for this exact `request_id`.
@@ -687,4 +758,13 @@ mod tests {
         assert!(connection.list_provider_models("claude").await.is_empty());
         assert!(connection.list_provider_models("typo").await.is_empty());
     }
+}
+
+/// Why a fork was not started.
+#[derive(Debug)]
+pub(crate) enum ForkError {
+    /// The source or the position in it cannot be forked.
+    Position(String),
+    /// The fork could not be started.
+    Failed(String),
 }

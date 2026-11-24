@@ -72,11 +72,14 @@ board のツールが `BoardHost` という別の口で入っている形もこ�
 - **葉を移す(書き直して再実行)**: 同じセッションが付いている葉を、過去の節から生やした新しい枝へ移す。元の枝は木に残る。
 - **新しいセッションを付ける(並べて試す)**: 指定した節に新しいセッションを付ける。元のセッションはそのまま動く。セッション同士の系譜(`docs/session-relationship-design.md`)には、どの節から生まれたかを加える。
 
-ACP では、v2 の session cursor(entry を指す位置)と `session/fork` が、この二つに当たる。どちらも今使っている crate(`agent-client-protocol-schema` 1.19.0)では unstable feature で、有効にしていない。
+ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_session_cursors`・`unstable_session_fork`)では、agent が会話の位置を cursor として告げ(`cursor_update`)、client はその cursor を `session/fork` に渡して新しいセッションを作る。cursor を受け取るメソッドは `session/fork` だけで、同じセッションの位置を戻す操作は ACP に無い。
+
+- **新しいセッションを付ける**: `session/fork` で行う。agentd は `session.fork` を広告し、決着した位置の後に最初に来る user メッセージの直前に cursor を置く(anchor は `user_message`・`before`)。`cursorId` を省くと、ターンの間にあるセッション全体を写す。
+- **葉を移す**: ACP に当たる操作が無いので、同じ cursor を受け取る `_horizon/*` の拡張で行う。
 
 ### 分岐できる位置
 
-分岐できるのは、決着した位置だけとする。user メッセージの直前か、ターンの終わりである。
+分岐できるのは、決着した位置だけとする。そこまでの event を畳んだとき、受け付けただけの入力も、開始して結果の出ていない入力も無く、ターンが開いていない位置である(`event_log::Settled`)。ターンの途中で次の入力を受け付けた場合、その入力の前には分岐できる位置が無い。
 
 途中の tool call や承認待ちを写さないので、写した履歴の末尾が結果のない tool call で終わることがない。以前の探索の子への履歴の写し(`docs/agent-explore-design.md` の Fork seeding)は、この形の末尾が chat template を壊して撤去された。
 
@@ -119,5 +122,4 @@ compaction の要約(Tier 2)は、`docs/agent-compaction-design.md` が保留と
 
 - 分岐を操作する UI(エージェントの view のどこで、どの節を選ぶか)。
 - ファイルの記録の ref をいつ消すか。
-- ACP の unstable feature(`unstable_session_fork`・`unstable_session_cursors`)を有効にするか、`_horizon/*` の拡張で持つか。
 - agentd の `frame` が streaming の delta を item として持ち続けるか。確定したメッセージを tool call の前に置く並び順をこの item が決めているが、agentd 側にその順序に頼る読み手がいるかは確かめていない。

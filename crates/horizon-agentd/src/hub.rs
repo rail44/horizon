@@ -37,7 +37,7 @@ use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::DAEMON_NAME;
-use crate::session::{AgentdState, Connection, HOST_TOOL_TIMEOUT};
+use crate::session::{AgentdState, Connection, ForkError, HOST_TOOL_TIMEOUT};
 
 use attachment::Opening;
 
@@ -257,7 +257,11 @@ impl Shared {
                 ProtocolVersion::V2,
                 v2::Implementation::new(DAEMON_NAME, env!("CARGO_PKG_VERSION")),
             )
-            .capabilities(v2::AgentCapabilities::new().session(v2::SessionCapabilities::new()))
+            .capabilities(
+                v2::AgentCapabilities::new().session(
+                    v2::SessionCapabilities::new().fork(v2::SessionForkCapabilities::new()),
+                ),
+            )
             .meta(meta),
         )?;
         if !matched {
@@ -357,6 +361,57 @@ impl Shared {
                         .await
                 }
                 Err(message) => {
+                    let _ = responder.respond_with_error(call_error(message));
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// `session/fork`: a new session from the source's history before a
+    /// cursor it announced, or from all of it when it is between turns.
+    fn fork_session(
+        self: &Arc<Self>,
+        request: v2::ForkSessionRequest,
+        responder: Responder<v2::ForkSessionResponse>,
+        cx: V2ConnectionTo<Client>,
+    ) -> Result<(), Error> {
+        if let Err(error) = self.gate() {
+            return responder.respond_with_error(error);
+        }
+        let Some(source) = mapping::parse_session_id(&request.session_id) else {
+            return responder.respond_with_error(Error::new(
+                agent_client_protocol::ErrorCode::INVALID_PARAMS,
+                format!("Unknown agent session {}", request.session_id),
+            ));
+        };
+        let cursor = request.cursor_id;
+        let workspace_root = request.cwd.into_inner();
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.connection.wait_until_resume_ready().await;
+            let connection = this.connection.clone();
+            let forked = tokio::task::spawn_blocking(move || {
+                connection.handle_session_fork(source, workspace_root, |events| {
+                    mapping::fork_point(events, cursor.as_ref())
+                })
+            })
+            .await
+            .unwrap_or_else(|error| {
+                Err(ForkError::Failed(format!("Session fork failed: {error}")))
+            });
+            match forked {
+                Ok(session_id) => {
+                    this.open_attachment(session_id, Opening::Fork(responder), cx)
+                        .await
+                }
+                Err(ForkError::Position(message)) => {
+                    let _ = responder.respond_with_error(Error::new(
+                        agent_client_protocol::ErrorCode::INVALID_PARAMS,
+                        message,
+                    ));
+                }
+                Err(ForkError::Failed(message)) => {
                     let _ = responder.respond_with_error(call_error(message));
                 }
             }
@@ -722,6 +777,7 @@ where
     let builder = on_request!(builder, v2::InitializeRequest, initialize);
     let builder = on_request!(builder, v2::NewSessionRequest, new_session);
     let builder = on_request!(builder, v2::ResumeSessionRequest, resume_session);
+    let builder = on_request!(builder, v2::ForkSessionRequest, fork_session);
     let builder = on_request!(builder, v2::ListSessionsRequest, list_sessions);
     let builder = on_request!(builder, v2::PromptRequest, prompt);
     let builder = on_request!(builder, v2::CloseSessionRequest, close_session);

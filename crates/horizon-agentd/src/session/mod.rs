@@ -62,7 +62,7 @@ mod subscription;
 pub(crate) mod test_support;
 
 pub(crate) use self::attachment::{AttachmentLease, Bootstrap};
-pub(crate) use self::connection::Connection;
+pub(crate) use self::connection::{Connection, ForkError};
 pub(crate) use self::host_tools::HOST_TOOL_TIMEOUT;
 pub(crate) use self::resume::{
     resume_persisted_sessions, resume_persisted_sessions_from_projection, resume_session,

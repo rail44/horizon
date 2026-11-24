@@ -92,8 +92,95 @@ fn message_ids_follow_commits_and_tool_calls() {
     let ids: Vec<_> = updates.iter().filter_map(message_id).collect();
     assert_eq!(ids, ["msg-0", "msg-1", "msg-1", "msg-1", "msg-3"]);
     std::assert_matches!(
-        &updates[3], v2::SessionUpdate::AgentMessage(message)
+        updates.iter().find(|update| matches!(update, v2::SessionUpdate::AgentMessage(_))),
+        Some(v2::SessionUpdate::AgentMessage(message))
         if message.content == MaybeUndefined::Value(vec!["Mock response".to_string().into()])
+    );
+}
+
+fn input_accepted(id: &str) -> Event {
+    Event::InputAccepted(
+        serde_json::from_value(serde_json::json!({"id": id, "origin": "user", "text": id}))
+            .unwrap(),
+    )
+}
+
+fn input_finished(id: &str) -> Event {
+    Event::InputOutcome(horizon_agent::contract::SessionInputOutcome {
+        delivery_id: format!("result:{id}"),
+        input_ids: vec![id.into()],
+        reply_to: None,
+        outcome: horizon_agent::contract::InputResult::Interrupted,
+    })
+}
+
+/// One whole turn for input `id`, from its acceptance to its outcome.
+fn turn(id: &str) -> Vec<Event> {
+    vec![
+        input_accepted(id),
+        Event::InputStarted(vec![id.into()]),
+        committed(MessageRole::User, id),
+        committed(MessageRole::Assistant, "done"),
+        Event::TurnEnded(TurnEndReason::Completed),
+        input_finished(id),
+    ]
+}
+
+/// The cursors announced, each with the user message it is before.
+fn cursors(updates: &[v2::SessionUpdate]) -> Vec<(String, String)> {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            v2::SessionUpdate::CursorUpdate(cursor) => match &cursor.anchor {
+                Some(v2::CursorAnchor::UserMessage(anchor)) => {
+                    assert_eq!(anchor.position, v2::CursorAnchorPosition::Before);
+                    Some((
+                        cursor.cursor_id.0.to_string(),
+                        anchor.message_id.0.to_string(),
+                    ))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_cursor_comes_before_each_user_message_that_follows_a_settled_position() {
+    let events: Vec<_> = [turn("a"), turn("b")].concat();
+    let updates = updates(&mut mapper(), &events);
+    assert_eq!(
+        cursors(&updates),
+        [
+            ("before-msg-0".to_string(), "msg-0".to_string()),
+            ("before-msg-2".to_string(), "msg-2".to_string()),
+        ]
+    );
+    let first_cursor = updates
+        .iter()
+        .position(|update| matches!(update, v2::SessionUpdate::CursorUpdate(_)))
+        .unwrap();
+    std::assert_matches!(
+        &updates[first_cursor + 1],
+        v2::SessionUpdate::UserMessage(message) if message.message_id.0.as_ref() == "msg-0"
+    );
+}
+
+#[test]
+fn a_message_queued_during_a_turn_gets_no_cursor() {
+    let mut events = vec![
+        input_accepted("a"),
+        Event::InputStarted(vec!["a".into()]),
+        committed(MessageRole::User, "a"),
+        input_accepted("b"),
+        Event::TurnEnded(TurnEndReason::Completed),
+        input_finished("a"),
+    ];
+    events.extend(turn("b").into_iter().skip(1));
+    assert_eq!(
+        cursors(&updates(&mut mapper(), &events)),
+        [("before-msg-0".to_string(), "msg-0".to_string())]
     );
 }
 

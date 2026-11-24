@@ -2663,3 +2663,123 @@ async fn large_history_survives_abandoned_replay_and_daemon_restart() {
     let restored = resume(&mut client, session).await.unwrap();
     assert_eq!(user_texts(&restored), history);
 }
+
+/// The user messages on `session`'s branch of the log, in order.
+fn branch_user_messages(log: &Path, session: SessionId) -> Vec<String> {
+    let records = horizon_agent::persistence::event_log::read(log)
+        .unwrap()
+        .records;
+    horizon_agent::persistence::event_log::Log::new(records)
+        .branch(session)
+        .into_iter()
+        .filter_map(|record| match record.event {
+            Event::MessageCommitted(message) if message.role == MessageRole::User => {
+                Some(message.text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One prompt answered, up to the session going idle again.
+async fn prompt_and_settle(
+    client: &mut AcpClient,
+    session_id: SessionId,
+    text: &str,
+) -> Vec<Inbound> {
+    prompt(client, session_id, text).await;
+    let answer = format!("Mock response: {text}");
+    let mut answered = false;
+    collect_until(client, |inbound| {
+        answered |= agent_message(inbound).as_deref() == Some(answer.as_str());
+        answered && idle_stop_reason(inbound).is_some()
+    })
+    .await
+}
+
+/// The cursor announced before the user message `text`.
+fn cursor_before_message(collected: &[Inbound], text: &str) -> v2::CursorId {
+    let message_id = collected
+        .iter()
+        .find_map(|inbound| match update(inbound)? {
+            v2::SessionUpdate::UserMessage(message) if content_text(&message.content) == text => {
+                Some(message.message_id.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no user message {text:?} in {collected:?}"));
+    collected
+        .iter()
+        .find_map(|inbound| match update(inbound)? {
+            v2::SessionUpdate::CursorUpdate(cursor) => match &cursor.anchor {
+                Some(v2::CursorAnchor::UserMessage(anchor)) if anchor.message_id == message_id => {
+                    Some(cursor.cursor_id.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no cursor before {text:?} in {collected:?}"))
+}
+
+/// A session forked at the cursor before its second message holds the first
+/// exchange, goes on by itself while the source keeps its own, and comes
+/// back with that branch after the daemon restarts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart() {
+    let mut daemon = spawn_agentd();
+    let log = daemon.event_log_path.clone();
+    let mut client = connect(&daemon.socket_path).await;
+    let source = SessionId::new();
+    open_session(&client, session_new(source)).await;
+    prompt_and_settle(&mut client, source, "one").await;
+    let collected = prompt_and_settle(&mut client, source, "two").await;
+    let cursor = cursor_before_message(&collected, "two");
+
+    let unknown = client
+        .request(
+            v2::ForkSessionRequest::new(acp_id(source), test_cwd())
+                .cursor_id(v2::CursorId::new("before-nowhere")),
+        )
+        .await
+        .expect_err("an unannounced cursor is refused");
+    assert_eq!(
+        unknown.code,
+        agent_client_protocol::ErrorCode::INVALID_PARAMS
+    );
+
+    let forked = client
+        .request(v2::ForkSessionRequest::new(acp_id(source), test_cwd()).cursor_id(cursor))
+        .await
+        .expect("session/fork at an announced cursor succeeds");
+    let fork = SessionId::from_uuid(forked.session_id.0.parse().unwrap());
+    assert_ne!(fork, source);
+    prompt_and_settle(&mut client, fork, "three").await;
+
+    assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
+    assert_eq!(branch_user_messages(&log, fork), ["one", "three"]);
+    horizon_agent::persistence::validate_history(&log).unwrap();
+
+    client.drain().await;
+    drop(client);
+    let status = wait_for_exit(&mut daemon.child).await;
+    assert!(status.success(), "the drained daemon ended with {status:?}");
+    daemon = daemon.respawn_at_same_paths();
+    let mut client = connect(&daemon.socket_path).await;
+    let replayed: Vec<_> = resume(&mut client, fork)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(user_message)
+        .collect();
+    assert_eq!(replayed, ["one", "three"]);
+    let answered = prompt_and_settle(&mut client, fork, "four").await;
+    assert!(
+        answered
+            .iter()
+            .any(|inbound| agent_message(inbound).as_deref() == Some("Mock response: four")),
+        "{answered:?}"
+    );
+    assert_eq!(branch_user_messages(&log, fork), ["one", "three", "four"]);
+    assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
+}

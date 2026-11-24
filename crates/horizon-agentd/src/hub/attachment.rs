@@ -23,6 +23,8 @@ pub(super) enum Opening {
     New(Responder<v2::NewSessionResponse>),
     /// Answered once the bootstrap has streamed.
     Resume(Responder<v2::ResumeSessionResponse>),
+    /// Answered before the bootstrap streams, as [`Self::New`].
+    Fork(Responder<v2::ForkSessionResponse>),
 }
 
 impl Opening {
@@ -30,6 +32,7 @@ impl Opening {
         let _ = match self {
             Self::New(responder) => responder.respond_with_error(call_error(message)),
             Self::Resume(responder) => responder.respond_with_error(call_error(message)),
+            Self::Fork(responder) => responder.respond_with_error(call_error(message)),
         };
     }
 }
@@ -255,6 +258,13 @@ async fn run(
     let resume = match opening {
         Opening::New(responder) => {
             let response = v2::NewSessionResponse::new(sink.acp_id.clone())
+                .config_options(mapper.config_options())
+                .meta(horizon_meta(&mapper.session_info_meta()));
+            let _ = responder.respond(response);
+            None
+        }
+        Opening::Fork(responder) => {
+            let response = v2::ForkSessionResponse::new(sink.acp_id.clone())
                 .config_options(mapper.config_options())
                 .meta(horizon_meta(&mapper.session_info_meta()));
             let _ = responder.respond(response);

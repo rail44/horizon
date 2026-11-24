@@ -13,12 +13,14 @@ use crate::roles::RoleId;
 
 mod appender;
 mod health;
+mod settled;
 mod turn;
 mod writer;
 
 pub use crate::providers::rig::conversation::interrupted_conversation_calls;
 pub use appender::{Appender, PendingEvents};
 pub use health::FailureSubscription;
+pub use settled::Settled;
 use turn::TurnTracker;
 pub use writer::BeforeRebuild;
 pub use writer::{WriterHandle, WriterInit};

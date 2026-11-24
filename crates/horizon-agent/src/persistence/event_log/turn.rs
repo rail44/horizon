@@ -67,7 +67,7 @@ impl TurnTracker {
     }
 }
 
-fn ends_turn(event: &Event) -> bool {
+pub(super) fn ends_turn(event: &Event) -> bool {
     matches!(event, Event::TurnEnded(_))
         || matches!(
             event,
