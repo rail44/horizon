@@ -99,8 +99,9 @@ pub(super) fn spawn_rig_session(
             };
             let rig_history = persisted.messages;
             let cleared_occurrence_ids = persisted.cleared_occurrence_ids;
+            let modules = crate::modules::builtin(&config, role);
             let extra_sections =
-                session_extra_sections(&environment, &config, role, trusted_project);
+                session_extra_sections(&modules, &environment, &config, role, trusted_project);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -142,6 +143,7 @@ pub(super) fn spawn_rig_session(
                     config,
                     environment,
                     extra_sections,
+                    modules,
                     role,
                     rig_history,
                     cleared_occurrence_ids,

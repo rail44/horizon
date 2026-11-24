@@ -26,6 +26,7 @@ impl SessionLoopState {
                         let mut config = self.config.clone();
                         config.trusted_project = trusted_project;
                         let sections = super::super::session_prompt::session_extra_sections(
+                            &self.modules,
                             &environment,
                             &config,
                             self.role,

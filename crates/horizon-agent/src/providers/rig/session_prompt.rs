@@ -37,92 +37,20 @@ pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment 
 /// byte-identical only in the hypothetical case of an empty registry,
 /// exercised directly in `skills`' own tests.
 pub(super) fn session_extra_sections(
+    modules: &[std::sync::Arc<dyn crate::modules::SessionModule>],
     environment: &SessionEnvironment,
     config: &RigAgentConfig,
     role: Option<&'static RoleDefinition>,
     trusted_project: bool,
 ) -> Vec<String> {
-    // Untrusted project: embedded skills only (no `.horizon/skills/`
-    // discovery), and no `AGENTS.md`/`CLAUDE.md` injection — see the `skills`
-    // module doc's trust note. Embedded skills
-    // are ship-native, so they stay advertised; the repository layer is the
-    // only thing the gate suppresses.
-    let skills = if trusted_project {
-        crate::skills::SkillRegistry::discover(&environment.cwd)
-    } else {
-        crate::skills::SkillRegistry::embedded()
+    let cx = crate::modules::ResolveContext {
+        environment,
+        config,
+        role,
+        trusted_project,
     };
-    let mut sections = Vec::new();
-    if advertises_task_tool(config) {
-        sections.push(crate::prompt::DELEGATION_ROUTING_SECTION.to_string());
-    }
-    let include_repository_instructions = match role {
-        Some(role) => {
-            // A role with an empty section contributes nothing rather than
-            // a blank paragraph in the prompt.
-            if !role.prompt_section.is_empty() {
-                sections.push(role.prompt_section.to_string());
-            }
-            if let Some(skills_section) = skills.prompt_section_for_ids(role.skill_ids) {
-                sections.push(skills_section);
-            }
-            role.include_repository_instructions
-        }
-        None => {
-            if let Some(skills_section) = skills.prompt_section_for_all() {
-                sections.push(skills_section);
-            }
-            true
-        }
-    };
-    if trusted_project && include_repository_instructions {
-        sections.extend(crate::instructions::extra_sections(
-            &environment.cwd,
-            config.repository_instructions_cap_chars,
-        ));
-    } else if !trusted_project {
-        // One-line note so the model doesn't read the absence of AGENTS.md
-        // as an anomaly — the repository's content was deliberately not
-        // loaded because the project is untrusted.
-        sections.push(
-            "Repository content not loaded (untrusted project) — AGENTS.md/CLAUDE.md and \
-             .horizon/skills/ were not injected into this prompt; this is expected, not an error."
-                .to_string(),
-        );
-    }
-    // Project knowledge index (trusted projects only — same gate as
-    // skills/instructions above). A 5th section, appended after
-    // repository instructions, listing `id: description` for every
-    // `status: active` entry in the user-side knowledge store keyed by
-    // this session's project main root. `None` (and thus no section)
-    // when the store doesn't exist or has no active entries.
-    if trusted_project
-        && let Some(knowledge_section) = crate::knowledge::prompt_section(&environment.cwd)
-    {
-        sections.push(knowledge_section);
-    }
-    sections
-}
-
-/// Whether this session is actually offered the `task` tool, decided from
-/// the same allowlist `completion::rig_tool_definitions` filters the
-/// advertised catalog with -- `config` here is already role-adjusted
-/// (`super::role_adjusted_config`, applied before `spawn_rig_session`), so
-/// `None` means the unrestricted role-less toolset and `Some` is the role's
-/// exact list.
-///
-/// This is the whole conditionality of `prompt::DELEGATION_ROUTING_SECTION`.
-/// The probes measured its wording unhedged ("your FIRST action must be
-/// task"), so the wording keeps no "when it is available" escape clause;
-/// instead the block is simply absent from a prompt whose session has no
-/// such tool. An exploration session is exactly that case: its role allows
-/// `fs_read`/`fs_grep`/`fs_glob` only (`roles::EXPLORE_ROLE`, which
-/// deliberately excludes this tool so explorations cannot recurse), and
-/// instructing it to delegate first would be an instruction it could only
-/// fail.
-fn advertises_task_tool(config: &RigAgentConfig) -> bool {
-    match &config.allowed_tool_ids {
-        Some(allowed) => allowed.iter().any(|id| id == crate::tools::TASK_TOOL_ID),
-        None => true,
-    }
+    crate::modules::sections(modules, &cx)
+        .into_iter()
+        .map(|section| section.text)
+        .collect()
 }

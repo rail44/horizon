@@ -2424,7 +2424,13 @@ fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_r
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
-    let sections = session_extra_sections(&environment, &config, None, true);
+    let sections = session_extra_sections(
+        &crate::modules::builtin(&config, None),
+        &environment,
+        &config,
+        None,
+        true,
+    );
     let expected_instructions = crate::instructions::extra_sections(
         &environment.cwd,
         config.repository_instructions_cap_chars,
@@ -2471,7 +2477,13 @@ fn session_extra_sections_lists_a_repository_skill_discovered_from_cwd_for_a_rol
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
-    let sections = session_extra_sections(&environment, &config, None, true);
+    let sections = session_extra_sections(
+        &crate::modules::builtin(&config, None),
+        &environment,
+        &config,
+        None,
+        true,
+    );
 
     // [0] is the delegation-routing block; the skills section follows it.
     assert!(
@@ -2497,7 +2509,13 @@ fn session_extra_sections_skips_repository_content_for_an_untrusted_project() {
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
-    let sections = session_extra_sections(&environment, &config, None, false);
+    let sections = session_extra_sections(
+        &crate::modules::builtin(&config, None),
+        &environment,
+        &config,
+        None,
+        false,
+    );
 
     // Delegation routing is still present (it's not repo-controlled).
     assert_eq!(
@@ -2544,7 +2562,13 @@ fn session_extra_sections_loads_repository_content_for_a_trusted_project() {
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
-    let sections = session_extra_sections(&environment, &config, None, true);
+    let sections = session_extra_sections(
+        &crate::modules::builtin(&config, None),
+        &environment,
+        &config,
+        None,
+        true,
+    );
 
     // Repository skill IS present for a trusted project.
     assert!(
@@ -2580,7 +2604,13 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
     let cwd = git_repo_with_agents_md("delegation-routing");
     let environment = test_environment(cwd.clone());
 
-    let role_less = session_extra_sections(&environment, &RigAgentConfig::default(), None, true);
+    let role_less = session_extra_sections(
+        &crate::modules::builtin(&RigAgentConfig::default(), None),
+        &environment,
+        &RigAgentConfig::default(),
+        None,
+        true,
+    );
     assert!(
         role_less.contains(&crate::prompt::DELEGATION_ROUTING_SECTION.to_string()),
         "a role-less session advertises `task`, so it must be routed to it: {role_less:?}"
@@ -2589,8 +2619,13 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
     let explore_role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
         .expect("the explore role must resolve");
     let explore_config = role_adjusted_config(&RigAgentConfig::default(), Some(explore_role));
-    let explore_sections =
-        session_extra_sections(&environment, &explore_config, Some(explore_role), true);
+    let explore_sections = session_extra_sections(
+        &crate::modules::builtin(&explore_config, Some(explore_role)),
+        &environment,
+        &explore_config,
+        Some(explore_role),
+        true,
+    );
     assert!(
         !explore_sections
             .iter()

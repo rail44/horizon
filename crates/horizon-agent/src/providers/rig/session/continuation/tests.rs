@@ -1,10 +1,17 @@
 use super::*;
+use crate::config::RigAgentConfig;
 use crate::contract::{ConversationRecord, ProviderEvent, TurnEndReason};
+use crate::decision::{Answer, DecisionClient, DecisionRequest, Question};
 use crate::decision::{DecisionConfig, DecisionResponse, Usage};
+use crate::modules::continuation::*;
 use async_trait::async_trait;
 use serde_json::Value;
+use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -162,10 +169,13 @@ async fn session(
             model: "chat-model".into(),
             ..Default::default()
         },
-        continuation: ContinuationState {
-            check,
-            ..Default::default()
-        },
+        modules: check
+            .map(|check| {
+                std::sync::Arc::new(crate::modules::DecisionContinuation::new(check))
+                    as std::sync::Arc<dyn crate::modules::SessionModule>
+            })
+            .into_iter()
+            .collect(),
         events_tx,
         ..Default::default()
     };

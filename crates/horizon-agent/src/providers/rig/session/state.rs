@@ -51,7 +51,9 @@ pub(crate) struct SessionLoopState {
     /// The token budget and the truncation-continue bound.
     pub(crate) guard: TurnLoopGuard,
 
-    /// The turn-continuation check and its per-turn inputs
+    /// What customizes this session (`crate::modules`), composed at start.
+    pub(crate) modules: Vec<std::sync::Arc<dyn crate::modules::SessionModule>>,
+    /// The continue stage's per-turn inputs
     /// (`docs/agent-decision-model-design.md`).
     pub(crate) continuation: super::continuation::ContinuationState,
 
@@ -80,6 +82,7 @@ impl Default for SessionLoopState {
             execution: Default::default(),
             guard: TurnLoopGuard::new(None),
             continuation: Default::default(),
+            modules: Vec::new(),
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
             environment: SessionEnvironment::for_workspace_root(None),
@@ -106,6 +109,7 @@ impl SessionLoopState {
         config: RigAgentConfig,
         environment: SessionEnvironment,
         extra_sections: Vec<String>,
+        modules: Vec<std::sync::Arc<dyn crate::modules::SessionModule>>,
         role: Option<&'static RoleDefinition>,
         rig_history: ConversationHistory,
         cleared_occurrence_ids: Vec<OccurrenceId>,
@@ -113,10 +117,7 @@ impl SessionLoopState {
         let mut clearing = super::discover_clearing_state(&config).await;
         clearing.seed_cleared(cleared_occurrence_ids);
         // Only where the config and role call for it.
-        let continuation = super::continuation::ContinuationState {
-            check: super::continuation::ContinuationCheck::for_session(&config, role),
-            ..Default::default()
-        };
+        let continuation = super::continuation::ContinuationState::default();
         Self {
             inputs: super::input::Inputs::default(),
             activation: VecDeque::new(),
@@ -129,6 +130,7 @@ impl SessionLoopState {
             execution: Default::default(),
             guard: TurnLoopGuard::new(config.turn_token_budget),
             continuation,
+            modules,
             config,
             environment,
             extra_sections,
