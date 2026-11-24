@@ -1,10 +1,17 @@
 # Agent history format
 
-The current event-log format is v4; the agent wire is v27. The offline
-converter from v1/v2/v3 logs was removed 2026-11-24: the
-owner's log holds no record older than v4. Its code remains only as the
-builder of test fixtures (`providers::rig::conversation::upgrade`, compiled for
-tests); an older log can be converted with a build from before that date.
+The current event-log format is v5; the agent wire is v27. A v5 record names
+the record before it on its branch of the conversation (`parent_id`), so a
+conversation is a tree: a session's history is the chain walked back from
+its latest record (`docs/agent-core-extension-design.md`, "会話"). Records
+written beside the conversation, such as the judge's verdicts, have no
+parent and are not on any branch.
+
+`horizon-agentd` does not convert an older log: it moves the log and the
+DuckDB projection built from it aside under a `.pre-<time>` name and starts
+a fresh one, and the old sessions are not resumed. The v3 to v4 converter
+remains only as the builder of test fixtures
+(`providers::rig::conversation::upgrade`, compiled for tests).
 
 Every tool request, start, approval, approval decision, and result names both
 `call_id` and `occurrence_id`. A retry keeps the provider's call ID and gets a

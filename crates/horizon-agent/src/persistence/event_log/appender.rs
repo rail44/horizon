@@ -30,6 +30,8 @@ pub struct Appender {
     role_id: Option<RoleId>,
     session_context: Option<PersistedSessionContext>,
     turn_tracker: TurnTracker,
+    /// The record the next one follows on this session's branch.
+    parent: Option<String>,
 }
 
 impl Appender {
@@ -46,6 +48,7 @@ impl Appender {
             role_id,
             session_context: None,
             turn_tracker: TurnTracker::new(),
+            parent: None,
         }
     }
 
@@ -80,7 +83,15 @@ impl Appender {
         {
             self.turn_tracker
                 .restore(&record.event, record.turn_id.as_deref());
+            self.parent = Some(record.event_id.clone());
         }
+        self
+    }
+
+    /// Starts this session's branch after `parent`: a record of the session
+    /// it is forked from.
+    pub fn with_parent(mut self, parent: Option<String>) -> Self {
+        self.parent = parent;
         self
     }
 
@@ -112,10 +123,13 @@ impl Appender {
                 continue;
             };
             let turn_id = self.turn_tracker.turn_id_for_event(&event);
+            let event_id = Uuid::new_v4().to_string();
+            let parent_id = self.parent.replace(event_id.clone());
             let record = Record {
                 schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
                 version: AGENT_EVENT_LOG_VERSION,
-                event_id: Uuid::new_v4().to_string(),
+                event_id,
+                parent_id,
                 sequence: 0,
                 session_id: self.session_id,
                 turn_id,

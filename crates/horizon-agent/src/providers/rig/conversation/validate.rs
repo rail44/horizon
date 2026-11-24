@@ -13,7 +13,7 @@ pub fn validate_conversation_records(rows: &[Value]) -> Result<(), String> {
         let record: crate::persistence::event_log::Record =
             serde_json::from_value(row.clone()).map_err(|error| error.to_string())?;
         if record.schema != "horizon.agent.event_log"
-            || record.version != 4
+            || record.version != crate::persistence::event_log::AGENT_EVENT_LOG_VERSION
             || record.event_id.is_empty()
             || !ids.insert(record.event_id)
             || previous.is_some_and(|prior| record.sequence <= prior)

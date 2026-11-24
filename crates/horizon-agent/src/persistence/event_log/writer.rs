@@ -945,6 +945,7 @@ mod tests {
             schema: super::super::AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: super::super::AGENT_EVENT_LOG_VERSION,
             event_id: Uuid::new_v4().to_string(),
+            parent_id: None,
             sequence,
             session_id,
             turn_id: None,

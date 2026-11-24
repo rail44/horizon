@@ -356,6 +356,49 @@ fn read_whole_log(state: &AgentdState, agent_config: &AgentConfig) -> anyhow::Re
 /// is indistinguishable from -- and handled the same as -- an explicit
 /// `None`.
 fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
+    match open_persistence_once(agent_config) {
+        Err(error)
+            if error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>() =>
+        {
+            eprintln!("horizon-agentd: {error}");
+            move_old_history_aside(agent_config)?;
+            open_persistence_once(agent_config)
+        }
+        opened => opened,
+    }
+}
+
+/// Moves a log this build cannot read, and the DuckDB projection built from
+/// it (with its WAL), aside under a `.pre-<time>` name, so the daemon starts
+/// with a fresh history. The old sessions are not resumed.
+fn move_old_history_aside(agent_config: &AgentConfig) -> anyhow::Result<()> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let log = &agent_config.persistence.event_log_path;
+    let mut paths = vec![log.clone()];
+    if let Some(duckdb) = &agent_config.persistence.duckdb_path {
+        paths.push(duckdb.clone());
+        let mut wal = duckdb.clone().into_os_string();
+        wal.push(".wal");
+        paths.push(PathBuf::from(wal));
+    }
+    for path in paths.into_iter().filter(|path| path.exists()) {
+        let mut aside = path.clone().into_os_string();
+        aside.push(format!(".pre-{stamp}"));
+        let aside = PathBuf::from(aside);
+        std::fs::rename(&path, &aside)?;
+        eprintln!(
+            "horizon-agentd: moved {} aside to {}",
+            path.display(),
+            aside.display()
+        );
+    }
+    Ok(())
+}
+
+fn open_persistence_once(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
     let before_rebuild = test_gate(TEST_DUCKDB_REBUILD_GATE_VAR).map(|gate| {
         Box::new(move || wait_for_gate(&gate))
             as horizon_agent::persistence::event_log::BeforeRebuild
@@ -441,7 +484,7 @@ mod tests {
     const GATED_STARTUP_READ: Duration = Duration::from_millis(750);
 
     #[test]
-    fn unsupported_log_format_cannot_fall_back_to_a_persistence_disabled_daemon() {
+    fn an_older_log_is_moved_aside_and_a_fresh_one_starts() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
         let mut record = state_record(horizon_agent::contract::SessionId::new(), 7);
@@ -450,12 +493,17 @@ mod tests {
         std::fs::write(&path, &original).unwrap();
         let mut config = session::test_support::test_config();
         config.persistence.event_log_path = path.clone();
-        let error = match open_persistence(&config) {
-            Ok(_) => panic!("old format must refuse startup"),
-            Err(error) => error,
+        let Ok(startup) = open_persistence(&config) else {
+            panic!("an older log is moved aside rather than refusing startup");
         };
-        assert!(error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>());
-        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+        assert!(startup.records.is_empty(), "the fresh log holds nothing");
+        let aside: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.to_string_lossy().contains("events.jsonl.pre-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), original);
     }
 
     #[test]
@@ -469,8 +517,9 @@ mod tests {
     fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {
         Record {
             schema: "horizon.agent.event_log".to_string(),
-            version: 4,
+            version: 5,
             event_id: uuid::Uuid::new_v4().to_string(),
+            parent_id: None,
             sequence,
             session_id,
             turn_id: None,

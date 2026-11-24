@@ -6,8 +6,9 @@ use std::io::Write;
 pub(crate) fn record(session_id: SessionId, event: Event) -> Record {
     Record {
         schema: "horizon.agent.event_log".into(),
-        version: 4,
+        version: 5,
         event_id: uuid::Uuid::new_v4().to_string(),
+        parent_id: None,
         sequence: 1,
         session_id,
         turn_id: None,

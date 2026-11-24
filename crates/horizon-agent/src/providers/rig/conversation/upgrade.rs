@@ -32,7 +32,10 @@ impl LegacyResponse {
 /// Original record identities and authority metadata survive; inserted records
 /// receive fresh IDs and the output's sequence is assigned in source order.
 pub(crate) fn upgrade_conversation_records(records: &[Value]) -> Result<Vec<Value>, String> {
-    if records.iter().all(|row| row["version"] == 4) {
+    if records
+        .iter()
+        .all(|row| row["version"] == crate::persistence::event_log::AGENT_EVENT_LOG_VERSION)
+    {
         validate_conversation_records(records)?;
         return Ok(records.to_vec());
     }
@@ -77,7 +80,7 @@ pub(crate) fn upgrade_conversation_records(records: &[Value]) -> Result<Vec<Valu
             .ok_or("Missing session identity")?;
         let session = sessions.entry(session_id.into()).or_default();
         let mut row = source.clone();
-        row["version"] = 4.into();
+        row["version"] = crate::persistence::event_log::AGENT_EVENT_LOG_VERSION.into();
         if let Some(cleared) = row["event"].get_mut("HistoryCleared") {
             convert_clearing(session, cleared)?;
         }
@@ -135,7 +138,7 @@ fn close_pending(
         let event = Event::ToolCallFinished(ToolCallResult::cancelled(identity));
         session.history.apply_event(&event)?;
         let mut row = template.clone();
-        row["version"] = 4.into();
+        row["version"] = crate::persistence::event_log::AGENT_EVENT_LOG_VERSION.into();
         row["event_id"] = uuid::Uuid::new_v4().to_string().into();
         row["event_kind"] = crate::contract::event_kind(&event).into();
         row["provider_payload"] = Value::Null;

@@ -219,6 +219,7 @@ impl Store {
                 schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
                 version: AGENT_EVENT_LOG_VERSION,
                 event_id: row.get(0)?,
+                parent_id: None,
                 sequence: row.get(2)?,
                 session_id,
                 turn_id: row.get(1)?,

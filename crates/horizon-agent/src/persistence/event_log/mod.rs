@@ -23,7 +23,7 @@ pub use writer::BeforeRebuild;
 pub use writer::{WriterHandle, WriterInit};
 
 pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
-pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 4;
+pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 5;
 
 /// A format cutover requires operator action, not a persistence-disabled run.
 #[derive(Debug)]
@@ -83,6 +83,13 @@ pub struct Record {
     pub schema: String,
     pub version: u32,
     pub event_id: String,
+    /// The record before this one on its branch of the conversation
+    /// (`docs/agent-core-extension-design.md`, "会話"): the session's
+    /// previous record, or, where a branch starts, an earlier record of this
+    /// session or of the session it was forked from. `None` for a
+    /// conversation's first record. A session's history is the chain
+    /// walked back from its latest record.
+    pub parent_id: Option<String>,
     pub sequence: u64,
     pub session_id: SessionId,
     pub turn_id: Option<String>,
@@ -112,6 +119,7 @@ struct RecordEnvelope {
     schema: String,
     version: u32,
     event_id: String,
+    parent_id: Option<String>,
     sequence: u64,
     session_id: SessionId,
     turn_id: Option<String>,
@@ -769,6 +777,7 @@ mod tests {
             schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: AGENT_EVENT_LOG_VERSION,
             event_id: "event-1".to_string(),
+            parent_id: None,
             sequence: 0,
             session_id,
             turn_id: None,
@@ -809,6 +818,7 @@ mod tests {
             schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: AGENT_EVENT_LOG_VERSION,
             event_id: event_id.to_string(),
+            parent_id: None,
             sequence,
             session_id,
             turn_id: None,
@@ -1075,6 +1085,7 @@ mod cursor_tests {
             schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: AGENT_EVENT_LOG_VERSION,
             event_id: format!("event-{sequence}"),
+            parent_id: None,
             sequence,
             session_id,
             turn_id: None,

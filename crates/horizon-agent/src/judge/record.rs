@@ -117,6 +117,7 @@ fn append(writer: &WriterHandle, session_id: SessionId, payload: serde_json::Val
         schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
         version: AGENT_EVENT_LOG_VERSION,
         event_id: Uuid::new_v4().to_string(),
+        parent_id: None,
         sequence: 0, // reassigned by the writer's background thread
         session_id,
         turn_id: None,
