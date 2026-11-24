@@ -12,6 +12,7 @@ mod external;
 pub(crate) use external::requires_trusted_project as external_requires_trust;
 pub use external::{ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor};
 mod fs;
+pub mod gate;
 pub(crate) mod input;
 mod knowledge;
 mod network;

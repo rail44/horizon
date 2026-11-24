@@ -18,6 +18,14 @@ pub enum ToolUpdate {
 }
 
 impl ToolUpdate {
+    /// The events it recorded, and the result it finished with, if it did.
+    pub fn into_parts(self) -> (Vec<Event>, Option<ToolCallResult>) {
+        match self {
+            Self::Started { events } => (events, None),
+            Self::Finished { events, result } => (events, Some(result)),
+        }
+    }
+
     pub(crate) fn start(
         live: &LiveState,
         request: &ToolCallRequest,

@@ -7,139 +7,64 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 
 use horizon_agent::contract::{
-    ApprovalDecisionPayload, ApprovalRequest, Command, ContinueTurnRequested, Event, OccurrenceId,
-    ProviderEvent, SessionId, SessionState, ToolCallId,
+    ApprovalDecisionPayload, Command, ContinueTurnRequested, Event, SessionId, ToolCallId,
 };
 use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
-use horizon_agent::tools::{
-    ApprovalCandidate, ApprovalDecision, ApprovalGate, ApprovalOutcome, ToolSessionState,
-    refuse_unattended, resolve_approval, should_fold_completion, start_approval_gate,
-    unattended_refusal_result,
-};
+use horizon_agent::tools::gate::GateStep;
+use horizon_agent::tools::{ApprovalDecision, ApprovalOutcome, resolve_approval};
 
-use super::events::{apply_and_send_session_events, send_session_event};
+use super::events::{
+    apply_and_send_session_events, report_persistence_failure, send_session_event,
+};
 use super::state::AgentdState;
 
-/// Intercepts the policy-generated human prompt after its kind/reason are
-/// fully derived. The original tool request remains foldable immediately;
-/// only the prompt and waiting state are held while the asynchronous judge
-/// runs.
-///
-/// A session nobody can approve for (`ToolSessionState::is_unattended`)
-/// never reaches the prompt at all: once the judge has declined to decide
-/// on its own, the call resolves as a refused tool result the model can act
-/// on, and the turn continues.
-pub(super) fn gate_processing_approval(
-    tool_state: &ToolSessionState,
+/// Carries out what the verdict stage's gate did with a call
+/// (`horizon_agent::tools::gate`): a prompt's events, already in the live
+/// state, go to the subscribers; a decision goes out as any approval's
+/// outcome does.
+pub(super) fn deliver_gate_step(
+    state: &Arc<AgentdState>,
+    commands_tx: &Sender<Command>,
     session_id: SessionId,
-    candidate: ApprovalCandidate,
-) -> (Vec<ProviderEvent>, Vec<Command>) {
-    gate_processing_approval_with(tool_state, candidate, |candidate| {
-        start_approval_gate(session_id, candidate)
-    })
-}
-
-fn gate_processing_approval_with(
-    tool_state: &ToolSessionState,
-    candidate: ApprovalCandidate,
-    start_gate: impl FnOnce(ApprovalCandidate) -> ApprovalGate,
-) -> (Vec<ProviderEvent>, Vec<Command>) {
-    match start_gate(candidate) {
-        ApprovalGate::Pending => (Vec::new(), Vec::new()),
-        ApprovalGate::Human(candidate) => {
-            if let Some(result) = unattended_refusal_result(tool_state, &candidate.request) {
-                (
-                    vec![Event::ToolCallFinished(result.clone()).into()],
-                    vec![Command::ToolCallResult(result)],
-                )
-            } else {
-                (
-                    vec![
-                        Event::ApprovalRequested(candidate.approval).into(),
-                        Event::StateChanged(SessionState::WaitingForApproval).into(),
-                    ],
-                    Vec::new(),
-                )
+    call_id: ToolCallId,
+    step: GateStep,
+) {
+    match step {
+        GateStep::Pending => {}
+        GateStep::Asked(events) => {
+            for event in events {
+                send_session_event(state, session_id, AgentWireEvent::Event(event));
             }
+        }
+        GateStep::Decided(outcome) => {
+            forward_approval_outcome(state, commands_tx, session_id, call_id, outcome)
         }
     }
 }
 
-pub(super) fn emit_human_approval(
-    state: &Arc<AgentdState>,
-    live_state: &LiveState,
-    session_id: SessionId,
-    approval: ApprovalRequest,
-) {
-    let frame = live_state.frame();
-    if !should_fold_completion(&frame, &approval.call_id)
-        || !frame
-            .tool_call_request(&approval.call_id)
-            .is_some_and(|request| request.identity() == approval.identity())
-    {
-        return;
-    }
-    let events = vec![
-        Event::ApprovalRequested(approval),
-        Event::StateChanged(SessionState::WaitingForApproval),
-    ];
-    apply_and_send_session_events(
-        state,
-        live_state,
-        session_id,
-        events.into_iter().map(Into::into).collect(),
-    );
-}
-
+/// Reissues `request` as a new attempt that needs `kind` approved
+/// (`gate::reissue`), publishes what that recorded, tells the provider, and
+/// carries out what the gate did with it.
 pub(super) fn begin_reissued_approval(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
-    mut request: horizon_agent::contract::ToolCallRequest,
+    request: horizon_agent::contract::ToolCallRequest,
     kind: horizon_agent::contract::ApprovalKind,
     reason: String,
     commands_tx: &Sender<Command>,
 ) {
-    let prior_identity = request.identity();
-    request.occurrence_id = OccurrenceId::new();
-    if matches!(
-        kind,
-        horizon_agent::contract::ApprovalKind::DomainGrant { .. }
-    ) {
-        // The fetch worker stopped at the next domain boundary. Close that
-        // attempt before opening the retry; no provider answer exists yet.
-        let event = Event::ToolCallFinished(
-            prior_identity
-                .result(serde_json::json!({}))
-                .superseded_by_retry(&request.occurrence_id),
-        );
-        if !apply_and_send_session_events(state, live_state, session_id, vec![event.into()]) {
-            return;
+    let call_id = request.call_id.clone();
+    match horizon_agent::tools::gate::reissue(session_id, live_state, request, kind, reason) {
+        Ok(reissued) => {
+            for event in reissued.events {
+                send_session_event(state, session_id, AgentWireEvent::Event(event));
+            }
+            let _ = commands_tx.send(reissued.command);
+            deliver_gate_step(state, commands_tx, session_id, call_id, reissued.step);
         }
-    }
-    let approval = ApprovalRequest {
-        call_id: request.call_id.clone(),
-        occurrence_id: request.occurrence_id.clone(),
-        kind,
-        reason,
-    };
-    let request_event = Event::ToolCallRequested(request.clone());
-    if !apply_and_send_session_events(state, live_state, session_id, vec![request_event.into()]) {
-        return;
-    }
-    let _ = commands_tx.send(Command::ToolCallReissued(request.identity()));
-    let candidate = ApprovalCandidate { request, approval };
-    if let ApprovalGate::Human(candidate) = start_approval_gate(session_id, candidate) {
-        // No judge took it: a session nobody can approve for gets the
-        // refusal here too, rather than a prompt that would never be
-        // answered.
-        if let Some(outcome) = refuse_unattended(session_id, &candidate) {
-            let call_id = candidate.request.call_id.clone();
-            forward_approval_outcome(state, commands_tx, session_id, call_id, outcome);
-            return;
-        }
-        emit_human_approval(state, live_state, session_id, candidate.approval);
+        Err(message) => report_persistence_failure(state, live_state, session_id, message),
     }
 }
 
@@ -398,116 +323,6 @@ mod tests {
         assert!(received.try_recv().is_err());
     }
 
-    /// A session state with a real, canonical workspace root — what the
-    /// out-of-root refusal needs in order to name anything.
-    fn rooted_tool_state(root: &std::path::Path, unattended: bool) -> ToolSessionState {
-        horizon_agent::tools::ToolSessionBuilder::for_root(
-            root.to_path_buf(),
-            horizon_agent::config::AgentToolsConfig::default(),
-            horizon_agent::tools::RecallContext::default(),
-        )
-        .with_unattended(unattended)
-        .build()
-    }
-
-    fn out_of_root_candidate(call_id: &str, path: &std::path::Path) -> ApprovalCandidate {
-        let mut candidate = judge_candidate(call_id);
-        candidate.request.tool_id = "fs_read".into();
-        candidate.request.input = serde_json::json!({"path": path.display().to_string()}).into();
-        candidate
-    }
-
-    #[test]
-    fn gate_suppresses_prompt_while_pending_and_preserves_human_fallback() {
-        let tool_state = rooted_tool_state(&std::env::temp_dir(), false);
-        let candidate = judge_candidate("gate-shape");
-        let (pending, commands) =
-            gate_processing_approval_with(&tool_state, candidate.clone(), |observed| {
-                assert_eq!(observed, candidate);
-                ApprovalGate::Pending
-            });
-        assert!(pending.is_empty());
-        assert!(commands.is_empty());
-        let (human, commands) =
-            gate_processing_approval_with(&tool_state, candidate.clone(), |candidate| {
-                ApprovalGate::Human(Box::new(candidate))
-            });
-        assert_eq!(
-            human,
-            vec![
-                Event::ApprovalRequested(candidate.approval).into(),
-                Event::StateChanged(SessionState::WaitingForApproval).into()
-            ]
-        );
-        assert!(commands.is_empty());
-    }
-
-    /// An unattended session (a `task` child) never parks: the prompt is withheld and the call resolves
-    /// as an error result the model can act on, so the turn continues. The
-    /// message names the root the session may read.
-    #[test]
-    fn an_unattended_session_is_refused_instead_of_prompted() {
-        let root = std::env::temp_dir().canonicalize().unwrap();
-        let tool_state = rooted_tool_state(&root, true);
-        let candidate =
-            out_of_root_candidate("unattended-read", std::path::Path::new("/etc/hostname"));
-        let request = candidate.request.clone();
-        let (events, commands) =
-            gate_processing_approval_with(&tool_state, candidate, |candidate| {
-                ApprovalGate::Human(Box::new(candidate))
-            });
-
-        assert!(
-            !events.iter().any(|event| matches!(
-                event.clone().into_event().expect("conversation event"),
-                Event::ApprovalRequested(_) | Event::StateChanged(SessionState::WaitingForApproval)
-            )),
-            "no prompt may survive for a session nobody watches: {events:?}"
-        );
-        let result = events
-            .iter()
-            .find_map(
-                |event| match &event.clone().into_event().expect("conversation event") {
-                    Event::ToolCallFinished(result) => Some(result.clone()),
-                    _ => None,
-                },
-            )
-            .expect("the call resolves with a result of its own");
-        assert_eq!(result.call_id, request.call_id);
-        assert!(result.is_error());
-        let message = result.output["message"].as_str().unwrap().to_string();
-        assert!(message.contains(&root.display().to_string()), "{message}");
-        std::assert_matches!(
-            commands.as_slice(), [Command::ToolCallResult(forwarded)] if forwarded.call_id == request.call_id,
-            "the model must receive the refusal as this call's result: {commands:?}"
-        );
-    }
-
-    /// The judge stays in the path for an unattended session: a candidate
-    /// it accepts is still pending its verdict, not refused here.
-    #[test]
-    fn a_judge_that_takes_the_call_refuses_nothing_in_an_unattended_session() {
-        let tool_state = rooted_tool_state(&std::env::temp_dir(), true);
-        let candidate =
-            out_of_root_candidate("unattended-judged", std::path::Path::new("/etc/hostname"));
-        let (events, commands) =
-            gate_processing_approval_with(&tool_state, candidate, |_| ApprovalGate::Pending);
-        assert!(events.is_empty());
-        assert!(
-            commands.is_empty(),
-            "a call the judge took must wait for its verdict, not resolve here"
-        );
-    }
-
-    /// `SESSION_PROTOCOL_VERSION` v16's `Event::ContinueTurnRequested`: a
-    /// `ContinueTurn` that lands while the live frame's last item is a
-    /// guard-halted `TurnEnded` records that halt's reason as
-    /// `resumed_from`, the live state folds the event, and the command is
-    /// still forwarded to the provider. The audit row is the only signal
-    /// an analyst has that the operator resumed a halted turn
-    /// (`docs/issues/002-agent-iteration-cap-halts-real-work.md` decision 3);
-    /// see the v16 doc comment on `SESSION_PROTOCOL_VERSION` for the wider
-    /// motivation.
     #[test]
     fn continue_turn_records_resumed_from_when_halted() {
         let state = test_state();

@@ -9,11 +9,8 @@ use crossbeam_channel::Sender;
 use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
-use horizon_agent::tools::{
-    JudgeDecision, ToolCompletion, ToolUpdate, refuse_unattended, resolve_auto_approval,
-};
+use horizon_agent::tools::{ToolCompletion, ToolUpdate};
 
-use super::approval::{emit_human_approval, forward_approval_outcome};
 use super::events::send_session_event;
 use super::state::AgentdState;
 
@@ -99,24 +96,9 @@ fn fold_approval_judgment(
     session_id: SessionId,
     judgment: horizon_agent::tools::ApprovalJudgment,
 ) {
-    let frame = live_state.frame();
-    match judgment.decision {
-        JudgeDecision::AutoApprove => {
-            let logged_call_id = judgment.candidate.request.call_id.clone();
-            let outcome = resolve_auto_approval(&frame, session_id, &judgment.candidate);
-            forward_approval_outcome(state, commands_tx, session_id, logged_call_id, outcome);
-        }
-        JudgeDecision::Escalate => {
-            // A session nobody can approve for gets the refusal instead of
-            // a prompt that would never be answered.
-            if let Some(outcome) = refuse_unattended(session_id, &judgment.candidate) {
-                let call_id = judgment.candidate.request.call_id.clone();
-                forward_approval_outcome(state, commands_tx, session_id, call_id, outcome);
-                return;
-            }
-            emit_human_approval(state, live_state, session_id, judgment.candidate.approval);
-        }
-    }
+    let call_id = judgment.candidate.request.call_id.clone();
+    let step = horizon_agent::tools::gate::judged(session_id, live_state, judgment);
+    super::approval::deliver_gate_step(state, commands_tx, session_id, call_id, step);
 }
 
 #[cfg(test)]

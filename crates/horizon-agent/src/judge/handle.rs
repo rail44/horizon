@@ -72,7 +72,7 @@ impl JudgeHandle {
     /// never place a real network call. Uses the default ask threshold and
     /// the production rate limit and timeout.
     #[cfg(test)]
-    pub(super) fn for_test_decision(
+    pub(crate) fn for_test_decision(
         model: impl Into<String>,
         client: Arc<dyn DecisionClient>,
         writer: WriterHandle,

@@ -1,11 +1,12 @@
 use super::*;
 use crate::session::Connection;
+use crate::session::approval::forward_approval_outcome;
 use crate::session::test_support::{drain_events, judge_candidate, test_state, tool_identity};
 use crossbeam_channel::unbounded;
 use horizon_agent::contract::SessionId;
 use horizon_agent::contract::{ApprovalKind, ApprovalRequest, ToolCallId};
 use horizon_agent::contract::{Event, SessionState, ToolCallResult};
-use horizon_agent::tools::ApprovalCandidate;
+use horizon_agent::tools::{ApprovalCandidate, JudgeDecision};
 
 #[test]
 fn old_async_completions_cannot_answer_a_new_occurrence_with_the_same_call_id() {

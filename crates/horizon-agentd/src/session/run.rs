@@ -18,7 +18,7 @@ use horizon_agent::tools::{
     register_session_runtime,
 };
 
-use super::approval::{dispatch_inbound_command, gate_processing_approval};
+use super::approval::dispatch_inbound_command;
 use super::completion::fold_tool_completion;
 use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnvironment};
 use super::events::{
@@ -349,14 +349,35 @@ fn handle_provider_event(
         }
     };
     if let Some(candidate) = processing.approval.take() {
-        let (events, commands) = gate_processing_approval(tool_state, session_id, candidate);
-        if let Err(message) = live_state.extend_provider_events(events.clone()) {
-            report_persistence_failure(state, live_state, session_id, message);
-            let _ = commands_tx.send(Command::Shutdown);
-            return;
+        // What the gate recorded is published with the rest of this batch,
+        // and what it sends the provider follows the batch's own commands.
+        use horizon_agent::tools::ApprovalOutcome;
+        use horizon_agent::tools::gate::GateStep;
+        match horizon_agent::tools::gate::open(session_id, live_state, candidate) {
+            GateStep::Pending | GateStep::Decided(ApprovalOutcome::AlreadyResolved) => {}
+            GateStep::Asked(events) => {
+                processing
+                    .horizon_events
+                    .extend(events.into_iter().map(Into::into));
+            }
+            GateStep::Decided(ApprovalOutcome::Applied(update)) => {
+                let (events, result) = update.into_parts();
+                processing
+                    .horizon_events
+                    .extend(events.into_iter().map(Into::into));
+                processing
+                    .provider_commands
+                    .extend(result.map(Command::ToolCallResult));
+            }
+            GateStep::Decided(ApprovalOutcome::Forward(command)) => {
+                processing.provider_commands.push(command);
+            }
+            GateStep::Decided(ApprovalOutcome::PersistenceFailed(message)) => {
+                report_persistence_failure(state, live_state, session_id, message);
+                let _ = commands_tx.send(Command::Shutdown);
+                return;
+            }
         }
-        processing.horizon_events.extend(events);
-        processing.provider_commands.extend(commands);
     }
     for event in processing.horizon_events {
         super::model_selection::record_applied(state, session_id, &event);
