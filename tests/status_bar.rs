@@ -12,8 +12,8 @@ use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
-use horizon_ui::reactive_graph::traits::WithUntracked;
-use horizon_workspace::Workspace;
+use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
+use horizon_workspace::{Direction, SessionKind, Side, Workspace};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
@@ -193,6 +193,38 @@ fn the_bar_says_the_keys_of_where_the_keys_are() {
     opened.key(Key::Named(NamedKey::Escape), Modifiers::default());
     opened.until("the mode's keys again", || {
         opened.bar().starts_with("hjklmove")
+    });
+}
+
+#[test]
+fn the_bar_says_the_modes_keys_on_a_pane_with_no_group_left() {
+    let opened = open();
+    // A terminal beside the whole group, then the group's one tab closed:
+    // the terminal is all there is, under no group.
+    opened.shell.model.update(|model| {
+        let group = model.tab_groups()[0].id;
+        model.enter_workspace_mode();
+        model.move_cursor(Direction::Up);
+        model.split_cursor_with_new_session(SessionKind::Terminal, Side::Left, true);
+        model.exit_workspace_mode();
+        model.close_tab_in(group, 0);
+    });
+    opened.app.run_effects();
+    opened.app.resolve();
+    let (groups, tabs, empty) = opened.shell.model.with_untracked(|model| {
+        (
+            model.tab_groups().len(),
+            model.tab_count(),
+            model.is_empty(),
+        )
+    });
+    assert_eq!((groups, tabs, empty), (0, 0, false));
+    opened.focus_a_terminal();
+    // The workspace is not empty: the mode's keys, not the empty one's.
+    opened.chord();
+    assert!(opened.mode());
+    opened.until("the mode's keys", || {
+        opened.bar().starts_with("hjklmoveentergoescbacktnew tab")
     });
 }
 

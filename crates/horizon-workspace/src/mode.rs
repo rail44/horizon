@@ -58,7 +58,7 @@ impl Workspace {
     /// command palette. The shell suppresses mode bindings while a modal
     /// owns keyboard input.
     pub fn is_workspace_mode_active(&self) -> bool {
-        matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) || self.panes.is_empty()
+        matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) || self.is_empty()
     }
 
     /// What the workspace-mode cursor is on while the mode is active.

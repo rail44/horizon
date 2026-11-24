@@ -902,8 +902,9 @@ impl Shell {
         });
         let element =
             pane.and_then(|id| self.kept().panes.borrow().get(&id).map(|view| view.element));
-        // (With no tab, the list the workspace shows has the keys.)
-        let choices = (self.model.with_untracked(Workspace::tab_count) == 0)
+        // (With no pane, the list the workspace shows has the keys.)
+        let choices = (self.model)
+            .with_untracked(Workspace::is_empty)
             .then(|| self.kept().choices.get())
             .flatten();
         match (element, choices) {

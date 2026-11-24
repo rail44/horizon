@@ -2271,6 +2271,41 @@ fn split_left_from_a_strip_puts_a_terminal_beside_the_whole_group() {
     opened.named(NamedKey::Escape);
 }
 
+#[test]
+fn the_modes_keys_make_views_from_a_pane_with_no_group_left() {
+    let opened = open();
+    let first = opened.panes()[0];
+    let left = left_of_the_group(&opened);
+    // The group's one tab closed: the pane on the left is all there is,
+    // under no group, and no tab is counted.
+    opened.model_closing(first);
+    assert_eq!(opened.panes(), [left]);
+    assert!(opened.model(|model| model.tab_groups().is_empty()));
+    assert_eq!(opened.model(Workspace::tab_count), 0);
+    assert!(!opened.model(Workspace::is_empty));
+    assert!(opened.all("choices").is_empty());
+
+    // The workspace is not empty, so `s` is the mode's: a pane beside it.
+    opened.chord();
+    opened.character("s");
+    assert!(!opened.mode());
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    assert_eq!(panes[0], left);
+    let right = panes[1];
+    assert_eq!(opened.model(|model| model.cursor_pane_id()), Some(right));
+    assert!(opened.model(|model| model.tab_groups().is_empty()));
+
+    // And `t` a tab, in a group made in that pane's place.
+    opened.chord();
+    opened.character("t");
+    assert!(!opened.mode());
+    assert_eq!(opened.model(|model| model.tab_groups().len()), 1);
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert!(opened.panes().contains(&left));
+    assert!(!opened.panes().contains(&right));
+}
+
 /// Paints a view being moved over another, near its right side -- or,
 /// with `HORIZON_MOVING_TO_STRIP` set, over the second half of the tab's
 /// label; or, with `HORIZON_MOVING_TAB` set to a share of a label's width,

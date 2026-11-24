@@ -58,9 +58,9 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     if !shell.mode.get_untracked() {
         return;
     }
-    // With no tab, what is typed searches the views a tab can show, which
+    // With no pane, what is typed searches the views a tab can show, which
     // the workspace shows then; `:` is still the commands'.
-    if shell.model.with_untracked(Workspace::tab_count) == 0 {
+    if shell.model.with_untracked(Workspace::is_empty) {
         if character == ":" {
             shell.open(Modal::Palette);
             prevent_default();

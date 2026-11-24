@@ -198,7 +198,7 @@ impl Shell {
         kept.reloading.set(None);
         kept.refocus.set(true);
         self.model.update(|model| {
-            if model.tab_count() == 0 {
+            if model.is_empty() {
                 model.open_tab_with_new_session_activated(SessionKind::Terminal, true);
             }
         });
