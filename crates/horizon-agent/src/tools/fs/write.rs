@@ -42,7 +42,11 @@ pub(in crate::tools) fn execute(
         return error_output(format!("failed to write `{path_arg}`: {error}"));
     }
 
-    if let Ok(mtime) = fs::metadata(&resolved).and_then(|metadata| metadata.modified()) {
+    let metadata = fs::metadata(&resolved).ok();
+    if let Some(mtime) = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+    {
         tool_state.record_mtime(resolved.clone(), mtime);
     }
 
@@ -50,5 +54,6 @@ pub(in crate::tools) fn execute(
         path: path_arg.into(),
         bytes_written: content.len(),
         created: !existed,
+        content_version: metadata.as_ref().and_then(super::content_version),
     })
 }

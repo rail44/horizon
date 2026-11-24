@@ -1,5 +1,4 @@
 use std::fs;
-use std::time::UNIX_EPOCH;
 
 use crate::tools::output::*;
 
@@ -52,16 +51,7 @@ pub(in crate::tools) fn execute(
     if let Some(mtime) = mtime {
         tool_state.record_mtime(resolved.clone(), mtime);
     }
-    let content_version = mtime
-        .and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| {
-            format!(
-                "{}.{:09}:{}",
-                duration.as_secs(),
-                duration.subsec_nanos(),
-                metadata.len()
-            )
-        });
+    let content_version = super::content_version(&metadata);
 
     output.path = path_arg.into();
     output.content_version = content_version;

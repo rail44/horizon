@@ -4729,3 +4729,88 @@ fn ephemeral_feedback_passes_processing_without_placeholder_events() {
         assert!(processing.provider_commands.is_empty());
     }
 }
+
+/// The history of one successful call of `tool` with `input`, run against
+/// `tool_state` now.
+fn recorded_call(
+    tool_state: &ToolSessionState,
+    tool: &str,
+    input: serde_json::Value,
+) -> Vec<Event> {
+    let output = if tool == "fs_read" {
+        sync_tools::execute_auto(tool_state, tool, &input).expect("auto-executed")
+    } else {
+        sync_tools::execute_approved(tool_state, tool, &input)
+    };
+    assert!(!is_error(&output), "{output}");
+    let request = ToolCallRequest {
+        call_id: ToolCallId(tool.into()),
+        occurrence_id: crate::contract::OccurrenceId::new(),
+        tool_id: tool.into(),
+        input: input.into(),
+    };
+    let result = ToolCallResult::new(
+        request.call_id.clone(),
+        request.occurrence_id.clone(),
+        output,
+    );
+    vec![
+        Event::ToolCallRequested(request),
+        Event::ToolCallFinished(result),
+    ]
+}
+
+#[test]
+fn a_session_started_again_over_its_history_edits_what_it_read_before() {
+    let root = temp_workspace("restore-file-versions");
+    let read = root.join("read.txt");
+    let edited = root.join("edited.txt");
+    let changed = root.join("changed.txt");
+    for file in [&read, &edited, &changed] {
+        fs::write(file, "before\n").unwrap();
+    }
+    let before = ToolSessionState::new(root.clone());
+    let mut history = Vec::new();
+    for file in [&read, &edited, &changed] {
+        history.extend(recorded_call(
+            &before,
+            "fs_read",
+            json!({"path": file.display().to_string()}),
+        ));
+    }
+    history.extend(recorded_call(
+        &before,
+        "fs_edit",
+        json!({"edits": [{"path": edited.display().to_string(), "old_string": "before", "new_string": "middle"}]}),
+    ));
+    // Something else changes one file while the session is away.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&changed, "outside\n").unwrap();
+
+    let after = ToolSessionState::new(root);
+    restore_file_versions(&after, &history);
+    let edit = |file: &PathBuf, old: &str| {
+        sync_tools::execute_approved(
+            &after,
+            "fs_edit",
+            &json!({"edits": [{"path": file.display().to_string(), "old_string": old, "new_string": "after"}]}),
+        )
+    };
+    assert!(
+        !is_error(&edit(&read, "before")),
+        "a file read before is edited without a read"
+    );
+    assert!(
+        !is_error(&edit(&edited, "middle")),
+        "so is one edited before"
+    );
+    let refused = edit(&changed, "outside");
+    assert!(is_error(&refused));
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed on disk"),
+        "{refused}"
+    );
+}

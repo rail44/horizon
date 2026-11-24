@@ -130,6 +130,7 @@ pub(super) fn run_session(
         },
         &retained_grants,
     );
+    horizon_agent::tools::restore_file_versions(&tool_state, &history);
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_context_and_history(
             session_id,

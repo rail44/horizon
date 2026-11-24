@@ -197,7 +197,12 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 - **Staleness gate, enforced mechanically:** a file must have been read in
   this session, and its mtime must be unchanged since that read, or the edit
   is rejected ("file changed on disk — read it again"). Read-before-edit is a
-  harness invariant, not prompt discipline. Note that `fs_edit` itself
+  harness invariant, not prompt discipline. The record is rebuilt from the
+  session's history when the session starts again over it (a resume, a
+  daemon restart): `fs_read`, `fs_write` and `fs_edit` results carry the
+  `content_version` the file was at, so a file the session read before is
+  editable again unless it changed since (2026-11-24; before then every
+  such edit was refused as unread). Note that `fs_edit` itself
   records the mtime it leaves behind, so a subsequent edit is allowed without
   an intervening `fs_read`; this is intentional (it is what lets edits chain
   without a read round trip per edit), but it means a resubmitted identical

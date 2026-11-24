@@ -64,6 +64,9 @@ pub struct FileWritten {
     pub bytes_written: usize,
     /// Whether the write created the file rather than replacing one.
     pub created: bool,
+    /// The version the file is at after the write, as `FileRead` gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -88,6 +91,10 @@ pub struct EditReceipt {
     pub path: String,
     #[serde(flatten)]
     pub outcome: EditOutcome,
+    /// The version the file is at after the call wrote it, as `FileRead`
+    /// gives it; only for an applied edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

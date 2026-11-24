@@ -47,6 +47,7 @@ pub(crate) mod test_support {
                     occurrences: 1,
                     normalized: false,
                 },
+                content_version: None,
             }],
             applied_count: 1,
             file_count: 1,

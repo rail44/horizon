@@ -135,24 +135,34 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles
     }
 
     let mut file_count = 0;
+    let mut versions: Vec<Option<String>> = vec![None; edits.len()];
     for target in &targets {
-        if let Err(message) = write(tool_state, target) {
-            // Only a write itself failing gets here, after every edit was
-            // placed: the files written before it stay written.
-            for (index, _) in &target.placed {
-                outcomes[*index] = Some(EditOutcome::Failed {
-                    message: message.clone(),
-                });
-            }
-            let message = format!(
-                "{message}; {file_count} file(s) before it were written and the rest were \
+        let version = match write(tool_state, target) {
+            Ok(version) => version,
+            Err(message) => {
+                // Only a write itself failing gets here, after every edit was
+                // placed: the files written before it stay written.
+                for (index, _) in &target.placed {
+                    outcomes[*index] = Some(EditOutcome::Failed {
+                        message: message.clone(),
+                    });
+                }
+                let message = format!(
+                    "{message}; {file_count} file(s) before it were written and the rest were \
                  not — re-read them before editing again"
-            );
-            return refused(edits, outcomes, target.placed[0].0, message);
+                );
+                return refused(edits, outcomes, target.placed[0].0, message);
+            }
+        };
+        for (index, _) in &target.placed {
+            versions[*index] = version.clone();
         }
         file_count += 1;
     }
-    let receipts = receipts(edits, outcomes);
+    let mut receipts = receipts(edits, outcomes);
+    for (receipt, version) in receipts.iter_mut().zip(versions) {
+        receipt.content_version = version;
+    }
     Response::succeeded(FileEdits {
         applied_count: receipts.len(),
         edits: receipts,
@@ -338,7 +348,7 @@ fn overlapping(placed: &[(usize, Vec<Replacement>)]) -> Option<(usize, usize)> {
 
 /// Writes `target` with its edits, from the last span back so earlier
 /// offsets stay valid, in its own line endings and byte-order mark.
-fn write(tool_state: &ToolSessionState, target: &Target) -> Result<(), String> {
+fn write(tool_state: &ToolSessionState, target: &Target) -> Result<Option<String>, String> {
     let mut replacements: Vec<&Replacement> = target
         .placed
         .iter()
@@ -357,10 +367,14 @@ fn write(tool_state: &ToolSessionState, target: &Target) -> Result<(), String> {
     }
     fs::write(&target.resolved, &content)
         .map_err(|error| format!("failed to write `{}`: {error}", target.path_arg))?;
-    if let Ok(mtime) = fs::metadata(&target.resolved).and_then(|metadata| metadata.modified()) {
+    let metadata = fs::metadata(&target.resolved).ok();
+    if let Some(mtime) = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+    {
         tool_state.record_mtime(target.resolved.clone(), mtime);
     }
-    Ok(())
+    Ok(metadata.as_ref().and_then(super::content_version))
 }
 
 fn receipts(edits: &[Edit], outcomes: Vec<Option<EditOutcome>>) -> Vec<EditReceipt> {
@@ -369,6 +383,7 @@ fn receipts(edits: &[Edit], outcomes: Vec<Option<EditOutcome>>) -> Vec<EditRecei
             index,
             path: edit.path.clone(),
             outcome: outcome.unwrap_or(EditOutcome::NotAttempted),
+            content_version: None,
         })
         .collect()
 }

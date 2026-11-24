@@ -40,6 +40,7 @@ pub(crate) use catalog::{
     permission_for_tool,
 };
 pub use completion::{BashCompletion, ToolCompletion, should_fold_completion};
+pub use fs::restore_file_versions;
 pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_refusal};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
 // because `horizon-agentd` implements it and installs it on every

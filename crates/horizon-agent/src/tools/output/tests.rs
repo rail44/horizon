@@ -8,6 +8,7 @@ fn annotate_auto_approval_adds_tier_and_reason() {
         path: "/tmp/x".into(),
         bytes_written: 0,
         created: false,
+        content_version: None,
     });
     annotate_auto_approval(&mut output, "contained", "isolated worktree session");
 
