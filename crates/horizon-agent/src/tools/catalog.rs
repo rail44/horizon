@@ -48,6 +48,11 @@ pub(super) fn legend_after(prose: &str, legend: String) -> String {
     }
 }
 
+/// The built-in tools' catalog entries.
+pub(crate) fn builtin_definitions() -> &'static [Definition] {
+    catalog()
+}
+
 fn catalog() -> &'static [Definition] {
     static DEFINITIONS: std::sync::OnceLock<Vec<Definition>> = std::sync::OnceLock::new();
     DEFINITIONS.get_or_init(build_definitions)

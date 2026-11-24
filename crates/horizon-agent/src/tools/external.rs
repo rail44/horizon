@@ -110,47 +110,102 @@ pub(crate) fn requires_trusted_project(tool_id: &str) -> bool {
 /// The registered tools' catalog entries, in registration order.
 pub(crate) fn definitions() -> Vec<super::Definition> {
     let registered = EXTERNAL_TOOLS.read().unwrap_or_else(|e| e.into_inner());
-    registered
-        .iter()
-        .map(|tool| super::Definition {
-            id: tool.id.clone(),
-            title: tool.title.clone(),
-            description: match &tool.output {
-                Some(output) => super::catalog::legend_after(
-                    &tool.description,
-                    super::output_legend::legend_from_schema(&output.type_name, &output.schema),
-                ),
-                None => tool.description.clone(),
-            },
-            input_schema: tool.input_schema.clone(),
-            permission: crate::contract::ToolPermission::AutoAllowUi,
-        })
-        .collect()
+    registered.iter().map(definition_of).collect()
 }
 
-/// Runs a registered tool, or `None` when `tool_id` is not one. A failure is
-/// returned in the external adapters' JSON error shape.
-pub(crate) fn execute(
-    tool_state: &super::ToolSessionState,
-    session_id: crate::contract::SessionId,
-    tool_id: &str,
-    input: &Value,
-) -> Option<Value> {
-    let execute = with_tool(tool_id, |tool| tool.execute.clone())?;
-    let workspace_root = tool_state.workspace_root();
-    let call = ExternalToolCall {
-        session_id: session_id.as_uuid(),
-        workspace_root,
-        project_root: workspace_root.and_then(crate::knowledge::main_root),
-        input,
-    };
-    Some(execute(&call).unwrap_or_else(super::error_output))
+fn definition_of(tool: &ExternalTool) -> super::Definition {
+    super::Definition {
+        id: tool.id.clone(),
+        title: tool.title.clone(),
+        description: match &tool.output {
+            Some(output) => super::catalog::legend_after(
+                &tool.description,
+                super::output_legend::legend_from_schema(&output.type_name, &output.schema),
+            ),
+            None => tool.description.clone(),
+        },
+        input_schema: tool.input_schema.clone(),
+        permission: crate::contract::ToolPermission::AutoAllowUi,
+    }
+}
+
+/// The registered tool `tool_id` names, as a [`super::tool::Tool`].
+pub(crate) fn find(tool_id: &str) -> Option<std::sync::Arc<dyn super::tool::Tool>> {
+    let tool = with_tool(tool_id, Clone::clone)?;
+    Some(std::sync::Arc::new(Registered {
+        definition: definition_of(&tool),
+        tool,
+    }))
+}
+
+struct Registered {
+    definition: super::Definition,
+    tool: ExternalTool,
+}
+
+impl super::tool::Tool for Registered {
+    fn definition(&self) -> &super::Definition {
+        &self.definition
+    }
+
+    /// A failure is returned in the external adapters' JSON error shape.
+    fn run(
+        &self,
+        cx: &super::tool::RunContext<'_>,
+        call: &super::input::PreparedCall<'_>,
+    ) -> super::tool::Dispatch {
+        let workspace_root = cx.state.workspace_root();
+        let external = ExternalToolCall {
+            session_id: cx.session_id.as_uuid(),
+            workspace_root,
+            project_root: workspace_root.and_then(crate::knowledge::main_root),
+            input: &call.request.input,
+        };
+        super::output::Response::external(
+            (self.tool.execute)(&external).unwrap_or_else(super::error_output),
+        )
+        .into()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    struct NoHost;
+    impl crate::tools::HostTools for NoHost {
+        fn execute_auto(&self, _: &str, _: &Value) -> Option<Value> {
+            None
+        }
+    }
+
+    /// Runs registered tool `id` as an automatic call would, or `None` when
+    /// no tool has that id.
+    fn run(
+        state: &crate::tools::ToolSessionState,
+        session_id: crate::contract::SessionId,
+        id: &str,
+        input: Value,
+    ) -> Option<Value> {
+        let tool = find(id)?;
+        let request = crate::contract::ToolCallRequest {
+            call_id: crate::contract::ToolCallId("call".into()),
+            occurrence_id: crate::contract::OccurrenceId::new(),
+            tool_id: id.into(),
+            input: input.into(),
+        };
+        let call = crate::tools::input::PreparedCall::new(&request).unwrap();
+        let cx = super::super::tool::RunContext {
+            host: &NoHost,
+            state,
+            session_id,
+        };
+        match tool.run(&cx, &call) {
+            super::super::tool::Dispatch::Done(output) => Some(output.output.to_json()),
+            super::super::tool::Dispatch::Spawned => None,
+        }
+    }
 
     fn tool(id: &str, execute: ExternalToolExecutor) -> ExternalTool {
         ExternalTool {
@@ -257,7 +312,7 @@ mod tests {
         let state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
         assert_eq!(
             crate::policy::plan_tool_call(&state, &request),
-            crate::policy::ToolPlan::Automatic(crate::policy::AutomaticTool::Synchronous)
+            crate::policy::ToolPlan::Automatic
         );
     }
 
@@ -294,14 +349,14 @@ mod tests {
         let state = crate::tools::ToolSessionBuilder::new(root.clone()).build();
         let session = crate::contract::SessionId::from_uuid(uuid::Uuid::from_u128(7));
 
-        let ok = execute(&state, session, "test_roots", &json!({ "a": 1 })).unwrap();
+        let ok = run(&state, session, "test_roots", json!({ "a": 1 })).unwrap();
         assert_eq!(ok["session"], uuid::Uuid::from_u128(7).to_string());
         assert_eq!(ok["workspace"], root.display().to_string());
         assert_eq!(ok["input"], json!({ "a": 1 }));
 
-        let failed = execute(&state, session, "test_fails", &json!({})).unwrap();
+        let failed = run(&state, session, "test_fails", json!({})).unwrap();
         assert_eq!(failed, json!({ "is_error": true, "message": "nope" }));
 
-        assert!(execute(&state, session, "test_unknown", &json!({})).is_none());
+        assert!(run(&state, session, "test_unknown", json!({})).is_none());
     }
 }

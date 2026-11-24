@@ -98,17 +98,9 @@ fn boundary_input(
 /// The single policy decision used by approval display and execution dispatch.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ToolPlan {
-    Automatic(AutomaticTool),
+    Automatic,
     Approval(Box<ApprovalRequest>),
     Reject(crate::tools::output::Response),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum AutomaticTool {
-    Synchronous,
-    ContainedFilesystem,
-    SandboxedBash,
-    Web,
 }
 
 pub(crate) fn plan_prepared_call(
@@ -130,7 +122,7 @@ pub(crate) fn plan_prepared_call(
     // outside the OS sandbox, need this pre-execution gate.
     // A registered tool's package declared it contained (`tools::external`).
     if crate::tools::is_external_tool(&request.tool_id) {
-        return ToolPlan::Automatic(AutomaticTool::Synchronous);
+        return ToolPlan::Automatic;
     }
     if let Some(read_only) = tool_state.read_only()
         && writes_without_containment(&request.tool_id, horizon_sandbox::sandbox_ready())
@@ -172,7 +164,7 @@ pub(crate) fn plan_prepared_call(
                     ApprovalKind::Standard,
                 )
             } else {
-                ToolPlan::Automatic(AutomaticTool::Synchronous)
+                ToolPlan::Automatic
             }
         }
         Some(ToolPermission::RequireApproval) => {
@@ -187,16 +179,12 @@ pub(crate) fn plan_prepared_call(
                 );
             }
             match classify_input(&request.tool_id, horizon_sandbox::sandbox_ready()) {
-                Classification::Contained => ToolPlan::Automatic(if request.tool_id == "bash" {
-                    AutomaticTool::SandboxedBash
-                } else {
-                    AutomaticTool::ContainedFilesystem
-                }),
+                Classification::Contained => ToolPlan::Automatic,
                 Classification::BoundaryCrossing
                     if boundary_input(tool_state, &request.tool_id, &request.input)
                         == BoundaryDisposition::Auto =>
                 {
-                    ToolPlan::Automatic(AutomaticTool::Web)
+                    ToolPlan::Automatic
                 }
                 Classification::BoundaryCrossing if request.tool_id == "web_fetch" => {
                     let domain = match &request.input {
@@ -608,10 +596,7 @@ mod tests {
         let target = granted.join("Cargo.toml");
         std::assert_matches!(read(&target), ToolPlan::Approval(_));
         std::assert_matches!(read(&not_spill), ToolPlan::Approval(_));
-        assert_eq!(
-            read(&spill),
-            ToolPlan::Automatic(AutomaticTool::Synchronous)
-        );
+        assert_eq!(read(&spill), ToolPlan::Automatic);
 
         tool_state
             .approve_filesystem_grants(&[horizon_sandbox::FilesystemGrant {
@@ -621,10 +606,7 @@ mod tests {
                 excluded_subpaths: Vec::new(),
             }])
             .unwrap();
-        assert_eq!(
-            read(&target),
-            ToolPlan::Automatic(AutomaticTool::Synchronous)
-        );
+        assert_eq!(read(&target), ToolPlan::Automatic);
         let _ = std::fs::remove_file(spill);
     }
 
@@ -680,10 +662,7 @@ mod tests {
                 occurrence_id: crate::contract::OccurrenceId("call-tracked".into()),
             },
         );
-        assert_eq!(
-            plan,
-            ToolPlan::Automatic(AutomaticTool::ContainedFilesystem)
-        );
+        assert_eq!(plan, ToolPlan::Automatic);
     }
 
     #[test]
@@ -766,7 +745,7 @@ mod tests {
         }
         assert_eq!(
             plan("fs_read", serde_json::json!({"path": tracked})),
-            ToolPlan::Automatic(AutomaticTool::Synchronous)
+            ToolPlan::Automatic
         );
         assert_eq!(std::fs::read_to_string(&tracked).unwrap(), "before");
     }
@@ -888,16 +867,13 @@ mod tests {
                     serde_json::json!({"command": "sed -i 's/a/b/' src/lib.rs"})
                 ),
             ),
-            ToolPlan::Automatic(AutomaticTool::SandboxedBash)
+            ToolPlan::Automatic
         );
         assert!(!tool_state.primary_checkout_writable());
 
         tool_state.approve_primary_checkout();
         assert!(tool_state.primary_checkout_writable());
-        assert_eq!(
-            plan_tool_call(&tool_state, &write),
-            ToolPlan::Automatic(AutomaticTool::ContainedFilesystem)
-        );
+        assert_eq!(plan_tool_call(&tool_state, &write), ToolPlan::Automatic);
     }
 
     #[test]

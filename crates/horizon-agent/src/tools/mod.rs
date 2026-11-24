@@ -26,6 +26,7 @@ mod recall;
 mod settlement;
 mod state;
 mod synchronous;
+pub(crate) mod tool;
 mod worktree;
 pub use background::{drain_session_work, session_tool_work_settled};
 pub(crate) mod web;

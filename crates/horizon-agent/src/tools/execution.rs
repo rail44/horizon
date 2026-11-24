@@ -1,13 +1,12 @@
-use super::input::{PreparedCall, ToolInput};
+use super::input::PreparedCall;
 use super::output::{Response, error as error_output};
+use super::tool::{Dispatch, RunContext};
 use super::transition::ToolUpdate;
 use crate::contract::{Event, SessionId, ToolCallRequest, ToolCallResult};
 use crate::judge::ApprovalCandidate;
 use crate::live::LiveState;
-use crate::policy::{AutomaticTool, ToolPlan, plan_prepared_call};
-use crate::tools::output::annotate_auto_approval;
-use crate::tools::state::{ToolSessionState, session_runtime};
-use crate::tools::{bash, board};
+use crate::policy::{ToolPlan, plan_prepared_call};
+use crate::tools::state::ToolSessionState;
 use serde_json::Value;
 
 /// Boundary for tools needing shell-owned state, such as `workspace_snapshot`.
@@ -80,9 +79,8 @@ pub fn execute_agent_tool(
         ToolPlan::Reject(output) => {
             ToolUpdate::finish(live, request.identity().finish(output)).map(Execution::Applied)
         }
-        ToolPlan::Automatic(mode) => {
-            execute_automatic(host, tool_state, session_id, live, &prepared, mode)
-                .map(Execution::Applied)
+        ToolPlan::Automatic => {
+            execute_automatic(host, tool_state, session_id, live, &prepared).map(Execution::Applied)
         }
     }
 }
@@ -93,113 +91,32 @@ fn execute_automatic(
     session_id: SessionId,
     live: &LiveState,
     request: &PreparedCall<'_>,
-    mode: AutomaticTool,
 ) -> Result<ToolUpdate, String> {
     // Every dispatch, including a synchronous effect, starts beyond this acknowledged boundary.
     let started = ToolUpdate::start(live, request, None)?;
-    let output = match mode {
-        AutomaticTool::Synchronous => execute_synchronous(host, tool_state, session_id, request),
-        AutomaticTool::ContainedFilesystem => {
-            let mut output = crate::tools::execute_approved(tool_state, &request.input);
-            annotate_auto_approval(&mut output, "contained", "confined to the workspace root");
-            output.into()
-        }
-        AutomaticTool::Web | AutomaticTool::SandboxedBash => {
-            let Some(runtime) = session_runtime(session_id) else {
-                return started.complete(
-                    live,
-                    request.identity().finish(error_output(format!(
-                        "{} has no registered session runtime",
-                        request.tool_id
-                    ))),
-                    Vec::new(),
-                );
-            };
-            if mode == AutomaticTool::Web {
-                crate::tools::web::spawn(
-                    session_id,
-                    request,
-                    tool_state.domain_allowlist(),
-                    crate::tools::web::WebApprovalOrigin::Auto,
-                    runtime.async_results,
-                );
-                return Ok(started);
-            }
-            let Some(workspace_root) = tool_state.workspace_root() else {
-                return started.complete(
-                    live,
-                    request
-                        .identity()
-                        .finish(error_output("sandboxed bash requires a workspace root")),
-                    Vec::new(),
-                );
-            };
-            bash::spawn_sandboxed_call(
-                session_id,
-                request,
-                tool_state,
-                runtime.async_results,
-                workspace_root,
-                bash::SandboxedApprovalOrigin::Tier1Auto,
-                None,
-            );
-            return Ok(started);
-        }
-    };
-    started.complete(
-        live,
-        request.identity().finish(output.output),
-        output.events,
-    )
-}
-
-fn execute_synchronous(
-    host: &dyn HostTools,
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    request: &PreparedCall<'_>,
-) -> ToolOutput {
-    match &request.input {
-        ToolInput::Task(input) => {
-            return crate::tools::explore::start(tool_state, session_id, request, input);
-        }
-        ToolInput::TaskOutput(input) => {
-            return crate::tools::explore::output(session_id, request, input);
-        }
-        ToolInput::EnterWorktree(_) => return crate::tools::worktree::enter(host, session_id),
-        _ => {}
-    }
-    match request.tool_id.as_str() {
-        "board_update" | "board_session" => {
-            return board::execute_operation(tool_state, session_id, request);
-        }
-        "board_comment" => return board::execute_comment(tool_state, session_id, request),
-        _ => {}
-    }
-    if let Some(output) = super::external::execute(
-        tool_state,
-        session_id,
-        &request.tool_id,
-        &request.request.input,
-    ) {
-        return Response::external(output).into();
-    }
-    super::synchronous::execute(tool_state, &request.input, false)
-        .or_else(|| {
-            host.execute_auto(&request.tool_id, &request.request.input)
-                .map(Response::external)
-        })
-        .or_else(|| {
-            board::execute_auto(tool_state, &request.tool_id, &request.request.input)
-                .map(Response::external)
-        })
-        .unwrap_or_else(|| {
-            error_output(format!(
+    let Some(tool) = super::tool::find(&request.tool_id) else {
+        return started.complete(
+            live,
+            request.identity().finish(error_output(format!(
                 "Tool `{}` cannot be executed automatically.",
                 request.tool_id
-            ))
-        })
-        .into()
+            ))),
+            Vec::new(),
+        );
+    };
+    let cx = RunContext {
+        host,
+        state: tool_state,
+        session_id,
+    };
+    match tool.run(&cx, request) {
+        Dispatch::Done(output) => started.complete(
+            live,
+            request.identity().finish(output.output),
+            output.events,
+        ),
+        Dispatch::Spawned => Ok(started),
+    }
 }
 
 /// The mock provider's acknowledgement of a tool result.
@@ -364,24 +281,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("must-not-exist");
         let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf()).build();
-        for (mode, tool_id, input) in [
+        for (tool_id, input) in [
+            ("workspace_snapshot", serde_json::json!({})),
             (
-                AutomaticTool::Synchronous,
-                "workspace_snapshot",
-                serde_json::json!({}),
-            ),
-            (
-                AutomaticTool::ContainedFilesystem,
                 "fs_write",
                 serde_json::json!({"path": marker, "content":"unsafe"}),
             ),
             (
-                AutomaticTool::SandboxedBash,
                 "bash",
                 serde_json::json!({"command": format!("touch {}", marker.display())}),
             ),
             (
-                AutomaticTool::Web,
                 "web_search",
                 serde_json::json!({"query":"must not be sent"}),
             ),
@@ -407,7 +317,6 @@ mod tests {
                     session,
                     &live,
                     &PreparedCall::new(&request).unwrap(),
-                    mode
                 )
                 .is_err()
             );
