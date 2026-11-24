@@ -5,6 +5,10 @@ package horizon:ui;
 /// (`blitz-traits`' `NodeId`, as a number).
 interface document {
     create-element: func(tag: string) -> u64;
+    /// As the DOM's `createElementNS`: an element of `namespace`
+    /// (`http://www.w3.org/2000/svg` for SVG's), its name with a prefix or
+    /// without. `create-element` makes HTML's.
+    create-element-ns: func(namespace: string, qualified-name: string) -> u64;
     create-text: func(text: string) -> u64;
     create-comment: func(text: string) -> u64;
     set-attribute: func(node: u64, name: string, value: string);

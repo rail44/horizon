@@ -26,6 +26,16 @@ pub fn el(tag: &str) -> El {
     }))
 }
 
+/// An element of SVG (`svg`, and what is drawn inside it): as a browser's
+/// `createElementNS`, where [`el`] is its `createElement`, whose elements
+/// are HTML's whatever their name.
+pub fn svg(tag: &str) -> El {
+    let tag = QualName::new(None, ns!(svg), LocalName::from(tag));
+    El(with_document(|document| {
+        document.mutate().create_element(tag, Vec::new())
+    }))
+}
+
 /// Puts `child` at the end of `parent`.
 ///
 /// An element that was on the page and was taken out keeps the styles it

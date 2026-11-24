@@ -459,6 +459,14 @@ impl Host for State {
         self.made(|| el(&tag).0)
     }
 
+    fn create_element_ns(
+        &mut self,
+        namespace: String,
+        qualified_name: String,
+    ) -> wasmtime::Result<u64> {
+        self.made(|| host::create_element_ns(&namespace, &qualified_name))
+    }
+
     fn create_text(&mut self, text: String) -> wasmtime::Result<u64> {
         self.made(|| host::create_text(&text))
     }

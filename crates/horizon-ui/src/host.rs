@@ -7,10 +7,21 @@
 
 use std::cell::Cell;
 
-use blitz_dom::{BaseDocument, NodeId};
+use blitz_dom::{BaseDocument, LocalName, Namespace, NodeId, Prefix, QualName};
 
 use crate::page::Page;
 use crate::shared::{drop_node, shared, with_document, write};
+
+/// As the DOM's `createElementNS`: an element of `namespace`, named
+/// `prefix:local` or `local`.
+pub fn create_element_ns(namespace: &str, qualified_name: &str) -> NodeId {
+    let (prefix, local) = match qualified_name.split_once(':') {
+        Some((prefix, local)) => (Some(Prefix::from(prefix)), local),
+        None => (None, qualified_name),
+    };
+    let name = QualName::new(prefix, Namespace::from(namespace), LocalName::from(local));
+    with_document(|document| document.mutate().create_element(name, Vec::new()))
+}
 
 pub fn create_text(text: &str) -> NodeId {
     with_document(|document| document.mutate().create_text_node(text))

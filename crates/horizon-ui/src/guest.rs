@@ -134,6 +134,16 @@ pub fn el(tag: &str) -> El {
     El(made)
 }
 
+/// An element of SVG (`svg`, and what is drawn inside it): as a browser's
+/// `createElementNS`, where [`el`] is its `createElement`, whose elements
+/// are HTML's whatever their name.
+pub fn svg(tag: &str) -> El {
+    El(node(host::create_element_ns(
+        "http://www.w3.org/2000/svg",
+        tag,
+    )))
+}
+
 /// Whether `node` is a field text is typed into, where a key that is a
 /// character is typed rather than pressed.
 pub fn is_text_field(node: NodeId) -> bool {

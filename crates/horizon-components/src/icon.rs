@@ -7,7 +7,7 @@
 //! `currentColor` on a square of 256, so an icon here is that path on an
 //! `svg` element of the page.
 
-use horizon_ui::{Component, El, el};
+use horizon_ui::{Component, El, svg};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -62,11 +62,11 @@ impl Icon {
 
 impl Component for Icon {
     fn view(self) -> El {
-        el("svg")
+        svg("svg")
             .class(styles::ICON)
             .attr("viewBox", "0 0 256 256")
             .attr("fill", "currentColor")
-            .child(el("path").attr("d", self.path()))
+            .child(svg("path").attr("d", self.path()))
     }
 }
 
