@@ -44,21 +44,32 @@ pub fn extra_sections(cwd: &Path, cap_chars: usize) -> Vec<String> {
 }
 
 fn repository_instructions_section(cwd: &Path, cap_chars: usize) -> Option<String> {
-    let files: Vec<(PathBuf, String)> = ancestor_dirs_from_git_root(cwd)
-        .into_iter()
-        .filter_map(|dir| read_instruction_file(&dir))
+    let dirs = ancestor_dirs_from_git_root(cwd);
+    let files: Vec<(PathBuf, String)> = dirs
+        .iter()
+        .filter_map(|dir| read_instruction_file(dir))
         .collect();
     if files.is_empty() {
         return None;
     }
 
+    // Each file is named from the repository root, so the section reads the
+    // same in every checkout of the repository: a session that moves into a
+    // worktree of it is not told its instructions changed.
+    let root = dirs.first().map(PathBuf::as_path).unwrap_or(cwd);
     let mut body = String::new();
     for (path, content) in &files {
         if !body.is_empty() {
             body.push_str("\n\n");
         }
         body.push_str("# ");
-        body.push_str(&path.display().to_string());
+        body.push_str(
+            &path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string(),
+        );
         body.push('\n');
         body.push_str(content.trim_end());
     }
@@ -230,6 +241,27 @@ mod tests {
             root_pos < nested_pos,
             "expected root-level content before nested-level content"
         );
+    }
+
+    /// Files are named from the repository root, so two checkouts of the
+    /// same content (a repository and a worktree of it) give one section.
+    #[test]
+    fn extra_sections_read_the_same_in_every_checkout() {
+        let sections_in = |label: &str| {
+            let directory = temp_dir(label);
+            let root = directory.path().to_path_buf();
+            std::fs::create_dir_all(root.join(".git")).unwrap();
+            let nested = root.join("crates").join("inner");
+            std::fs::create_dir_all(&nested).unwrap();
+            write(&root, "AGENTS.md", "ROOT_MARKER");
+            write(&nested, "AGENTS.md", "NESTED_MARKER");
+            extra_sections(&nested, 24_000)
+        };
+
+        let first = sections_in("checkout-a");
+        assert_eq!(first, sections_in("checkout-b"));
+        assert!(first[0].contains("\n# AGENTS.md\nROOT_MARKER"));
+        assert!(first[0].contains("\n# crates/inner/AGENTS.md\nNESTED_MARKER"));
     }
 
     /// At a directory level with no `AGENTS.md`, `CLAUDE.md` is read
