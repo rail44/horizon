@@ -93,9 +93,6 @@ pub enum Subcommand {
     CancelTurn {
         session_id: String,
     },
-    ContinueTurn {
-        session_id: String,
-    },
     /// Delivers a user message to an already-running agent session -- the
     /// same path as pasting into the composer (`AgentSession::send_user_message`).
     /// `text` is `None` when the caller omitted it on the command line, in
@@ -189,7 +186,6 @@ Subcommands:\n  \
   approve <session-id> <call-id> <occurrence-id>\n  \
   deny <session-id> <call-id> <occurrence-id> [--reason <text>]\n  \
   cancel-turn <session-id>\n  \
-  continue-turn <session-id>\n  \
   send <session-id> [text]\n  \
   set-model <session-id> <provider> <model>\n  \
   set-effort <session-id> <level>\n  \
@@ -296,11 +292,6 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             let session_id = next_required(&mut positionals, "cancel-turn", "session-id")?;
             reject_extra(&mut positionals, "cancel-turn")?;
             Subcommand::CancelTurn { session_id }
-        }
-        "continue-turn" => {
-            let session_id = next_required(&mut positionals, "continue-turn", "session-id")?;
-            reject_extra(&mut positionals, "continue-turn")?;
-            Subcommand::ContinueTurn { session_id }
         }
         "send" => {
             let session_id = next_required(&mut positionals, "send", "session-id")?;
@@ -868,12 +859,6 @@ mod tests {
         assert_eq!(
             parse(&args(&["cancel-turn", "s-1"])).unwrap().subcommand,
             Subcommand::CancelTurn {
-                session_id: "s-1".to_string()
-            }
-        );
-        assert_eq!(
-            parse(&args(&["continue-turn", "s-1"])).unwrap().subcommand,
-            Subcommand::ContinueTurn {
                 session_id: "s-1".to_string()
             }
         );

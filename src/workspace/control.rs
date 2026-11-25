@@ -166,7 +166,6 @@ impl Shell {
                 reason,
             } => self.tell(session_id, AgentCommand::Deny { identity, reason }),
             Command::CancelTurn(session) => self.tell(session, AgentCommand::Cancel),
-            Command::ContinueTurn(session) => self.tell(session, AgentCommand::ContinueTurn),
             Command::Send { session_id, text } => {
                 self.tell(session_id, AgentCommand::Prompt { text })
             }

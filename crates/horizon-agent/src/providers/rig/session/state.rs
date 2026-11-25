@@ -223,9 +223,6 @@ impl SessionLoopState {
                 crate::contract::Command::ToolCallResult(result) => {
                     self.handle_tool_result(result).await;
                 }
-                crate::contract::Command::ContinueTurn => {
-                    self.continue_halted_turn().await;
-                }
                 crate::contract::Command::Cancel { .. } => {
                     self.pause_inputs(true);
                     if !self.cancel_outstanding_tool_calls().await {

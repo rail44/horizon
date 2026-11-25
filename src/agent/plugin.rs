@@ -22,7 +22,6 @@ pub enum AgentPaneCommand {
     Approve,
     Deny,
     Cancel,
-    Continue,
     SwitchModel,
     SwitchEffort,
 }
@@ -59,7 +58,6 @@ impl AgentPlugin {
                     reason: None,
                 }),
                 AgentPaneCommand::Cancel => Some(AgentCommand::Cancel),
-                AgentPaneCommand::Continue => Some(AgentCommand::ContinueTurn),
                 AgentPaneCommand::SwitchModel => return ask.run(AgentAsked::SwitchModel),
                 AgentPaneCommand::SwitchEffort => return ask.run(AgentAsked::SwitchEffort),
             };
@@ -72,7 +70,6 @@ impl AgentPlugin {
             match command {
                 AgentPaneCommand::Approve | AgentPaneCommand::Deny => standing.pending_approval,
                 AgentPaneCommand::Cancel => standing.turn_in_flight,
-                AgentPaneCommand::Continue => standing.paused_turn,
                 AgentPaneCommand::SwitchModel => true,
                 AgentPaneCommand::SwitchEffort => session.effort().is_some(),
             }
@@ -121,12 +118,6 @@ impl Plugin for AgentPlugin {
                 "Cancel Agent Turn",
                 "Cancel the agent turn currently in flight.",
                 Cancel,
-            ),
-            command(
-                "continue-agent-turn",
-                "Continue Agent Turn",
-                "Resume a turn the turn-loop guard paused, without a new message.",
-                Continue,
             ),
             command(
                 "switch-model",

@@ -17,13 +17,6 @@ pub struct EmptyResponse {}
 
 // -- client → agent requests --
 
-/// Mirrors `contract::Command::ContinueTurn` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
-#[request(method = "_horizon/continue_turn", response = EmptyResponse)]
-pub struct ContinueTurnRequest {
-    pub session_id: SessionId,
-}
-
 /// Lists the configured providers.
 #[derive(
     Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
@@ -173,8 +166,6 @@ mod tests {
 
     #[test]
     fn requests_round_trip() {
-        let session_id = SessionId::new();
-        message_round_trip(&ContinueTurnRequest { session_id });
         message_round_trip(&ListProvidersRequest {});
         message_round_trip(&ListProviderModelsRequest {
             provider: "default".into(),
@@ -245,7 +236,6 @@ mod tests {
     fn horizon_method_names_are_pinned() {
         let session_id = SessionId::new();
         let methods = [
-            ContinueTurnRequest { session_id }.method().to_owned(),
             ListProvidersRequest {}.method().to_owned(),
             ListProviderModelsRequest {
                 provider: String::new(),
@@ -265,7 +255,6 @@ mod tests {
         assert_eq!(
             methods,
             [
-                "_horizon/continue_turn",
                 "_horizon/list_providers",
                 "_horizon/list_provider_models",
                 "_horizon/ensure_board_organizer",

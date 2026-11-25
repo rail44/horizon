@@ -132,7 +132,6 @@ pub enum TurnEndReason {
     Cancelled,
     Failed,
     HaltedByIterationCap,
-    HaltedByTokenBudget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

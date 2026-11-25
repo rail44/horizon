@@ -51,10 +51,10 @@ fn replacement_revokes_old_commands_and_old_drop_keeps_new_subscription() {
     let previous = snapshot(&state, session, &live);
     let mut current = snapshot(&state, session, &live);
     assert_eq!(*previous.ended.borrow(), Some(AttachmentEnd::Replaced));
-    assert!(!previous.lease.command(Command::ContinueTurn));
+    assert!(!previous.lease.command(Command::Suspend));
     drop(previous);
-    assert!(current.lease.command(Command::ContinueTurn));
-    assert_eq!(commands.try_recv().unwrap(), Command::ContinueTurn);
+    assert!(current.lease.command(Command::Suspend));
+    assert_eq!(commands.try_recv().unwrap(), Command::Suspend);
     assert!(commands.try_recv().is_err());
     publish(&state, session, &live, message(1));
     assert_eq!(
@@ -108,7 +108,7 @@ fn slow_attachment_is_revoked_and_reopening_recovers_every_committed_event() {
         publish(&state, session, &live, message(index));
     }
     assert_eq!(*slow.ended.borrow(), Some(AttachmentEnd::Lagged));
-    assert!(!slow.lease.command(Command::ContinueTurn));
+    assert!(!slow.lease.command(Command::Suspend));
     assert_eq!(slow.events.len(), LIVE_CAPACITY);
     let recovered = snapshot(&state, session, &live);
     assert_eq!(
@@ -233,8 +233,8 @@ fn duplicate_creation_preserves_the_existing_session_command_owner() {
             .unwrap_err()
             .contains("already exists")
     );
-    assert!(state.send_command(session, Command::ContinueTurn));
-    assert_eq!(commands.try_recv().unwrap(), Command::ContinueTurn);
+    assert!(state.send_command(session, Command::Suspend));
+    assert_eq!(commands.try_recv().unwrap(), Command::Suspend);
 }
 
 /// A `task` child's approval shown through its requester

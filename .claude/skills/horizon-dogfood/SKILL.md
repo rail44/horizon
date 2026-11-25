@@ -68,8 +68,8 @@ markers). Schema subtleties and data-quality caveats (top-level
 the `agent-inspect` skill — read it before aggregate analysis.
 
 **Act.** `horizon approve <session_id> <call_id> <occurrence_id>` / `deny <session_id>
-<call_id> <occurrence_id>` resolve a pending approval; `horizon continue-turn
-<session_id>` resumes a guard-paused turn; `cancel-turn <session_id>`
+<call_id> <occurrence_id>` resolve a pending approval; `horizon send
+<session_id> <text>` goes on after a guard-paused turn; `cancel-turn <session_id>`
 aborts. **Read the pending call's
 `input` before approving — an approval runs a real command on this
 machine.** Never approve an outside-worktree write or a network-shaped

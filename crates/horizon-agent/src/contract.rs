@@ -229,17 +229,6 @@ pub enum Command {
         reason: Option<String>,
     },
     ToolCallResult(ToolCallResult),
-    /// Resumes a turn the turn-loop guard halted (`TurnEndReason::
-    /// HaltedByTokenBudget`), without composing a new
-    /// user message -- `docs/issues/002-agent-iteration-cap-halts-real-
-    /// work.md`'s resolution, decision 3 ("Continue is one action"). The
-    /// session loop (`providers::rig::session::SessionLoopState::run`) resets
-    /// the guard and re-enters the turn loop from the halted result it
-    /// already recorded. A safe no-op when there is nothing halted to
-    /// resume (e.g. sent to an idle session, or replayed from a persisted
-    /// log -- replay must never auto-resume a halted turn, so nothing in
-    /// bootstrap ever sends this on a session's behalf).
-    ContinueTurn,
     /// Request a model switch. The daemon resolves its current catalog before
     /// forwarding an internal `ApplySessionModel`. The running turn finishes
     /// on its previous selection; the provider announces only after application.
@@ -393,13 +382,9 @@ pub enum Event {
     /// `TurnEnded` event in this session's frame at the moment of
     /// dispatch — `AgentFrame::last_turn_end_reason` is the accessor —
     /// so an analyst can read "human resumed after a token-budget halt"
-    /// from this row alone. A
-    /// `ContinueTurn` arriving for a session with nothing halted (a
-    /// no-op replay, or one sent to an idle session) still emits this
-    /// event with `resumed_from = None`, so analytics can count
-    /// attempted-but-idle continue-turns without a separate missing-
-    /// data signal: that count is itself a useful operator-behavior
-    /// number (a non-zero one likely means a UI keybinding race).
+    /// from this row alone; `None` when nothing was halted. Nothing records
+    /// it any more: there is no command to continue a halted turn, a new
+    /// user message goes on. It is read from the logs that have it.
     ///
     /// Audit-only: same as `ApprovalResolved`. The transcript already
     /// shows the resumed turn's `TurnEnded` receipt and the next turn's
@@ -443,7 +428,7 @@ pub enum TurnEndReason {
     Cancelled,
     Failed,
     /// The rounds since the last user input spent the turn loop's token
-    /// budget (`providers::rig::guards`); `Command::ContinueTurn` resumes.
+    /// budget (`providers::rig::guards`); a new user message goes on.
     HaltedByTokenBudget,
 }
 

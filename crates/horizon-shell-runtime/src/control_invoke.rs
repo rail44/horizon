@@ -41,7 +41,6 @@ pub enum Command {
         reason: Option<String>,
     },
     CancelTurn(SessionId),
-    ContinueTurn(SessionId),
     Send {
         session_id: SessionId,
         text: String,
@@ -102,7 +101,6 @@ pub fn parse(invoke: &Invoke) -> Result<Command, String> {
             reason: optional_string_arg(args, "reason")?,
         },
         "cancel-turn" => Command::CancelTurn(session_id_arg(args, "session_id")?),
-        "continue-turn" => Command::ContinueTurn(session_id_arg(args, "session_id")?),
         "send" => Command::Send {
             session_id: session_id_arg(args, "session_id")?,
             text: nonempty_string_arg(args, "text")?,

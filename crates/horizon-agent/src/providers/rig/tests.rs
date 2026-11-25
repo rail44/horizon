@@ -1588,7 +1588,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     );
 
     // The arrived result is *not* folded into history here -- it's stashed
-    // for `Command::ContinueTurn`/a later `Command::UserMessage` to fold in
+    // for a later `Command::UserMessage` to fold in
     // exactly like an ordinary tool-driven turn's last-landed result (see
     // `halt_turn_loop`'s doc comment). Only B's synthesized cancellation is
     // appended immediately, since it never gets a second chance to land.
@@ -1774,50 +1774,6 @@ fn start_fallback_rig_session_with_history(
         recv(&rx);
     }
     (tx, rx)
-}
-
-/// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
-/// replay-safety requirement: a session that ended halted must not
-/// auto-resume once restarted/replayed. The halted continuation consumed by
-/// `Command::ContinueTurn` is purely in-memory, never reconstructed from
-/// `rig_history`; each new execution owner starts idle, regardless of
-/// what the loaded history looks like, exactly as if bootstrap had replayed
-/// a persisted halted turn. So a stray `Command::ContinueTurn` reaching a
-/// just-started session (e.g. a UI that still shows a stale Continue
-/// button right after a restart, before any new interaction) is a safe
-/// no-op, not an accidental resume.
-#[test]
-fn continue_turn_on_a_freshly_started_session_is_a_no_op_not_an_auto_resume() {
-    let (tx, rx) = start_fallback_rig_session();
-
-    let _ = tx.send(Command::ContinueTurn);
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_millis(200))
-            .is_err(),
-        "Continue must be a silent no-op when nothing is halted -- in particular, a freshly \
-         started/replayed session must never auto-resume"
-    );
-
-    // The session is unaffected: a normal user turn still works afterward.
-    let _ = tx.send(Command::UserMessage {
-        text: "hello".to_string(),
-    });
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            text,
-        }) if text == "hello");
-    std::assert_matches!(
-        recv(&rx),
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::Assistant,
-            ..
-        })
-    );
-    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 #[test]
@@ -3320,11 +3276,6 @@ fn restored_input_admission_and_receipts_match_the_live_session() {
             super::conversation::upgrade::fixture(history),
         );
         if paused {
-            tx.send(Command::ContinueTurn).unwrap();
-            assert!(
-                rx.recv_timeout(Duration::from_millis(100)).is_err(),
-                "stale Continue must preserve a restored pause"
-            );
             tx.send(Command::UserMessage {
                 text: "resume".into(),
             })

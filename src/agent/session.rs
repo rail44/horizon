@@ -96,7 +96,6 @@ pub struct AgentSession {
 pub struct Standing {
     pub pending_approval: bool,
     pub turn_in_flight: bool,
-    pub paused_turn: bool,
 }
 
 impl AgentSession {
@@ -206,7 +205,6 @@ impl AgentSession {
         Standing {
             pending_approval: !actionable_pending_approval_identities_in(&frame.items).is_empty(),
             turn_in_flight: state_indicates_turn_in_flight(frame.state()),
-            paused_turn: frame.halted_awaiting_continue(),
         }
     }
 

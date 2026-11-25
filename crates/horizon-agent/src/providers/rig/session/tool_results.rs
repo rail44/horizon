@@ -1,4 +1,4 @@
-//! Accept tool results and resume halted results before starting the next turn.
+//! Accept tool results before starting the next turn.
 
 use super::super::conversation::Prompt;
 use crate::contract::ToolCallResult;
@@ -25,25 +25,6 @@ impl SessionLoopState {
 
         self.advance_from_tool_result(result, &descriptor.tool_id)
             .await;
-    }
-
-    pub(super) async fn continue_halted_turn(&mut self) {
-        let Some((result, tool_id)) = self.execution.take_halted() else {
-            // Nothing halted to resume: a safe no-op. Covers a
-            // stale Continue arriving after a fresh user message
-            // already flushed the pending result, a Continue sent
-            // to an idle/never-halted session, and — critically —
-            // a resumed session right after bootstrap: replay
-            // never reconstructs an in-memory halted continuation, so
-            // a persisted session that ended halted stays halted
-            // (waiting-for-user) rather than auto-resuming.
-            return;
-        };
-        self.pause_inputs(false);
-        self.guard.reset();
-        // A resumed halt is a new turn on the same request.
-        self.continuation.count = 0;
-        self.advance_from_tool_result(result, &tool_id).await;
     }
 
     async fn advance_from_tool_result(&mut self, result: ToolCallResult, tool_id: &str) {

@@ -31,7 +31,6 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Approve { .. } => "approve",
         Subcommand::Deny { .. } => "deny",
         Subcommand::CancelTurn { .. } => "cancel-turn",
-        Subcommand::ContinueTurn { .. } => "continue-turn",
         Subcommand::Send { .. } => "send",
         Subcommand::SetModel { .. } => "set-model",
         Subcommand::SetEffort { .. } => "set-effort",
@@ -147,10 +146,6 @@ pub fn to_request(
             ),
         },
         Subcommand::CancelTurn { session_id } => invoke(
-            command_name,
-            serde_json::json!({ "session_id": session_id }),
-        ),
-        Subcommand::ContinueTurn { session_id } => invoke(
             command_name,
             serde_json::json!({ "session_id": session_id }),
         ),
@@ -410,9 +405,6 @@ mod tests {
         assert!(!is_destructive(&Subcommand::CancelTurn {
             session_id: "s-1".to_string()
         }));
-        assert!(!is_destructive(&Subcommand::ContinueTurn {
-            session_id: "s-1".to_string()
-        }));
         assert!(!is_destructive(&Subcommand::Sessions));
         assert!(!is_destructive(&Subcommand::Send {
             session_id: "s-1".to_string(),
@@ -421,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_turn_and_continue_turn_carry_the_session_id() {
+    fn cancel_turn_carries_the_session_id() {
         let Request::Invoke(cancel) = to_request(
             &Subcommand::CancelTurn {
                 session_id: "s-1".to_string(),
@@ -433,18 +425,6 @@ mod tests {
         };
         assert_eq!(cancel.command, "cancel-turn");
         assert_eq!(cancel.args, serde_json::json!({ "session_id": "s-1" }));
-
-        let Request::Invoke(cont) = to_request(
-            &Subcommand::ContinueTurn {
-                session_id: "s-1".to_string(),
-            },
-            None,
-            None,
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(cont.command, "continue-turn");
-        assert_eq!(cont.args, serde_json::json!({ "session_id": "s-1" }));
     }
 
     #[test]

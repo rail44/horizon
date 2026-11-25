@@ -2,8 +2,7 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
-    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, SessionId, ToolCallMeta, ToolOutcome,
-    write_horizon_meta,
+    SessionEventNotification, SessionId, ToolCallMeta, ToolOutcome, write_horizon_meta,
 };
 use serde_json::json;
 
@@ -343,10 +342,6 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
         (v2::StopReason::Cancelled, SessionStatus::Cancelled),
         (v2::StopReason::MaxTurnRequests, SessionStatus::Paused),
         (
-            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_TOKEN_BUDGET)),
-            SessionStatus::Paused,
-        ),
-        (
             v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_FAILED)),
             SessionStatus::Failed,
         ),
@@ -415,29 +410,6 @@ fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
     model.restart();
     assert!(model.frame.items.is_empty());
     assert_eq!(model.frame.settled_revision, settled + 3);
-}
-
-#[test]
-fn halted_detection_is_idle_on_a_guard_stop() {
-    let mut model = AgentModel::default();
-    for (reason, halted) in [
-        (v2::StopReason::MaxTurnRequests, true),
-        (
-            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_TOKEN_BUDGET)),
-            true,
-        ),
-        (v2::StopReason::EndTurn, false),
-        (v2::StopReason::Cancelled, false),
-        (
-            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_FAILED)),
-            false,
-        ),
-    ] {
-        apply(&mut model, running());
-        assert!(!model.frame.halted_awaiting_continue());
-        apply(&mut model, idle(Some(reason)));
-        assert_eq!(model.frame.halted_awaiting_continue(), halted);
-    }
 }
 
 #[test]

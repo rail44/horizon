@@ -12,8 +12,8 @@ use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    AttachmentEnd, ContinueTurnRequest, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
-    PermissionResponseMeta, SessionEventNotification, SessionId, write_horizon_meta,
+    AttachmentEnd, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
+    SessionEventNotification, SessionId, write_horizon_meta,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -72,7 +72,6 @@ pub enum AgentCommand {
         identity: ToolCallIdentity,
         reason: Option<String>,
     },
-    ContinueTurn,
     Close,
 }
 
@@ -304,13 +303,6 @@ impl Session {
                 }
                 None => true,
             },
-            AgentCommand::ContinueTurn => {
-                let request = ContinueTurnRequest {
-                    session_id: self.route.session_id(),
-                };
-                self.report_failure("continue", self.connection.send_request(request));
-                true
-            }
             AgentCommand::Close => {
                 let request = v2::CloseSessionRequest::new(session_id);
                 self.report_failure("close", self.connection.send_request(request));

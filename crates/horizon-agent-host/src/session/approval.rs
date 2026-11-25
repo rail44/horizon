@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 
-use horizon_agent::contract::{
-    ApprovalDecisionPayload, Command, ContinueTurnRequested, Event, SessionId, ToolCallId,
-};
+use horizon_agent::contract::{ApprovalDecisionPayload, Command, Event, SessionId, ToolCallId};
 use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::gate::GateStep;
@@ -72,11 +70,8 @@ pub(super) fn begin_reissued_approval(
 /// A `Command` envelope arriving from Horizon for this session.
 /// `ApproveToolCall`/`DenyToolCall` are resolved right here (decision 2:
 /// "Approval decisions stay in Horizon... resolved in agentd") via
-/// `tools::approval::resolve_approval`; `ContinueTurn` is special-cased to
-/// emit an audit event (`Event::ContinueTurnRequested`) recording the
-/// `TurnEndReason` of the most recent `TurnEnded` item in the live frame
-/// before forwarding the command to the provider unchanged. Every other
-/// command forwards straight to the provider. (An earlier in-process shell
+/// `tools::approval::resolve_approval`. Every other command forwards
+/// straight to the provider. (An earlier in-process shell
 /// shared this helper from its own click handler; that path retired with
 /// the runtime split.)
 pub(super) fn dispatch_inbound_command(
@@ -165,25 +160,6 @@ pub(super) fn dispatch_inbound_command(
             identity,
             ApprovalDecision::Deny { reason },
         ),
-        Command::ContinueTurn => {
-            // The audit event is the v16 (`SESSION_PROTOCOL_VERSION`'s v16
-            // note) fix for the operator-intervention gap surfaced by the
-            // 2026-07-28 session aa95e066 dogfooding report: a `ContinueTurn`
-            // previously left no event at all, so an analyst couldn't tell
-            // a 3-Continue-turns run from a 0-Continue-turns one without
-            // reading the rig session loop's code. `resumed_from` carries
-            // the most recent `TurnEnded`'s reason when there is one (the
-            // real halt case); the no-op replay / idle-session case leaves
-            // it `None` per `Event::ContinueTurnRequested`'s doc comment,
-            // so a non-zero no-reason count from analytics still surfaces
-            // UI races.
-            let resumed_from = live_state.frame().last_turn_end_reason();
-            let event = Event::ContinueTurnRequested(ContinueTurnRequested { resumed_from });
-            if !apply_and_send_session_events(state, live_state, session_id, vec![event.into()]) {
-                return;
-            }
-            let _ = commands_tx.send(Command::ContinueTurn);
-        }
         other => {
             let _ = commands_tx.send(other);
         }
@@ -270,8 +246,8 @@ mod tests {
     use super::*;
     use crate::session::test_support::{drain_events, judge_candidate, test_state};
     use horizon_agent::contract::{
-        ApprovalDecisionPayload, ApprovalKind, ApprovalRequest, ApprovalResolved,
-        ContinueTurnRequested, OccurrenceId, ProviderEvent, ToolCallRequest, TurnEndReason,
+        ApprovalDecisionPayload, ApprovalKind, ApprovalRequest, ApprovalResolved, OccurrenceId,
+        ProviderEvent, ToolCallRequest,
     };
     use horizon_agent::live::LiveState;
 
@@ -333,120 +309,6 @@ mod tests {
         );
         assert_eq!(live.events(), cancelled);
         assert!(received.try_recv().is_err());
-    }
-
-    #[test]
-    fn continue_turn_records_resumed_from_when_halted() {
-        let state = test_state();
-        let session_id = SessionId::new();
-        let live_state = LiveState::with_disabled_persistence();
-        let (commands_tx, commands_rx) = crossbeam_channel::unbounded::<Command>();
-
-        // Seed the frame with a `TurnEnded` that uses one of the v16-meaningful
-        // halt reasons, so the emit site must actually walk the frame to
-        // recover it (the `.rev()` pattern `last_turn_end_reason` shares with
-        // `tool_call_request`/`approval_kind`) rather than hard-coding anything.
-        live_state
-            .extend_provider_events([ProviderEvent::from(Event::TurnEnded(
-                TurnEndReason::HaltedByTokenBudget,
-            ))])
-            .unwrap();
-
-        dispatch_inbound_command(
-            &state,
-            &live_state,
-            &commands_tx,
-            session_id,
-            Command::ContinueTurn,
-        );
-
-        // The live state carries the audit event with the recovered reason.
-        let events = live_state.events();
-        let resolved = events
-            .iter()
-            .find_map(|event| match event {
-                Event::ContinueTurnRequested(ContinueTurnRequested { resumed_from }) => {
-                    Some(*resumed_from)
-                }
-                _ => None,
-            })
-            .expect("a ContinueTurnRequested event recorded in the live state");
-        assert_eq!(resolved, Some(TurnEndReason::HaltedByTokenBudget));
-
-        // The original command is forwarded to the provider unchanged so
-        // the resume itself still happens.
-        std::assert_matches!(
-            commands_rx.try_recv().expect("the command is forwarded"),
-            Command::ContinueTurn
-        );
-    }
-
-    /// The no-op replay case documented on
-    /// `Event::ContinueTurnRequested::resumed_from`: a `ContinueTurn` sent
-    /// to a session whose frame has no `TurnEnded` records `resumed_from:
-    /// None`, not a panic and not a silent skip, so analytics can count
-    /// the attempt.
-    #[test]
-    fn continue_turn_records_none_when_no_halt_exists() {
-        let state = test_state();
-        let session_id = SessionId::new();
-        let live_state = LiveState::with_disabled_persistence();
-        let (commands_tx, commands_rx) = crossbeam_channel::unbounded::<Command>();
-
-        dispatch_inbound_command(
-            &state,
-            &live_state,
-            &commands_tx,
-            session_id,
-            Command::ContinueTurn,
-        );
-
-        let resumed_from = live_state.events().iter().find_map(|event| match event {
-            Event::ContinueTurnRequested(ContinueTurnRequested { resumed_from }) => {
-                Some(*resumed_from)
-            }
-            _ => None,
-        });
-        assert_eq!(resumed_from, Some(None));
-        assert!(commands_rx.try_recv().is_ok(), "command still forwarded");
-    }
-
-    /// A `ContinueTurn` that lands after the frame has moved past the
-    /// halt (a later item, e.g. a new message) records the latest
-    /// `TurnEnded` regardless -- the `.rev()` walk in
-    /// `last_turn_end_reason` returns the *most recent* one, even if it is
-    /// no longer the frame's tail. That is the honest read of "what turn
-    /// ended last" and matches the audit semantic in
-    /// `Event::ContinueTurnRequested`'s doc comment.
-    #[test]
-    fn continue_turn_records_the_most_recent_turn_ended_reason() {
-        let state = test_state();
-        let session_id = SessionId::new();
-        let live_state = LiveState::with_disabled_persistence();
-        let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
-
-        live_state
-            .extend_provider_events([
-                ProviderEvent::from(Event::TurnEnded(TurnEndReason::HaltedByTokenBudget)),
-                ProviderEvent::from(Event::TurnEnded(TurnEndReason::Completed)),
-            ])
-            .unwrap();
-
-        dispatch_inbound_command(
-            &state,
-            &live_state,
-            &commands_tx,
-            session_id,
-            Command::ContinueTurn,
-        );
-
-        let resumed_from = live_state.events().iter().find_map(|event| match event {
-            Event::ContinueTurnRequested(ContinueTurnRequested { resumed_from }) => {
-                Some(*resumed_from)
-            }
-            _ => None,
-        });
-        assert_eq!(resumed_from, Some(Some(TurnEndReason::Completed)));
     }
 
     /// `SESSION_PROTOCOL_VERSION` v16's `Event::ApprovalResolved`:

@@ -6,8 +6,7 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
-    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, ToolCallMeta, decode_model_option_id,
-    read_horizon_meta,
+    SessionEventNotification, ToolCallMeta, decode_model_option_id, read_horizon_meta,
 };
 
 use super::types::*;
@@ -411,9 +410,6 @@ fn turn_end_reason(reason: &v2::StopReason) -> TurnEndReason {
         v2::StopReason::EndTurn => TurnEndReason::Completed,
         v2::StopReason::Cancelled => TurnEndReason::Cancelled,
         v2::StopReason::MaxTurnRequests => TurnEndReason::HaltedByIterationCap,
-        v2::StopReason::Other(other) if other.stop_reason == STOP_REASON_TOKEN_BUDGET => {
-            TurnEndReason::HaltedByTokenBudget
-        }
         v2::StopReason::Other(other) if other.stop_reason == STOP_REASON_FAILED => {
             TurnEndReason::Failed
         }

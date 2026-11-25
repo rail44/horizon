@@ -240,9 +240,7 @@ fn a_turn_end_is_one_idle_with_its_stop_reason() {
             )),
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(v2::RunningStateUpdate::new())),
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(
-                v2::IdleStateUpdate::new().stop_reason(v2::StopReason::Other(
-                    acp::other_stop_reason(acp::STOP_REASON_TOKEN_BUDGET,)
-                ))
+                v2::IdleStateUpdate::new().stop_reason(v2::StopReason::MaxTurnRequests)
             )),
         ]
     );

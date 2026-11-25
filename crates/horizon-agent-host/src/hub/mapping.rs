@@ -639,9 +639,7 @@ fn stop_reason(reason: TurnEndReason) -> v2::StopReason {
         TurnEndReason::Failed => {
             v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_FAILED))
         }
-        TurnEndReason::HaltedByTokenBudget => {
-            v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_TOKEN_BUDGET))
-        }
+        TurnEndReason::HaltedByTokenBudget => v2::StopReason::MaxTurnRequests,
     }
 }
 

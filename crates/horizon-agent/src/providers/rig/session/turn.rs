@@ -395,7 +395,7 @@ impl SessionLoopState {
     /// Pauses the turn loop once the rounds have spent the token budget
     /// (`super::super::guards`): a `TurnEnded` with
     /// `HaltedByTokenBudget`, and a return to `WaitingForUser` where a new
-    /// user message or `Command::ContinueTurn` resumes with a fresh budget.
+    /// user message goes on with a fresh budget.
     ///
     /// `arrived_result` (the batch's last result) is real -- its tool
     /// already ran -- and is retained in `Execution::halt` for Continue;

@@ -306,7 +306,7 @@ mod tests {
                 commands: receive,
                 ..Default::default()
             };
-            state.inbox.push_back(Command::ContinueTurn);
+            state.inbox.push_back(Command::Suspend);
             send.send(Command::SessionInput(input("before", Some("first"))))
                 .unwrap();
             send.send(control.clone()).unwrap();
@@ -315,7 +315,7 @@ mod tests {
 
             state.prepare_next_input().await;
 
-            assert_eq!(state.inbox, [control, Command::ContinueTurn, later]);
+            assert_eq!(state.inbox, [control, Command::Suspend, later]);
             assert!(state.inputs.active_ids().is_empty());
             assert_eq!(
                 state.inputs.start_next(),
@@ -527,29 +527,5 @@ mod recovery_tests {
             );
             assert!(inputs.start_next().is_none());
         }
-    }
-
-    #[tokio::test]
-    async fn a_stale_continue_cannot_restart_a_restored_paused_queue() {
-        let (events_tx, events) = crossbeam_channel::unbounded();
-        let mut state = SessionLoopState {
-            inputs: Inputs::restore(&[
-                Event::InputQueuePaused(true),
-                Event::InputAccepted(request("pending")),
-            ]),
-            events_tx,
-            ..Default::default()
-        };
-        state.continue_halted_turn().await;
-        state.prepare_next_input().await;
-        assert!(state.inbox.is_empty());
-        assert!(state.inputs.is_paused());
-        assert!(events.try_recv().is_err());
-        state.pause_inputs(false);
-        state.prepare_next_input().await;
-        std::assert_matches!(
-            state.inbox.pop_front(), Some(Command::UserMessage { text }) if text.ends_with("pending")
-        );
-        assert_eq!(state.inputs.active_ids(), ["pending"]);
     }
 }

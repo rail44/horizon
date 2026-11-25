@@ -7,8 +7,8 @@
 //! The budget counts input tokens the provider did not serve from its
 //! prompt cache, summed over every round since the last user input: what
 //! the rounds cost, rather than how many there were. A halted turn ends
-//! with `TurnEndReason::HaltedByTokenBudget` and waits; `Command::
-//! ContinueTurn` (or a new user message) starts a fresh budget. A session
+//! with `TurnEndReason::HaltedByTokenBudget` and waits; a new user
+//! message starts a fresh budget. A session
 //! nobody attends cannot be continued, so the halt is where it stops.
 
 const MAX_CONSECUTIVE_TRUNCATION_CONTINUES: u32 = 3;

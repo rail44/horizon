@@ -74,18 +74,6 @@
       ],
       "type": "string"
     },
-    "ContinueTurnRequest": {
-      "description": "Mirrors `contract::Command::ContinueTurn` (crates/horizon-agent/src/contract.rs).",
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
-      "type": "object"
-    },
     "EmptyResponse": {
       "description": "Reply of the extension requests that return nothing.",
       "type": "object"
@@ -614,14 +602,6 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "client_to_agent": {
-    "_horizon/continue_turn": {
-      "reply": {
-        "$ref": "#/$defs/EmptyResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/ContinueTurnRequest"
-      }
-    },
     "_horizon/ensure_board_organizer": {
       "reply": {
         "$ref": "#/$defs/EnsureBoardOrganizerResponse"
@@ -687,9 +667,8 @@
     }
   },
   "stop_reasons": [
-    "_horizon/failed",
-    "_horizon/token_budget"
+    "_horizon/failed"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 15
+  "x-session-protocol-version": 16
 }

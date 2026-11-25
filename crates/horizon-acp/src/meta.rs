@@ -15,8 +15,6 @@ pub const HORIZON_META_KEY: &str = "horizon";
 
 /// `stopReason` value for `contract::TurnEndReason::Failed`.
 pub const STOP_REASON_FAILED: &str = "_horizon/failed";
-/// `stopReason` value for `contract::TurnEndReason::HaltedByTokenBudget`.
-pub const STOP_REASON_TOKEN_BUDGET: &str = "_horizon/token_budget";
 
 /// A stop reason of Horizon's own, as the protocol carries one it does not
 /// name: the reason and no other field.
@@ -307,6 +305,5 @@ mod tests {
     #[test]
     fn stop_reason_values_are_extension_prefixed() {
         assert_eq!(STOP_REASON_FAILED, "_horizon/failed");
-        assert_eq!(STOP_REASON_TOKEN_BUDGET, "_horizon/token_budget");
     }
 }

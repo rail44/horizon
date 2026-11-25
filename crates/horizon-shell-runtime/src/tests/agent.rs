@@ -14,11 +14,10 @@ use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
-    AttachmentEnd, ContinueTurnRequest, EmptyResponse, EnsureBoardOrganizerRequest,
-    EnsureBoardOrganizerResponse, HORIZON_ACP_EXT_VERSION, InitializeMeta,
-    PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
-    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
-    write_horizon_meta,
+    AttachmentEnd, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse,
+    HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
+    PermissionResponseMeta, SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta,
+    read_horizon_meta, write_horizon_meta,
 };
 use horizon_agent::contract::ProviderId;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -65,7 +64,6 @@ enum AgentCall {
     Prompt(String),
     Cancel,
     Close,
-    ContinueTurn,
     EnsureBoardOrganizer(PathBuf, SessionId),
 }
 
@@ -79,7 +77,6 @@ impl std::fmt::Debug for AgentCall {
             AgentCall::Prompt(_) => "Prompt",
             AgentCall::Cancel => "Cancel",
             AgentCall::Close => "Close",
-            AgentCall::ContinueTurn => "ContinueTurn",
             AgentCall::EnsureBoardOrganizer(..) => "EnsureBoardOrganizer",
         };
         f.write_str(name)
@@ -117,8 +114,7 @@ async fn serve_fake_agentd(
     let record = |calls: &Calls, call| {
         let _ = calls.send(call);
     };
-    let (c1, c2, c3, c4, c5, c6, c7, c8, c10) = (
-        calls_tx.clone(),
+    let (c1, c2, c3, c4, c5, c6, c7, c10) = (
         calls_tx.clone(),
         calls_tx.clone(),
         calls_tx.clone(),
@@ -281,15 +277,6 @@ async fn serve_fake_agentd(
                         _connection: V2ConnectionTo<Client>| {
                 record(&c7, AgentCall::Close);
                 responder.respond(v2::CloseSessionResponse::new())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |_request: ContinueTurnRequest,
-                        responder: Responder<EmptyResponse>,
-                        _connection: V2ConnectionTo<Client>| {
-                record(&c8, AgentCall::ContinueTurn);
-                responder.respond(EmptyResponse {})
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -733,8 +720,8 @@ async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
     wait_until_ready(&mut current).await;
     fake.update(id, idle());
     assert!(is_idle_update(&next_agent_event(&mut current).await));
-    current.sender().send(AgentCommand::ContinueTurn).unwrap();
-    std::assert_matches!(fake.next_call().await, AgentCall::ContinueTurn);
+    current.sender().send(AgentCommand::Cancel).unwrap();
+    std::assert_matches!(fake.next_call().await, AgentCall::Cancel);
 }
 
 /// Commands wait for the resume response; the replay before it reaches the

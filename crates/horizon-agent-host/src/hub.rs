@@ -554,19 +554,6 @@ impl Shared {
         answer(responder, result)
     }
 
-    fn continue_turn(
-        self: &Arc<Self>,
-        request: acp::ContinueTurnRequest,
-        responder: Responder<acp::EmptyResponse>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        let result = self
-            .gate()
-            .and_then(|()| self.command(request.session_id, Command::ContinueTurn))
-            .map(|()| acp::EmptyResponse {});
-        answer(responder, result)
-    }
-
     fn list_providers(
         self: &Arc<Self>,
         _request: acp::ListProvidersRequest,
@@ -715,7 +702,6 @@ where
         v2::SetSessionConfigOptionRequest,
         set_config_option
     );
-    let builder = on_request!(builder, acp::ContinueTurnRequest, continue_turn);
     let builder = on_request!(builder, acp::ListProvidersRequest, list_providers);
     let builder = on_request!(
         builder,

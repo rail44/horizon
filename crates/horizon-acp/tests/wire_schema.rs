@@ -32,10 +32,6 @@ fn generate_wire_schema() -> Value {
     }
 
     let client_to_agent = json!({
-        "_horizon/continue_turn": {
-            "request": schema_of(sub::<ContinueTurnRequest>),
-            "reply": schema_of(sub::<EmptyResponse>),
-        },
         "_horizon/list_providers": {
             "request": schema_of(sub::<ListProvidersRequest>),
             "reply": schema_of(sub::<ListProvidersResponse>),
@@ -69,7 +65,7 @@ fn generate_wire_schema() -> Value {
         "config_option": schema_of(sub::<ModelOptionMeta>),
     });
 
-    let stop_reasons = json!([STOP_REASON_FAILED, STOP_REASON_TOKEN_BUDGET]);
+    let stop_reasons = json!([STOP_REASON_FAILED]);
 
     let defs = Value::Object(generator.take_definitions(true));
 
