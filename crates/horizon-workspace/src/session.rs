@@ -13,6 +13,24 @@ impl Workspace {
         }
     }
 
+    /// Gives the session `was` the id `is`, wherever the workspace keeps
+    /// it: an agent names the sessions the shell starts once it has them.
+    pub fn rename_session(&mut self, was: SessionId, is: SessionId) {
+        for session in &mut self.sessions {
+            if session.id == was {
+                session.id = is;
+            }
+            if session.parent_session_id == Some(was) {
+                session.parent_session_id = Some(is);
+            }
+        }
+        for pane in &mut self.panes {
+            if pane.session_id == Some(was) {
+                pane.session_id = Some(is);
+            }
+        }
+    }
+
     /// Records `parent_session_id` on an existing session (a no-op if
     /// `session_id` is unknown) -- see `WorkspaceSession::parent_session_id`'s
     /// doc comment for who calls this and when. Mirrors

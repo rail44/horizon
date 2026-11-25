@@ -293,18 +293,6 @@ impl Shared {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
         }
-        let meta = match acp::read_horizon_meta::<acp::SessionNewMeta>(request.meta.as_ref()) {
-            Some(Ok(meta)) => meta,
-            Some(Err(error)) => {
-                return responder
-                    .respond_with_error(call_error(format!("Invalid _meta.horizon: {error}")));
-            }
-            None => {
-                return responder.respond_with_error(call_error(
-                    "session/new needs _meta.horizon with the session id and provider",
-                ));
-            }
-        };
         // The role and model are the options' initial values; one this
         // agent does not take is left out.
         let mut role_id = None;
@@ -330,7 +318,8 @@ impl Shared {
             },
         };
         let new = SessionNew {
-            session_id: meta.session_id,
+            // The agent names its sessions.
+            session_id: SessionId::new(),
             provider_id,
             role_id,
             workspace_root: Some(request.cwd.into_inner()),

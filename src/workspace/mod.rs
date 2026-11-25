@@ -68,6 +68,7 @@ mod links;
 mod models;
 mod move_to;
 mod moving;
+mod naming;
 mod over;
 mod palette;
 mod picker;
@@ -543,6 +544,9 @@ struct Kept {
     /// The sessions a board named that this workspace did not have, and
     /// whether the agent runtime has answered about each.
     looked_for: RefCell<HashMap<SessionId, bool>>,
+    /// The agent sessions this shell started that the agent has not named
+    /// yet, with the control plane's answers waiting for the name.
+    unnamed: RefCell<HashMap<SessionId, Vec<naming::Awaiting>>>,
     /// The components of the extensions that come with the shell.
     own_extensions: Vec<PathBuf>,
     /// What reads the extensions.
@@ -667,6 +671,7 @@ impl Shell {
         });
         kept.sessions.keep_only(&sessions);
         kept.agents.keep_only(&sessions);
+        self.forget_unnamed(&sessions);
         let gone: Vec<PaneId> = (kept.panes.borrow().keys())
             .filter(|id| !panes.iter().any(|(pane, ..)| pane == *id))
             .copied()
@@ -761,6 +766,8 @@ impl Shell {
                             role: start.role,
                         }));
                         (kept.agents.borrow_mut()).insert(session_id, session.clone());
+                        // Kept under this id until the agent names it.
+                        kept.unnamed.borrow_mut().insert(session_id, Vec::new());
                         if let Some(directory) = directory {
                             self.model.update(|model| {
                                 model.set_session_directory(session_id, directory);
@@ -772,9 +779,15 @@ impl Shell {
                         session.set_waker(waker);
                     }
                     session.set_summarizer(kept.summarizer.borrow().clone());
-                    let ask = Callback::new(move |asked| match asked {
-                        AgentAsked::SwitchModel => shell.switch_model(session_id),
-                        AgentAsked::SwitchEffort => shell.switch_effort(session_id),
+                    // (The session as the pane shows it now: the agent
+                    // names a new one after it is shown.)
+                    let ask = Callback::new(move |asked| {
+                        let shown = (shell.model).with_untracked(|model| model.pane_session_id(id));
+                        let session_id = shown.unwrap_or(session_id);
+                        match asked {
+                            AgentAsked::SwitchModel => shell.switch_model(session_id),
+                            AgentAsked::SwitchEffort => shell.switch_effort(session_id),
+                        }
                     });
                     let (mounted, view) = AgentPlugin { session }.mount_keeping(ask);
                     agent = Some(view);
@@ -1374,6 +1387,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reload_terminals: opening.reload_terminals,
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
+            unnamed: RefCell::default(),
             own_extensions: opening.extensions,
             read_extensions: (opening.read_extensions)
                 .unwrap_or_else(|| Arc::new(crate::extension::load_all)),

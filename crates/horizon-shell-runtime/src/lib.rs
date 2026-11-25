@@ -41,7 +41,7 @@ pub mod terminal_glyphs;
 pub mod terminal_links;
 pub use agent::SessionSummary;
 pub use attachment::{AgentCommand, AgentUpdate, AttachmentState};
-pub use routing::WorkspaceRootUpdate;
+pub use routing::RuntimeNews;
 pub use terminal::HandOver;
 mod terminal;
 
@@ -49,7 +49,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use horizon_acp::{SessionId, SessionNewMeta};
+use horizon_acp::SessionId;
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
@@ -164,7 +164,7 @@ impl AgentSessionHandle {
     /// address the session by id (`session/set_config_option` -- the model
     /// picker's confirm path).
     pub fn session_id(&self) -> SessionId {
-        self.route.session_id()
+        self.routes.agent_of(self.route.session_id())
     }
 }
 
@@ -212,10 +212,7 @@ impl AgentdHandle {
     ///
     /// The child's own children reach this Horizon through
     /// `control_socket`; its standard error is appended to `log`.
-    pub fn start(
-        control_socket: &Path,
-        log: &Path,
-    ) -> (Self, Receiver<(SessionId, WorkspaceRootUpdate)>) {
+    pub fn start(control_socket: &Path, log: &Path) -> (Self, Receiver<RuntimeNews>) {
         Self::start_within(control_socket, log, Timeouts::default())
     }
 
@@ -225,7 +222,7 @@ impl AgentdHandle {
         control_socket: &Path,
         log: &Path,
         timeouts: Timeouts,
-    ) -> (Self, Receiver<(SessionId, WorkspaceRootUpdate)>) {
+    ) -> (Self, Receiver<RuntimeNews>) {
         let (handle, workspace_roots, ops) = Self::parts(timeouts);
         agent::spawn(
             horizon_wire::spawn::resolve_daemon_binary(AGENT_BINARY_NAME),
@@ -242,12 +239,12 @@ impl AgentdHandle {
         timeouts: Timeouts,
     ) -> (
         Self,
-        Receiver<(SessionId, WorkspaceRootUpdate)>,
+        Receiver<RuntimeNews>,
         tokio::sync::mpsc::UnboundedReceiver<agent::Op>,
     ) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (workspace_root_tx, workspace_root_rx) = unbounded();
-        let routes = Arc::new(AgentRoutes::new(workspace_root_tx));
+        let (news_tx, news_rx) = unbounded();
+        let routes = Arc::new(AgentRoutes::new(news_tx));
         let control = Arc::new(RuntimeControl::new(timeouts));
         let lifetime = Arc::new(RuntimeLifetime {
             control: control.clone(),
@@ -259,13 +256,13 @@ impl AgentdHandle {
                 control,
                 _lifetime: lifetime,
             },
-            workspace_root_rx,
+            news_rx,
             ops_rx,
         )
     }
 
     #[cfg(test)]
-    fn start_on_stream<S>(stream: S) -> (Self, Receiver<(SessionId, WorkspaceRootUpdate)>)
+    fn start_on_stream<S>(stream: S) -> (Self, Receiver<RuntimeNews>)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     {
@@ -294,7 +291,6 @@ impl AgentdHandle {
         let _ = self.ops.send(agent::Op::NewAgent {
             route: handle.route,
             new: Box::new(agent::SessionNew {
-                meta: SessionNewMeta { session_id },
                 role: role_id.map(|role| role.0),
                 workspace_root,
             }),

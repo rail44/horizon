@@ -117,9 +117,10 @@ async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() 
     routes.route_session_info(SessionId::new(), "/resolved".into());
     assert!(roots_rx.try_recv().is_err(), "an unregistered session");
     routes.route_session_info(id, "/resolved".into());
-    let (routed, root) = roots_rx.try_recv().unwrap();
-    assert_eq!(routed, id);
-    assert_eq!(root.workspace_root, std::path::PathBuf::from("/resolved"));
+    assert_eq!(
+        roots_rx.try_recv().unwrap(),
+        RuntimeNews::Directory(id, "/resolved".into())
+    );
     // The update itself reaches the session's pane.
     routes.route_update(update(id));
     assert!(matches!(inbound.try_recv(), Ok(Inbound::Event(_))));
@@ -181,4 +182,46 @@ async fn replacing_a_route_cancels_a_send_blocked_by_a_slow_view() {
         new_rx.recv().await,
         Some(AgentUpdate::State(AttachmentState::Ready))
     );
+}
+
+#[tokio::test]
+async fn a_session_the_agent_named_is_routed_by_its_name_until_attached_by_it() {
+    use agent_client_protocol::v2::schema as v2;
+    let (news, news_rx) = crossbeam_channel::unbounded();
+    let routes = AgentRoutes::new(news);
+    let (started, named) = (SessionId::new(), SessionId::new());
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let first = routes.register_agent(started, tx);
+    let mut first_inbound = routes.open_inbound(first).unwrap();
+    routes.name(started, named);
+    assert_eq!(
+        news_rx.try_recv().unwrap(),
+        RuntimeNews::Named {
+            was: started,
+            is: named,
+        }
+    );
+    assert_eq!(routes.agent_of(started), named);
+    let update = || {
+        v2::UpdateSessionNotification::new(
+            named.as_uuid().to_string(),
+            v2::SessionUpdate::SessionInfoUpdate(v2::SessionInfoUpdate::new()),
+        )
+    };
+    // What the agent says of it by its name reaches the attachment that
+    // started it.
+    routes.route_update(update());
+    assert!(matches!(first_inbound.try_recv(), Ok(Inbound::Event(_))));
+
+    // Attached by its name, the later attachment is the one told.
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let second = routes.register_agent(named, tx);
+    let mut second_inbound = routes.open_inbound(second).unwrap();
+    routes.route_update(update());
+    assert!(matches!(second_inbound.try_recv(), Ok(Inbound::Event(_))));
+    assert!(first_inbound.try_recv().is_err());
+
+    // The started attachment's end lets go of the name.
+    routes.unregister_agent(first);
+    assert_eq!(routes.agent_of(started), started);
 }

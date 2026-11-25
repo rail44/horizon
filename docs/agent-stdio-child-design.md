@@ -254,6 +254,11 @@ input came from is not marked; a session's directory is its
 session's parent is not shown, and `session/new` carries no spawn
 source (#114).
 
+The shell holds a session it starts under an id of its own until
+`session/new` answers with the agent's, and from then on keeps it, in the
+workspace and in its routes, under the agent's; `horizon new agent`
+answers with the agent's id, once there is one.
+
 ## Stages
 
 Each stage ends with the gate clean.

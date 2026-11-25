@@ -6,8 +6,6 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use horizon_wire::SessionId;
-
 /// The `_meta` key every Horizon payload lives under.
 pub const HORIZON_META_KEY: &str = "horizon";
 
@@ -73,14 +71,6 @@ pub struct InitializeMeta {
     pub binary_id: String,
 }
 
-/// The id the client gives a new session (`hosting::SessionNew::session_id`,
-/// crates/horizon-agent/src/hosting.rs): its role and model are the `mode`
-/// and `model` options' initial values.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct SessionNewMeta {
-    pub session_id: SessionId,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,9 +100,6 @@ mod tests {
         round_trip(&InitializeMeta {
             ext_version: crate::HORIZON_ACP_EXT_VERSION,
             binary_id: "horizon-agentd 0.1.0".into(),
-        });
-        round_trip(&SessionNewMeta {
-            session_id: SessionId::new(),
         });
     }
 

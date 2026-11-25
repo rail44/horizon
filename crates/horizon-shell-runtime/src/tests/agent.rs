@@ -16,7 +16,7 @@ use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
     AttachmentEnd, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse,
     HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
-    SessionEventNotification, SessionId, SessionNewMeta, read_horizon_meta, write_horizon_meta,
+    SessionEventNotification, SessionId, write_horizon_meta,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -45,14 +45,15 @@ struct FakeAgentBehavior {
     /// Hand `session/new` and `session/resume` responders to the test
     /// instead of answering them.
     manual_bootstrap: bool,
-    /// The session `session/list` lists, with its directory.
-    listed: Option<(SessionId, &'static str)>,
+    /// The directory `session/list` gives every session the fake named.
+    listed: Option<&'static str>,
 }
 
 enum AgentCall {
     Initialize,
     NewSession {
-        meta: SessionNewMeta,
+        /// The id the fake named the session with.
+        named: SessionId,
         /// The `mode` option's initial value.
         mode: Option<String>,
         cwd: PathBuf,
@@ -113,6 +114,8 @@ async fn serve_fake_agentd(
     type Calls = tokio::sync::mpsc::UnboundedSender<AgentCall>;
     let (calls_tx, calls) = tokio::sync::mpsc::unbounded_channel::<AgentCall>();
     let held_initialize: Arc<Mutex<Vec<Responder<v2::InitializeResponse>>>> = Arc::default();
+    let named_sessions: Arc<Mutex<Vec<SessionId>>> = Arc::default();
+    let (named_by_new, named_for_list) = (named_sessions.clone(), named_sessions);
     let record = |calls: &Calls, call| {
         let _ = calls.send(call);
     };
@@ -167,9 +170,9 @@ async fn serve_fake_agentd(
             async move |request: v2::NewSessionRequest,
                         responder: Responder<v2::NewSessionResponse>,
                         _connection: V2ConnectionTo<Client>| {
-                let meta: SessionNewMeta = read_horizon_meta(request.meta.as_ref())
-                    .expect("session/new carries SessionNewMeta")
-                    .unwrap();
+                // The agent names its sessions.
+                let named = SessionId::new();
+                named_by_new.lock().unwrap().push(named);
                 let cwd = request.cwd.0.clone();
                 let mode = (request.config_options.iter())
                     .find(|option| &*option.config_id.0 == horizon_acp::MODE_CONFIG_ID)
@@ -179,7 +182,7 @@ async fn serve_fake_agentd(
                     record(
                         &c2,
                         AgentCall::NewSession {
-                            meta,
+                            named,
                             mode,
                             cwd,
                             responder: Some(responder),
@@ -187,11 +190,11 @@ async fn serve_fake_agentd(
                     );
                     return Ok(());
                 }
-                let response = v2::NewSessionResponse::new(meta.session_id.as_uuid().to_string());
+                let response = v2::NewSessionResponse::new(acp_session_id(named));
                 record(
                     &c2,
                     AgentCall::NewSession {
-                        meta,
+                        named,
                         mode,
                         cwd,
                         responder: None,
@@ -240,7 +243,11 @@ async fn serve_fake_agentd(
                     return responder.respond_with_error(mismatch_error());
                 }
                 let sessions = (behavior.listed.into_iter())
-                    .map(|(session, cwd)| v2::SessionInfo::new(acp_session_id(session), cwd))
+                    .flat_map(|cwd| {
+                        (named_for_list.lock().unwrap().iter())
+                            .map(|session| v2::SessionInfo::new(acp_session_id(*session), cwd))
+                            .collect::<Vec<_>>()
+                    })
                     .collect();
                 responder.respond(v2::ListSessionsResponse::new(sessions))
             },
@@ -458,13 +465,9 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     assert_eq!(session_id, terminal_id);
 
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    let AgentCall::NewSession {
-        meta, mode, cwd, ..
-    } = fake.next_call().await
-    else {
+    let AgentCall::NewSession { mode, cwd, .. } = fake.next_call().await else {
         panic!("the agent spawn must land on agentd");
     };
-    assert_eq!(meta.session_id, agent_id);
     // No role: no mode option, and the agent's default model.
     assert_eq!(mode, None);
     assert_eq!(cwd, PathBuf::from("/work/project"));
@@ -534,41 +537,51 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     );
 }
 
-/// A `session_info_update` sends the shell to `session/list` for the
-/// session's directory, which reaches the process-wide channel.
+/// The agent names a session the shell starts, and a `session_info_update`
+/// sends the shell to `session/list` for the session's directory: both reach
+/// the runtime's news, in that order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_root_updates_reach_their_own_channel() {
     let (client, server) = pair();
-    let (handle, workspace_roots) = AgentdHandle::start_on_stream(client);
-    let session_id = SessionId::new();
-    let mut agent = start_mock_session(&handle, session_id);
+    let (handle, news) = AgentdHandle::start_on_stream(client);
+    let started = SessionId::new();
+    let mut agent = start_mock_session(&handle, started);
 
     let mut fake = serve_fake_agentd(
         server,
         FakeAgentBehavior {
-            listed: Some((session_id, "/tmp/repo/.horizon/worktrees/abcd1234")),
+            listed: Some("/tmp/repo/.horizon/worktrees/abcd1234"),
             ..Default::default()
         },
     )
     .await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
+    let AgentCall::NewSession {
+        named: session_id, ..
+    } = fake.next_call().await
+    else {
+        panic!("a new session");
+    };
     wait_until_ready(&mut agent).await;
+    // The agent named the session: the shell is told first.
+    assert_eq!(
+        news.recv_timeout(Duration::from_secs(5)).unwrap(),
+        RuntimeNews::Named {
+            was: started,
+            is: session_id,
+        }
+    );
+    assert_eq!(agent.session_id(), session_id);
 
     fake.update(
         session_id,
         v2::SessionUpdate::SessionInfoUpdate(v2::SessionInfoUpdate::new()),
     );
     std::assert_matches!(fake.next_call().await, AgentCall::List);
-    let (received, update) = workspace_roots
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the listed directory");
-    assert_eq!(received, session_id);
     assert_eq!(
-        update,
-        WorkspaceRootUpdate {
-            workspace_root: "/tmp/repo/.horizon/worktrees/abcd1234".into(),
-        }
+        news.recv_timeout(Duration::from_secs(5))
+            .expect("the listed directory"),
+        RuntimeNews::Directory(session_id, "/tmp/repo/.horizon/worktrees/abcd1234".into())
     );
 }
 
@@ -605,17 +618,15 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     for _ in 0..2 {
         match fake.next_call().await {
             AgentCall::NewSession {
-                meta, responder, ..
-            } => new_responder = Some((meta, responder.unwrap())),
+                named, responder, ..
+            } => new_responder = Some((named, responder.unwrap())),
             AgentCall::Resume { responder, .. } => resume_responder = responder,
             call => panic!("unexpected {call:?}"),
         }
     }
-    let (meta, responder) = new_responder.unwrap();
+    let (named, responder) = new_responder.unwrap();
     responder
-        .respond(v2::NewSessionResponse::new(
-            meta.session_id.as_uuid().to_string(),
-        ))
+        .respond(v2::NewSessionResponse::new(acp_session_id(named)))
         .unwrap();
     wait_until_ready(&mut ready).await;
 
@@ -815,7 +826,9 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
     let mut handle = start_mock_session(&agentd, id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
+    let AgentCall::NewSession { named: id, .. } = fake.next_call().await else {
+        panic!("a new session");
+    };
     wait_until_ready(&mut handle).await;
 
     let identity = |occurrence: &str| ToolCallIdentity {
@@ -903,7 +916,9 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     let mut handle = start_mock_session(&agentd, id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
+    let AgentCall::NewSession { .. } = fake.next_call().await else {
+        panic!("a new session");
+    };
     wait_until_ready(&mut handle).await;
     handle
         .sender()
@@ -929,7 +944,9 @@ async fn a_subagents_permission_request_is_shown_where_its_parent_is() {
     let mut handle = start_mock_session(&agentd, parent);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
+    let AgentCall::NewSession { named: parent, .. } = fake.next_call().await else {
+        panic!("a new session");
+    };
     wait_until_ready(&mut handle).await;
 
     let child = SessionId::new();

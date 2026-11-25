@@ -190,7 +190,7 @@ pub(super) async fn run(
                     }
                 }
                 Some(Inbound::Permission(request, responder)) => {
-                    let own = acp_session_id(route.session_id());
+                    let own = acp_session_id(routes.agent_of(route.session_id()));
                     let Some(permission) = Permission::from_request(&request, &own) else {
                         let _ = responder.respond(cancelled_permission());
                         continue;
@@ -263,7 +263,7 @@ struct Session {
 impl Session {
     /// Carries out one pane command. `false` once the pane is gone.
     async fn command(&self, command: AgentCommand, held: &mut HeldPermissions) -> bool {
-        let session_id = acp_session_id(self.route.session_id());
+        let session_id = acp_session_id(self.routes.agent_of(self.route.session_id()));
         match command {
             AgentCommand::Prompt { text } => {
                 let request = v2::PromptRequest::new(session_id, vec![text.into()]);

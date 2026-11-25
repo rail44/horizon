@@ -20,8 +20,7 @@ use agent_client_protocol::{
 };
 use horizon_acp::{
     EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, InitializeMeta,
-    MODEL_CONFIG_ID, SessionEventNotification, SessionId, SessionNewMeta, read_horizon_meta,
-    write_horizon_meta,
+    MODEL_CONFIG_ID, SessionEventNotification, SessionId, read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -53,7 +52,6 @@ impl SessionSummary {
 
 /// What `session/new` needs beyond the route.
 pub(super) struct SessionNew {
-    pub(super) meta: SessionNewMeta,
     /// The role the session starts with: the `mode` option's initial value.
     pub(super) role: Option<String>,
     pub(super) workspace_root: Option<PathBuf>,
@@ -470,10 +468,12 @@ fn handle_op(
         } => {
             let Some(workspace_root) = new.workspace_root.or_else(|| std::env::current_dir().ok())
             else {
-                routes.agent_failed(route, "the new session has no workspace root".to_string());
+                let error = "the new session has no workspace root".to_string();
+                routes.not_named(route.session_id(), error.clone());
+                routes.agent_failed(route, error);
                 return;
             };
-            let mut request = v2::NewSessionRequest::new(workspace_root).config_options(
+            let request = v2::NewSessionRequest::new(workspace_root).config_options(
                 (new.role.iter())
                     .map(|role| {
                         v2::InitialSessionConfigOption::new(
@@ -483,10 +483,6 @@ fn handle_op(
                     })
                     .collect(),
             );
-            if let Err(error) = write_horizon_meta(&mut request.meta, &new.meta) {
-                routes.agent_failed(route, format!("failed to encode the new session: {error}"));
-                return;
-            }
             open_session(routes, route, connection, commands, |connection, routes| {
                 connection
                     .build_session_from(request)
@@ -495,6 +491,10 @@ fn handle_op(
                         match result {
                             Ok(opened) => {
                                 let response = &opened.response;
+                                // The agent names the session.
+                                if let Some(named) = parse_session_id(&response.session_id) {
+                                    routes.name(route.session_id(), named);
+                                }
                                 routes.deliver_to(
                                     route,
                                     Inbound::Event(AgentEvent::Update(Box::new(
@@ -509,12 +509,9 @@ fn handle_op(
                             }
                             Err(error) => {
                                 routes.note_error(&error);
-                                routes.deliver_to(
-                                    route,
-                                    Inbound::Opened(Err(format!(
-                                        "failed to start the agent session: {error}"
-                                    ))),
-                                )
+                                let error = format!("failed to start the agent session: {error}");
+                                routes.not_named(route.session_id(), error.clone());
+                                routes.deliver_to(route, Inbound::Opened(Err(error)))
                             }
                         }
                         Ok(())
@@ -553,7 +550,7 @@ fn handle_op(
             reply,
         } => {
             let request = v2::SetSessionConfigOptionRequest::new(
-                acp_session_id(session_id),
+                acp_session_id(routes.agent_of(session_id)),
                 MODEL_CONFIG_ID,
                 v2::SessionConfigOptionValue::id(horizon_acp::encode_model_option_id(
                     &provider, &model,
@@ -572,7 +569,7 @@ fn handle_op(
             reply,
         } => {
             let request = v2::SetSessionConfigOptionRequest::new(
-                acp_session_id(session_id),
+                acp_session_id(routes.agent_of(session_id)),
                 EFFORT_CONFIG_ID,
                 v2::SessionConfigOptionValue::id(level),
             );

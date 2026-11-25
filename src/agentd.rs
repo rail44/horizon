@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
-use horizon_shell_runtime::{AgentdHandle, WorkspaceRootUpdate};
+use horizon_shell_runtime::{AgentdHandle, RuntimeNews};
 use horizon_ui::reactive_graph::traits::Update;
 use horizon_workspace::SessionId;
 
@@ -15,7 +15,7 @@ use crate::agent::AgentSession;
 use crate::workspace::{AgentRuntime, Models, RunningAgent, Shell, SpawnAgent};
 
 enum Told {
-    Directory(SessionId, WorkspaceRootUpdate),
+    News(RuntimeNews),
 }
 
 type Wake = Arc<Mutex<Option<Waker>>>;
@@ -54,7 +54,7 @@ impl Agentd {
         tell: &Sender<Told>,
         waker: &Wake,
     ) -> AgentdHandle {
-        let (handle, directories) = AgentdHandle::start(control_socket, log);
+        let (handle, news) = AgentdHandle::start(control_socket, log);
         // The runtime's stream is passed on to the UI thread, which is woken
         // to take it in.
         fn pass_on<T: Send + 'static>(
@@ -74,12 +74,7 @@ impl Agentd {
                 }
             });
         }
-        pass_on(
-            directories,
-            tell.clone(),
-            waker.clone(),
-            |(session, update)| Told::Directory(session, update),
-        );
+        pass_on(news, tell.clone(), waker.clone(), Told::News);
         handle
     }
 
@@ -172,9 +167,15 @@ impl Agentd {
         *self.waker.lock().unwrap() = Some(waker.clone());
         for told in self.told.try_iter() {
             match told {
-                Told::Directory(session, update) => shell.model.update(|model| {
-                    model.set_session_directory(session, update.workspace_root);
-                }),
+                Told::News(RuntimeNews::Directory(session, directory)) => {
+                    shell.model.update(|model| {
+                        model.set_session_directory(session, directory);
+                    })
+                }
+                Told::News(RuntimeNews::Named { was, is }) => shell.rename_agent_session(was, is),
+                Told::News(RuntimeNews::Unnamed { was, error }) => {
+                    shell.agent_session_unnamed(was, &error)
+                }
             }
         }
     }

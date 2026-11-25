@@ -158,18 +158,13 @@ fn mock_provider_id() -> ProviderId {
     ProviderId("builtin.agent.mock".to_string())
 }
 
-/// A `session/new` for `session_id` on `provider_id`, confined to `cwd`.
+/// A `session/new` on `provider_id`, confined to `cwd`.
 fn new_session_request(
-    session_id: SessionId,
     provider_id: &str,
     role_id: Option<&str>,
     cwd: PathBuf,
 ) -> v2::NewSessionRequest {
-    let mut meta = None;
-    acp::write_horizon_meta(&mut meta, &acp::SessionNewMeta { session_id }).unwrap();
-    v2::NewSessionRequest::new(cwd)
-        .config_options(initial_options(provider_id, role_id))
-        .meta(meta)
+    v2::NewSessionRequest::new(cwd).config_options(initial_options(provider_id, role_id))
 }
 
 /// The initial `model` (on `provider_id`) and `mode` option values.
@@ -189,18 +184,17 @@ fn initial_options(
 }
 
 /// A mock-provider session in the test's cwd.
-fn session_new(session_id: SessionId) -> v2::NewSessionRequest {
-    new_session_request(session_id, &mock_provider_id().0, None, test_cwd())
+fn session_new() -> v2::NewSessionRequest {
+    new_session_request(&mock_provider_id().0, None, test_cwd())
 }
 
-async fn open_session(
-    client: &AcpClient,
-    request: v2::NewSessionRequest,
-) -> v2::NewSessionResponse {
-    client
+/// Opens a session: the id the agent named it with.
+async fn open_session(client: &AcpClient, request: v2::NewSessionRequest) -> SessionId {
+    let response = client
         .request(request)
         .await
-        .expect("session/new should succeed")
+        .expect("session/new should succeed");
+    SessionId::from_uuid(response.session_id.0.parse().expect("a uuid session id"))
 }
 
 async fn prompt(client: &AcpClient, session_id: SessionId, text: &str) {
@@ -602,18 +596,15 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
         .env_remove("HORIZON_SWITCH_TEST_KEY")
         .spawn();
     let mut client = connect(&mut agentd).await;
-    let session_id = SessionId::new();
-    let created = open_session(
+    let session_id = open_session(
         &client,
         new_session_request(
-            session_id,
             &horizon_agent::registry::named_rig_provider_id("initial").0,
             None,
             test_cwd(),
         ),
     )
     .await;
-    assert_eq!(created.session_id, acp_id(session_id));
     // Ensure the provider thread has captured its initial config before reload.
     collect_until(&mut client, |inbound| idle_stop_reason(inbound).is_some()).await;
 
@@ -713,11 +704,9 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
         .env_remove("HORIZON_EFFORT_TEST_KEY")
         .spawn();
     let mut client = connect(&mut agentd).await;
-    let session_id = SessionId::new();
-    open_session(
+    let session_id = open_session(
         &client,
         new_session_request(
-            session_id,
             &horizon_agent::registry::named_rig_provider_id("gateway").0,
             None,
             test_cwd(),
@@ -767,8 +756,7 @@ async fn new_agent_then_user_message_streams_events_in_order() {
     let mut agentd = spawn_agentd();
     let mut client = connect(&mut agentd).await;
 
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
+    let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "hello").await;
 
     let collected = collect_until(&mut client, |inbound| {
@@ -792,9 +780,7 @@ async fn list_agents_reflects_live_sessions_after_new_agent() {
     let mut agentd = spawn_agentd();
     let client = connect(&mut agentd).await;
 
-    let session_id = SessionId::new();
-    let created = open_session(&client, session_new(session_id)).await;
-    assert_eq!(created.session_id, acp_id(session_id));
+    let session_id = open_session(&client, session_new()).await;
 
     let sessions = list_sessions(&client).await;
     assert_listed(&sessions, session_id, Some(test_cwd()));
@@ -845,8 +831,7 @@ async fn workspace_snapshot_asks_the_shells_control_plane() {
         .spawn();
     let mut client = connect(&mut agentd).await;
 
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
+    let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "please take a snapshot").await;
 
     let collected = collect_until(&mut client, |inbound| {
@@ -875,18 +860,16 @@ async fn approve_and_finish(
     client: &mut AcpClient,
     text: &str,
 ) -> (SessionId, Approval, Vec<Inbound>) {
-    let session_id = SessionId::new();
-    approve_and_finish_in(client, session_id, session_new(session_id), text).await
+    approve_and_finish_in(client, session_new(), text).await
 }
 
 /// [`approve_and_finish`] for a session opened with `request`.
 async fn approve_and_finish_in(
     client: &mut AcpClient,
-    session_id: SessionId,
     request: v2::NewSessionRequest,
     text: &str,
 ) -> (SessionId, Approval, Vec<Inbound>) {
-    open_session(client, request).await;
+    let session_id = open_session(client, request).await;
     prompt(client, session_id, text).await;
 
     let mut collected =
@@ -940,8 +923,8 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
 
 /// A session started in a plain checkout, the shape whose `bash` calls
 /// run sandboxed without approval and ask to run outside it.
-fn shared_session_in(session_id: SessionId, cwd: PathBuf) -> v2::NewSessionRequest {
-    new_session_request(session_id, &mock_provider_id().0, None, cwd)
+fn shared_session_in(cwd: PathBuf) -> v2::NewSessionRequest {
+    new_session_request(&mock_provider_id().0, None, cwd)
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call (a write
@@ -953,11 +936,9 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     let mut agentd = spawn_agentd();
     let mut client = connect(&mut agentd).await;
     let (_outer, repo) = nested_session_fixture();
-    let session_id = SessionId::new();
     let (_, approval, collected) = approve_and_finish_in(
         &mut client,
-        session_id,
-        shared_session_in(session_id, repo),
+        shared_session_in(repo),
         "please write beside the workspace",
     )
     .await;
@@ -979,8 +960,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let mut client = connect(&mut agentd).await;
 
     let (_outer, repo) = nested_session_fixture();
-    let session_id = SessionId::new();
-    open_session(&client, shared_session_in(session_id, repo)).await;
+    let session_id = open_session(&client, shared_session_in(repo)).await;
     prompt(&client, session_id, "please write beside the workspace").await;
     let mut collected = collect_until(&mut client, |inbound| {
         matches!(inbound, Inbound::Permission(..))
@@ -1133,8 +1113,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&mut agentd).await;
 
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
+    let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "please run a tool").await;
     collect_until(&mut client, |inbound| {
         matches!(inbound, Inbound::Permission(..))
@@ -1288,15 +1267,9 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&mut agentd).await;
 
-    let session_id = SessionId::new();
-    open_session(
+    let session_id = open_session(
         &client,
-        new_session_request(
-            session_id,
-            &mock_provider_id().0,
-            Some("board-task"),
-            test_cwd(),
-        ),
+        new_session_request(&mock_provider_id().0, Some("board-task"), test_cwd()),
     )
     .await;
     // Drain the startup burst until its init message reaches the wire...
@@ -1329,12 +1302,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     let mut agentd = spawn_agentd();
     let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&mut agentd).await;
-    let session_id = SessionId::new();
-    open_session(
-        &client,
-        shared_session_in(session_id, repo.path().to_path_buf()),
-    )
-    .await;
+    let session_id = open_session(&client, shared_session_in(repo.path().to_path_buf())).await;
 
     prompt(&client, session_id, "please enter a worktree").await;
     let (_, isolated_root) = moved_root(&mut client, session_id, repo.path()).await;
@@ -1434,12 +1402,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     let mut agentd = spawn_agentd();
     let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&mut agentd).await;
-    let session_id = SessionId::new();
-    open_session(
-        &client,
-        shared_session_in(session_id, repo.path().to_path_buf()),
-    )
-    .await;
+    let session_id = open_session(&client, shared_session_in(repo.path().to_path_buf())).await;
 
     prompt(&client, session_id, "please enter a worktree").await;
     let (collected, root) = moved_root(&mut client, session_id, repo.path()).await;
@@ -1566,8 +1529,7 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
     let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&mut agentd).await;
 
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
+    let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "hello").await;
     collect_until(&mut client, |inbound| {
         agent_message(inbound).as_deref() == Some("Mock response: hello")
@@ -1794,8 +1756,7 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
         .env(TEST_MOCK_STREAM_GATE_VAR, &gate)
         .spawn();
     let mut client = connect(&mut agentd).await;
-    let session = SessionId::new();
-    open_session(&client, session_new(session)).await;
+    let session = open_session(&client, session_new()).await;
     prompt(&client, session, "slow word word word").await;
     collect_until(&mut client, is_chunk).await;
     for _ in 0..4 {
@@ -1959,10 +1920,9 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
         .spawn();
     let log = daemon.sessions_dir.clone();
     let mut client = connect(&mut daemon).await;
-    let source = SessionId::new();
-    open_session(
+    let source = open_session(
         &client,
-        new_session_request(source, &mock_provider_id().0, None, repo.clone()),
+        new_session_request(&mock_provider_id().0, None, repo.clone()),
     )
     .await;
     prompt_and_settle(&mut client, source, "one").await;

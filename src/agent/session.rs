@@ -88,7 +88,7 @@ pub struct AgentSession {
     waker: Wake,
     /// The attachment to the agent runtime: letting go of it detaches the
     /// session, which goes on.
-    _attachment: AgentSessionHandle,
+    attachment: AgentSessionHandle,
 }
 
 /// What the commands' availability is decided from.
@@ -137,8 +137,13 @@ impl AgentSession {
             folded,
             title,
             waker,
-            _attachment: handle,
+            attachment: handle,
         }
+    }
+
+    /// The session's id: the agent's name for it, once it has named it.
+    pub fn session_id(&self) -> horizon_workspace::SessionId {
+        self.attachment.session_id()
     }
 
     pub fn send(&self, command: AgentCommand) {

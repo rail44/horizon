@@ -103,18 +103,6 @@
       "description": "This crate's own session identifier: a UUID newtype that serializes as a\nbare UUID string (serde's transparent treatment of one-field tuple\nstructs) — the shape a future wire/IPC boundary will use (see\n`docs/agent-runtime-split-design.md`). Horizon has its own shared\n`session::SessionId` (used across terminal and agent sessions alike) —\nthis crate cannot depend on it (that's the whole point of the split), so\nthe two are distinct types connected by `From` impls at the seam in\nHorizon's `agent` module.",
       "format": "uuid",
       "type": "string"
-    },
-    "SessionNewMeta": {
-      "description": "The id the client gives a new session (`hosting::SessionNew::session_id`,\ncrates/horizon-agent/src/hosting.rs): its role and model are the `mode`\nand `model` options' initial values.",
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -131,9 +119,6 @@
   "meta": {
     "initialize": {
       "$ref": "#/$defs/InitializeMeta"
-    },
-    "session_new": {
-      "$ref": "#/$defs/SessionNewMeta"
     }
   },
   "notifications": {
@@ -142,5 +127,5 @@
     }
   },
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 24
+  "x-session-protocol-version": 25
 }

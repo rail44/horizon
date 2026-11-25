@@ -43,11 +43,19 @@ impl<I: Copy> RouteKey<I> {
     }
 }
 
-/// A session's working directory, as `session/list` has it after a
-/// `session_info_update`.
+/// What the agent runtime tells the shell outside any session, in the
+/// order it happened.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WorkspaceRootUpdate {
-    pub workspace_root: PathBuf,
+pub enum RuntimeNews {
+    /// A session's working directory, as `session/list` has it after a
+    /// `session_info_update`.
+    Directory(SessionId, PathBuf),
+    /// The session the shell started as `was` is `is` to the agent, which
+    /// names its sessions.
+    Named { was: SessionId, is: SessionId },
+    /// The session the shell started as `was` did not start, and has no
+    /// name.
+    Unnamed { was: SessionId, error: String },
 }
 
 struct AgentRoute {
@@ -71,7 +79,10 @@ impl Drop for AgentRoute {
 /// plus the two process-wide channels its connection-global traffic feeds.
 pub(super) struct AgentRoutes {
     state: Mutex<AgentRouteState>,
-    workspace_roots: Sender<(SessionId, WorkspaceRootUpdate)>,
+    news: Sender<RuntimeNews>,
+    /// The agent's name of each session the shell started, by the shell's
+    /// own id: what the agent is asked by, and what it says back.
+    names: Mutex<Names>,
     /// The first extension-version rejection a request met on the current
     /// connection, and its wakeup for the connection's op loop.
     version_mismatch: Mutex<Option<String>>,
@@ -84,6 +95,13 @@ pub(super) struct AgentRoutes {
 /// The message prefix of the daemon's rejection when the extension
 /// versions differ.
 pub(super) const EXT_VERSION_MISMATCH: &str = "horizon ext version mismatch";
+
+/// The two ways round between the shell's session ids and the agent's.
+#[derive(Default)]
+struct Names {
+    agent: HashMap<SessionId, SessionId>,
+    local: HashMap<SessionId, SessionId>,
+}
 
 struct AgentRouteState {
     agent: HashMap<SessionId, AgentRoute>,
@@ -127,13 +145,14 @@ pub(super) fn parse_session_id(id: &v2::SessionId) -> Option<SessionId> {
 }
 
 impl AgentRoutes {
-    pub(super) fn new(workspace_roots: Sender<(SessionId, WorkspaceRootUpdate)>) -> Self {
+    pub(super) fn new(news: Sender<RuntimeNews>) -> Self {
         Self {
             state: Mutex::new(AgentRouteState {
                 agent: HashMap::new(),
                 failure: None,
             }),
-            workspace_roots,
+            news,
+            names: Mutex::new(Names::default()),
             version_mismatch: Mutex::new(None),
             version_mismatch_signal: tokio::sync::Notify::new(),
             parents: Mutex::new(HashMap::new()),
@@ -197,6 +216,10 @@ impl AgentRoutes {
             .is_some_and(|route| route.key == key)
         {
             state.agent.remove(&key.session_id);
+            let mut names = self.names.lock().unwrap();
+            if let Some(named) = names.agent.remove(&key.session_id) {
+                names.local.remove(&named);
+            }
         }
     }
 
@@ -231,6 +254,7 @@ impl AgentRoutes {
     /// Queues `inbound` for the session's current attachment task. Hands
     /// it back when no task is running for the session.
     pub(super) fn deliver(&self, session_id: SessionId, inbound: Inbound) -> Option<Inbound> {
+        let session_id = self.local_of(session_id);
         let state = self.state.lock().unwrap();
         match state
             .agent
@@ -290,7 +314,8 @@ impl AgentRoutes {
         if let v2::SessionUpdate::SubagentUpdate(subagent) = &notification.update
             && let Some(child) = parse_session_id(&subagent.session_id)
         {
-            self.parents.lock().unwrap().insert(child, session_id);
+            let parent = self.local_of(session_id);
+            self.parents.lock().unwrap().insert(child, parent);
         }
         let _ = self.deliver(
             session_id,
@@ -301,11 +326,44 @@ impl AgentRoutes {
     /// Forwards a session's resolved workspace root to the process-wide
     /// channel while that session has a registered pane.
     pub(super) fn route_session_info(&self, session_id: SessionId, workspace_root: PathBuf) {
-        if self.state.lock().unwrap().agent.contains_key(&session_id) {
+        let local = self.local_of(session_id);
+        if self.state.lock().unwrap().agent.contains_key(&local) {
             let _ = self
-                .workspace_roots
-                .send((session_id, WorkspaceRootUpdate { workspace_root }));
+                .news
+                .send(RuntimeNews::Directory(session_id, workspace_root));
         }
+    }
+
+    /// Records that the session the shell started as `local` is `named` to
+    /// the agent, and tells the shell.
+    pub(super) fn name(&self, local: SessionId, named: SessionId) {
+        let mut names = self.names.lock().unwrap();
+        names.agent.insert(local, named);
+        names.local.insert(named, local);
+        drop(names);
+        let _ = self.news.send(RuntimeNews::Named {
+            was: local,
+            is: named,
+        });
+    }
+
+    /// Tells the shell the session it started as `local` did not start.
+    pub(super) fn not_named(&self, local: SessionId, error: String) {
+        let _ = self.news.send(RuntimeNews::Unnamed { was: local, error });
+    }
+
+    /// The shell's id of the session the agent names `session_id`: an
+    /// attachment by that name itself, made later, is the one routed to.
+    fn local_of(&self, session_id: SessionId) -> SessionId {
+        if self.state.lock().unwrap().agent.contains_key(&session_id) {
+            return session_id;
+        }
+        (self.names.lock().unwrap().local.get(&session_id).copied()).unwrap_or(session_id)
+    }
+
+    /// The agent's name of the session the shell knows as `session_id`.
+    pub(super) fn agent_of(&self, session_id: SessionId) -> SessionId {
+        (self.names.lock().unwrap().agent.get(&session_id).copied()).unwrap_or(session_id)
     }
 
     /// One `_horizon/session_event` from the connection.
@@ -331,11 +389,12 @@ impl AgentRoutes {
             return responder.respond(cancelled_permission());
         };
         // A subagent's request is shown where its parent is.
-        let routed = self.state.lock().unwrap().agent.contains_key(&session_id);
+        let local = self.local_of(session_id);
+        let routed = self.state.lock().unwrap().agent.contains_key(&local);
         let parent = (!routed)
             .then(|| self.parents.lock().unwrap().get(&session_id).copied())
             .flatten();
-        let session_id = parent.unwrap_or(session_id);
+        let session_id = parent.unwrap_or(local);
         match self.deliver(
             session_id,
             Inbound::Permission(Box::new(request), responder),

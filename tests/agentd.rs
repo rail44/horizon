@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use horizon::agentd::{Agentd, RuntimeModels};
 use horizon::workspace::{self, Modal, Opening};
-use horizon_control::contract::{EnvelopeBody, Query};
+use horizon_control::contract::{EnvelopeBody, Invoke, Query};
 use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
@@ -433,17 +433,20 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
 
     // A task's session this workspace does not have: one the daemon
     // runs is taken in and shown; one it does not run is said so.
-    let elsewhere = horizon_workspace::SessionId::new();
-    let _elsewhere = (agentd.spawn())(workspace::Starting {
-        session: elsewhere,
+    let started = horizon_workspace::SessionId::new();
+    let spawned = (agentd.spawn())(workspace::Starting {
+        session: started,
         from: None,
         directory: Some(directory.join("project")),
         role: None,
     });
+    // (Under the name the agent gives it.)
     until("the daemon to have it", &|| {
+        let named = spawned.session_id();
         let running = agentd.running().expect("the daemon's sessions");
-        running.iter().any(|agent| agent.session == elsewhere)
+        named != started && running.iter().any(|agent| agent.session == named)
     });
+    let elsewhere = spawned.session_id();
     // What whoever asked is told went wrong.
     let notice = horizon_ui::reactive_graph::signal::RwSignal::new(None);
     let failed = horizon_ui::Callback::new(move |error: String| {
@@ -465,19 +468,19 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // one this workspace has, one only the daemon has (which is taken
     // in), and one nobody runs.
     use horizon::board::activity::BoardSessionActivity;
-    let only_the_daemon_s = horizon_workspace::SessionId::new();
-    let _running = (agentd.spawn())(workspace::Starting {
-        session: only_the_daemon_s,
+    let started = horizon_workspace::SessionId::new();
+    let running = (agentd.spawn())(workspace::Starting {
+        session: started,
         from: None,
         directory: Some(directory.join("project")),
         role: None,
     });
     until("the daemon to have it", &|| {
+        let named = running.session_id();
         let running = agentd.running().expect("the daemon's sessions");
-        running
-            .iter()
-            .any(|agent| agent.session == only_the_daemon_s)
+        named != started && running.iter().any(|agent| agent.session == named)
     });
+    let only_the_daemon_s = running.session_id();
     let nobody_s = horizon_workspace::SessionId::new();
     let board_store = horizon_board::Store::from_dir(&directory.join("project")).unwrap();
     tokio::runtime::Builder::new_current_thread()
@@ -517,6 +520,36 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         told(nobody_s) == Some(BoardSessionActivity::Unavailable)
     });
     assert!(text().contains("Unreachable"), "{}", text());
+
+    // `horizon new agent` is answered once the agent has named the new
+    // session: with the name, which the workspace keeps it under and the
+    // daemon runs it by.
+    let (reply, answer) = std::sync::mpsc::channel();
+    shell.control_answering(
+        &ControlRequest::Invoke(Invoke {
+            command: "new".to_string(),
+            args: serde_json::json!({ "plugin": "agent" }),
+        }),
+        move |body| _ = reply.send(body),
+    );
+    let body = std::cell::RefCell::new(None);
+    until("the new session's name", &|| {
+        let mut body = body.borrow_mut();
+        if body.is_none() {
+            *body = answer.try_recv().ok();
+        }
+        body.is_some()
+    });
+    let Some(EnvelopeBody::Ok {
+        session_id: Some(named),
+    }) = body.into_inner()
+    else {
+        panic!("a session id");
+    };
+    let named = horizon_workspace::SessionId::from_uuid(named.parse().unwrap());
+    assert!(agents().contains(&named));
+    let running = agentd.running().expect("the daemon's sessions");
+    assert!(running.iter().any(|agent| agent.session == named));
 
     // The agent runtime ends with the test.
     drop(app);

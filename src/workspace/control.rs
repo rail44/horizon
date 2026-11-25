@@ -96,6 +96,26 @@ impl Shell {
                     reply(error_body(error));
                 }
             }
+            // A new agent session is answered with the id its agent
+            // names it with.
+            Some(Command::New { .. }) => {
+                let body = self.control(request);
+                let started = match &body {
+                    EnvelopeBody::Ok {
+                        session_id: Some(id),
+                    } => id.parse().ok().map(SessionId::from_uuid),
+                    _ => None,
+                };
+                let reply: super::naming::Awaiting = Box::new(reply);
+                match started {
+                    Some(session) => {
+                        if let Err(reply) = self.answer_when_named(session, reply) {
+                            reply(body);
+                        }
+                    }
+                    None => reply(body),
+                }
+            }
             _ => reply(self.control(request)),
         }
     }
