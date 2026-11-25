@@ -63,7 +63,6 @@ fn generate_wire_schema() -> Value {
 
     let notifications = json!({
         "_horizon/task_progress": schema_of(sub::<TaskProgressNotification>),
-        "_horizon/tool_call_progress": schema_of(sub::<ToolCallProgressNotification>),
         "_horizon/session_event": schema_of(sub::<SessionEventNotification>),
     });
 

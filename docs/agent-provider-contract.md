@@ -232,7 +232,6 @@ Provider runtime transport separates conversation events from notifications:
 ```rust
 enum ProviderEvent {
     Event { event: Event, provider_payload: Option<serde_json::Value> },
-    ToolCallProgress(ToolCallProgress),
     SessionModel(String),
     TaskProgress(TaskProgress),
     SessionSelection(ModelSelection),

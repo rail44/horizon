@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::contract::{
     Event, JsonValue, ProviderEvent, ProviderId, RequestId, SessionId, TaskProgress,
-    ToolCallProgress,
 };
 use crate::roles::RoleId;
 
@@ -32,16 +31,10 @@ pub enum AgentWireEvent {
     /// A folded provider event — the transcript's raw material, identical
     /// to what the event log persists.
     Event(Event),
-    /// Ephemeral tool-call-argument-streaming preview
-    /// (`contract::ProviderEvent::tool_call_progress`). UI-only feedback:
-    /// never part of conversation history and never persisted (see
-    /// [`ToolCallProgress`]'s own doc comment), which is why
-    /// `contract::Event` deliberately has no variant for it.
-    ToolCallProgress(ToolCallProgress),
     /// The session's resolved model id — sent once right after a fresh
     /// session resolves it, and re-announced to every later attachment
     /// (see `docs/agent-output-ui-amendment.md`'s dated model-chip
-    /// addendum). Ephemeral like `ToolCallProgress`.
+    /// addendum). Ephemeral: never persisted.
     SessionModel(String),
     /// Live correction of a session's authoritative `workspace_root` (and
     /// derivation edge) — sent when the session enters a worktree through
@@ -50,7 +43,7 @@ pub enum AgentWireEvent {
     WorkspaceRootResolved(WorkspaceRootResolved),
     /// Live progress of one of this session's background `task` children —
     /// the daemon-side task watcher mirroring what the child was last
-    /// observed doing. Ephemeral like [`ToolCallProgress`]: a completion is
+    /// observed doing. Ephemeral: a completion is
     /// recorded durably as a `MessageRole::TaskNotification` message; this
     /// event only drives the client's live progress rows. The daemon retains
     /// current running rows and seeds them during attachment bootstrap.
@@ -58,8 +51,7 @@ pub enum AgentWireEvent {
     /// The session's last applied *selection* — the `(provider, model)` pair
     /// a `set_session_model` call named (an echo of
     /// `contract::Command::SetSessionModel`), where `model` is the model id
-    /// the caller asked for. Display-only and ephemeral like
-    /// `ToolCallProgress`: the composer's model chip renders it as a
+    /// the caller asked for. Display-only and ephemeral: the composer's model chip renders it as a
     /// `provider · model` label beside the resolved model id
     /// [`Self::SessionModel`] carries.
     SessionSelection(ModelSelection),
@@ -68,8 +60,6 @@ pub enum AgentWireEvent {
     /// switch, and re-announced to every later attachment. Ephemeral like
     /// [`Self::SessionModel`].
     SessionReasoning(ReasoningSelection),
-    /// Close the preview identified by its streaming key.
-    ToolCallProgressClosed(String),
     /// One of this session's `task` children asks for an approval, shown to
     /// the human through this session (`docs/agent-subagent-design.md`
     /// decision 4). Ephemeral like [`Self::TaskProgress`]: the child's own
@@ -100,12 +90,10 @@ impl AgentWireEvent {
     pub fn from_provider(event: &ProviderEvent) -> Option<Self> {
         Some(match event {
             ProviderEvent::Event { event, .. } => Self::Event((**event).clone()),
-            ProviderEvent::ToolCallProgress(progress) => Self::ToolCallProgress(progress.clone()),
             ProviderEvent::SessionModel(model) => Self::SessionModel(model.clone()),
             ProviderEvent::SessionSelection(selection) => Self::SessionSelection(selection.clone()),
             ProviderEvent::SessionReasoning(reasoning) => Self::SessionReasoning(reasoning.clone()),
             ProviderEvent::TaskProgress(progress) => Self::TaskProgress(progress.clone()),
-            ProviderEvent::ToolCallProgressClosed(key) => Self::ToolCallProgressClosed(key.clone()),
             ProviderEvent::SettleTools { .. } => return None,
         })
     }
@@ -276,12 +264,6 @@ mod tests {
                         .clone(),
                 ),
             })),
-            AgentWireEvent::ToolCallProgress(ToolCallProgress {
-                key: "call-1".to_string(),
-                tool_id: Some("fs_read".to_string()),
-                bytes: 64,
-            }),
-            AgentWireEvent::ToolCallProgressClosed("call-1".into()),
             AgentWireEvent::SessionModel("gpt-4o".to_string()),
             AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
                 workspace_root: PathBuf::from("/tmp/some-workspace/.horizon/worktrees/abcd1234"),

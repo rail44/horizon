@@ -34,7 +34,6 @@ pub(super) enum Outgoing {
     /// (Boxed: an update is several times the size of anything else here.)
     Update(Box<v2::SessionUpdate>),
     TaskProgress(acp::TaskProgressNotification),
-    ToolCallProgress(acp::ToolCallProgressNotification),
     SessionEvent(acp::SessionEventNotification),
     /// An approval the client must be asked for with
     /// `session/request_permission`.
@@ -310,26 +309,6 @@ impl Mapper {
                 self.settled.apply(event);
                 self.cursor_pending |= self.settled.is_settled();
                 outgoing
-            }
-            AgentWireEvent::ToolCallProgress(progress) => {
-                vec![Outgoing::ToolCallProgress(
-                    acp::ToolCallProgressNotification {
-                        session_id,
-                        event: acp::ToolCallProgressEvent::Progress {
-                            key: progress.key.clone(),
-                            tool_id: progress.tool_id.clone(),
-                            bytes: progress.bytes,
-                        },
-                    },
-                )]
-            }
-            AgentWireEvent::ToolCallProgressClosed(key) => {
-                vec![Outgoing::ToolCallProgress(
-                    acp::ToolCallProgressNotification {
-                        session_id,
-                        event: acp::ToolCallProgressEvent::Closed { key: key.clone() },
-                    },
-                )]
             }
             AgentWireEvent::TaskProgress(progress) => {
                 vec![Outgoing::TaskProgress(task_progress(session_id, progress))]

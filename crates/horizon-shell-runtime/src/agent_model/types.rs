@@ -102,12 +102,6 @@ pub struct Permission {
     pub task_session_id: Option<String>,
 }
 
-/// `_horizon/tool_call_progress` `Progress`, removed by its `Closed`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolCallPreparing {
-    pub key: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryCleared {
     pub cleared_occurrence_ids: Vec<String>,
@@ -136,7 +130,6 @@ pub enum AgentFrameItem {
     Thought(Thought),
     ToolCall(Box<ToolCall>),
     Permission(Permission),
-    ToolCallPreparing(ToolCallPreparing),
     HistoryCleared(HistoryCleared),
     ProviderRateLimited(ProviderRateLimited),
     Error(String),

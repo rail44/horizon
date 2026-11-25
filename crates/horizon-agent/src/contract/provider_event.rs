@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Event, TaskProgress, ToolCallProgress};
+use super::{Event, TaskProgress};
 use crate::hosting::{ModelSelection, ReasoningSelection};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -12,13 +12,10 @@ pub enum ProviderEvent {
         event: Box<Event>,
         provider_payload: Option<serde_json::Value>,
     },
-    ToolCallProgress(ToolCallProgress),
     SessionModel(String),
     TaskProgress(TaskProgress),
     SessionSelection(ModelSelection),
     SessionReasoning(ReasoningSelection),
-    /// Close exactly one streamed preview when its request is finalized.
-    ToolCallProgressClosed(String),
     /// Internal provider-to-host settlement barrier; never published or persisted.
     #[serde(skip)]
     SettleTools {
@@ -45,12 +42,10 @@ impl ProviderEvent {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Event { event, .. } => super::event_kind(event),
-            Self::ToolCallProgress(_) => "tool_call_progress",
             Self::SessionModel(_) => "session_model",
             Self::TaskProgress(_) => "task_progress",
             Self::SessionSelection(_) => "session_selection",
             Self::SessionReasoning(_) => "session_reasoning",
-            Self::ToolCallProgressClosed(_) => "tool_call_progress_closed",
             Self::SettleTools { .. } => "settle_tools",
         }
     }
@@ -67,10 +62,6 @@ impl ProviderEvent {
             event: Box::new(event),
             provider_payload: Some(provider_payload),
         }
-    }
-
-    pub fn tool_call_progress(progress: ToolCallProgress) -> Self {
-        Self::ToolCallProgress(progress)
     }
 
     pub fn session_model(model: String) -> Self {

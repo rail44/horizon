@@ -310,7 +310,6 @@ fn describe(item: &AgentFrameItem) -> Option<Value> {
         AgentFrameItem::ProviderRateLimited(_) => json!({ "rate_limited": true }),
         AgentFrameItem::Thought(_)
         | AgentFrameItem::Permission(_)
-        | AgentFrameItem::ToolCallPreparing(_)
         | AgentFrameItem::HistoryCleared(_) => return None,
     })
 }

@@ -7,8 +7,7 @@ use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
     STOP_REASON_TOKEN_BUDGET, SessionEventNotification, TaskProgressNotification,
-    TaskProgressState, ToolCallMeta, ToolCallProgressEvent, decode_model_option_id,
-    read_horizon_meta,
+    TaskProgressState, ToolCallMeta, decode_model_option_id, read_horizon_meta,
 };
 
 use super::types::*;
@@ -18,7 +17,6 @@ use super::types::*;
 pub enum AgentEvent {
     Update(Box<v2::SessionUpdate>),
     TaskProgress(TaskProgressNotification),
-    ToolCallProgress(ToolCallProgressEvent),
     Session(SessionEventNotification),
     /// A `session/request_permission` the attachment now holds a responder for.
     PermissionRequested(Permission),
@@ -77,7 +75,6 @@ impl AgentModel {
         match event {
             AgentEvent::Update(update) => self.apply_update(*update),
             AgentEvent::TaskProgress(progress) => apply_task_progress(&mut self.tasks, progress),
-            AgentEvent::ToolCallProgress(progress) => self.apply_tool_call_progress(progress),
             AgentEvent::Session(event) => self.apply_session_event(event),
             AgentEvent::PermissionRequested(permission) => {
                 let existing = self.frame.items.iter().position(|item| {
@@ -367,36 +364,6 @@ impl AgentModel {
             MaybeUndefined::Null => call.output = None,
             MaybeUndefined::Value(output) => call.output = Some(output),
         }
-    }
-
-    fn apply_tool_call_progress(&mut self, progress: ToolCallProgressEvent) {
-        match progress {
-            ToolCallProgressEvent::Progress { key, .. } => {
-                let preparing = ToolCallPreparing { key: key.clone() };
-                match self.preparing_index(&key) {
-                    Some(index) => {
-                        self.touched(index);
-                        self.frame.items[index] = AgentFrameItem::ToolCallPreparing(preparing);
-                    }
-                    None => self
-                        .frame
-                        .items
-                        .push(AgentFrameItem::ToolCallPreparing(preparing)),
-                }
-            }
-            ToolCallProgressEvent::Closed { key } => {
-                while let Some(index) = self.preparing_index(&key) {
-                    self.touched(index);
-                    self.frame.items.remove(index);
-                }
-            }
-        }
-    }
-
-    fn preparing_index(&self, key: &str) -> Option<usize> {
-        self.frame.items.iter().position(
-            |item| matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == key),
-        )
     }
 
     fn apply_session_event(&mut self, event: SessionEventNotification) {

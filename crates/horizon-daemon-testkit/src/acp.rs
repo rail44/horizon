@@ -20,7 +20,6 @@ pub enum Inbound {
     Update(v2::UpdateSessionNotification),
     SessionEvent(acp::SessionEventNotification),
     TaskProgress(acp::TaskProgressNotification),
-    ToolCallProgress(acp::ToolCallProgressNotification),
     Permission(
         v2::RequestPermissionRequest,
         Responder<v2::RequestPermissionResponse>,
@@ -106,7 +105,6 @@ where
     let builder = notification!(builder, v2::UpdateSessionNotification, Update);
     let builder = notification!(builder, acp::SessionEventNotification, SessionEvent);
     let builder = notification!(builder, acp::TaskProgressNotification, TaskProgress);
-    let builder = notification!(builder, acp::ToolCallProgressNotification, ToolCallProgress);
     let builder = request!(builder, v2::RequestPermissionRequest, Permission);
     let builder = request!(builder, acp::HostToolRequest, HostTool);
     let transport = ByteStreams::new(write.compat_write(), read.compat());

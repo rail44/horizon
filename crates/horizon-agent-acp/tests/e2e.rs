@@ -400,7 +400,6 @@ fn wire(inbound: &Inbound) -> serde_json::Value {
         Inbound::Update(notification) => serde_json::to_value(notification),
         Inbound::SessionEvent(notification) => serde_json::to_value(notification),
         Inbound::TaskProgress(notification) => serde_json::to_value(notification),
-        Inbound::ToolCallProgress(notification) => serde_json::to_value(notification),
         Inbound::Permission(request, _) => serde_json::to_value(request),
         Inbound::HostTool(request, _) => serde_json::to_value(request),
         Inbound::Replied(_) => Ok(serde_json::Value::Null),
@@ -1013,86 +1012,6 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     );
 }
 
-/// The mock provider's `"streaming tool"` trigger emits ephemeral
-/// tool-call-progress ticks before the real tool call -- these must reach
-/// a connected client (as `_horizon/tool_call_progress`) and must never
-/// appear in the durable on-disk event log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log() {
-    let mut agentd = spawn_agentd();
-    let mut client = connect(&mut agentd).await;
-
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
-    prompt(&client, session_id, "please use the streaming tool").await;
-
-    let collected = collect_until(&mut client, |inbound| {
-        tool_update(inbound).is_some_and(|call| has_status(call, v2::ToolCallStatus::Pending))
-    })
-    .await;
-    let requested = collected.iter().rev().find_map(tool_update).unwrap();
-    assert_eq!(
-        requested.title,
-        MaybeUndefined::Value("mock_approval_required".to_string())
-    );
-    let progress_ticks: Vec<usize> = collected
-        .iter()
-        .filter_map(|inbound| match inbound {
-            Inbound::ToolCallProgress(acp::ToolCallProgressNotification {
-                event: acp::ToolCallProgressEvent::Progress { bytes, .. },
-                ..
-            }) => Some(*bytes),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        progress_ticks.len() >= 3,
-        "expected every mock streaming tick to reach the client, got: {progress_ticks:?}"
-    );
-    assert!(
-        progress_ticks.windows(2).all(|pair| pair[1] >= pair[0]),
-        "byte counts should grow monotonically as the mock provider streams, got: {progress_ticks:?}"
-    );
-
-    let mut report = None;
-    for _ in 0..100 {
-        let candidate = horizon_agent::persistence::event_log::read_all(&agentd.sessions_dir)
-            .expect("the on-disk event log should parse cleanly");
-        let has_tool_call_requested = candidate.records.iter().any(|record| {
-            matches!(
-                &record.event,
-                Event::ToolCallRequested(request) if request.tool_id == "mock_approval_required"
-            )
-        });
-        if has_tool_call_requested {
-            report = Some(candidate);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let report = report.expect("the real tool call request should eventually be persisted");
-    assert_eq!(
-        report.corrupt_line_count, 0,
-        "every persisted line must still be a well-formed record, got: {report:?}"
-    );
-
-    let mut log_contents = String::new();
-    for entry in std::fs::read_dir(&agentd.sessions_dir).expect("the session logs exist") {
-        log_contents.push_str(
-            &std::fs::read_to_string(entry.unwrap().path()).expect("a session log is readable"),
-        );
-    }
-    assert!(
-        !log_contents
-            .to_ascii_lowercase()
-            .contains("tool_call_progress"),
-        "the persisted event log must never contain the ephemeral tool-call-progress preview, got:\n{log_contents}"
-    );
-}
-
-/// A corrupt line found during startup must be reported to a connecting
-/// client once, as a `_horizon/session_event` -- not just printed to stderr
-/// -- so Horizon's status bar can surface it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection() {
     let sessions_dir = std::env::temp_dir().join(format!(

@@ -21,10 +21,7 @@ pub use types::{AgentFrame, AgentFrameItem};
 
 pub(crate) use fold::TurnClock;
 pub use fold::agent_frame_from_events;
-pub(crate) use fold::{
-    agent_frame_and_turn_clock_from_events, apply_agent_event_to_frame,
-    apply_tool_call_progress_to_frame,
-};
+pub(crate) use fold::{agent_frame_and_turn_clock_from_events, apply_agent_event_to_frame};
 
 pub(crate) use tool_calls::tool_call_occurrences;
 

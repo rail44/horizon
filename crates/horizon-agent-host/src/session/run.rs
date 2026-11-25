@@ -318,16 +318,7 @@ pub(super) fn run_session(
 /// (`process_agent_provider_event` for tool execution/policy mapping, then
 /// `LiveState::extend_provider_events` for the fold/persist) -- except the
 /// resulting frame isn't published to a local `Frames` signal, it's
-/// forwarded to Horizon as event envelopes. Ephemeral tool-call progress
-/// (`ProviderEvent::tool_call_progress`) is folded into the local frame (so
-/// a later `resolve_approval`'s `frame.tool_call_request` lookup stays
-/// correct) exactly like every other event, but forwarded as its own
-/// `Control::ToolCallProgress` message rather than a `contract::Event` --
-/// there's no `Event` variant for it (it's never part of conversation
-/// history or the persisted log; see `ToolCallProgress`'s own doc comment),
-/// so wrapping it in `Envelope::event` isn't an option. This restores the
-/// streaming-tool-call-argument-preview feature the module's step 3 notes in
-/// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
+/// forwarded to the client as event envelopes.
 /// Feedback keeps its dedicated wire variant through the shared conversion;
 /// it cannot also carry a conversation event.
 #[expect(clippy::too_many_arguments)]

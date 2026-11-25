@@ -7,7 +7,6 @@ use crate::roles::RoleId;
 
 use super::frame::{
     AgentFrame, TurnClock, agent_frame_and_turn_clock_from_events, apply_agent_event_to_frame,
-    apply_tool_call_progress_to_frame,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,13 +54,6 @@ impl State {
                 ProviderEvent::Event { event, .. } => {
                     apply_agent_event_to_frame(&mut self.frame, &event, &mut self.turn);
                     self.events.push(*event);
-                }
-                ProviderEvent::ToolCallProgress(progress) => {
-                    apply_tool_call_progress_to_frame(&mut self.frame, progress);
-                }
-                ProviderEvent::ToolCallProgressClosed(key) => {
-                    self.frame.items.retain(|item| !matches!(item,
-                        crate::frame::AgentFrameItem::ToolCallPreparing(progress) if progress.key == key));
                 }
                 ProviderEvent::SettleTools { .. } => {}
                 // The view owns the live child rows; the daemon keeps the

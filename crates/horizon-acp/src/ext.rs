@@ -125,31 +125,6 @@ pub enum TaskProgressState {
     Finished,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
-#[notification(method = "_horizon/tool_call_progress")]
-pub struct ToolCallProgressNotification {
-    pub session_id: SessionId,
-    #[serde(flatten)]
-    pub event: ToolCallProgressEvent,
-}
-
-/// Mirrors `hosting::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`
-/// (crates/horizon-agent/src/hosting.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolCallProgressEvent {
-    /// Mirrors `contract::ToolCallProgress` (crates/horizon-agent/src/contract.rs).
-    Progress {
-        key: String,
-        #[serde(default)]
-        tool_id: Option<String>,
-        bytes: usize,
-    },
-    Closed {
-        key: String,
-    },
-}
-
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
 /// HistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),
 /// `hosting::AgentWireEvent::AttachmentClosed`
@@ -282,23 +257,6 @@ mod tests {
             started_at_epoch_ms: 1_700_000_000_000,
         });
         for event in [
-            ToolCallProgressEvent::Progress {
-                key: "call-1".into(),
-                tool_id: Some("fs_edit".into()),
-                bytes: 64,
-            },
-            ToolCallProgressEvent::Progress {
-                key: "call-1".into(),
-                tool_id: None,
-                bytes: 0,
-            },
-            ToolCallProgressEvent::Closed {
-                key: "call-1".into(),
-            },
-        ] {
-            message_round_trip(&ToolCallProgressNotification { session_id, event });
-        }
-        for event in [
             SessionEventNotification::SessionResumed { session_id },
             SessionEventNotification::ProviderRateLimited {
                 session_id,
@@ -338,26 +296,6 @@ mod tests {
     }
 
     #[test]
-    fn flattened_notifications_keep_session_id_beside_the_tag() {
-        let session_id = SessionId::new();
-        let encoded = serde_json::to_value(ToolCallProgressNotification {
-            session_id,
-            event: ToolCallProgressEvent::Closed {
-                key: "call-1".into(),
-            },
-        })
-        .unwrap();
-        assert_eq!(
-            encoded,
-            serde_json::json!({
-                "session_id": session_id,
-                "type": "closed",
-                "key": "call-1",
-            })
-        );
-    }
-
-    #[test]
     fn horizon_method_names_are_pinned() {
         let session_id = SessionId::new();
         let methods = [
@@ -391,12 +329,6 @@ mod tests {
             }
             .method()
             .to_owned(),
-            ToolCallProgressNotification {
-                session_id,
-                event: ToolCallProgressEvent::Closed { key: String::new() },
-            }
-            .method()
-            .to_owned(),
             SessionEventNotification::SessionResumed { session_id }
                 .method()
                 .to_owned(),
@@ -411,7 +343,6 @@ mod tests {
                 "_horizon/reload_provider_config",
                 "_horizon/host_tool",
                 "_horizon/task_progress",
-                "_horizon/tool_call_progress",
                 "_horizon/session_event",
             ]
         );

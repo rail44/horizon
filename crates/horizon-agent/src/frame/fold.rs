@@ -97,27 +97,14 @@ pub(crate) fn apply_agent_event_to_frame(
                 .items
                 .push(AgentFrameItem::ApprovalRequested(request.clone()));
         }
-        // Request markers bound live previews without adding transcript rows.
-        // Remember the model for the turn receipt as well.
+        // Request markers add no transcript rows; a request marks where its
+        // response begins.
         Event::ProviderRequestSent(_) => {
-            // A failed attempt's tool-call previews go; what it committed
-            // stays.
-            let mut index = 0;
-            frame.items.retain(|item| {
-                let keep = index < turn.response_start
-                    || !matches!(item, AgentFrameItem::ToolCallPreparing(_));
-                index += 1;
-                keep
-            });
             turn.response_start = frame.items.len();
         }
-        Event::ProviderRequestFinished => {
-            frame
-                .items
-                .retain(|item| !matches!(item, AgentFrameItem::ToolCallPreparing(_)));
-            turn.response_start = turn.response_start.min(frame.items.len());
-        }
-        Event::ProviderRequestFirstToken | Event::ProviderRequestUsage(_) => {}
+        Event::ProviderRequestFinished
+        | Event::ProviderRequestFirstToken
+        | Event::ProviderRequestUsage(_) => {}
         Event::ProviderRateLimited(rate_limited) => {
             frame
                 .items
@@ -161,38 +148,6 @@ pub(crate) fn apply_agent_event_to_frame(
                 .push(AgentFrameItem::TurnEnded { reason: *reason });
         }
     }
-}
-
-/// Folds one [`ToolCallProgress`] tick into the frame: updates the matching
-/// in-flight `ToolCallPreparing` item in place (by `key`) if the current
-/// turn already has one, otherwise starts a new one. `ToolCallPreparing` is
-/// not a turn boundary (see [`is_turn_boundary_item`]): this needs to keep
-/// matching the same item across repeated calls while it is the most recent
-/// thing in the turn.
-pub(crate) fn apply_tool_call_progress_to_frame(
-    frame: &mut AgentFrame,
-    progress: ToolCallProgress,
-) {
-    if let Some(AgentFrameItem::ToolCallPreparing(existing)) = last_current_turn_item_mut(
-        frame,
-        is_turn_opening_boundary_item,
-        |item| matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == progress.key),
-    ) {
-        *existing = progress;
-        return;
-    }
-    frame
-        .items
-        .push(AgentFrameItem::ToolCallPreparing(progress));
-}
-
-fn last_current_turn_item_mut(
-    frame: &mut AgentFrame,
-    boundary: impl Fn(&AgentFrameItem) -> bool,
-    predicate: impl Fn(&AgentFrameItem) -> bool,
-) -> Option<&mut AgentFrameItem> {
-    let index = last_current_turn_item_index(frame, boundary, predicate)?;
-    frame.items.get_mut(index)
 }
 
 /// Finds the last item matching `predicate` in the current turn, where the
@@ -242,21 +197,6 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
     )
 }
 
-/// The **loose** turn boundary: only items that genuinely open or close a
-/// turn (user/`task` messages, `TurnEnded`, `Error`, `Exited`), so a tool
-/// call's preview keeps matching across the calls before it.
-fn is_turn_opening_boundary_item(item: &AgentFrameItem) -> bool {
-    matches!(
-        item,
-        AgentFrameItem::Message(Message {
-            role: MessageRole::User | MessageRole::TaskNotification,
-            ..
-        }) | AgentFrameItem::TurnEnded { .. }
-            | AgentFrameItem::Error(_)
-            | AgentFrameItem::Exited(_)
-    )
-}
-
 #[cfg(test)]
 mod response_tests {
     use super::*;
@@ -294,24 +234,5 @@ mod response_tests {
         assert_eq!(frame, agent_frame_from_events(&events));
         assert_eq!(frame.items.iter().filter(|item| matches!(item, AgentFrameItem::Message(message) if message.role == MessageRole::Assistant && message.text == "new answer")).count(), 1);
         assert!(!frame.items.iter().any(|item| matches!(item, AgentFrameItem::Message(message) if message.text.contains("failed prefix"))));
-    }
-    #[test]
-    fn finalizing_one_interleaved_preview_does_not_remove_its_sibling() {
-        let live = crate::live::LiveState::with_disabled_persistence();
-        for key in ["a", "b", "a"] {
-            live.extend_provider_events([ProviderEvent::ToolCallProgress(ToolCallProgress {
-                key: key.into(),
-                tool_id: Some("fs_read".into()),
-                bytes: 3,
-            })])
-            .unwrap();
-        }
-        live.extend_provider_events([ProviderEvent::ToolCallProgressClosed("a".into())])
-            .unwrap();
-        std::assert_matches!(
-            &live.frame().items[..], [AgentFrameItem::ToolCallPreparing(progress)] if progress.key == "b"
-        );
-        live.extend_events([Event::ProviderRequestFinished]);
-        assert!(live.frame().items.is_empty());
     }
 }

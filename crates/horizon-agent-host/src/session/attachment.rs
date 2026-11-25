@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use horizon_agent::contract::{
-    ApprovalRequest, Command, Event, SessionId, TaskProgress, TaskProgressState, ToolCallProgress,
+    ApprovalRequest, Command, Event, SessionId, TaskProgress, TaskProgressState,
 };
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd, WorkspaceRootResolved};
 use horizon_agent::live::LiveState;
@@ -22,7 +22,6 @@ pub(super) type AttachRequest = oneshot::Sender<Bootstrap>;
 #[derive(Default)]
 pub(super) struct SessionStream {
     subscriber: Option<Subscriber>,
-    previews: BTreeMap<String, ToolCallProgress>,
     tasks: BTreeMap<Uuid, TaskProgress>,
     /// Children's approvals shown through this session and not settled, by
     /// occurrence id: asked again of a new attachment, and the record an
@@ -42,12 +41,6 @@ pub(super) type Streams = std::sync::Mutex<HashMap<SessionId, SessionStream>>;
 impl SessionStream {
     pub(super) fn publish(&mut self, event: AgentWireEvent) {
         match &event {
-            AgentWireEvent::ToolCallProgress(progress) => {
-                self.previews.insert(progress.key.clone(), progress.clone());
-            }
-            AgentWireEvent::ToolCallProgressClosed(key) => {
-                self.previews.remove(key);
-            }
             AgentWireEvent::TaskProgress(progress) => {
                 let key = progress.task_session_id.as_uuid();
                 if progress.state == TaskProgressState::Running {
@@ -199,13 +192,6 @@ pub(super) fn capture(
     let (id, events, ended, end) = {
         let mut streams = lock_unpoisoned(&state.agent_subscribers);
         let stream = streams.entry(session).or_default();
-        metadata.extend(
-            stream
-                .previews
-                .values()
-                .cloned()
-                .map(AgentWireEvent::ToolCallProgress),
-        );
         let mut tasks: Vec<_> = stream.tasks.values().cloned().collect();
         tasks.sort_by_key(|task| (task.started_at_epoch_ms, task.task_session_id.as_uuid()));
         metadata.extend(tasks.into_iter().map(AgentWireEvent::TaskProgress));

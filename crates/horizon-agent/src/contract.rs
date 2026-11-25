@@ -520,27 +520,6 @@ pub enum TaskProgressState {
     Finished,
 }
 
-/// Tool-call-argument-streaming progress observed mid-turn, before the
-/// provider's tool call is complete (rig's
-/// `StreamedAssistantContent::ToolCallDelta`). Purely a UI feedback signal:
-/// never folded into conversation history and never persisted — see
-/// [`ProviderEvent::tool_call_progress`].
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct ToolCallProgress {
-    /// Rig's `internal_call_id`: stable across every delta for one tool
-    /// call from the very first chunk, unlike the provider's own tool-call
-    /// id which may not be known yet. Used only to fold repeated deltas for
-    /// the same call into a single frame item — this is not the eventual
-    /// `ToolCallId` the eventual `ToolCallRequested` carries.
-    pub key: String,
-    /// The tool/function name, once a `ToolCallDeltaContent::Name` chunk
-    /// has been observed for this call.
-    #[serde(default)]
-    pub tool_id: Option<String>,
-    /// Cumulative argument bytes streamed so far for this call.
-    pub bytes: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum SessionState {
     Created,

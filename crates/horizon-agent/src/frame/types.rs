@@ -17,14 +17,6 @@ pub enum AgentFrameItem {
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
     ApprovalResolved(ApprovalResolved),
-    /// Ephemeral tool-call-argument-streaming progress (see
-    /// [`ToolCallProgress`]): folded in place by
-    /// [`apply_tool_call_progress_to_frame`] while arguments stream, and
-    /// removed by the matching `ToolCallProgressClosed` notification before
-    /// the real request is appended. Never produced by
-    /// `agent_frame_from_events`/persisted replay — it never reaches the
-    /// event log in the first place (`ProviderEvent::tool_call_progress`).
-    ToolCallPreparing(ToolCallProgress),
     /// A Tier 1 compaction pass's divider row (`Event::HistoryCleared`,
     /// `docs/agent-compaction-design.md`'s "transcript に区切りを表示"):
     /// the point in the transcript from which older tool-result bodies stop

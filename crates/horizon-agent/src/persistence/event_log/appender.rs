@@ -167,17 +167,12 @@ fn unix_time_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{TaskProgress, TaskProgressState, ToolCallProgress};
+    use crate::contract::{TaskProgress, TaskProgressState};
     use crate::live::LiveState;
 
     #[test]
     fn ephemeral_feedback_never_enters_history_or_jsonl_through_any_append_api() {
         let feedback = vec![
-            ProviderEvent::tool_call_progress(ToolCallProgress {
-                key: "streaming-call".into(),
-                tool_id: Some("fs_read".into()),
-                bytes: 12,
-            }),
             ProviderEvent::session_model("model".into()),
             ProviderEvent::session_selection("provider".into(), "model".into()),
             ProviderEvent::task_progress(TaskProgress {

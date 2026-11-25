@@ -1,7 +1,7 @@
 use super::*;
 use crate::session::events::send_session_event;
 use crate::session::test_support::test_state;
-use horizon_agent::contract::{Message, MessageRole, TaskProgress, ToolCallProgress};
+use horizon_agent::contract::{Message, MessageRole, TaskProgress};
 
 fn message(index: usize) -> Event {
     Event::MessageCommitted(Message {
@@ -120,15 +120,10 @@ fn slow_attachment_is_revoked_and_reopening_recovers_every_committed_event() {
 }
 
 #[test]
-fn detached_progress_is_seeded_and_closed_previews_and_tasks_stay_closed() {
+fn detached_progress_is_seeded_and_finished_tasks_stay_closed() {
     let state = test_state();
     let session = SessionId::new();
     let live = LiveState::with_disabled_persistence();
-    let preview = AgentWireEvent::ToolCallProgress(ToolCallProgress {
-        key: "preview".into(),
-        tool_id: None,
-        bytes: 500,
-    });
     let task = TaskProgress {
         task_session_id: SessionId::new(),
         description: "research".into(),
@@ -136,19 +131,12 @@ fn detached_progress_is_seeded_and_closed_previews_and_tasks_stay_closed() {
         activity: Some("fs_read".into()),
         started_at_epoch_ms: 0,
     };
-    send_session_event(&state, session, preview.clone());
     send_session_event(&state, session, AgentWireEvent::TaskProgress(task.clone()));
     let first = snapshot(&state, session, &live);
-    assert!(first.metadata.contains(&preview));
     assert!(
         first
             .metadata
             .contains(&AgentWireEvent::TaskProgress(task.clone()))
-    );
-    send_session_event(
-        &state,
-        session,
-        AgentWireEvent::ToolCallProgressClosed("preview".into()),
     );
     send_session_event(
         &state,

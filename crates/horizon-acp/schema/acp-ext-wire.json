@@ -615,66 +615,6 @@
       ],
       "type": "object"
     },
-    "ToolCallProgressNotification": {
-      "description": "Mirrors `hosting::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`\n(crates/horizon-agent/src/hosting.rs).",
-      "oneOf": [
-        {
-          "description": "Mirrors `contract::ToolCallProgress` (crates/horizon-agent/src/contract.rs).",
-          "properties": {
-            "bytes": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "key": {
-              "type": "string"
-            },
-            "tool_id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "progress",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "key",
-            "bytes"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "key": {
-              "type": "string"
-            },
-            "type": {
-              "const": "closed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "key"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
-      "type": "object"
-    },
     "ToolOutcome": {
       "description": "Mirrors `contract::ToolOutcome` (crates/horizon-agent/src/contract/tool_result.rs).",
       "oneOf": [
@@ -830,9 +770,6 @@
     },
     "_horizon/task_progress": {
       "$ref": "#/$defs/TaskProgressNotification"
-    },
-    "_horizon/tool_call_progress": {
-      "$ref": "#/$defs/ToolCallProgressNotification"
     }
   },
   "stop_reasons": [
@@ -840,5 +777,5 @@
     "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 12
+  "x-session-protocol-version": 13
 }

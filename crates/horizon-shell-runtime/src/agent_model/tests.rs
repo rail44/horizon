@@ -3,7 +3,7 @@ use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
     STOP_REASON_TOKEN_BUDGET, SessionEventNotification, SessionId, TaskProgressNotification,
-    TaskProgressState, ToolCallMeta, ToolCallProgressEvent, ToolOutcome, write_horizon_meta,
+    TaskProgressState, ToolCallMeta, ToolOutcome, write_horizon_meta,
 };
 use serde_json::json;
 
@@ -513,29 +513,6 @@ fn the_effort_option_sets_the_effort_and_its_absence_clears_it() {
         v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![])),
     );
     assert_eq!(model.effort, None);
-}
-
-#[test]
-fn argument_progress_is_replaced_in_place_and_removed_on_close() {
-    let mut model = AgentModel::default();
-    for bytes in [10, 64] {
-        model.apply(AgentEvent::ToolCallProgress(
-            ToolCallProgressEvent::Progress {
-                key: "call-1".into(),
-                tool_id: Some("fs_edit".into()),
-                bytes,
-            },
-        ));
-    }
-    std::assert_matches!(
-        model.frame.items.as_slice(),
-        [AgentFrameItem::ToolCallPreparing(ToolCallPreparing { key })] if key == "call-1");
-    model.apply(AgentEvent::ToolCallProgress(
-        ToolCallProgressEvent::Closed {
-            key: "call-1".into(),
-        },
-    ));
-    assert!(model.frame.items.is_empty());
 }
 
 fn progress(id: SessionId, state: TaskProgressState, activity: Option<&str>) -> AgentEvent {

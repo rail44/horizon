@@ -66,9 +66,7 @@ pub fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
 fn is_tool_related(item: &AgentFrameItem) -> bool {
     matches!(
         item,
-        AgentFrameItem::ToolCall(_)
-            | AgentFrameItem::Permission(_)
-            | AgentFrameItem::ToolCallPreparing(_)
+        AgentFrameItem::ToolCall(_) | AgentFrameItem::Permission(_)
     )
 }
 

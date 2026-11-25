@@ -279,46 +279,6 @@ fn respond_to_user_message(
         .into(),
     );
     let lower_text = text.to_ascii_lowercase();
-    if lower_text.contains("streaming tool") {
-        // Manual test hook for tool-call-argument
-        // streaming feedback (see `ToolCallProgressBuffer`
-        // in the rig provider): simulates a slow-to-
-        // stream tool call by emitting a few
-        // `ToolCallProgress` ticks — first the tool name,
-        // then growing byte counts — before the real
-        // `ToolCallRequested`, so the pane header/
-        // transcript "preparing a tool call…" feedback is
-        // exercisable without a network provider.
-        let call_id = ToolCallId("mock-streaming-tool-1".to_string());
-        let occurrence_id = OccurrenceId::new();
-        *pending_tool_call = Some(ToolCallIdentity {
-            call_id: call_id.clone(),
-            occurrence_id: occurrence_id.clone(),
-        });
-        for (bytes, tool_id) in [
-            (0usize, Some("mock_approval_required".to_string())),
-            (64, None),
-            (512, None),
-        ] {
-            let _ = events_tx.send(ProviderEvent::tool_call_progress(ToolCallProgress {
-                key: call_id.0.clone(),
-                tool_id,
-                bytes,
-            }));
-            thread::sleep(MOCK_STREAM_CHUNK_TICK);
-        }
-        let _ = events_tx.send(ProviderEvent::ToolCallProgressClosed(call_id.0.clone()));
-        let _ = events_tx.send(
-            Event::ToolCallRequested(ToolCallRequest {
-                call_id,
-                tool_id: "mock_approval_required".to_string(),
-                input: serde_json::json!({ "message": text }).into(),
-                occurrence_id,
-            })
-            .into(),
-        );
-        return ControlFlow::Continue(());
-    }
     // Test hooks for `worktree_enter` and what follows it, so
     // `horizon-agentd`'s e2e suite can move a session into a worktree and
     // check where its later writes land without a network provider.
@@ -630,11 +590,6 @@ mod tests {
         let provider = MockProvider::new();
         for (text, expected_call, expected_tool) in [
             (
-                "streaming tool snapshot bash slow",
-                "mock-streaming-tool-1",
-                "mock_approval_required",
-            ),
-            (
                 "snapshot bash tool slow",
                 "workspace-snapshot-1",
                 "workspace_snapshot",
@@ -671,17 +626,6 @@ mod tests {
                     ..
                 })
             );
-            if expected_call == "mock-streaming-tool-1" {
-                for expected_bytes in [0, 64, 512] {
-                    let event = receive();
-                    std::assert_matches!(
-                        event, ProviderEvent::ToolCallProgress(progress) if progress.bytes == expected_bytes
-                    );
-                }
-                std::assert_matches!(
-                    receive(), ProviderEvent::ToolCallProgressClosed(key) if key == expected_call
-                );
-            }
             let Event::ToolCallRequested(request) =
                 receive().clone().into_event().expect("conversation event")
             else {

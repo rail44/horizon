@@ -697,7 +697,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             ..Default::default()
         };
         let server = tokio::spawn(serve(listener, false, body));
-        let (events, receive) = crossbeam_channel::unbounded();
+        let (events, _receive) = crossbeam_channel::unbounded();
         let completion = complete_rig_turn(
             &config,
             &SessionEnvironment::for_workspace_root(None),
@@ -717,22 +717,6 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
         assert_eq!(
             calls,
             [ToolCallId("call-1".into()), ToolCallId("call-2".into())]
-        );
-        let events: Vec<_> = receive.try_iter().collect();
-        // Calls are shown once, complete: no preview opens, so none is left
-        // for a close to remove.
-        assert!(!events.iter().any(|event| matches!(
-            event,
-            ProviderEvent::ToolCallProgress(_) | ProviderEvent::ToolCallProgressClosed(_)
-        )));
-        let live = crate::live::LiveState::with_disabled_persistence();
-        live.extend_provider_events(events).unwrap();
-        assert!(
-            !live
-                .frame()
-                .items
-                .iter()
-                .any(|item| matches!(item, crate::frame::AgentFrameItem::ToolCallPreparing(_)))
         );
     }
 }
