@@ -60,7 +60,6 @@ fn generate_wire_schema() -> Value {
         "session_info": schema_of(sub::<SessionInfoMeta>),
         "tool_call": schema_of(sub::<ToolCallMeta>),
         "request_permission": schema_of(sub::<ApprovalMeta>),
-        "request_permission_response": schema_of(sub::<PermissionResponseMeta>),
         "message": schema_of(sub::<MessageMeta>),
         "config_option": schema_of(sub::<ModelOptionMeta>),
     });

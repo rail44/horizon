@@ -150,12 +150,6 @@ pub enum ToolOutcome {
     Superseded { retry_occurrence_id: String },
 }
 
-/// Mirrors `contract::Command::DenyToolCall::reason` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct PermissionResponseMeta {
-    pub reason: Option<String>,
-}
-
 /// Mirrors the non-human `contract::MessageRole` variants (crates/horizon-agent/src/contract.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MessageMeta {
@@ -232,9 +226,6 @@ mod tests {
             auto_approved: None,
             policy_tier: None,
         });
-        round_trip(&PermissionResponseMeta {
-            reason: Some("not now".into()),
-        });
         round_trip(&MessageMeta {
             role: MessageRole::TaskNotification,
         });
@@ -267,10 +258,19 @@ mod tests {
             ("other".to_owned(), json!({"keep": true})),
             (HORIZON_META_KEY.to_owned(), json!("stale")),
         ]));
-        write_horizon_meta(&mut meta, &PermissionResponseMeta { reason: None }).unwrap();
+        write_horizon_meta(
+            &mut meta,
+            &MessageMeta {
+                role: MessageRole::AutoContinue,
+            },
+        )
+        .unwrap();
         let meta = meta.unwrap();
         assert_eq!(meta.get("other"), Some(&json!({"keep": true})));
-        assert_eq!(meta.get(HORIZON_META_KEY), Some(&json!({"reason": null})));
+        assert_eq!(
+            meta.get(HORIZON_META_KEY),
+            Some(&json!({"role": "auto_continue"}))
+        );
         assert_eq!(meta.len(), 2);
     }
 

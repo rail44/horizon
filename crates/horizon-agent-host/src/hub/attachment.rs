@@ -167,12 +167,10 @@ async fn ask_permission(sink: Sink, ask: Ask, cancelled: oneshot::Receiver<()>) 
         v2::RequestPermissionOutcome::Selected(selected)
             if &*selected.option_id.0 == acp::PERMISSION_OPTION_DENY =>
         {
-            let reason =
-                acp::read_horizon_meta::<acp::PermissionResponseMeta>(response.meta.as_ref())
-                    .or_else(|| acp::read_horizon_meta(selected.meta.as_ref()))
-                    .and_then(Result::ok)
-                    .and_then(|meta| meta.reason);
-            Command::DenyToolCall { identity, reason }
+            Command::DenyToolCall {
+                identity,
+                reason: None,
+            }
         }
         v2::RequestPermissionOutcome::Selected(selected) => {
             eprintln!(

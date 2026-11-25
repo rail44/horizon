@@ -16,8 +16,8 @@ use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
     AttachmentEnd, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse,
     HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
-    PermissionResponseMeta, SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta,
-    read_horizon_meta, write_horizon_meta,
+    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
+    write_horizon_meta,
 };
 use horizon_agent::contract::ProviderId;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -882,10 +882,13 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
             reason: Some("not now".into()),
         })
         .unwrap();
-    let (option, meta) = selected(answer.block_task().await.unwrap());
+    let (option, _) = selected(answer.block_task().await.unwrap());
     assert_eq!(option, PERMISSION_OPTION_DENY);
-    let meta: PermissionResponseMeta = read_horizon_meta(meta.as_ref()).unwrap().unwrap();
-    assert_eq!(meta.reason.as_deref(), Some("not now"));
+    // The reason is the next message.
+    let AgentCall::Prompt(text) = fake.next_call().await else {
+        panic!("the reason as a prompt");
+    };
+    assert_eq!(text, "not now");
     assert_eq!(
         resolved(next_agent_event(&mut handle).await).1,
         PermissionDecision::Denied

@@ -12,8 +12,8 @@ use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    AttachmentEnd, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
-    SessionEventNotification, SessionId, write_horizon_meta,
+    AttachmentEnd, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionEventNotification,
+    SessionId,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -294,11 +294,15 @@ impl Session {
                 }
                 None => true,
             },
+            // A reason is the next message: the agent hears it after the
+            // denial.
             AgentCommand::Deny { identity, reason } => match held.take(&identity) {
                 Some(responder) => {
-                    let mut meta = None;
-                    let _ = write_horizon_meta(&mut meta, &PermissionResponseMeta { reason });
-                    let _ = responder.respond(selected(PERMISSION_OPTION_DENY, meta));
+                    let _ = responder.respond(selected(PERMISSION_OPTION_DENY, None));
+                    if let Some(reason) = reason.filter(|reason| !reason.trim().is_empty()) {
+                        let request = v2::PromptRequest::new(session_id, vec![reason.into()]);
+                        self.report_failure("prompt", self.connection.send_request(request));
+                    }
                     self.resolved(identity, PermissionDecision::Denied).await
                 }
                 None => true,

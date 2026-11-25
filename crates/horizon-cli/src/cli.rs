@@ -84,9 +84,8 @@ pub enum Subcommand {
         session_id: String,
         call_id: String,
         occurrence_id: String,
-        /// Optional human-supplied deny reason, forwarded to the wire
-        /// `Command::DenyToolCall.reason` and recorded on the resulting
-        /// `Event::ApprovalResolved`. `None` (the `--reason` flag omitted) is
+        /// Optional human-supplied deny reason: the agent gets it as the
+        /// message after the denial. `None` (the `--reason` flag omitted) is
         /// the no-reason case.
         reason: Option<String>,
     },
