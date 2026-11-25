@@ -285,6 +285,11 @@ lands:
   `docs/image-viewer-design.md`): a `file://` link to an image clicked in
   a terminal opens it over the workspace, through the extensions' own
   `horizon:ui/opener`. Git diff is not started.
+- **Agent sessions back in the shell's process — proposed 2026-11-25**
+  (board #114, `docs/agent-in-process-design.md`): agentd's code moves
+  into a library the shell hosts directly, agentd and its ACP line go,
+  and a stdio binary speaks standard ACP for other clients. The entry
+  below is the line it would replace.
 - **ACP as the shell↔agentd line — implemented 2026-09-27** (stages A–D
   on the integration branch, main merge pending; stage E, external
   agents, pending a config consultation) (`docs/acp-agentd-design.md`,
