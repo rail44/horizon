@@ -5,7 +5,7 @@
 //! **Design.** The store lives outside any
 //! repository, under the user's data home:
 //! `$XDG_DATA_HOME/horizon/knowledge/<sanitized-root>/<id>.md` (same
-//! XDG-resolution shape as `config::default_event_log_path_from`), keyed
+//! XDG-resolution shape as `config::default_sessions_dir_from`), keyed
 //! by the project's *main* root (the `--git-common-dir` parent, not the
 //! worktree's own toplevel) so every worktree of one project shares the
 //! same knowledge. One file per entry; YAML-ish `---`-delimited

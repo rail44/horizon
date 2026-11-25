@@ -57,7 +57,7 @@ fn stub_recovery_never_launches_inherited_daemon_binaries() {
                 .env("HORIZON_LOGD_BINARY", &recorder)
                 .env("HORIZON_TEST_SPAWN_RECORD", &attempts)
                 .env("HORIZON_CONFIG", scratch.0.join("absent-config.toml"))
-                .env("HORIZON_AGENT_EVENT_LOG", scratch.0.join("events.jsonl"))
+                .env("HORIZON_AGENT_SESSIONS_DIR", scratch.0.join("sessions"))
                 .env("HORIZON_AGENT_STATE_DB", scratch.0.join("state.duckdb"))
                 .stdout(Stdio::from(output.try_clone().unwrap()))
                 .stderr(Stdio::from(output))

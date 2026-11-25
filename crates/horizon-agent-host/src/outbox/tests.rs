@@ -62,16 +62,16 @@ fn receipts_are_scoped_to_recipient_and_stable_source() {
 #[test]
 fn tail_retries_a_partial_last_record_without_replaying_prior_lines() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("events.jsonl");
-    let mut file = std::fs::File::create(&path).unwrap();
     let session = SessionId::new();
+    let path = horizon_agent::persistence::event_log::session_path(dir.path(), session);
+    let mut file = std::fs::File::create(&path).unwrap();
     let text =
         serde_json::to_string(&record(session, Event::DeliveryAcknowledged("one".into()))).unwrap();
     writeln!(file, "{text}").unwrap();
     let split = text.len() / 2;
     write!(file, "{}", &text[..split]).unwrap();
     file.flush().unwrap();
-    let mut tail = Tail::new(path);
+    let mut tail = Tail::new(dir.path().to_path_buf());
     assert_eq!(tail.read().unwrap().len(), 1);
     assert!(tail.read().unwrap().is_empty());
     writeln!(file, "{}", &text[split..]).unwrap();
@@ -139,6 +139,7 @@ fn pending_deliveries_keep_log_order_across_replay_and_duplicate_records() {
         };
         let mut value = record(source, event);
         value.sequence = sequence;
+        value.created_at_unix_ms = sequence;
         events.push(value);
     }
     let expected = vec!["request", "result", "correction"];
@@ -173,9 +174,10 @@ fn pending_deliveries_keep_log_order_across_replay_and_duplicate_records() {
 #[test]
 fn tail_read_failure_does_not_discard_earlier_records_in_the_same_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("events.jsonl");
+    let session = SessionId::new();
+    let path = horizon_agent::persistence::event_log::session_path(dir.path(), session);
     let text = serde_json::to_string(&record(
-        SessionId::new(),
+        session,
         Event::DeliveryAcknowledged("retained".into()),
     ))
     .unwrap()
@@ -183,7 +185,7 @@ fn tail_read_failure_does_not_discard_earlier_records_in_the_same_batch() {
     let mut broken = text.as_bytes().to_vec();
     broken.extend_from_slice(&[0xff, b'\n']);
     std::fs::write(&path, broken).unwrap();
-    let mut tail = Tail::new(path.clone());
+    let mut tail = Tail::new(dir.path().to_path_buf());
     assert!(tail.read().is_err());
     std::fs::write(&path, text).unwrap();
     let records = tail.read().unwrap();
@@ -217,6 +219,7 @@ async fn pending_receipt_orders_one_recipient_without_blocking_another() {
             (source, id.into()),
             Pending::Send {
                 sequence,
+                at: sequence,
                 target: recipient,
                 input: SessionInput {
                     id: id.into(),

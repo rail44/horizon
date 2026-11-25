@@ -5,12 +5,14 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 /// Validate the exact decoder, event envelopes, conversation codec and
-/// identities, and that each session's records after its first name the
-/// record they follow (the judge's verdicts are written beside the chain).
+/// identities, that each session's sequences increase, and that each
+/// session's records after its first name the record they follow (the
+/// judge's verdicts are written beside the chain). A record's parent must
+/// come before it in `rows`.
 pub fn validate_conversation_records(rows: &[Value]) -> Result<(), String> {
     let mut sessions: HashMap<crate::contract::SessionId, (bool, Vec<Event>)> = HashMap::new();
     let mut ids = HashSet::new();
-    let mut previous = None;
+    let mut previous: HashMap<crate::contract::SessionId, u64> = HashMap::new();
     let mut chained = HashSet::new();
     for row in rows {
         let record: crate::persistence::event_log::Record =
@@ -19,11 +21,13 @@ pub fn validate_conversation_records(rows: &[Value]) -> Result<(), String> {
             || record.version != crate::persistence::event_log::AGENT_EVENT_LOG_VERSION
             || record.event_id.is_empty()
             || !ids.insert(record.event_id.clone())
-            || previous.is_some_and(|prior| record.sequence <= prior)
+            || previous
+                .get(&record.session_id)
+                .is_some_and(|prior| record.sequence <= *prior)
         {
             return Err("Invalid event envelope, duplicate identity or unordered sequence".into());
         }
-        previous = Some(record.sequence);
+        previous.insert(record.session_id, record.sequence);
         if record
             .parent_id
             .as_ref()

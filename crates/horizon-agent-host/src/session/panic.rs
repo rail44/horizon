@@ -214,7 +214,6 @@ mod tests {
     use crate::session::Connection;
     use crate::session::test_support::{drain_events, test_state};
     use horizon_agent::frame::agent_frame_from_events;
-    use horizon_agent::persistence::event_log::WriterHandle;
 
     #[test]
     fn session_panic_capture_preserves_provider_event_kind_and_payload() {
@@ -264,14 +263,8 @@ mod tests {
     #[test]
     fn session_loop_panic_is_forwarded_and_persisted_as_a_failed_terminated_turn() {
         let dir = tempfile::tempdir().expect("create panic log directory");
-        let path = dir.path().join("events.jsonl");
-        let (writer, init_rx) = WriterHandle::open(&path);
-        match init_rx.recv().expect("writer startup outcome") {
-            horizon_agent::persistence::event_log::WriterInit::Ready(_) => {}
-            horizon_agent::persistence::event_log::WriterInit::Failed(error) => {
-                panic!("writer startup failed: {error}")
-            }
-        }
+        let path = dir.path().join("sessions");
+        let writer = horizon_agent::persistence::event_log::WriterHandle::open(&path);
 
         let state = test_state();
         let session_id = SessionId::new();
@@ -323,7 +316,7 @@ mod tests {
         );
 
         let report =
-            horizon_agent::persistence::event_log::read(&path).expect("read panic event log");
+            horizon_agent::persistence::event_log::read_all(&path).expect("read panic event log");
         let records = report
             .records
             .iter()

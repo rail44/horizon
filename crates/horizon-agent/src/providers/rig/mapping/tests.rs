@@ -166,11 +166,7 @@ fn a_refused_edit_batch_survives_log_database_provider_and_change_projection() {
     let state = ToolSessionBuilder::new(root.clone()).build();
     let session = SessionId::new();
     let log = root.join("events.jsonl");
-    let (writer, ready) = event_log::WriterHandle::open(&log);
-    assert!(matches!(
-        ready.recv().unwrap(),
-        event_log::WriterInit::Ready(_)
-    ));
+    let writer = crate::persistence::event_log::WriterHandle::open(&log);
     let live =
         LiveState::with_event_log_and_history(session, None, None, writer.clone(), Vec::new());
     let execute = |tool: &str, input: serde_json::Value| {
@@ -213,7 +209,7 @@ fn a_refused_edit_batch_survives_log_database_provider_and_change_projection() {
     std::assert_matches!(facts.edits[2].outcome, EditOutcome::Failed { .. });
 
     writer.flush().unwrap();
-    let records = event_log::read(&log).unwrap().records;
+    let records = event_log::read_all(&log).unwrap().records;
     let replay: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
     assert_eq!(replay, live.events());
     let store = Store::open_in_memory().unwrap();

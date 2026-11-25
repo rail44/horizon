@@ -5,6 +5,10 @@ Agent pane.
 
 Design date: 2026-06-29
 
+> **Changed 2026-11-25** (`docs/agent-stdio-child-design.md`, "The DuckDB
+> projection"): no process holds the projection open; recall catches it up
+> from the per-session logs and queries it read-only.
+
 > **Superseded in part.** The "Runtime Boundary" section describes the JSONL
 > writer and DuckDB rebuild running inside the Horizon process. That
 > ownership has since moved: `horizon-agentd`, not Horizon, now owns the

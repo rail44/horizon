@@ -1,5 +1,11 @@
 # Agent persistence contract
 
+> **Changed 2026-11-25** (`docs/agent-stdio-child-design.md`): each session
+> has a log file of its own, and the DuckDB projection is no longer held
+> open or projected per append; recall catches it up from the session
+> files, a cursor per file. What this contract says of "the log" holds per
+> session file; the startup cursor below is now one cursor per file.
+
 The JSONL log owns conversation history. DuckDB is a rebuildable search index.
 A successful enqueue, a successful write, and a usable search index are separate
 outcomes. This contract applies to the shared agent runtime; board behavior and

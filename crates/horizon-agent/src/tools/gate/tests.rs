@@ -43,7 +43,7 @@ fn session(unattended: bool, judged: bool) -> Session {
     let canonical = root.path().canonicalize().unwrap();
     let judge = judged.then(|| {
         let log = root.path().join("events.jsonl");
-        let (writer, _ready) = crate::persistence::event_log::WriterHandle::open(&log);
+        let writer = crate::persistence::event_log::WriterHandle::open(&log);
         JudgeHandle::for_test_decision("judge", Arc::new(Unhurried), writer)
     });
     let tool_state = ToolSessionBuilder::for_root(

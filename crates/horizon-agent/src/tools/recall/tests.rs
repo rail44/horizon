@@ -4,68 +4,20 @@ use crate::contract::{
     Event, Message, MessageRole, OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult,
     TurnEndReason,
 };
-use crate::persistence::projection::duckdb::{
-    AppendEvent, DuckdbStoreHandle, SharedDuckdbStore, Store,
-};
+use crate::persistence::projection::duckdb::{AppendEvent, Projection, Store};
 use crate::tools::state::RecallContext;
 use crate::tools::synchronous::execute_auto;
 use serde_json::{Value, json};
 
-/// A projection slot already holding `store`.
-fn ready_slot(store: Store) -> SharedDuckdbStore {
-    let slot = SharedDuckdbStore::pending();
-    slot.set(Some(DuckdbStoreHandle::new(store)));
-    slot
-}
-
-/// One context over a slot still pending answers "still being rebuilt";
-/// once the slot is set, the very same context queries the store. The
-/// slot is read per query, not captured when the session starts.
+/// A session with no projection answers that history search is
+/// unavailable, rather than nothing or everything.
 #[test]
-fn recall_reports_a_pending_rebuild_and_works_once_the_same_slot_is_set() {
-    let session = SessionId::new();
-    let slot = SharedDuckdbStore::pending();
-    let tool_state = ToolSessionState::for_current_dir(
-        AgentToolsConfig::default(),
-        RecallContext {
-            session_id: Some(session),
-            store: slot.clone(),
-        },
-    );
-    let search = || execute_auto(&tool_state, "recall_search", &json!({ "query": "widget" }));
-
-    let pending = format!("{:?}", search());
-    assert!(
-        pending.contains("still being rebuilt"),
-        "a pending slot must say so: {pending}"
-    );
-
-    let store = Store::open_in_memory().unwrap();
-    store
-        .append_events(
-            session,
-            None,
-            [Event::MessageCommitted(Message {
-                role: MessageRole::User,
-                text: "widget after the rebuild".into(),
-            })],
-        )
-        .unwrap();
-    slot.set(Some(DuckdbStoreHandle::new(store)));
-    let output = search().expect("recall_search handled");
-    assert_eq!(
-        output["total"], 1,
-        "the same context must now query: {output}"
-    );
-}
-
-#[test]
-fn recall_over_an_unavailable_slot_keeps_the_existing_message() {
+fn recall_without_a_projection_says_history_search_is_unavailable() {
     let tool_state = ToolSessionState::for_current_dir(
         AgentToolsConfig::default(),
         RecallContext {
             session_id: Some(SessionId::new()),
-            store: SharedDuckdbStore::unavailable(),
+            projection: None,
         },
     );
     let output = format!(
@@ -73,7 +25,7 @@ fn recall_over_an_unavailable_slot_keeps_the_existing_message() {
         execute_auto(&tool_state, "recall_read", &json!({ "from_sequence": 0 }))
     );
     assert!(
-        output.contains("could not be rebuilt completely"),
+        output.contains("History search is unavailable"),
         "unexpected output: {output}"
     );
 }
@@ -110,7 +62,7 @@ fn tool_state_with_seeded_store(
 
     let recall = RecallContext {
         session_id: Some(own_session_id),
-        store: ready_slot(store),
+        projection: Some(Projection::held(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
     (tool_state, path)
@@ -124,11 +76,11 @@ fn sessions_return_one_bounded_summary_per_session_with_separate_failure_classes
         session_a,
         vec![(session_a, vec!["first question", "second question"])],
     );
-    let slot = tool_state.recall_context().store;
-    let store = slot.current();
-    let crate::persistence::projection::duckdb::DuckdbStoreState::Ready(store) = store else {
-        panic!("seeded store must be ready");
-    };
+    let store = tool_state
+        .recall_context()
+        .projection
+        .expect("seeded")
+        .held_store();
     let finished = |id: &str, output: Value| {
         Event::ToolCallFinished(ToolCallResult::new(
             ToolCallId(id.into()),
@@ -432,7 +384,7 @@ fn search_session_scope_without_a_session_id_errors_instead_of_falling_back_to_a
     // fail loudly rather than silently searching everything).
     let recall = RecallContext {
         session_id: None,
-        store: ready_slot(store),
+        projection: Some(Projection::held(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -586,7 +538,7 @@ fn search_filters_by_turn_outcome() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: ready_slot(store),
+        projection: Some(Projection::held(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -658,7 +610,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: ready_slot(store),
+        projection: Some(Projection::held(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -723,7 +675,7 @@ fn search_without_query_but_with_turn_outcome_lists_matches() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: ready_slot(store),
+        projection: Some(Projection::held(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -814,7 +766,7 @@ fn read_entries_carry_is_error_on_tool_results() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: ready_slot(store),
+        projection: Some(Projection::held(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 

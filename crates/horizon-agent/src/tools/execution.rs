@@ -144,7 +144,6 @@ pub fn cancel_tool_execution(session_id: SessionId, identity: &crate::contract::
 mod tests {
     use super::*;
     use crate::contract::{OccurrenceId, ToolCallId};
-    use crate::persistence::event_log::{WriterHandle, WriterInit};
     use crate::tools::{register_session_runtime, unregister_session_runtime};
 
     struct MustNotRun;
@@ -304,8 +303,8 @@ mod tests {
                 input: input.into(),
             };
             let history = vec![Event::ToolCallRequested(request.clone())];
-            let (writer, ready) = WriterHandle::open(dir.path());
-            assert!(matches!(ready.recv().unwrap(), WriterInit::Failed(_)));
+            let writer =
+                crate::persistence::event_log::WriterHandle::failed("the log cannot be written");
             let live =
                 LiveState::with_event_log_and_history(session, None, None, writer, history.clone());
             let (tx, rx) = crossbeam_channel::unbounded();

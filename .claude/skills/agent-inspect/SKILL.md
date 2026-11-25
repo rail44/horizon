@@ -5,22 +5,22 @@ description: Investigate Horizon agent-session behavior from its persisted JSONL
 
 # Inspecting Horizon agent sessions
 
-Horizon persists every `agent::contract::Event` from every agent session to one
-append-only JSONL log, and (optionally) rebuilds a DuckDB projection from it at
-startup. Both are read-only-safe to poke at from outside the app. This skill is
+Horizon persists every `agent::contract::Event` of an agent session to that
+session's own append-only JSONL log, and recall catches a DuckDB projection up
+from those logs when it queries. Both are read-only-safe to poke at from outside the app. This skill is
 about *reading* that history, not the app's live runtime.
 
 ## Where the data lives
 
-- **JSONL event log** (the durable source of truth): path from the
-  `HORIZON_AGENT_EVENT_LOG` env var, falling back to
-  `$XDG_DATA_HOME/horizon/agent-events.jsonl` (commonly
-  `~/.local/share/horizon/agent-events.jsonl` on Linux if `XDG_DATA_HOME` is
-  unset) — see `crates/horizon-agent/src/config.rs`'s `AgentPersistenceConfig`.
-  There is no config-file key: the 2026-07-18 config-narrowing wave made
-  these paths environment-only. One file, one background writer thread,
-  shared by every agent session in the process — sessions interleave in it,
-  distinguished by `session_id`.
+- **Session logs** (the durable source of truth): one file per session,
+  `<session id>.jsonl`, in the directory the `HORIZON_AGENT_SESSIONS_DIR` env
+  var names, falling back to `$XDG_DATA_HOME/horizon/sessions` (commonly
+  `~/.local/share/horizon/sessions` on Linux if `XDG_DATA_HOME` is unset) —
+  see `crates/horizon-agent/src/config.rs`'s `AgentPersistenceConfig`.
+  There is no config-file key. One process hosts a directory's sessions at
+  a time (it holds `sessions.lock` beside it). Before 2026-11-25 every
+  session shared one file, `agent-events.jsonl`; the host split it into the
+  directory once and moved it aside as `agent-events.jsonl.split-<ms>`.
 - **DuckDB projection** (rebuildable, *not* the source of truth): path from
   `HORIZON_AGENT_STATE_DB`, falling back to
   `$XDG_DATA_HOME/horizon/agent-state.duckdb`. Since the config narrowing
@@ -40,7 +40,7 @@ Each line is one `agent::persistence::event_log::Record` (`crates/horizon-agent/
 | `schema` | always `"horizon.agent.event_log"` |
 | `version` | always `1` |
 | `event_id` | uuid string, unique per record |
-| `sequence` | `u64`, **globally monotonic across the whole file** — not reset per session |
+| `sequence` | `u64`, increasing within its session's file. Sessions split from the shared log keep that log's numbers (increasing, not contiguous); across sessions, order by `created_at_unix_ms` |
 | `session_id` | uuid string |
 | `turn_id` | string or `null`; opened by a user `message_committed` (which itself carries the new id) and closed by the next `state_changed` to `WaitingForUser`/`WaitingForApproval`/`Cancelled`/`Failed`/`Terminated` (which still carries the id); events outside a turn are `null` |
 | `provider_id` | string or `null`, e.g. `"builtin.agent.rig"`, `"builtin.agent.mock"` |
@@ -99,11 +99,16 @@ Always parse tolerantly first, then slurp for anything that needs
 cross-record work:
 
 ```sh
-LOG=~/.local/share/horizon/agent-events.jsonl   # or $HORIZON_AGENT_EVENT_LOG
+SESSIONS=~/.local/share/horizon/sessions   # or $HORIZON_AGENT_SESSIONS_DIR
+LOG="$SESSIONS/$SID.jsonl"                 # one session; for every session,
+                                           # read "$SESSIONS"/*.jsonl instead
 
 # Sanity check: how many lines actually parse?
 jq -R 'fromjson? // empty' "$LOG" | jq -s 'length'
 ```
+
+The recipes below take `"$LOG"`; the ones that group across sessions work
+the same over `"$SESSIONS"/*.jsonl` (jq reads every file in turn).
 
 `-R` reads each line as a raw string; `fromjson?` tries to parse it and turns
 a failure into an error `jq` can catch; `// empty` drops the ones that fail.
@@ -227,31 +232,14 @@ attribution the query above gives you): `ls -la "$(dirname "$LOG")"/horizon-bash
 
 ## DuckDB projection
 
-**The projection is live now (as of the recall work), and the recipes below
-"work" while `horizon-agentd` is running — but may silently lag.**
-Previously the projection was only rebuilt at startup, then the store was
-closed; now the event-log writer thread opens the store once at startup
-and *keeps it open* for the rest of the process's life, live-appending
-every subsequent event so the projection stays current without a restart
-(see `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum). An
-external `duckdb -readonly` invocation against the same file is **not
-blocked** by that open (POSIX file locks are per-process, and DuckDB's own
-locking follows suit here) — but it reads DuckDB's own on-disk,
-last-checkpointed state, which can trail behind what the live writer
-connection has actually committed in memory. Treat a `duckdb -readonly`
-read taken while agentd is running as a **diagnostic snapshot that may be
-stale**, not as an authoritative live view. For anything time-sensitive (a
-session's most recent few events, "did this just happen"), **prefer the
-JSONL recipes earlier in this doc** — they read the same file the writer
-itself appends to, with no separate database engine's checkpoint timing in
-the way. For a guaranteed-current DuckDB read, stop agentd first (a plain
-kill/stop, or `horizon reload-agent-runtime`; agent sessions survive it,
-and since the 2026-07-30 terminald split it no longer ends the UI's terminal
-sessions either — that was verified true on 2026-07-25, before terminals
-moved to their own daemon), or
-query a copied `*.duckdb` file (DuckDB may
-also keep a sibling `*.duckdb.wal` — copy both together, or checkpoint
-first if you have a live connection available).
+**Nobody holds the projection open; it is as current as the last recall
+query.** The recall tools open it for writing, catch it up from the session
+logs, close it, and reopen it read-only for the query
+(`docs/agent-stdio-child-design.md`, "The DuckDB projection"). A
+`duckdb -readonly` open succeeds whenever no process is catching it up, and
+shows what the last catch-up projected. For anything time-sensitive,
+**prefer the JSONL recipes earlier in this doc**. The projection is written
+by DuckDB 2.0; a system `duckdb` CLI of an older version cannot open it.
 
 Requires the separate `duckdb` CLI (`command -v duckdb`) — it is not bundled
 with Horizon and must be installed independently. The projection lives at

@@ -234,10 +234,10 @@ mod tests {
 
     fn writer() -> (WriterHandle, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!(
-            "horizon-agent-judge-handle-{}.jsonl",
+            "horizon-agent-judge-handle-{}",
             uuid::Uuid::new_v4()
         ));
-        (WriterHandle::open(&path).0, path)
+        (WriterHandle::open(&path), path)
     }
 
     fn connection(api_key_env: &str) -> DecisionConfig {

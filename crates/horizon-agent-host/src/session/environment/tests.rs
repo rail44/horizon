@@ -2,7 +2,7 @@ use super::*;
 use crate::session::connection::Connection;
 use crate::session::state::SessionEntry;
 use crossbeam_channel::unbounded;
-use horizon_agent::persistence::event_log::{self, WriterHandle, WriterInit};
+use horizon_agent::persistence::event_log::{self, WriterHandle};
 
 fn git(root: &Path, args: &[&str]) {
     let mut command = std::process::Command::new("git");
@@ -43,8 +43,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
         git(&root, &["commit", "--allow-empty", "-qm", "initial"]);
         let root = root.canonicalize().unwrap();
         let log_path = dir.path().join("events.jsonl");
-        let (writer, ready) = WriterHandle::open(&log_path);
-        assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+        let writer = WriterHandle::open(&log_path);
         let state = crate::session::test_support::test_state();
         state.set_writer(Some(writer.clone()));
         let config = lock_unpoisoned(&state.agent_config).clone();
@@ -112,7 +111,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
         environment.activate("HEAD", &live_state, &mut tool_state, &results, &commands);
         let response = responses.try_recv().unwrap();
         // No extra flush: the provider acknowledgement must already imply durability.
-        let records = event_log::read(&log_path).unwrap().records;
+        let records = event_log::read_all(&log_path).unwrap().records;
         if persistence_available {
             let Command::EnvironmentPrepared {
                 workspace_root,

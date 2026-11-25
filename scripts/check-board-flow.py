@@ -38,14 +38,17 @@ def message_text(message):
     return "\n".join(part.get("text", "") for part in content or [] if isinstance(part, dict))
 
 
-def records(path):
-    if not path.exists():
-        return []
-    raw = path.read_bytes()
-    lines = raw.splitlines()
-    if raw and not raw.endswith(b"\n"):
-        lines.pop()
-    return [json.loads(line) for line in lines if line.strip()]
+def records(directory):
+    """Every session log's complete records in `directory`, by time."""
+    found = []
+    for path in sorted(directory.glob("*.jsonl")) if directory.exists() else []:
+        raw = path.read_bytes()
+        lines = raw.splitlines()
+        if raw and not raw.endswith(b"\n"):
+            lines.pop()
+        found.extend(json.loads(line) for line in lines if line.strip())
+    found.sort(key=lambda record: (record["created_at_unix_ms"], record["session_id"], record["sequence"]))
+    return found
 
 
 class Provider(http.server.BaseHTTPRequestHandler):
@@ -63,7 +66,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
         # turn ends, hiding a missing reply address on the next turn.
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            history = [r["event"] for r in records(self.root / "agent.jsonl")
+            history = [r["event"] for r in records(self.root / "sessions")
                        if r["session_id"] == self.task_session and isinstance(r["event"], dict)]
             answered = any(e.get("InputOutcome", {}).get("outcome") == {"Success": {"text": text}}
                            for e in history)
@@ -296,7 +299,7 @@ def main():
         "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
         "XDG_DATA_HOME": str(root / "data"), "XDG_CONFIG_HOME": str(root / "config-home"),
         "XDG_RUNTIME_DIR": str(root / "runtime"), "HORIZON_CONFIG": str(root / "config.toml"),
-        "HORIZON_AGENT_EVENT_LOG": str(root / "agent.jsonl"), "HORIZON_AGENT_STATE_DB": str(root / "agent.duckdb"),
+        "HORIZON_AGENT_SESSIONS_DIR": str(root / "sessions"), "HORIZON_AGENT_STATE_DB": str(root / "agent.duckdb"),
         "HORIZON_LOGD_SOCKET": str(root / "logd.sock"), "HORIZON_LOGD_BINARY": str(binaries / "horizon-logd"),
         "HORIZON_AGENTD_SOCKET": str(root / "agentd.sock"), "HORIZON_AGENTD_BINARY": str(binaries / "horizon-agentd"),
         "OPENAI_API_KEY": "local-fixture-only",
@@ -362,7 +365,7 @@ def main():
             return any(marker in message["text"] for message in item(id)["comments"])
 
         def activated(session):
-            return [r for r in records(root / "agent.jsonl") if r["session_id"] == session and "EnvironmentActivated" in r["event"]]
+            return [r for r in records(root / "sessions") if r["session_id"] == session and "EnvironmentActivated" in r["event"]]
 
         cli("add", MAIN, "--body", "Create alpha.txt containing final and evidence.txt. Consult before implementation; independent review and main integration are required for completion.", "--json")
         wait_for("automatic organizer consultation", lambda: has_message(1, CONSULTATION))
@@ -399,7 +402,7 @@ def main():
         assert latest_reviewer and latest_reviewer != task_session
         assert (repository / "alpha.txt").read_text() == "final\n"
         assert int(git("rev-list", "--count", f"{Provider.base}..main")) == 3
-        events = records(root / "agent.jsonl")
+        events = records(root / "sessions")
         requests = {}
         for entry in events:
             event = entry["event"]

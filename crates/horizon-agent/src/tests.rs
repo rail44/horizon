@@ -282,7 +282,7 @@ fn with_event_log_and_history_seeds_the_frame_and_events_up_front() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::new();
-    let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+    let writer = crate::persistence::event_log::WriterHandle::open(&path);
     let history = vec![
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
@@ -329,7 +329,7 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
     ));
     let session_id = SessionId::new();
     let provider_id = agent::ProviderId("builtin.agent.rig".to_string());
-    let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+    let writer = crate::persistence::event_log::WriterHandle::open(&path);
     let store = crate::live::LiveState::with_event_log(
         session_id,
         Some(provider_id.clone()),
@@ -354,7 +354,7 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
         .unwrap();
     writer.flush().expect("flush");
 
-    let report = crate::persistence::event_log::read(&path).expect("read log");
+    let report = crate::persistence::event_log::read_all(&path).expect("read log");
     assert_eq!(report.records.len(), 2);
     assert_eq!(report.records[0].session_id, session_id);
     assert_eq!(report.records[0].provider_id, Some(provider_id));
@@ -377,7 +377,7 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::new();
-    let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+    let writer = crate::persistence::event_log::WriterHandle::open(&path);
     let store = crate::live::LiveState::with_event_log(session_id, None, None, writer.clone());
 
     let frame = store
@@ -403,7 +403,7 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
     )));
 
     // ...but only the real event reaches the persisted log.
-    let report = crate::persistence::event_log::read(&path).expect("read log");
+    let report = crate::persistence::event_log::read_all(&path).expect("read log");
     assert_eq!(report.records.len(), 1);
     assert_eq!(report.records[0].event_kind, "message_committed");
 

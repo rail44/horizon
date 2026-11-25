@@ -176,7 +176,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         );
         for unset in [
             "OPENAI_API_KEY",
-            "HORIZON_AGENT_EVENT_LOG",
+            "HORIZON_AGENT_SESSIONS_DIR",
             "HORIZON_AGENT_STATE_DB",
             "HORIZON_SOCKET",
             "HORIZON_SESSION_ID",

@@ -725,7 +725,6 @@ mod tests {
     use horizon_agent::config::{NamedProviderConfig, ProvidersTable, Vendor};
     use horizon_agent::contract::Command;
     use horizon_agent::contract::ProviderId;
-    use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
     use horizon_agent::registry::ProviderRegistry;
     use horizon_agent::roles::RoleId;
     use std::sync::Arc;
@@ -895,9 +894,8 @@ mod tests {
                 }),
             },
             persistence: horizon_agent::config::AgentPersistenceConfig {
-                event_log_path: std::path::PathBuf::from(
-                    "/tmp/horizon-connection-test-events.jsonl",
-                ),
+                sessions_dir: std::path::PathBuf::from("/tmp/horizon-connection-test-sessions"),
+                legacy_event_log: None,
                 duckdb_path: None,
             },
             tools: horizon_agent::config::AgentToolsConfig::default(),
@@ -906,7 +904,6 @@ mod tests {
             ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             None,
-            SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
             Vec::new(),

@@ -3,7 +3,7 @@
 /// a projection stamped with another version (or one whose stamp cannot be
 /// read at all) is rebuilt from the event log, and the rebuild drops and
 /// recreates every table ([`DROP_ALL_AGENT_STATE_SQL`]).
-pub(super) const PROJECTION_SCHEMA_VERSION: u32 = 3;
+pub(super) const PROJECTION_SCHEMA_VERSION: u32 = 4;
 
 pub(super) const INITIALIZE_SCHEMA_SQL: &str = "
 -- Invalidates this derived cache when event representation or this
@@ -15,13 +15,13 @@ CREATE TABLE IF NOT EXISTS agent_projection_format (
     projection_schema_version INTEGER NOT NULL
 );
 
--- The last event log record this projection ingested: the byte offset just
--- past that record's JSONL line, and the record's identity. Committed in the
--- same transaction as the records it covers, so it never runs ahead of the
--- projected rows. Startup verifies only that one line and then reads the log
--- from `log_offset` on.
-CREATE TABLE IF NOT EXISTS agent_log_cursor (
-    singleton BOOLEAN PRIMARY KEY CHECK (singleton),
+-- For each session's log file, the last record this projection ingested
+-- from it: the byte offset just past that record's line, and the record's
+-- identity. Committed in the same transaction as the records it covers, so
+-- it never runs ahead of the projected rows. A catch-up verifies only that
+-- one line and then reads the file from `log_offset` on.
+CREATE TABLE IF NOT EXISTS agent_log_cursors (
+    session_id TEXT PRIMARY KEY,
     log_offset BIGINT NOT NULL,
     sequence BIGINT NOT NULL,
     event_id TEXT NOT NULL
@@ -154,6 +154,7 @@ pub(super) const PROJECTION_TABLES: &[&str] = &[
 pub(super) const DROP_ALL_AGENT_STATE_SQL: &str = "
 DROP TABLE IF EXISTS agent_projection_format;
 DROP TABLE IF EXISTS agent_log_cursor;
+DROP TABLE IF EXISTS agent_log_cursors;
 DROP TABLE IF EXISTS agent_messages;
 DROP TABLE IF EXISTS agent_tool_calls;
 DROP TABLE IF EXISTS agent_tool_results;

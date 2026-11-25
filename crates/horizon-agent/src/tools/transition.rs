@@ -147,13 +147,11 @@ fn apply(live: &LiveState, events: &[Event]) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::contract::{OccurrenceId, SessionId, ToolCallId};
-    use crate::persistence::event_log::{WriterHandle, WriterInit};
 
     #[test]
     fn a_failed_start_cannot_run_a_synchronous_approved_effect_or_publish_a_result() {
-        let dir = tempfile::tempdir().unwrap();
-        let (writer, ready) = WriterHandle::open(dir.path());
-        assert!(matches!(ready.recv().unwrap(), WriterInit::Failed(_)));
+        let writer =
+            crate::persistence::event_log::WriterHandle::failed("the log cannot be written");
         let request = ToolCallRequest {
             call_id: ToolCallId("blocked".into()),
             occurrence_id: OccurrenceId::new(),

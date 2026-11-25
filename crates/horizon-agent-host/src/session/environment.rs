@@ -80,7 +80,7 @@ impl SessionEnvironment<'_> {
         // still being rebuilt can recall as soon as the rebuild lands.
         let recall = RecallContext {
             session_id: Some(session_id),
-            store: state.duckdb_cell(),
+            projection: state.projection(),
         };
         // Use the same resolved root as the provider's prompt-side skill
         // listing. Otherwise an isolated session can be told that a repository

@@ -8,7 +8,6 @@ use horizon_agent::contract::Event;
 use horizon_agent::contract::{ApprovalKind, ApprovalRequest, ToolCallId};
 #[cfg(test)]
 use horizon_agent::hosting::AgentWireEvent;
-use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
 #[cfg(test)]
 use horizon_agent::tools::ApprovalCandidate;
@@ -40,7 +39,8 @@ pub fn test_config() -> AgentConfig {
         },
         rig,
         persistence: AgentPersistenceConfig {
-            event_log_path: Default::default(),
+            sessions_dir: Default::default(),
+            legacy_event_log: None,
             duckdb_path: None,
         },
         tools: Default::default(),
@@ -55,7 +55,6 @@ pub fn state_from_config(
         ProviderRegistry::builtin_with_config(config.clone()),
         config,
         None,
-        SharedDuckdbStore::unavailable(),
         None,
         Vec::new(),
         trusted,
@@ -158,7 +157,7 @@ fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("HORIZON_AGENT_CLEARING_THRESHOLD_PCT", "1") };
     // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HORIZON_AGENT_EVENT_LOG", "host-events.jsonl") };
+    unsafe { std::env::set_var("HORIZON_AGENT_SESSIONS_DIR", "host-sessions") };
     // FIXME: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("HORIZON_AGENT_STATE_DB", "host-state.duckdb") };
     for state in [
@@ -173,7 +172,7 @@ fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
             config.rig.clearing_threshold_pct,
             horizon_agent::config::RigAgentConfig::default().clearing_threshold_pct
         );
-        assert!(config.persistence.event_log_path.as_os_str().is_empty());
+        assert!(config.persistence.sessions_dir.as_os_str().is_empty());
         assert_eq!(config.persistence.duckdb_path, None);
         assert!(!config.providers.entries[0].api_key_present);
     }

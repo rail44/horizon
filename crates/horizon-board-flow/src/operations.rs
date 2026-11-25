@@ -359,8 +359,8 @@ fn session_records(
 #[cfg(test)]
 pub(super) fn records(state: &Arc<AgentdState>) -> Result<Vec<event_log::Record>, String> {
     flush(state)?;
-    let path = state.event_log_path();
-    event_log::read(path)
+    let path = state.sessions_dir();
+    event_log::read_all(&path)
         .map(|report| report.records)
         .map_err(|e| e.to_string())
 }
@@ -455,7 +455,7 @@ mod review_tests {
     #[test]
     fn organizer_open_reuses_and_resumes_without_submitting_work() {
         use horizon_agent::contract::{Command, Event, SessionState};
-        use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
+        use horizon_agent::persistence::event_log::WriterHandle;
         let repository = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-q", "-b", "main"]);
         let state = horizon_agent_host::session::test_support::state_with_packages(
@@ -464,9 +464,8 @@ mod review_tests {
             crate::roles::add(horizon_agent::packages::Packages::builder()).build(),
         );
         let path = repository.path().join("agent-events.jsonl");
-        state.set_event_log_path(path.clone());
-        let (writer, ready) = WriterHandle::open(&path);
-        assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+        state.set_sessions_dir(path.clone());
+        let writer = WriterHandle::open(&path);
         state.set_writer(Some(writer));
         let flow = crate::BoardFlow::new(None);
         let ensure = |root: std::path::PathBuf| {

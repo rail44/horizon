@@ -13,7 +13,7 @@ use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::hosting::{HostToolRequest, HostToolResponse};
 use horizon_agent::persistence::event_log::WriterHandle;
-use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
+use horizon_agent::persistence::projection::duckdb::Projection;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
 use tokio::sync::Notify;
@@ -93,14 +93,9 @@ pub struct AgentdState {
     /// and `initialize` (`crate::hub`), which forwards this once per
     /// connection as a `_horizon/session_event` `SkippedLines` notice.
     skipped_lines_summary: Mutex<Option<String>>,
-    /// The shared slot for the live DuckDB projection (see
-    /// [`SharedDuckdbStore`]'s doc comment) -- the *same* instance `main`
-    /// also hands to the rig provider, so every consumer observes the
-    /// event-log writer thread's one decision. A spawned session's
-    /// `RecallContext` gets a clone ([`Self::duckdb_cell`]) and reads it per
-    /// query; nothing waits on it, so a session starts even while the
-    /// projection is still being rebuilt.
-    duckdb_cell: SharedDuckdbStore,
+    /// The lock on the session logs' directory this process holds while it
+    /// hosts them (`crate::startup`).
+    host_lock: Mutex<Option<std::fs::File>>,
     /// Horizon's single config file's host-resolved path (`main`'s
     /// `horizon_config::resolved_path()` call), which a provider reload
     /// reads again. `None` means the same thing it means for
@@ -145,7 +140,6 @@ impl AgentdState {
         providers: ProviderRegistry,
         agent_config: AgentConfig,
         writer: Option<WriterHandle>,
-        duckdb_cell: SharedDuckdbStore,
         config_path: Option<PathBuf>,
         project_grants: Vec<horizon_config::ProjectGrant>,
         trusted_projects: Vec<std::path::PathBuf>,
@@ -167,7 +161,7 @@ impl AgentdState {
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
             skipped_lines_summary: Mutex::new(None),
-            duckdb_cell,
+            host_lock: Mutex::new(None),
             config_path,
             project_grants,
             trusted_projects,
@@ -225,20 +219,34 @@ impl AgentdState {
             .map_err(|error| error.to_string())
     }
 
-    /// Where the event log is written.
-    pub fn event_log_path(&self) -> PathBuf {
+    /// The directory of the session logs.
+    pub fn sessions_dir(&self) -> PathBuf {
         lock_unpoisoned(&self.agent_config)
             .persistence
-            .event_log_path
+            .sessions_dir
             .clone()
     }
 
-    /// Writes the event log to `path` from now on (a test's own log).
+    /// Writes the session logs to `dir` from now on (a test's own).
     #[cfg(any(test, feature = "test-support"))]
-    pub fn set_event_log_path(&self, path: PathBuf) {
-        lock_unpoisoned(&self.agent_config)
-            .persistence
-            .event_log_path = path;
+    pub fn set_sessions_dir(&self, dir: PathBuf) {
+        lock_unpoisoned(&self.agent_config).persistence.sessions_dir = dir;
+    }
+
+    /// The projection of the session logs the recall tools query, when
+    /// one is configured.
+    pub(crate) fn projection(&self) -> Option<Projection> {
+        let config = lock_unpoisoned(&self.agent_config);
+        let persistence = &config.persistence;
+        persistence
+            .duckdb_path
+            .as_ref()
+            .map(|db| Projection::new(&persistence.sessions_dir, db))
+    }
+
+    /// Keeps `lock` for as long as this process hosts the sessions.
+    pub(crate) fn hold_host_lock(&self, lock: std::fs::File) {
+        *lock_unpoisoned(&self.host_lock) = Some(lock);
     }
 
     pub fn writer(&self) -> Option<WriterHandle> {
@@ -268,12 +276,6 @@ impl AgentdState {
 
     pub fn set_writer(&self, writer: Option<WriterHandle>) {
         *self.writer.lock().unwrap() = writer;
-    }
-
-    /// A clone of the shared projection slot, for a session's
-    /// `RecallContext` to read per query.
-    pub(crate) fn duckdb_cell(&self) -> SharedDuckdbStore {
-        self.duckdb_cell.clone()
     }
 
     /// Called once from [`crate::spawn_resume_task`], alongside

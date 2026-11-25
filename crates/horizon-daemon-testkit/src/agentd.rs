@@ -28,7 +28,7 @@ use crate::process::{scratch_file, scratch_socket};
 #[derive(Clone, Debug)]
 pub struct AgentdPaths {
     pub socket_path: PathBuf,
-    pub event_log_path: PathBuf,
+    pub sessions_dir: PathBuf,
     pub state_db_path: PathBuf,
     pub data_home: PathBuf,
 }
@@ -40,7 +40,7 @@ impl AgentdPaths {
     pub fn scratch(tag: &str) -> Self {
         Self {
             socket_path: scratch_socket(tag),
-            event_log_path: scratch_file(&format!("{tag}-events"), "jsonl"),
+            sessions_dir: scratch_file(&format!("{tag}-sessions"), "dir"),
             state_db_path: scratch_file(&format!("{tag}-state"), "duckdb"),
             data_home: scratch_file(&format!("{tag}-data"), "dir"),
         }
@@ -50,10 +50,10 @@ impl AgentdPaths {
     /// projection -- the shape the "kill it and bring a new one up on the
     /// same paths" tests need, where the log must survive but the
     /// projection is rebuilt from it anyway.
-    pub fn scratch_at(tag: &str, socket_path: PathBuf, event_log_path: PathBuf) -> Self {
+    pub fn scratch_at(tag: &str, socket_path: PathBuf, sessions_dir: PathBuf) -> Self {
         Self {
             socket_path,
-            event_log_path,
+            sessions_dir,
             state_db_path: scratch_file(&format!("{tag}-state"), "duckdb"),
             data_home: scratch_file(&format!("{tag}-data"), "dir"),
         }
@@ -75,7 +75,7 @@ impl AgentdPaths {
 ///   (`spawn_resume_task`/`open_persistence`) would read/rebuild from a real
 ///   developer's -- potentially large, potentially concurrently locked --
 ///   state.
-/// * `HORIZON_AGENT_EVENT_LOG` at a fresh empty path, for that same reason
+/// * `HORIZON_AGENT_SESSIONS_DIR` at a fresh empty path, for that same reason
 ///   and so runs are fast and deterministic.
 /// * `HORIZON_AGENT_STATE_DB` likewise. There is no "unset = disabled" state
 ///   for the DuckDB projection any more (`resolve_state_db_path`'s doc
@@ -93,7 +93,7 @@ impl AgentdPaths {
 ///   the running user's git configuration.
 ///
 /// The env var *names* are agentd's own, resolved inside `horizon-agent`'s
-/// `config` module (`EVENT_LOG_PATH_VAR`, `STATE_DB_PATH_VAR`) and
+/// `config` module (`SESSIONS_DIR_VAR`, `STATE_DB_PATH_VAR`) and
 /// `horizon-config`'s `CONFIG_PATH_VAR`; they are spelled out here because
 /// those constants are crate-private. If one of them changes -- or agentd
 /// grows another environment input that reaches outside the test's scratch
@@ -106,7 +106,7 @@ pub fn agentd_hermetic_command(binary: &Path, paths: &AgentdPaths) -> Command {
         .arg("--socket")
         .arg(&paths.socket_path)
         .env("HORIZON_CONFIG", &missing_config_path)
-        .env("HORIZON_AGENT_EVENT_LOG", &paths.event_log_path)
+        .env("HORIZON_AGENT_SESSIONS_DIR", &paths.sessions_dir)
         .env("HORIZON_AGENT_STATE_DB", &paths.state_db_path)
         .env("XDG_DATA_HOME", &paths.data_home)
         .env(
@@ -200,7 +200,7 @@ impl AgentdSpawn {
         AgentdProcess {
             child,
             socket_path: self.paths.socket_path.clone(),
-            event_log_path: self.paths.event_log_path.clone(),
+            sessions_dir: self.paths.sessions_dir.clone(),
             state_db_path: self.paths.state_db_path.clone(),
             spawn: self,
             stderr_lines,
@@ -214,7 +214,7 @@ impl AgentdSpawn {
 pub struct AgentdProcess {
     pub child: Child,
     pub socket_path: PathBuf,
-    pub event_log_path: PathBuf,
+    pub sessions_dir: PathBuf,
     pub state_db_path: PathBuf,
     /// The recipe that produced this process, kept for
     /// [`Self::respawn_at_same_paths`].
@@ -287,7 +287,7 @@ impl Drop for AgentdProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket_path);
-        let _ = std::fs::remove_file(&self.event_log_path);
+        let _ = std::fs::remove_file(&self.sessions_dir);
         let _ = std::fs::remove_file(&self.state_db_path);
         let _ = std::fs::remove_dir_all(&self.spawn.paths.data_home);
     }

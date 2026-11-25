@@ -187,7 +187,7 @@ fn collect_for_project<T: Clone + PartialEq>(
 
 /// Expands a leading `~`/`~/` against `home` and requires the result to be
 /// absolute -- the same rule the persistence-path overrides
-/// (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) already apply. A
+/// (`HORIZON_AGENT_SESSIONS_DIR`/`HORIZON_AGENT_STATE_DB`) already apply. A
 /// `~user` form is deliberately *not* supported: it would need passwd
 /// lookups to mean anything, and this file only ever describes the account
 /// Horizon runs as.

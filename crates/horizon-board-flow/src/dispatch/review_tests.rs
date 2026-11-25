@@ -1,6 +1,6 @@
 use super::*;
 use horizon_agent::contract::{Command, Event, InputResult, SessionInputOutcome, SessionWorktree};
-use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
+use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent_host::outbox::Outbox;
 use horizon_agent_host::outbox::log::Pending;
 use horizon_agent_host::session::test_support::record;
@@ -60,9 +60,8 @@ async fn replayed_review_result_preserves_board_destination_and_receipt() {
     let task_session = SessionId::new();
     let reviewer = SessionId::new();
     let state = horizon_agent_host::session::test_support::state_with_rig_config(false, "test");
-    state.set_event_log_path(log.clone());
-    let (writer, ready) = WriterHandle::open(&log);
-    assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+    state.set_sessions_dir(log.clone());
+    let writer = WriterHandle::open(&log);
     state.set_writer(Some(writer.clone()));
     let receiver = state.install_test_session(task_session);
     for session in [task_session, reviewer] {

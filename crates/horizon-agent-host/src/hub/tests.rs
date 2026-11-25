@@ -1,6 +1,5 @@
 use super::*;
 use agent_client_protocol::ConnectionTo;
-use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
 
 /// Serves `state` over an in-process pipe and hands back a client
@@ -157,7 +156,6 @@ async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
         providers,
         agent_config,
         None,
-        SharedDuckdbStore::unavailable(),
         Some(config.clone()),
         Vec::new(),
         Vec::new(),

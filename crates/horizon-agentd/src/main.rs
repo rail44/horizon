@@ -35,7 +35,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent_host::DAEMON_NAME;
 use horizon_agent_host::extension::Extensions;
@@ -60,13 +59,6 @@ const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
 const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
 
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
-/// file's path, the full DuckDB rebuild waits until that file is there
-/// (the writer's `before_rebuild`), so a test can
-/// prove the rebuild never sits on the readiness path `session/list` and
-/// `session/new` block on. Never set in production.
-const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
-
-/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
 /// file's path, the mock provider's slow turns wait until that file is
 /// there once their first word is out
 /// (`ProviderRegistry::hold_mock_streams`), so a test can reattach while a
@@ -79,7 +71,7 @@ const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENTD_TEST_MOCK_STREAM_GATE";
 const TEST_NO_CHECKPOINTS_VAR: &str = "HORIZON_AGENTD_TEST_NO_CHECKPOINTS";
 
 /// The file the variable `var` names, when it is set: a test's gate
-/// ([`TEST_RESUME_GATE_VAR`], [`TEST_DUCKDB_REBUILD_GATE_VAR`]). The
+/// ([`TEST_RESUME_GATE_VAR`]). The
 /// variable is how a test that spawns this daemon reaches it; inside, the
 /// gate is an argument. A build without test fixtures never reads it.
 fn test_gate(var: &str) -> Option<PathBuf> {
@@ -152,12 +144,6 @@ async fn main() -> anyhow::Result<()> {
     // the socket path, and it happens before the event log is even opened.
     let listener = daemon::bind_listener(&socket_path, DAEMON_NAME).await?;
 
-    // The shared slot for the live DuckDB projection -- see
-    // `SharedDuckdbStore`'s doc comment. Created pending here (before
-    // the event log's writer thread, and therefore any real DuckDB store,
-    // exists) and handed to `AgentdState` (the recall tools' context);
-    // populated later, once, by `spawn_resume_task`'s propagator.
-    let duckdb_cell = SharedDuckdbStore::pending();
     let mut providers = ProviderRegistry::builtin_with_config(agent_config.clone());
     if let Some(gate) = test_gate(TEST_MOCK_STREAM_GATE_VAR) {
         providers.hold_mock_streams(Arc::new(move || wait_for_gate(&gate)));
@@ -169,7 +155,6 @@ async fn main() -> anyhow::Result<()> {
             providers,
             agent_config.clone(),
             None,
-            duckdb_cell.clone(),
             config_path,
             horizon_config::project_grants(raw_config),
             horizon_config::trusted_projects(raw_config),
@@ -181,12 +166,9 @@ async fn main() -> anyhow::Result<()> {
     spawn_resume_task(
         state.clone(),
         agent_config,
-        duckdb_cell,
         StartupHooks {
             before_resume: test_gate(TEST_RESUME_GATE_VAR)
                 .map(|gate| Box::new(move || wait_for_gate(&gate)) as Box<dyn FnOnce() + Send>),
-            before_rebuild: test_gate(TEST_DUCKDB_REBUILD_GATE_VAR)
-                .map(|gate| Arc::new(move || wait_for_gate(&gate)) as Arc<dyn Fn() + Send + Sync>),
             refused: Box::new(|error| {
                 eprintln!("horizon-agentd: startup refused: {error:#}");
                 std::process::exit(1);
@@ -241,17 +223,17 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
+    use horizon_agent::persistence::event_log::{Record, WriterHandle};
     use std::time::Duration;
 
-    /// How long the writer thread's startup read is held open below. The
+    /// How long the writer thread holds its first write below. The
     /// test's own correctness does not depend on this number: with the
     /// flush in place, [`run`]'s SIGTERM arm blocks on a real writer
     /// barrier, so a slower machine only means a longer wait. It is what
     /// makes the *absence* of the flush observable -- without it, `run`
     /// returns while the writer thread is still inside this sleep and the
     /// log file is still empty when the assertion below reads it.
-    const GATED_STARTUP_READ: Duration = Duration::from_millis(750);
+    const GATED_FIRST_WRITE: Duration = Duration::from_millis(750);
 
     /// Every skill a package adds parses: composing the registry panics on
     /// one that does not, which would stop every session at startup.
@@ -288,19 +270,16 @@ mod tests {
     /// landed, records that had already been forwarded to a client over the
     /// wire could still die with the process.
     ///
-    /// The writer's startup read is deliberately held open (see
-    /// [`GATED_STARTUP_READ`]), which is what pins the three appends below
+    /// The writer's first write is deliberately held (see
+    /// [`GATED_FIRST_WRITE`]), which is what pins the three appends below
     /// in the channel -- unwritten -- at the moment SIGTERM arrives.
     #[tokio::test]
     async fn sigterm_flushes_the_event_log_before_exiting() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let log_path = dir.path().join("events.jsonl");
+        let sessions = dir.path().join("sessions");
         let socket_path = dir.path().join("agentd.sock");
 
-        let (writer, init_rx) = WriterHandle::open_with_reader(&log_path, |path| {
-            std::thread::sleep(GATED_STARTUP_READ);
-            horizon_agent::persistence::event_log::read(path)
-        });
+        let writer = WriterHandle::open_after(&sessions, || std::thread::sleep(GATED_FIRST_WRITE));
         let session_id = horizon_agent::contract::SessionId::new();
         let appended = 3;
         for sequence in 0..appended {
@@ -314,7 +293,6 @@ mod tests {
             ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             Some(writer),
-            SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
             Vec::new(),
@@ -347,11 +325,8 @@ mod tests {
         run(listener, &socket_path, state).await.expect("run");
         raiser.abort();
 
-        match init_rx.recv().expect("writer init outcome") {
-            WriterInit::Ready(_) => {}
-            WriterInit::Failed(error) => panic!("unexpected startup failure: {error}"),
-        }
-        let report = horizon_agent::persistence::event_log::read(&log_path).expect("read log");
+        let report =
+            horizon_agent::persistence::event_log::read_all(&sessions).expect("read the logs");
         assert_eq!(
             report.records.len(),
             appended as usize,

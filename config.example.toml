@@ -457,9 +457,10 @@ cyan = "#56b6c2"
 # any more (the whole section retired 2026-07-18), but the event log's and
 # DuckDB projection's paths are still relocatable via env var:
 #
-#   HORIZON_AGENT_EVENT_LOG   overrides the agent event log (JSONL) path
-#                             (default: $XDG_DATA_HOME/horizon/agent-events.jsonl,
-#                             falling back to ~/.local/share/horizon/agent-events.jsonl)
+#   HORIZON_AGENT_SESSIONS_DIR overrides the directory of the agent's session
+#                             logs, one JSONL file per session
+#                             (default: $XDG_DATA_HOME/horizon/sessions,
+#                             falling back to ~/.local/share/horizon/sessions)
 #   HORIZON_AGENT_STATE_DB    overrides the DuckDB projection database path
 #                             (default: $XDG_DATA_HOME/horizon/agent-state.duckdb,
 #                             same fallback as above)

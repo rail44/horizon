@@ -51,14 +51,12 @@ and then the sessions diff is the only fallback. `horizon sessions --json`
 lists sessions (id, role, attach state); `horizon state` dumps the
 workspace snapshot.
 
-**Observe live.** The agent's event stream persists to
-`~/.local/share/horizon/agent-events.jsonl` (shared across sessions —
-always filter by `session_id`). Tail it:
+**Observe live.** Each session's event stream persists to its own log,
+`~/.local/share/horizon/sessions/<session id>.jsonl`. Tail it:
 
 ```sh
-tail -f ~/.local/share/horizon/agent-events.jsonl \
-  | jq -c --arg sid "$SID" 'select(.session_id == $sid)
-      | {seq: .sequence, kind: .event_kind, ev: .event}'
+tail -f ~/.local/share/horizon/sessions/"$SID".jsonl \
+  | jq -c '{seq: .sequence, kind: .event_kind, ev: .event}'
 ```
 
 Key kinds: `state_changed` (`WaitingForApproval` means it's blocked on

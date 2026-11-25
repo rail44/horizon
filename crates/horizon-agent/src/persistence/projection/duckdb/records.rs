@@ -8,6 +8,7 @@ use crate::contract::{Event, ProviderId};
 use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
 use crate::frame::AgentFrame;
+#[cfg(test)]
 use crate::roles::RoleId;
 
 // `Store::sessions` (see `query.rs`) is only ever called from this crate's
@@ -45,18 +46,6 @@ pub(crate) struct AppendEvent {
     pub role_id: Option<RoleId>,
     pub event: Event,
     pub provider_payload: Option<Value>,
-}
-
-/// One session's resume pre-filter, answered by the projection instead of
-/// folding its whole history (see `Store::session_liveness`).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionLiveness {
-    pub session_id: SessionId,
-    /// The session's last non-null role.
-    pub role_id: Option<RoleId>,
-    /// The latest state-bearing event is `StateChanged(Terminated)` or
-    /// `Exited`.
-    pub dead: bool,
 }
 
 #[cfg(test)]

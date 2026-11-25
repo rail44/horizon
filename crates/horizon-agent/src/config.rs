@@ -30,8 +30,8 @@
 //! way `max_tokens` used to), so the provider's own default applies --
 //! there is no Horizon-side constant standing in for the retired
 //! `[provider] temperature` key, and the same audit found no vendor
-//! guidance strong enough to justify adding one. `event_log_path`/
-//! `state_db_path` similarly lost their file keys; `HORIZON_AGENT_EVENT_LOG`/
+//! guidance strong enough to justify adding one. `sessions_dir`/
+//! `state_db_path` similarly lost their file keys; `HORIZON_AGENT_SESSIONS_DIR`/
 //! `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default remain the
 //! only override path.
 
@@ -64,22 +64,22 @@ use std::path::PathBuf;
 pub(crate) const OPENAI_API_KEY_VAR: &str = "OPENAI_API_KEY";
 pub(crate) const EXA_API_KEY_VAR: &str = "EXA_API_KEY";
 
-/// Overrides the path of the append-only agent event log (JSONL). Falls
-/// back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (see
-/// [`default_event_log_path_from`]). A leading `~/` is expanded against
+/// Overrides the directory of the agent's session logs (one JSONL file per
+/// session). Falls back to `$XDG_DATA_HOME/horizon/sessions` (see
+/// [`default_sessions_dir_from`]). A leading `~/` is expanded against
 /// `$HOME`.
-const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
+const SESSIONS_DIR_VAR: &str = "HORIZON_AGENT_SESSIONS_DIR";
 
 /// Overrides the path of the DuckDB projection database used to replay
 /// per-session rig history. The projection always runs now (see
 /// [`default_state_db_path_from`]) -- there is no "unset = disabled"
 /// state to opt into; setting this just relocates the file. A leading
-/// `~/` is expanded against `$HOME`, same as `event_log_path` above.
+/// `~/` is expanded against `$HOME`, same as `sessions_dir` above.
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 
 /// Overrides the Tier 1 history-clearing trigger percentage (see
 /// [`DEFAULT_CLEARING_TRIGGER_PCT`]), clamped to `1..=100`. Env-only, the
-/// same no-file-key treatment `HORIZON_AGENT_EVENT_LOG`/
+/// same no-file-key treatment `HORIZON_AGENT_SESSIONS_DIR`/
 /// `HORIZON_AGENT_STATE_DB` get: it exists to force clearing to fire in a
 /// measurement run (`docs/agent-compaction-design.md`'s "計測スイッチ"),
 /// not as a user-facing knob. A value that isn't a number in range is
@@ -87,15 +87,15 @@ const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 const CLEARING_THRESHOLD_PCT_VAR: &str = "HORIZON_AGENT_CLEARING_THRESHOLD_PCT";
 
 /// `$HOME`, read once per resolution call to expand a leading `~/` in a
-/// path-typed env value (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`)
+/// path-typed env value (`HORIZON_AGENT_SESSIONS_DIR`/`HORIZON_AGENT_STATE_DB`)
 /// and, absent `$XDG_DATA_HOME`, to build the event log's and DuckDB
-/// projection's default paths — see [`default_event_log_path_from`] and
+/// projection's default paths — see [`default_sessions_dir_from`] and
 /// [`default_state_db_path_from`].
 const HOME_VAR: &str = "HOME";
 
 /// XDG base-directory spec's data-home var, used for both the event log's
 /// and the DuckDB projection's built-in default paths — see
-/// [`default_event_log_path_from`] and [`default_state_db_path_from`].
+/// [`default_sessions_dir_from`] and [`default_state_db_path_from`].
 const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 
 /// Names the data home for Horizon's own data alone, ahead of
@@ -118,8 +118,8 @@ fn named_data_home() -> Option<String> {
 // config file); the 2026-07-18 config-narrowing wave retired that whole
 // section (see the module doc), so every one of them is now a fixed
 // built-in constant with no override path at all except the two explicitly
-// noted otherwise (`event_log_path`/`state_db_path`, still env-overridable
-// via `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) — see
+// noted otherwise (`sessions_dir`/`state_db_path`, still env-overridable
+// via `HORIZON_AGENT_SESSIONS_DIR`/`HORIZON_AGENT_STATE_DB`) — see
 // `config.example.toml` at the repo root for the user-facing summary of
 // what's still configurable at all.
 //
@@ -643,22 +643,33 @@ pub(crate) fn resolve_clearing_threshold_pct(env_value: Option<String>) -> u32 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentPersistenceConfig {
-    pub event_log_path: PathBuf,
+    /// The directory of the session logs, one file per session.
+    pub sessions_dir: PathBuf,
+    /// The single log every session shared before the logs were split, at
+    /// the default place; `None` when the sessions directory is named
+    /// explicitly. The host splits it into `sessions_dir` once.
+    pub legacy_event_log: Option<PathBuf>,
     pub duckdb_path: Option<PathBuf>,
 }
 
 impl AgentPersistenceConfig {
-    /// No file input any more (see the module doc): `event_log_path`/
+    /// No file input any more (see the module doc): `sessions_dir`/
     /// `state_db_path` lost their `[agent]` file keys in the 2026-07-18
-    /// config-narrowing wave, leaving `HORIZON_AGENT_EVENT_LOG`/
+    /// config-narrowing wave, leaving `HORIZON_AGENT_SESSIONS_DIR`/
     /// `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default as the
     /// only override path.
     pub(crate) fn from_env() -> Self {
         let home = std::env::var(HOME_VAR).ok();
         let xdg_data_home = named_data_home();
+        let sessions_dir_value = std::env::var(SESSIONS_DIR_VAR).ok();
         Self {
-            event_log_path: resolve_event_log_path(
-                std::env::var(EVENT_LOG_PATH_VAR).ok(),
+            legacy_event_log: sessions_dir_value.is_none().then(|| {
+                agent_data_home_from(xdg_data_home.clone(), home.clone())
+                    .join("horizon")
+                    .join("agent-events.jsonl")
+            }),
+            sessions_dir: resolve_sessions_dir(
+                sessions_dir_value,
                 xdg_data_home.clone(),
                 home.clone(),
             ),
@@ -671,27 +682,27 @@ impl AgentPersistenceConfig {
     }
 }
 
-/// Pure precedence resolution for the event log path: `HORIZON_AGENT_EVENT_LOG`
-/// wins, then [`default_event_log_path_from`]'s XDG-based built-in default.
+/// Pure precedence resolution for the event log path: `HORIZON_AGENT_SESSIONS_DIR`
+/// wins, then [`default_sessions_dir_from`]'s XDG-based built-in default.
 /// An env value gets a leading `~/` expanded against `home` (see
 /// [`expand_tilde`]). Kept free of I/O (the env read happens at the call
 /// site) for the same testability reason as
 /// [`resolve_clearing_threshold_pct`].
-pub(crate) fn resolve_event_log_path(
+pub(crate) fn resolve_sessions_dir(
     env_value: Option<String>,
     xdg_data_home: Option<String>,
     home: Option<String>,
 ) -> PathBuf {
     env_value
         .map(|value| expand_tilde(&value, home.as_deref()))
-        .unwrap_or_else(|| default_event_log_path_from(xdg_data_home, home))
+        .unwrap_or_else(|| default_sessions_dir_from(xdg_data_home, home))
 }
 
 /// Resolves the `horizon` data directory shared by the event log's and the
 /// DuckDB projection's built-in defaults: `$XDG_DATA_HOME`, falling back
 /// to `~/.local/share` when `XDG_DATA_HOME` is unset or empty, and further
 /// to the OS temp dir if even `$HOME` is unset. Factored out of
-/// [`default_event_log_path_from`] so [`default_state_db_path_from`]
+/// [`default_sessions_dir_from`] so [`default_state_db_path_from`]
 /// mirrors its exact resolution shape instead of duplicating it.
 pub(crate) fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
     let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
@@ -713,9 +724,9 @@ pub(crate) fn agent_data_home() -> PathBuf {
     agent_data_home_from(named_data_home(), std::env::var(HOME_VAR).ok())
 }
 
-/// The event log's built-in default when `HORIZON_AGENT_EVENT_LOG` doesn't
-/// set a path: `$XDG_DATA_HOME/horizon/agent-events.jsonl`, falling back
-/// to `~/.local/share/horizon/agent-events.jsonl` when `XDG_DATA_HOME` is
+/// The session logs' built-in default when `HORIZON_AGENT_SESSIONS_DIR`
+/// doesn't set a path: `$XDG_DATA_HOME/horizon/sessions`, falling back
+/// to `~/.local/share/horizon/sessions` when `XDG_DATA_HOME` is
 /// unset or empty, and further to the OS temp dir (namespaced under a
 /// `horizon` subdirectory, so it doesn't collide with unrelated temp
 /// files) if even `$HOME` is unset. Durable across reboots in the common
@@ -724,18 +735,18 @@ pub(crate) fn agent_data_home() -> PathBuf {
 /// `persistence`). The writer (`persistence::event_log::writer`) already
 /// creates the path's parent directories on first write, so this can name
 /// a path that doesn't exist yet.
-pub(crate) fn default_event_log_path_from(
+pub(crate) fn default_sessions_dir_from(
     xdg_data_home: Option<String>,
     home: Option<String>,
 ) -> PathBuf {
     agent_data_home_from(xdg_data_home, home)
         .join("horizon")
-        .join("agent-events.jsonl")
+        .join("sessions")
 }
 
 /// The DuckDB projection's built-in default when `HORIZON_AGENT_STATE_DB`
 /// doesn't set a path: `$XDG_DATA_HOME/horizon/agent-state.duckdb`,
-/// mirroring [`default_event_log_path_from`]'s exact fallback chain (same
+/// mirroring [`default_sessions_dir_from`]'s exact fallback chain (same
 /// `$XDG_DATA_HOME` > `~/.local/share` > OS temp dir chain via
 /// [`agent_data_home_from`]), just under a different filename. The
 /// projection has no "unset = disabled" state any more: it is a
@@ -753,10 +764,10 @@ pub(crate) fn default_state_db_path_from(
         .join("agent-state.duckdb")
 }
 
-/// Same precedence as [`resolve_event_log_path`], for the DuckDB state
+/// Same precedence as [`resolve_sessions_dir`], for the DuckDB state
 /// path: `HORIZON_AGENT_STATE_DB` wins, then [`default_state_db_path_from`]'s
 /// XDG-based built-in default. Same tilde-expansion treatment as
-/// `resolve_event_log_path`. Keeps returning `Option<PathBuf>` (it now
+/// `resolve_sessions_dir`. Keeps returning `Option<PathBuf>` (it now
 /// always resolves to `Some` in practice) rather than switching to a bare
 /// `PathBuf`, so [`AgentPersistenceConfig::duckdb_path`]'s existing
 /// `Option<PathBuf>` shape -- and every `if let Some(duckdb_path) = ...`
@@ -776,7 +787,7 @@ pub(crate) fn resolve_state_db_path(
 
 /// Expands a leading `~/` in a path-typed env value against `home`,
 /// mirroring shell tilde-expansion for the common case
-/// (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` above). A value
+/// (`HORIZON_AGENT_SESSIONS_DIR`/`HORIZON_AGENT_STATE_DB` above). A value
 /// without a leading `~/` (including a bare `~`) passes through unchanged,
 /// as does a `~/`-prefixed value when `home` is `None` or empty — there
 /// being nothing to expand it against. Takes `home` as a parameter rather
@@ -945,9 +956,9 @@ mod tests {
     }
 
     #[test]
-    fn event_log_path_prefers_env_over_default() {
+    fn sessions_dir_prefers_env_over_default() {
         assert_eq!(
-            resolve_event_log_path(
+            resolve_sessions_dir(
                 Some("/env/log.jsonl".to_string()),
                 Some("/xdg/data".to_string()),
                 Some("/home/user".to_string()),
@@ -955,55 +966,53 @@ mod tests {
             PathBuf::from("/env/log.jsonl")
         );
         assert_eq!(
-            resolve_event_log_path(None, Some("/xdg/data".to_string()), None),
-            PathBuf::from("/xdg/data/horizon/agent-events.jsonl")
+            resolve_sessions_dir(None, Some("/xdg/data".to_string()), None),
+            PathBuf::from("/xdg/data/horizon/sessions")
         );
     }
 
     #[test]
-    fn event_log_path_defaults_to_xdg_data_home_when_env_is_unset() {
+    fn sessions_dir_defaults_to_xdg_data_home_when_env_is_unset() {
         assert_eq!(
-            default_event_log_path_from(
+            default_sessions_dir_from(
                 Some("/xdg/data".to_string()),
                 Some("/home/user".to_string())
             ),
-            PathBuf::from("/xdg/data/horizon/agent-events.jsonl")
+            PathBuf::from("/xdg/data/horizon/sessions")
         );
     }
 
     #[test]
-    fn event_log_path_falls_back_to_home_dot_local_share_without_xdg_data_home() {
+    fn sessions_dir_falls_back_to_home_dot_local_share_without_xdg_data_home() {
         assert_eq!(
-            default_event_log_path_from(None, Some("/home/user".to_string())),
-            PathBuf::from("/home/user/.local/share/horizon/agent-events.jsonl")
+            default_sessions_dir_from(None, Some("/home/user".to_string())),
+            PathBuf::from("/home/user/.local/share/horizon/sessions")
         );
         // An empty (but present) XDG_DATA_HOME is treated the same as unset.
         assert_eq!(
-            default_event_log_path_from(Some(String::new()), Some("/home/user".to_string())),
-            PathBuf::from("/home/user/.local/share/horizon/agent-events.jsonl")
+            default_sessions_dir_from(Some(String::new()), Some("/home/user".to_string())),
+            PathBuf::from("/home/user/.local/share/horizon/sessions")
         );
     }
 
     #[test]
-    fn event_log_path_falls_back_to_temp_dir_when_home_and_xdg_data_home_are_both_unset() {
+    fn sessions_dir_falls_back_to_temp_dir_when_home_and_xdg_data_home_are_both_unset() {
         assert_eq!(
-            default_event_log_path_from(None, None),
-            std::env::temp_dir()
-                .join("horizon")
-                .join("agent-events.jsonl")
+            default_sessions_dir_from(None, None),
+            std::env::temp_dir().join("horizon").join("sessions")
         );
     }
 
     #[test]
-    fn event_log_path_expands_leading_tilde_from_env_source() {
+    fn sessions_dir_expands_leading_tilde_from_env_source() {
         assert_eq!(
-            resolve_event_log_path(
-                Some("~/logs/agent-events.jsonl".to_string()),
+            resolve_sessions_dir(
+                Some("~/logs/sessions".to_string()),
                 None,
                 Some("/home/user".to_string()),
             ),
-            PathBuf::from("/home/user/logs/agent-events.jsonl"),
-            "HORIZON_AGENT_EVENT_LOG must expand a leading ~/ against HOME"
+            PathBuf::from("/home/user/logs/sessions"),
+            "HORIZON_AGENT_SESSIONS_DIR must expand a leading ~/ against HOME"
         );
     }
 

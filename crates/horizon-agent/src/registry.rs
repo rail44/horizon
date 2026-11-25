@@ -290,7 +290,8 @@ mod tests {
                 }),
             },
             persistence: AgentPersistenceConfig {
-                event_log_path: std::path::PathBuf::from("/tmp/horizon-registry-test-events.jsonl"),
+                sessions_dir: std::path::PathBuf::from("/tmp/horizon-registry-test-sessions"),
+                legacy_event_log: None,
                 duckdb_path: None,
             },
             tools: crate::config::AgentToolsConfig::default(),

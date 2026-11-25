@@ -32,7 +32,7 @@ use crate::tools::output::{
 };
 
 use crate::contract::SessionId;
-use crate::persistence::projection::duckdb::{DuckdbStoreHandle, DuckdbStoreState, RecallEntry};
+use crate::persistence::projection::duckdb::{Projection, RecallEntry};
 use crate::tools::state::RecallContext;
 use crate::tools::state::ToolSessionState;
 
@@ -96,16 +96,11 @@ pub(super) fn search(
 
 /// Reads the shared projection slot for this one query, so a session
 /// started while the rebuild ran can recall as soon as it lands.
-fn resolve_store(recall: &RecallContext) -> Result<DuckdbStoreHandle, Response> {
-    match recall.store.current() {
-        DuckdbStoreState::Ready(store) => Ok(store),
-        DuckdbStoreState::Pending => Err(error_output(
-            "recall is unavailable: the history index is still being rebuilt; retry later",
-        )),
-        DuckdbStoreState::Unavailable => Err(error_output(
-            "recall is unavailable: history database is not configured or could not be rebuilt completely",
-        )),
-    }
+fn resolve_store(recall: &RecallContext) -> Result<Projection, Response> {
+    recall
+        .projection
+        .clone()
+        .ok_or_else(|| error_output("History search is unavailable in this session"))
 }
 
 fn hit_json(

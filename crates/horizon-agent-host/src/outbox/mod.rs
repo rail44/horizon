@@ -308,14 +308,8 @@ pub fn spawn(
 ) {
     tokio::spawn(async move {
         state.wait_until_resume_ready().await;
-        let path = state
-            .agent_config
-            .lock()
-            .unwrap()
-            .persistence
-            .event_log_path
-            .clone();
-        let mut outbox = Outbox::new(state, path, sources, sinks);
+        let dir = state.sessions_dir();
+        let mut outbox = Outbox::new(state, dir, sources, sinks);
         let mut last_error = None;
         loop {
             match outbox.tick().await {

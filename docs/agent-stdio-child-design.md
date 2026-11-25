@@ -1,7 +1,8 @@
 # The agent as a stdio ACP child of the shell
 
-Status: stage 1 implemented (the library and the two flow crates);
-stages 2-4 not started. Board item #114 holds the decisions this design
+Status: stages 1 and 2 implemented (the library and the two flow crates;
+one log file per session and the projection caught up on demand); stages
+3 and 4 not started. Board item #114 holds the decisions this design
 follows.
 
 ## Goal
@@ -138,17 +139,29 @@ there ever was (563 MB in October; 749 MB moved aside on 2026-11-24),
 and why two processes on one data home would write the same file.
 
 Each session gets a file of its own, `sessions/<session-id>.jsonl` under
-the data home. The process hosting a session holds an exclusive lock on
-its file while the session is live; a second process asked to host a
-session whose file is locked refuses with that reason. Two windows, the
-probe and a TUI can then share a data home, each owning the sessions it
-hosts. Listing sessions reads each file's head and tail; resuming one
-reads its file alone; a session started by a fork or a task names its
-parent, as its events do now. The data home's path is an argument of the
-library, not read from the environment inside it.
+the data home. One process hosts a data home's sessions at a time: it
+holds a lock on `sessions.lock` beside the directory for as long as it
+runs, and a second process is refused at startup (board #114: the outbox
+and the sessions no window holds are the host's, so two hosts would both
+act on them). One writer thread appends each record to its session's
+file, and a record's `sequence` counts within its session. Where records
+of different sessions are ordered (the outbox's deliveries, the latest
+session of a role), their time orders them, then the session, then the
+sequence.
 
-The existing log is split into session files once, by a migration the
-binary runs when it finds `agent-events.jsonl` and no `sessions/`.
+Startup reads each file backwards only as far as its latest state and
+its latest context (`session_summary`), and reads the whole file only for
+a session it resumes. A fork's history is its branch: its own file, and
+the file of the session it was forked from (named in its context) up to
+the record it was forked at.
+
+The shared log is split into session files once, at the first start
+that finds `agent-events.jsonl`: its lines are copied as they are into a
+directory beside `sessions/` that then takes its name, and the log is
+moved aside as `agent-events.jsonl.split-<ms>`. A start that finds the log
+and a `sessions/` already holding sessions was stopped between the two,
+and only moves it aside. A log of another version is moved aside unsplit,
+as a format change always was.
 
 ### The DuckDB projection
 
@@ -173,6 +186,11 @@ So no process holds it open. It is caught up when recall needs it:
    then closes it.
 3. It opens it again read-only, waiting the same way if a writer holds
    it, runs the query and closes it.
+
+The host also catches it up once at startup, after resuming the
+sessions, on a thread of its own: a rebuild (the first start after the
+split, or a new projection format) took 89 s over the 25,129 records of
+2026-11-24 to 2026-11-25, and that must not land on a recall.
 
 Recall is rare (15 of 20,047 tool calls from 2026-08-03 to 2026-11-25,
 3 across every session). Measured on a copy of four months' projection

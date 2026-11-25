@@ -3,7 +3,7 @@ use crate::session::Connection;
 use crate::session::approval::dispatch_inbound_command;
 use crate::session::test_support::{drain_events, test_state};
 use horizon_agent::contract::{Command, InputResult, SessionInputOutcome};
-use horizon_agent::persistence::event_log::{WriterHandle, WriterInit, read};
+use horizon_agent::persistence::event_log::{WriterHandle, read_all};
 
 fn input(id: &str) -> SessionInput {
     SessionInput {
@@ -19,8 +19,7 @@ fn input(id: &str) -> SessionInput {
 fn identified_inputs_publish_after_flush_and_deduplicate_delivery() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("events.jsonl");
-    let (writer, ready) = WriterHandle::open(&path);
-    assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+    let writer = WriterHandle::open(&path);
     let state = test_state();
     state.set_writer(Some(writer.clone()));
     let session_id = SessionId::new();
@@ -42,7 +41,7 @@ fn identified_inputs_publish_after_flush_and_deduplicate_delivery() {
         vec![Command::SessionInput(accepted.clone())]
     );
     assert_eq!(
-        read(&path)
+        read_all(&path)
             .unwrap()
             .records
             .iter()
@@ -87,7 +86,7 @@ fn identified_inputs_publish_after_flush_and_deduplicate_delivery() {
         );
     }
     let published = drain_events(&mut events);
-    let persisted = read(&path)
+    let persisted = read_all(&path)
         .unwrap()
         .records
         .into_iter()
@@ -112,9 +111,7 @@ fn unavailable_persistence_never_forwards_or_publishes_an_input() {
     let session_id = SessionId::new();
     let mut events = Connection::new(state.clone()).subscribe_agent(session_id);
     let (commands_tx, commands) = crossbeam_channel::unbounded();
-    let dir = tempfile::tempdir().unwrap();
-    let (failed_writer, ready) = WriterHandle::open(dir.path());
-    assert!(matches!(ready.recv().unwrap(), WriterInit::Failed(_)));
+    let failed_writer = WriterHandle::failed("the log cannot be written");
     let failed = LiveState::with_event_log_and_history(
         session_id,
         None,

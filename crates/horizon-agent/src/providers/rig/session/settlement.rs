@@ -142,11 +142,7 @@ mod tests {
         let session = SessionId::new();
         let tools = ToolSessionBuilder::new(root.clone()).build();
         let log = root.join("history.jsonl");
-        let (writer, ready) = event_log::WriterHandle::open(&log);
-        assert!(matches!(
-            ready.recv().unwrap(),
-            event_log::WriterInit::Ready(_)
-        ));
+        let writer = crate::persistence::event_log::WriterHandle::open(&log);
         let live =
             LiveState::with_event_log_and_history(session, None, None, writer.clone(), vec![]);
         let written = ToolCallRequest {
@@ -265,7 +261,7 @@ mod tests {
             |event| matches!(event, Event::ToolCallFinished(result) if result == real_result)
         ));
         writer.flush().unwrap();
-        let records = event_log::read(&log).unwrap().records;
+        let records = event_log::read_all(&log).unwrap().records;
         let restored: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
         assert_eq!(
             ConversationHistory::from_events(&restored)

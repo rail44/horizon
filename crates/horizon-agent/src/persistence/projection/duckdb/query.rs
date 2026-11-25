@@ -3,16 +3,15 @@ use duckdb::{OptionalExt, params, params_from_iter, types::Value as DuckValue};
 #[cfg(test)]
 use serde_json::Value;
 
-use crate::contract::ProviderId;
 use crate::contract::SessionId;
-use crate::contract::{Event, SessionState};
+#[cfg(test)]
+use crate::contract::{Event, ProviderId};
 #[cfg(test)]
 use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
 use crate::frame::{AgentFrame, agent_frame_from_events};
-use crate::persistence::event_log::{
-    AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION, LogCursor, PersistedSessionContext, Record,
-};
+use crate::persistence::event_log::LogCursor;
+#[cfg(test)]
 use crate::roles::RoleId;
 
 #[cfg(test)]
@@ -23,7 +22,7 @@ use super::{
     AgentStoredToolCall, AgentStoredToolResult, AgentStoredTurn,
 };
 use super::{
-    RecallEntry, RecallEntryKind, RecallSearchReport, RecallSessionSummary, SessionLiveness, Store,
+    RecallEntry, RecallEntryKind, RecallSearchReport, RecallSessionSummary, Store,
     schema::PROJECTION_SCHEMA_VERSION, session_id_text,
 };
 
@@ -42,32 +41,6 @@ const RESULT_CALL_JOIN: &str = "LEFT JOIN agent_tool_calls tc
     AND tc.occurrence_id = r.occurrence_id AND tc.sequence < r.sequence";
 
 impl Store {
-    /// Test-only: whether the projection holds exactly `records`' identities,
-    /// in order. Startup no longer verifies the whole prefix (it checks the
-    /// one line its cursor names); tests still use this to assert a rebuild
-    /// is complete.
-    #[cfg(test)]
-    pub(crate) fn matches_log_prefix(
-        &self,
-        records: &[crate::persistence::event_log::Record],
-    ) -> Result<bool> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT sequence, event_id FROM agent_events ORDER BY sequence")?;
-        let mut rows = statement.query([])?;
-        for record in records {
-            let Some(row) = rows.next()? else {
-                return Ok(false);
-            };
-            if row.get::<_, u64>(0)? != record.sequence
-                || row.get::<_, String>(1)? != record.event_id
-            {
-                return Ok(false);
-            }
-        }
-        Ok(rows.next()?.is_none())
-    }
-
     /// Whether the last complete rebuild stamped this projection with the
     /// current event-log version and the current table shape. A file from
     /// before the shape stamp existed fails to answer at all (the column is
@@ -89,13 +62,15 @@ impl Store {
             )))
     }
 
-    /// The last record this projection ingested, if any was committed with
-    /// its log position (see `agent_log_cursor` in `schema.rs`).
-    pub(crate) fn log_cursor(&self) -> Result<Option<LogCursor>> {
+    /// The last record this projection ingested from `session_id`'s file,
+    /// if any was committed with its position (`agent_log_cursors` in
+    /// `schema.rs`).
+    pub(crate) fn log_cursor(&self, session_id: SessionId) -> Result<Option<LogCursor>> {
         self.conn
             .query_row(
-                "SELECT log_offset, sequence, event_id FROM agent_log_cursor",
-                [],
+                "SELECT log_offset, sequence, event_id FROM agent_log_cursors
+                 WHERE session_id = ?",
+                [session_id_text(session_id)?],
                 |row| {
                     Ok(LogCursor {
                         offset: row.get(0)?,
@@ -108,186 +83,6 @@ impl Store {
             .context("query agent event log cursor")
     }
 
-    /// Every session with an event at or below `through_sequence`, with the
-    /// verdict "already dead" taken from its latest state-bearing event:
-    /// the frame fold sets `AgentFrame::state` only from `StateChanged` and
-    /// `Exited` (which reads as `Terminated`), so a session is dead exactly
-    /// when the later of those, by sequence, is `StateChanged(Terminated)` or
-    /// `Exited`. Also returns the session's last non-null role, which resume
-    /// checks before liveness. `through_sequence` keeps the answer to the
-    /// startup snapshot even while the live writer projects new appends.
-    pub(crate) fn session_liveness(&self, through_sequence: u64) -> Result<Vec<SessionLiveness>> {
-        let through = i64::try_from(through_sequence).context("agent event sequence overflow")?;
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                session_id,
-                arg_max(horizon_event_json, sequence)
-                    FILTER (WHERE event_kind IN ('state_changed', 'exited')),
-                arg_max(role_id, sequence) FILTER (WHERE role_id IS NOT NULL)
-             FROM agent_events
-             WHERE sequence <= ?
-             GROUP BY session_id",
-        )?;
-        let rows = stmt.query_map(params![through], |row| {
-            let session_id = parse_session_id_column(0, &row.get::<_, String>(0)?)?;
-            let last_state_event = row
-                .get::<_, Option<String>>(1)?
-                .map(|json| decode_json_column::<Event>(1, &json))
-                .transpose()?;
-            Ok(SessionLiveness {
-                session_id,
-                role_id: row.get::<_, Option<String>>(2)?.map(RoleId),
-                dead: matches!(
-                    last_state_event,
-                    Some(
-                        Event::StateChanged(SessionState::Terminated | SessionState::Suspended)
-                            | Event::Exited(_)
-                    )
-                ),
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .context("query agent session liveness")
-    }
-
-    /// The sessions of `role`, the one with the latest event first, each
-    /// with the workspace root of its stored context.
-    pub(crate) fn sessions_with_role(
-        &self,
-        role: &RoleId,
-    ) -> Result<Vec<(SessionId, Option<std::path::PathBuf>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT session_id, session_context_json
-             FROM agent_sessions
-             WHERE role_id = ?
-             ORDER BY last_sequence DESC",
-        )?;
-        let rows = stmt.query_map(params![&role.0], |row| {
-            let session_id = parse_session_id_column(0, &row.get::<_, String>(0)?)?;
-            let context = row
-                .get::<_, Option<String>>(1)?
-                .map(|json| decode_json_column::<PersistedSessionContext>(1, &json))
-                .transpose()?;
-            Ok((session_id, context.and_then(|c| c.workspace_root)))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .context("query agent sessions of a role")
-    }
-
-    /// One session's records at or below `through_sequence`, rebuilt from the
-    /// projection in sequence order. Every record carries the session's
-    /// latest stored `session_context` (the only value a resume reads).
-    /// `session_id`'s branch through `through_sequence`
-    /// (`event_log::session_branch`), with what it reaches in the session it
-    /// was forked from.
-    pub(crate) fn session_branch(
-        &self,
-        session_id: SessionId,
-        through_sequence: u64,
-    ) -> Result<Vec<Record>> {
-        let own = self.session_records(session_id, through_sequence)?;
-        let mut failed = None;
-        let branch = crate::persistence::event_log::session_branch(own, &mut |id| match self
-            .branch_to(id)
-        {
-            Ok(branch) => branch,
-            Err(error) => {
-                failed = Some(error);
-                Vec::new()
-            }
-        });
-        match failed {
-            Some(error) => Err(error),
-            None => Ok(branch),
-        }
-    }
-
-    /// The branch that ends at the record `event_id` names (empty if none).
-    fn branch_to(&self, event_id: &str) -> Result<Vec<Record>> {
-        let found: Option<(String, i64)> = self
-            .conn
-            .query_row(
-                "SELECT session_id, sequence FROM agent_events WHERE event_id = ?",
-                params![event_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((session, sequence)) = found else {
-            return Ok(Vec::new());
-        };
-        let session = SessionId::from_uuid(session.parse().context("stored session id")?);
-        let sequence = u64::try_from(sequence).context("stored sequence")?;
-        self.session_branch(session, sequence)
-    }
-
-    pub(crate) fn session_records(
-        &self,
-        session_id: SessionId,
-        through_sequence: u64,
-    ) -> Result<Vec<Record>> {
-        let session_id_text = session_id_text(session_id)?;
-        let through = i64::try_from(through_sequence).context("agent event sequence overflow")?;
-        let session_context: Option<PersistedSessionContext> = self
-            .conn
-            .query_row(
-                "SELECT session_context_json FROM agent_sessions WHERE session_id = ?",
-                params![&session_id_text],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten()
-            .map(|json| serde_json::from_str(&json))
-            .transpose()
-            .context("decode stored session context")?;
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                event_id,
-                turn_id,
-                sequence,
-                event_kind,
-                horizon_event_json,
-                provider_id,
-                role_id,
-                provider_payload_json,
-                epoch_ms(event_at),
-                parent_event_id
-             FROM agent_events
-             WHERE session_id = ? AND sequence <= ?
-             ORDER BY sequence",
-        )?;
-        let rows = stmt.query_map(params![&session_id_text, through], |row| {
-            let Some(event) = decode_stored_event(&row.get::<_, String>(4)?) else {
-                return Ok(None);
-            };
-            Ok(Some(Record {
-                schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
-                version: AGENT_EVENT_LOG_VERSION,
-                event_id: row.get(0)?,
-                parent_id: row.get(9)?,
-                sequence: row.get(2)?,
-                session_id,
-                turn_id: row.get(1)?,
-                provider_id: row.get::<_, Option<String>>(5)?.map(ProviderId),
-                role_id: row.get::<_, Option<String>>(6)?.map(RoleId),
-                session_context: session_context.clone(),
-                event_kind: row.get(3)?,
-                event,
-                provider_payload: row
-                    .get::<_, Option<String>>(7)?
-                    .map(|json| decode_json_column(7, &json))
-                    .transpose()?,
-                created_at_unix_ms: row.get(8)?,
-            }))
-        })?;
-        rows.filter_map(Result::transpose)
-            .collect::<Result<Vec<_>, _>>()
-            .context("query agent session records")
-    }
-
-    /// Test-only: both current callers (`session_snapshots` below and
-    /// `projection.rs`'s `rebuild_projections`) are themselves `cfg(test)`,
-    /// and this crate's own tests assert what actually landed in the
-    /// projection after a rebuild or a live append.
     #[cfg(test)]
     pub(crate) fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
         let mut stmt = self.conn.prepare(
@@ -881,17 +676,9 @@ fn parse_role(value: &str) -> MessageRole {
 /// removed among them, and the log's own reader (`event_log::read`) passes
 /// over the same ones: a session read from here holds what it holds read
 /// from the log.
+#[cfg(test)]
 fn decode_stored_event(json: &str) -> Option<Event> {
     serde_json::from_str(json).ok()
-}
-
-fn decode_json_column<T: serde::de::DeserializeOwned>(
-    column: usize,
-    json: &str,
-) -> duckdb::Result<T> {
-    serde_json::from_str(json).map_err(|err| {
-        duckdb::Error::FromSqlConversionFailure(column, duckdb::types::Type::Text, Box::new(err))
-    })
 }
 
 fn parse_session_id_column(column: usize, value: &str) -> duckdb::Result<SessionId> {

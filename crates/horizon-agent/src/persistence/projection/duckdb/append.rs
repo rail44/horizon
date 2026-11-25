@@ -5,7 +5,6 @@ use duckdb::params;
 #[cfg(test)]
 use uuid::Uuid;
 
-#[cfg(test)]
 use crate::contract::SessionId;
 #[cfg(test)]
 use crate::contract::{Event, ProviderId, event_kind};
@@ -38,14 +37,6 @@ impl Store {
     /// appended a record while a hard `SIGKILL` landed nearby. Wrapping
     /// this one record's several statements and the cursor in a transaction
     /// makes them atomic: either every table sees it, or none does.
-    pub(crate) fn append_record_at(
-        &self,
-        record: &Record,
-        cursor: Option<&LogCursor>,
-    ) -> Result<()> {
-        self.append_records_atomic(std::slice::from_ref(record), cursor)
-    }
-
     /// Test-only: [`Self::append_record_at`] without a log position.
     #[cfg(test)]
     pub(crate) fn append_record(&self, record: &Record) -> Result<()> {
@@ -65,8 +56,8 @@ impl Store {
         let mut result = records
             .iter()
             .try_for_each(|record| self.append_record_uncommitted(record));
-        if let (Ok(()), Some(cursor)) = (&result, cursor) {
-            result = self.write_log_cursor(cursor);
+        if let (Ok(()), Some(cursor), Some(last)) = (&result, cursor, records.last()) {
+            result = self.write_log_cursor(last.session_id, cursor);
         }
         if let Err(error) = result {
             let _ = self.conn.execute_batch("ROLLBACK");
@@ -76,17 +67,22 @@ impl Store {
         Ok(())
     }
 
-    fn write_log_cursor(&self, cursor: &LogCursor) -> Result<()> {
+    fn write_log_cursor(&self, session_id: SessionId, cursor: &LogCursor) -> Result<()> {
         let offset = i64::try_from(cursor.offset).context("agent event log offset overflow")?;
         let sequence = i64::try_from(cursor.sequence).context("agent event sequence overflow")?;
         self.conn.execute(
-            "INSERT INTO agent_log_cursor (singleton, log_offset, sequence, event_id)
-             VALUES (true, ?, ?, ?)
-             ON CONFLICT (singleton) DO UPDATE SET
+            "INSERT INTO agent_log_cursors (session_id, log_offset, sequence, event_id)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (session_id) DO UPDATE SET
                 log_offset = excluded.log_offset,
                 sequence = excluded.sequence,
                 event_id = excluded.event_id",
-            params![offset, sequence, &cursor.event_id],
+            params![
+                session_id_text(session_id)?,
+                offset,
+                sequence,
+                &cursor.event_id
+            ],
         )?;
         Ok(())
     }
@@ -165,6 +161,7 @@ impl Store {
             role_id_text.as_deref(),
             session_context_json.as_deref(),
             sequence,
+            Some(event_at_unix_ms),
         )?;
         self.project_event(EventRecordRef {
             event_id: &record.event_id,
@@ -228,6 +225,7 @@ impl Store {
             role_id_text.as_deref(),
             None,
             sequence,
+            None,
         )?;
         self.project_event(EventRecordRef {
             event_id: &event_id,
@@ -293,12 +291,14 @@ impl Store {
         role_id: Option<&str>,
         session_context_json: Option<&str>,
         last_sequence: i64,
+        at_unix_ms: Option<i64>,
     ) -> Result<()> {
+        // A session's time is its latest record's, not when it was projected.
         self.conn.execute(
             "INSERT INTO agent_sessions (
                 session_id, provider_id, role_id, session_context_json, last_sequence, updated_at
              )
-             VALUES (?, ?, ?, ?, ?, now())
+             VALUES (?, ?, ?, ?, ?, COALESCE(epoch_ms(?), now()))
              ON CONFLICT (session_id) DO UPDATE SET
                 provider_id = COALESCE(excluded.provider_id, agent_sessions.provider_id),
                 role_id = COALESCE(excluded.role_id, agent_sessions.role_id),
@@ -307,13 +307,14 @@ impl Store {
                     agent_sessions.session_context_json
                 ),
                 last_sequence = excluded.last_sequence,
-                updated_at = now()",
+                updated_at = excluded.updated_at",
             params![
                 session_id,
                 provider_id,
                 role_id,
                 session_context_json,
-                last_sequence
+                last_sequence,
+                at_unix_ms
             ],
         )?;
         Ok(())

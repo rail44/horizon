@@ -13,17 +13,22 @@ use crate::roles::RoleId;
 
 mod appender;
 mod health;
+mod sessions;
 mod settled;
+mod split;
 mod turn;
 mod writer;
 
 pub use crate::providers::rig::conversation::interrupted_conversation_calls;
 pub use appender::{Appender, PendingEvents};
 pub use health::FailureSubscription;
+pub use sessions::{
+    SessionSummary, read_all, read_branch, read_session, session_ids, session_path, session_summary,
+};
 pub use settled::Settled;
+pub use split::{SplitReport, split_legacy_log};
 use turn::TurnTracker;
-pub use writer::BeforeRebuild;
-pub use writer::{WriterHandle, WriterInit};
+pub use writer::WriterHandle;
 
 pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
 pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 5;
@@ -181,7 +186,7 @@ impl Log {
     }
 
     /// The branch that ends at `event_id`.
-    fn branch_to(&self, event_id: &str) -> Vec<Record> {
+    pub(crate) fn branch_to(&self, event_id: &str) -> Vec<Record> {
         let Some((session_id, position)) = self.at.get(event_id) else {
             return Vec::new();
         };
@@ -594,8 +599,9 @@ mod tolerant_read_tests {
     /// (the duplicate-sequence hazard an envelope-blind read would have).
     #[test]
     fn next_sequence_counts_a_skipped_event_line() {
-        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let dir = tempfile::tempdir().unwrap();
         let session_id = SessionId::new();
+        let path = session_path(dir.path(), session_id);
         let line = serde_json::json!({
             "schema": AGENT_EVENT_LOG_SCHEMA,
             "version": AGENT_EVENT_LOG_VERSION,
@@ -613,17 +619,13 @@ mod tolerant_read_tests {
         });
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
-        let (writer, init_rx) = WriterHandle::open(&path);
-        match init_rx.recv().unwrap() {
-            WriterInit::Ready(report) => {
-                assert!(
-                    report.records.is_empty(),
-                    "the undecodable line must contribute no record"
-                );
-                assert_eq!(report.skipped_event_count, 1);
-            }
-            WriterInit::Failed(error) => panic!("writer startup failed: {error}"),
-        }
+        let skipped = read(&path).unwrap();
+        assert!(
+            skipped.records.is_empty(),
+            "the undecodable line must contribute no record"
+        );
+        assert_eq!(skipped.skipped_event_count, 1);
+        let writer = crate::persistence::event_log::WriterHandle::open(dir.path());
         let mut appender = Appender::new(writer.clone(), session_id, None, None);
         appender
             .append_provider_events(vec![ProviderEvent::from(Event::StateChanged(
@@ -640,8 +642,6 @@ mod tolerant_read_tests {
             "the fresh append must continue past the skipped-event line's sequence, not reuse it"
         );
         assert_eq!(report.skipped_event_count, 1);
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// A line whose *envelope* is broken still counts as corrupt — the
@@ -775,7 +775,7 @@ mod tests {
     fn writes_and_reads_jsonl_records() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let session_context = PersistedSessionContext {
             workspace_root: Some(PathBuf::from("/tmp/session-worktree")),
             isolated_worktree: true,
@@ -807,7 +807,7 @@ mod tests {
             .expect("append");
         writer.flush().expect("flush");
 
-        let report = read(&path).expect("read");
+        let report = read_all(&path).expect("read");
         assert_eq!(report.records.len(), 1);
         assert_eq!(report.records[0].sequence, 0);
         assert_eq!(report.records[0].session_id, session_id);
@@ -858,7 +858,7 @@ mod tests {
     fn writes_and_reads_provider_request_lifecycle_events_with_shared_turn_id() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let mut appender = Appender::new(
             writer.clone(),
             session_id,
@@ -881,7 +881,7 @@ mod tests {
             .expect("append");
         writer.flush().expect("flush");
 
-        let report = read(&path).expect("read");
+        let report = read_all(&path).expect("read");
         assert_eq!(report.records.len(), 4);
 
         let kinds: Vec<&str> = report
@@ -1021,7 +1021,7 @@ mod tests {
     fn flush_makes_pending_records_durable_before_shutdown() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let mut appender = Appender::new(writer.clone(), session_id, None, None);
 
         appender
@@ -1039,7 +1039,7 @@ mod tests {
         // dropped during a normal run).
         writer.flush().expect("shutdown flush");
 
-        let report = read(&path).expect("read after shutdown flush");
+        let report = read_all(&path).expect("read after shutdown flush");
         assert_eq!(report.records.len(), 1);
         assert_eq!(
             report.records[0].event,
@@ -1063,7 +1063,7 @@ mod tests {
     #[test]
     fn concurrent_appenders_share_one_writer_without_tearing() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
 
         let session_ids = Vec::from_fn(4, |_| SessionId::new());
         let events_per_session = 25_usize;
@@ -1101,25 +1101,25 @@ mod tests {
         }
         writer.flush().expect("flush");
 
-        let report = read(&path).expect("read");
+        let report = read_all(&path).expect("read");
         assert_eq!(report.corrupt_line_count, 0);
         assert!(!report.ignored_partial_line);
         assert_eq!(report.records.len(), session_ids.len() * events_per_session);
 
-        let mut sequences: Vec<u64> = report
+        let mut sequences: Vec<(uuid::Uuid, u64)> = report
             .records
             .iter()
-            .map(|record| record.sequence)
+            .map(|record| (record.session_id.as_uuid(), record.sequence))
             .collect();
         sequences.sort_unstable();
         sequences.dedup();
         assert_eq!(
             sequences.len(),
             report.records.len(),
-            "every record must have a unique sequence number"
+            "every record must have a sequence of its own within its session"
         );
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(path);
     }
 
     #[test]

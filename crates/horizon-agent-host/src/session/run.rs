@@ -433,11 +433,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = super::super::test_support::test_state();
         let session_id = SessionId::new();
-        let (writer, ready) = horizon_agent::persistence::event_log::WriterHandle::open(dir.path());
-        assert!(matches!(
-            ready.recv().unwrap(),
-            horizon_agent::persistence::event_log::WriterInit::Failed(_)
-        ));
+        let writer = horizon_agent::persistence::event_log::WriterHandle::failed(
+            "the log cannot be written",
+        );
         let live =
             LiveState::with_event_log_and_history(session_id, None, None, writer, Vec::new());
         let mut published =

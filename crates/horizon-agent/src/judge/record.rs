@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn write_verdict_lands_as_a_json_extract_queryable_provider_payload() {
         let path = temp_log_path("verdict");
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let session_id = SessionId::new();
         let input = judge_input("call-1");
 
@@ -194,7 +194,7 @@ mod tests {
         );
         writer.flush().expect("flush");
 
-        let report = event_log::read(&path).expect("read");
+        let report = event_log::read_all(&path).expect("read");
         assert_eq!(report.records.len(), 1);
         let record = &report.records[0];
         assert_eq!(record.event_kind, JUDGE_VERDICT_EVENT_KIND);
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn client_error_verdict_records_the_error_text() {
         let path = temp_log_path("client-error");
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let session_id = SessionId::new();
         let input = judge_input("call-err");
 
@@ -239,7 +239,7 @@ mod tests {
         );
         writer.flush().expect("flush");
 
-        let report = event_log::read(&path).expect("read");
+        let report = event_log::read_all(&path).expect("read");
         assert_eq!(report.records.len(), 1);
         let payload = report.records[0]
             .provider_payload
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn host_execution_verdict_records_the_whole_call_scope() {
         let path = temp_log_path("host-scope");
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let session_id = SessionId::new();
         let mut input = judge_input("call-host");
         input.host_execution_requested = true;
@@ -281,7 +281,7 @@ mod tests {
         );
         writer.flush().expect("flush");
 
-        let report = event_log::read(&path).expect("read");
+        let report = event_log::read_all(&path).expect("read");
         let payload = report.records[0]
             .provider_payload
             .as_ref()
@@ -294,14 +294,14 @@ mod tests {
     #[test]
     fn write_skipped_records_fail_closed_decision_and_reason() {
         let path = temp_log_path("skipped");
-        let (writer, _init_rx) = WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let session_id = SessionId::new();
         let input = judge_input("call-2");
 
         write_skipped(&writer, session_id, &input, "clef:cloud", "rate_limited");
         writer.flush().expect("flush");
 
-        let report = event_log::read(&path).expect("read");
+        let report = event_log::read_all(&path).expect("read");
         assert_eq!(report.records.len(), 1);
         let payload = report.records[0]
             .provider_payload

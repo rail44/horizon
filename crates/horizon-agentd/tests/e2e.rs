@@ -22,7 +22,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
@@ -31,7 +31,7 @@ use horizon_acp as acp;
 use horizon_agent::contract::{
     Event, Exit, MessageRole, ProviderEvent, ProviderId, SessionId, SessionState, TurnEndReason,
 };
-use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
+use horizon_agent::persistence::event_log::{Appender, WriterHandle};
 use horizon_daemon_testkit::{
     AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound, agentd_hermetic_command,
     cargo_bin_exe_var, connect_acp, connect_initialized, connect_with_retry, initialize_request,
@@ -133,11 +133,11 @@ fn spawn_agentd() -> AgentdProcess {
 /// step 4's "kill -9 mid-session, respawn" tests use to bring a *second*
 /// process up against the *first* process's own socket/event-log paths,
 /// simulating a real restart.
-fn spawn_agentd_at(socket_path: PathBuf, event_log_path: PathBuf) -> AgentdProcess {
+fn spawn_agentd_at(socket_path: PathBuf, sessions_dir: PathBuf) -> AgentdProcess {
     agentd_spawn(AgentdPaths::scratch_at(
         "agentd-e2e",
         socket_path,
-        event_log_path,
+        sessions_dir,
     ))
     .spawn()
 }
@@ -149,51 +149,16 @@ fn spawn_agentd_at(socket_path: PathBuf, event_log_path: PathBuf) -> AgentdProce
 /// then a consequence of the ordering, not of timing.
 fn spawn_agentd_with_resume_gate(
     socket_path: PathBuf,
-    event_log_path: PathBuf,
+    sessions_dir: PathBuf,
     gate: &Path,
 ) -> AgentdProcess {
     agentd_spawn(AgentdPaths::scratch_at(
         "agentd-e2e",
         socket_path,
-        event_log_path,
+        sessions_dir,
     ))
     .env(TEST_RESUME_GATE_VAR, gate)
     .spawn()
-}
-
-/// Same as [`spawn_agentd_at`], but with the DuckDB rebuild held until
-/// `gate` is made ([`TEST_DUCKDB_REBUILD_GATE_VAR`]) -- for proving the
-/// rebuild (task 1 of the readiness fix) no longer sits on the
-/// resume-readiness path `session_list` blocks on.
-fn spawn_agentd_with_duckdb_rebuild_gate(
-    socket_path: PathBuf,
-    event_log_path: PathBuf,
-    gate: &Path,
-) -> AgentdProcess {
-    agentd_spawn(AgentdPaths::scratch_at(
-        "agentd-e2e",
-        socket_path,
-        event_log_path,
-    ))
-    .env(TEST_DUCKDB_REBUILD_GATE_VAR, gate)
-    .spawn()
-}
-
-/// Same as [`spawn_agentd_at`], but with an explicit `state_db_path`
-/// (rather than the fresh random one every other spawn picks) and piped,
-/// continuously drained stderr (see `AgentdProcess::wait_for_stderr_line`)
-/// -- both needed only by task 2's skip/rebuild tests below: they must
-/// point two successive spawns at the *same* DuckDB file to prove the
-/// second one either skips or redoes the rebuild, and must observe that
-/// spawn's own rebuild-or-skip decision before killing the process.
-fn spawn_agentd_with_duckdb_options(
-    socket_path: PathBuf,
-    event_log_path: PathBuf,
-    state_db_path: PathBuf,
-) -> AgentdProcess {
-    let mut paths = AgentdPaths::scratch_at("agentd-e2e", socket_path, event_log_path);
-    paths.state_db_path = state_db_path;
-    agentd_spawn(paths).capture_stderr().spawn()
 }
 
 // --- the ACP test harness --------------------------------------------------
@@ -530,16 +495,7 @@ fn fixture_repository(repo: &Path) {
 /// that need a specific pre-existing log *before* `horizon-agentd` itself
 /// ever runs. Every record gets [`mock_provider_id`] as its provider id.
 fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<Event>)>) {
-    let (writer, init_rx) = WriterHandle::open(path);
-    match init_rx
-        .recv()
-        .expect("fixture writer should report a startup outcome")
-    {
-        WriterInit::Ready(_) => {}
-        WriterInit::Failed(error) => {
-            panic!("fixture writer failed to open {}: {error}", path.display())
-        }
-    }
+    let writer = WriterHandle::open(path);
     for (session_id, events) in sessions {
         let mut appender =
             Appender::new(writer.clone(), session_id, Some(mock_provider_id()), None);
@@ -561,7 +517,7 @@ async fn wait_for_persisted_event(
     mut predicate: impl FnMut(&Event) -> bool,
 ) {
     for _ in 0..200 {
-        if let Ok(report) = horizon_agent::persistence::event_log::read(path)
+        if let Ok(report) = horizon_agent::persistence::event_log::read_all(path)
             && report
                 .records
                 .iter()
@@ -1130,7 +1086,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 
     let mut report = None;
     for _ in 0..100 {
-        let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+        let candidate = horizon_agent::persistence::event_log::read_all(&agentd.sessions_dir)
             .expect("the on-disk event log should parse cleanly");
         if candidate.records.iter().any(|record| {
             matches!(&record.event, Event::ToolCallFinished(result) if result.occurrence_id.0 == occurrence)
@@ -1198,7 +1154,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
 
     let mut report = None;
     for _ in 0..100 {
-        let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+        let candidate = horizon_agent::persistence::event_log::read_all(&agentd.sessions_dir)
             .expect("the on-disk event log should parse cleanly");
         let has_tool_call_requested = candidate.records.iter().any(|record| {
             matches!(
@@ -1218,8 +1174,12 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
         "every persisted line must still be a well-formed record, got: {report:?}"
     );
 
-    let log_contents = std::fs::read_to_string(&agentd.event_log_path)
-        .expect("event log should exist and be readable");
+    let mut log_contents = String::new();
+    for entry in std::fs::read_dir(&agentd.sessions_dir).expect("the session logs exist") {
+        log_contents.push_str(
+            &std::fs::read_to_string(entry.unwrap().path()).expect("a session log is readable"),
+        );
+    }
     assert!(
         !log_contents
             .to_ascii_lowercase()
@@ -1237,15 +1197,29 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
-    let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+    let sessions_dir = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-sessions-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    std::fs::write(&event_log_path, b"not valid json\n{\"text\":\"\xe6\x97")
-        .expect("write corrupt line and a tail split inside UTF-8");
+    // A live session whose log ends in a corrupt line and a torn tail.
+    let damaged = SessionId::new();
+    write_session_fixture(
+        &sessions_dir,
+        vec![(
+            damaged,
+            vec![Event::StateChanged(SessionState::WaitingForUser)],
+        )],
+    );
+    {
+        use std::io::Write;
+        let path = horizon_agent::persistence::event_log::session_path(&sessions_dir, damaged);
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        file.write_all(b"not valid json\n{\"text\":\"\xe6\x97")
+            .expect("write corrupt line and a tail split inside UTF-8");
+    }
 
-    let agentd = spawn_agentd_at(socket_path, event_log_path);
+    let agentd = spawn_agentd_at(socket_path, sessions_dir);
     let mut client = connect(&agentd.socket_path).await;
 
     let collected = collect_until(&mut client, |inbound| {
@@ -1262,28 +1236,20 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
     };
     assert_eq!(summary, "skipped 1 corrupt line and a torn trailing line");
 
-    // The ignored tail must not consume the first new record after startup.
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
-    prompt(&client, session_id, "after torn tail").await;
-    collect_until(&mut client, |inbound| {
-        agent_message(inbound).as_deref() == Some("Mock response: after torn tail")
+    // The ignored tail must not join the first record the resumed session
+    // writes.
+    wait_for_persisted_event(&agentd.sessions_dir, damaged, |event| {
+        matches!(event, Event::StateChanged(SessionState::Created))
     })
     .await;
-    wait_for_persisted_event(&agentd.event_log_path, session_id, |event| {
-        matches!(event, Event::MessageCommitted(message)
-            if message.role == MessageRole::Assistant && message.text == "Mock response: after torn tail")
-    }).await;
-    let report = horizon_agent::persistence::event_log::read(&agentd.event_log_path).unwrap();
+    let report =
+        horizon_agent::persistence::event_log::read_session(&agentd.sessions_dir, damaged).unwrap();
     assert_eq!(
         report.corrupt_line_count, 1,
         "only the original corrupt line remains"
     );
     assert!(!report.ignored_partial_line);
     assert_eq!(report.records.first().unwrap().sequence, 0);
-    assert!(report.records.iter().any(|record| matches!(&record.event,
-        Event::MessageCommitted(message) if message.role == MessageRole::User && message.text == "after torn tail"
-    )));
 }
 
 /// Step 4's headline scenario: `kill -9` a live daemon mid-session (a turn
@@ -1294,7 +1260,7 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
 async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled() {
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&socket_path).await;
 
     let session_id = SessionId::new();
@@ -1304,12 +1270,12 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         matches!(inbound, Inbound::Permission(..))
     })
     .await;
-    wait_for_persisted_event(&event_log_path, session_id, |event| {
+    wait_for_persisted_event(&sessions_dir, session_id, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
 
-    let interrupted_turn_id = horizon_agent::persistence::event_log::read(&event_log_path)
+    let interrupted_turn_id = horizon_agent::persistence::event_log::read_all(&sessions_dir)
         .unwrap()
         .records
         .into_iter()
@@ -1328,7 +1294,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     let mut respawned = agentd_spawn(AgentdPaths::scratch_at(
         "agentd-e2e",
         socket_path,
-        event_log_path,
+        sessions_dir,
     ))
     .capture_stderr()
     .spawn();
@@ -1402,20 +1368,15 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
             .any(|inbound| user_message(inbound).as_deref() == Some("hello again"))
     );
 
-    wait_for_persisted_event(&respawned.event_log_path, session_id, |event| {
+    wait_for_persisted_event(&respawned.sessions_dir, session_id, |event| {
         matches!(event, Event::MessageCommitted(message)
             if message.role == MessageRole::Assistant && message.text == "Mock response: hello again")
     })
     .await;
-    // Sessions no longer wait for the projection, and a drain abandons a
-    // rebuild still running, so let it land before draining.
-    respawned
-        .wait_for_stderr_line("DuckDB projection rebuilt (")
-        .await;
     client.drain().await;
     assert!(wait_for_exit(&mut respawned.child).await.success());
 
-    let records = horizon_agent::persistence::event_log::read(&respawned.event_log_path)
+    let records = horizon_agent::persistence::event_log::read_all(&respawned.sessions_dir)
         .unwrap()
         .records;
     let cancelled = records
@@ -1436,6 +1397,12 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         .unwrap();
     assert!(next_turn.turn_id.is_some());
     assert_ne!(next_turn.turn_id, cancelled.turn_id);
+    horizon_agent::persistence::projection::duckdb::Projection::new(
+        &respawned.sessions_dir,
+        &respawned.state_db_path,
+    )
+    .catch_up()
+    .expect("catch the projection up");
     let conn = duckdb::Connection::open(&respawned.state_db_path).unwrap();
     let projected: (String, String) = conn.query_row(
         "SELECT turn_id, ended_event_id FROM agent_turns WHERE session_id = ? AND end_reason = 'cancelled'",
@@ -1458,7 +1425,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
 async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&socket_path).await;
 
     let session_id = SessionId::new();
@@ -1478,7 +1445,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     })
     .await;
     // ...and disk, before the hard kill.
-    wait_for_persisted_event(&event_log_path, session_id, |event| {
+    wait_for_persisted_event(&sessions_dir, session_id, |event| {
         matches!(event, Event::MessageCommitted(_))
     })
     .await;
@@ -1486,7 +1453,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = spawn_agentd_at(socket_path, event_log_path);
+    let respawned = spawn_agentd_at(socket_path, sessions_dir);
     let client = connect(&respawned.socket_path).await;
     assert_listed(
         &list_sessions(&client).await,
@@ -1506,7 +1473,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     let repo = isolated_session_fixture();
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&socket_path).await;
     let session_id = SessionId::new();
     open_session(
@@ -1533,12 +1500,12 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     );
 
     wait_for_persisted_event(
-        &event_log_path,
+        &sessions_dir,
         session_id,
         |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == isolated_root),
     )
     .await;
-    let report = horizon_agent::persistence::event_log::read(&event_log_path)
+    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir)
         .expect("the session context should be readable before restart");
     assert!(report.records.iter().any(|record| {
         record.session_id == session_id
@@ -1550,7 +1517,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = spawn_agentd_at(socket_path, event_log_path);
+    let respawned = spawn_agentd_at(socket_path, sessions_dir);
     let mut client = connect(&respawned.socket_path).await;
     let resumed = list_sessions(&client)
         .await
@@ -1644,7 +1611,7 @@ async fn worktree_enter_records_the_spawn_source_as_parent() {
     let repo = isolated_session_fixture();
     let head = fixture_git_output(repo.path(), &["rev-parse", "HEAD"]);
     let agentd = spawn_agentd();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&agentd.socket_path).await;
     let parent = SessionId::new();
     open_session(
@@ -1716,12 +1683,12 @@ async fn worktree_enter_records_the_spawn_source_as_parent() {
     assert_eq!(info_meta(&listed).parent_session_id, Some(parent));
 
     wait_for_persisted_event(
-        &event_log_path,
+        &sessions_dir,
         child,
         |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
     )
     .await;
-    let report = horizon_agent::persistence::event_log::read(&event_log_path).unwrap();
+    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir).unwrap();
     let context = report
         .records
         .iter()
@@ -1743,7 +1710,7 @@ async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent
     let repo = isolated_session_fixture();
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let client = connect(&socket_path).await;
     let parent = SessionId::new();
     open_session(
@@ -1770,8 +1737,8 @@ async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent
     )
     .await;
 
-    wait_for_persisted_event(&event_log_path, child, |_| true).await;
-    let report = horizon_agent::persistence::event_log::read(&event_log_path).unwrap();
+    wait_for_persisted_event(&sessions_dir, child, |_| true).await;
+    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir).unwrap();
     let context = report
         .records
         .iter()
@@ -1789,7 +1756,7 @@ async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = spawn_agentd_at(socket_path, event_log_path.clone());
+    let respawned = spawn_agentd_at(socket_path, sessions_dir.clone());
     let mut client = connect(&respawned.socket_path).await;
     let listed = list_sessions(&client)
         .await
@@ -1813,12 +1780,12 @@ async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent
     let root = resolved.workspace_root.unwrap();
 
     wait_for_persisted_event(
-        &event_log_path,
+        &sessions_dir,
         child,
         |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
     )
     .await;
-    let report = horizon_agent::persistence::event_log::read(&event_log_path).unwrap();
+    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir).unwrap();
     let context = report
         .records
         .iter()
@@ -1841,7 +1808,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     let head = fixture_git_output(repo.path(), &["rev-parse", "HEAD"]);
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&socket_path).await;
     let session_id = SessionId::new();
     open_session(
@@ -1939,7 +1906,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     );
 
     wait_for_persisted_event(
-        &event_log_path,
+        &sessions_dir,
         session_id,
         |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
     )
@@ -1947,7 +1914,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = spawn_agentd_at(socket_path, event_log_path);
+    let respawned = spawn_agentd_at(socket_path, sessions_dir);
     let mut client = connect(&respawned.socket_path).await;
     let resumed = list_sessions(&client)
         .await
@@ -2015,7 +1982,7 @@ async fn attach_agent_after_reconnect_rebuilds_an_equivalent_frame() {
 async fn drained_agentd_respawns_and_preserves_a_completed_session() {
     let mut agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessions_dir = agentd.sessions_dir.clone();
     let mut client = connect(&socket_path).await;
 
     let session_id = SessionId::new();
@@ -2031,7 +1998,7 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
     let status = wait_for_exit(&mut agentd.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 
-    let respawned = spawn_agentd_at(socket_path, event_log_path);
+    let respawned = spawn_agentd_at(socket_path, sessions_dir);
     let mut client = connect(&respawned.socket_path).await;
     assert_listed(
         &list_sessions(&client).await,
@@ -2064,7 +2031,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
-    let event_log_path = std::env::temp_dir().join(format!(
+    let sessions_dir = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
@@ -2074,7 +2041,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
     let exited_session = SessionId::new();
     let live_session = SessionId::new();
     write_session_fixture(
-        &event_log_path,
+        &sessions_dir,
         vec![
             (
                 terminated_session,
@@ -2105,7 +2072,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         ],
     );
 
-    let agentd = spawn_agentd_at(socket_path, event_log_path);
+    let agentd = spawn_agentd_at(socket_path, sessions_dir);
     let client = connect(&agentd.socket_path).await;
     assert_listed(&list_sessions(&client).await, live_session, None, None);
 }
@@ -2118,7 +2085,7 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
-    let event_log_path = std::env::temp_dir().join(format!(
+    let sessions_dir = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
@@ -2126,7 +2093,7 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
 
     let live_session = SessionId::new();
     write_session_fixture(
-        &event_log_path,
+        &sessions_dir,
         vec![(
             live_session,
             vec![
@@ -2137,7 +2104,7 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
     );
 
     let gate = gate_path("resume");
-    let agentd = spawn_agentd_with_resume_gate(socket_path, event_log_path, &gate);
+    let agentd = spawn_agentd_with_resume_gate(socket_path, sessions_dir, &gate);
 
     // `initialize` answers while the resume is held...
     let client = tokio::time::timeout(NEVER, connect(&agentd.socket_path))
@@ -2170,7 +2137,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
-    let event_log_path = std::env::temp_dir().join(format!(
+    let sessions_dir = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
@@ -2178,7 +2145,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
 
     let live_session = SessionId::new();
     write_session_fixture(
-        &event_log_path,
+        &sessions_dir,
         vec![(
             live_session,
             vec![
@@ -2188,7 +2155,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
         )],
     );
 
-    let first = spawn_agentd_at(socket_path.clone(), event_log_path.clone());
+    let first = spawn_agentd_at(socket_path.clone(), sessions_dir.clone());
     // Wait for the first instance to be up and resumed (session/list's own
     // readiness gate) before racing a second one against it.
     let client = connect(&first.socket_path).await;
@@ -2200,7 +2167,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
     // the *first* process, which must outlive it -- so nothing here may own
     // those paths' cleanup.
     let second_paths =
-        AgentdPaths::scratch_at("agentd-e2e", socket_path.clone(), event_log_path.clone());
+        AgentdPaths::scratch_at("agentd-e2e", socket_path.clone(), sessions_dir.clone());
     let mut second_command = agentd_hermetic_command(&resolve_agentd_binary(), &second_paths);
     second_command
         .env_remove(TEST_RESUME_GATE_VAR)
@@ -2232,256 +2199,6 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
     drop(first);
 }
 
-/// Task 1: `initialize`/`session/list` must both answer promptly even
-/// while an (artificially slowed) DuckDB rebuild is still running in the
-/// background.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn duckdb_rebuild_delay_does_not_block_initialize_or_session_list() {
-    let socket_path = std::env::temp_dir().join(format!(
-        "hzn-e2e-{}.sock",
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    ));
-    let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-
-    let live_session = SessionId::new();
-    write_session_fixture(
-        &event_log_path,
-        vec![(
-            live_session,
-            vec![
-                Event::StateChanged(SessionState::Created),
-                Event::StateChanged(SessionState::WaitingForUser),
-            ],
-        )],
-    );
-
-    // The rebuild is held for the whole test: neither answer may wait on it.
-    let gate = gate_path("rebuild");
-    let agentd = spawn_agentd_with_duckdb_rebuild_gate(socket_path, event_log_path, &gate);
-
-    let client = tokio::time::timeout(NEVER, connect(&agentd.socket_path))
-        .await
-        .expect("initialize answers while the duckdb rebuild is held");
-    let sessions = tokio::time::timeout(NEVER, list_sessions(&client))
-        .await
-        .expect("session/list answers while the duckdb rebuild is held");
-    assert_listed(&sessions, live_session, None, None);
-    open_gate(&gate);
-    let _ = std::fs::remove_file(&gate);
-}
-
-/// Owner decision 2026-10-11: session start must not wait on the DuckDB
-/// projection. With the full rebuild artificially slowed, `session/new`
-/// answers and a turn runs while the rebuild is still going, recall on that
-/// session says the index is still being rebuilt, and once the rebuild has
-/// landed the same session's recall works without a restart.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_session_starts_and_recalls_across_a_slow_duckdb_rebuild() {
-    let socket_path = std::env::temp_dir().join(format!(
-        "hzn-e2e-{}.sock",
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    ));
-    let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    write_session_fixture(
-        &event_log_path,
-        vec![(
-            SessionId::new(),
-            vec![
-                Event::MessageCommitted(horizon_agent::contract::Message {
-                    role: horizon_agent::contract::MessageRole::User,
-                    text: "widget history".to_string(),
-                }),
-                Event::StateChanged(SessionState::Terminated),
-            ],
-        )],
-    );
-
-    // The rebuild is held until the session has started and recalled.
-    let gate = gate_path("rebuild");
-    let agentd = agentd_spawn(AgentdPaths::scratch_at(
-        "agentd-e2e",
-        socket_path,
-        event_log_path,
-    ))
-    .env(TEST_DUCKDB_REBUILD_GATE_VAR, &gate)
-    .capture_stderr()
-    .spawn();
-    let mut client = connect(&agentd.socket_path).await;
-
-    let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
-    // The recall call's final update is the first one carrying an output.
-    let tool_output = |inbound: &Inbound| -> Option<String> {
-        tool_update(inbound)?
-            .raw_output
-            .as_opt_ref()
-            .flatten()
-            .map(|output| output.to_string())
-    };
-    let recall_output = |collected: &[Inbound]| -> String {
-        collected
-            .iter()
-            .find_map(tool_output)
-            .expect("the recall call finished")
-    };
-    prompt(&client, session_id, "recall widget").await;
-    let pending =
-        recall_output(&collect_until(&mut client, |inbound| tool_output(inbound).is_some()).await);
-    assert!(
-        pending.contains("still being rebuilt"),
-        "recall during the rebuild must say so: {pending}"
-    );
-
-    open_gate(&gate);
-    agentd
-        .wait_for_stderr_line("DuckDB projection rebuilt (")
-        .await;
-    // The store is shared just after that line, once the writer has caught
-    // it up; poll the same session until recall sees it.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        prompt(&client, session_id, "recall widget").await;
-        let output = recall_output(
-            &collect_until(&mut client, |inbound| tool_output(inbound).is_some()).await,
-        );
-        if !output.contains("still being rebuilt") {
-            assert!(
-                output.contains("widget history"),
-                "recall after the rebuild must find the fixture: {output}"
-            );
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "recall never saw the rebuilt store"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-/// Task 2's skip path: a second spawn against an *unchanged* event log must
-/// skip the DuckDB rebuild entirely.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
-    let socket_path = std::env::temp_dir().join(format!(
-        "hzn-e2e-{}.sock",
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    ));
-    let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let state_db_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-state-{}-{}.duckdb",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-
-    let session_id = SessionId::new();
-    write_session_fixture(
-        &event_log_path,
-        vec![(
-            session_id,
-            vec![
-                Event::StateChanged(SessionState::Created),
-                Event::StateChanged(SessionState::WaitingForUser),
-                Event::StateChanged(SessionState::Terminated),
-            ],
-        )],
-    );
-
-    let first = spawn_agentd_with_duckdb_options(
-        socket_path.clone(),
-        event_log_path.clone(),
-        state_db_path.clone(),
-    );
-    drop(connect(&first.socket_path).await);
-    first
-        .wait_for_stderr_line("DuckDB projection rebuilt (")
-        .await;
-    first.kill_and_wait();
-
-    let second = spawn_agentd_with_duckdb_options(socket_path, event_log_path, state_db_path);
-    drop(connect(&second.socket_path).await);
-    second
-        .wait_for_stderr_line("DuckDB projection already current, skipping rebuild")
-        .await;
-}
-
-/// Task 2's other half: a log that grew since the projection was last built
-/// must still be reconciled.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
-    let socket_path = std::env::temp_dir().join(format!(
-        "hzn-e2e-{}.sock",
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    ));
-    let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let state_db_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-state-{}-{}.duckdb",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-
-    let first_session = SessionId::new();
-    write_session_fixture(
-        &event_log_path,
-        vec![(
-            first_session,
-            vec![
-                Event::StateChanged(SessionState::Created),
-                Event::StateChanged(SessionState::WaitingForUser),
-            ],
-        )],
-    );
-
-    let first = spawn_agentd_with_duckdb_options(
-        socket_path.clone(),
-        event_log_path.clone(),
-        state_db_path.clone(),
-    );
-    drop(connect(&first.socket_path).await);
-    first
-        .wait_for_stderr_line("DuckDB projection rebuilt (")
-        .await;
-    first.kill_and_wait();
-
-    let second_session = SessionId::new();
-    write_session_fixture(
-        &event_log_path,
-        vec![(
-            second_session,
-            vec![
-                Event::StateChanged(SessionState::Created),
-                Event::StateChanged(SessionState::WaitingForUser),
-            ],
-        )],
-    );
-
-    let second = spawn_agentd_with_duckdb_options(socket_path, event_log_path, state_db_path);
-    drop(connect(&second.socket_path).await);
-    let catch_up_line = second
-        .wait_for_stderr_line("DuckDB projection caught up incrementally (")
-        .await;
-    assert!(
-        !catch_up_line.contains("already current"),
-        "a stale (grown) log must trigger real reconciliation work, not the skip path: {catch_up_line}"
-    );
-}
-
 /// A crash between durable announcement and dispatch still leaves a valid
 /// conversation after restoration, including another full daemon restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2496,8 +2213,7 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         call_id: ToolCallId("pending".into()),
         occurrence_id: OccurrenceId::new(),
     };
-    let (writer, ready) = WriterHandle::open(&paths.event_log_path);
-    assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+    let writer = WriterHandle::open(&paths.sessions_dir);
     let mut appender = Appender::new(
         writer.clone(),
         session,
@@ -2522,7 +2238,7 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         .env_remove("ANTHROPIC_API_KEY")
         .spawn();
     let socket = daemon.socket_path.clone();
-    let log = daemon.event_log_path.clone();
+    let log = daemon.sessions_dir.clone();
     for round in 0..2 {
         let mut client = connect(&socket).await;
         let _ = resume(&mut client, session).await.unwrap();
@@ -2541,7 +2257,7 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         drop(client);
         let status = wait_for_exit(&mut daemon.child).await;
         assert!(status.success(), "the drained daemon ended with {status:?}");
-        let records = horizon_agent::persistence::event_log::read(&log)
+        let records = horizon_agent::persistence::event_log::read_all(&log)
             .unwrap()
             .records;
         assert_eq!(records.iter().filter(|record|matches!(&record.event,Event::ToolCallFinished(result) if result.occurrence_id==identity.occurrence_id && result.outcome==ToolOutcome::Cancelled)).count(),1);
@@ -2679,7 +2395,7 @@ async fn large_history_survives_abandoned_replay_and_daemon_restart() {
 
 /// The user messages on `session`'s branch of the log, in order.
 fn branch_user_messages(log: &Path, session: SessionId) -> Vec<String> {
-    let records = horizon_agent::persistence::event_log::read(log)
+    let records = horizon_agent::persistence::event_log::read_all(log)
         .unwrap()
         .records;
     horizon_agent::persistence::event_log::Log::new(records)
@@ -2745,7 +2461,7 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
     let mut daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
         .env_remove("HORIZON_AGENTD_TEST_NO_CHECKPOINTS")
         .spawn();
-    let log = daemon.event_log_path.clone();
+    let log = daemon.sessions_dir.clone();
     let mut client = connect(&daemon.socket_path).await;
     let source = SessionId::new();
     open_session(
@@ -2866,7 +2582,7 @@ async fn a_session_rewound_to_a_cursor_goes_on_from_there() {
     let daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
         .env_remove("HORIZON_AGENTD_TEST_NO_CHECKPOINTS")
         .spawn();
-    let log = daemon.event_log_path.clone();
+    let log = daemon.sessions_dir.clone();
     let mut client = connect(&daemon.socket_path).await;
     let session = SessionId::new();
     open_session(
@@ -2904,7 +2620,7 @@ async fn a_session_rewound_to_a_cursor_goes_on_from_there() {
         "{old_ids:?} {new_ids:?}"
     );
     assert_eq!(branch_user_messages(&log, session), ["one", "three"]);
-    let all: Vec<_> = horizon_agent::persistence::event_log::read(&log)
+    let all: Vec<_> = horizon_agent::persistence::event_log::read_all(&log)
         .unwrap()
         .records
         .into_iter()

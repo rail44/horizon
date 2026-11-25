@@ -192,7 +192,7 @@ mod tests {
         for mode in ["appender", "live", "durable"] {
             let path =
                 std::env::temp_dir().join(format!("horizon-feedback-{}.jsonl", Uuid::new_v4()));
-            let (writer, _) = WriterHandle::open(&path);
+            let writer = crate::persistence::event_log::WriterHandle::open(&path);
             let session = SessionId::new();
             let live = LiveState::with_event_log(session, None, None, writer.clone());
             match mode {
@@ -210,14 +210,14 @@ mod tests {
             if !live.events().is_empty() || live.frame().state.is_some() {
                 failures.push(format!("{mode} folded placeholder events"));
             }
-            let report = super::super::read(&path).unwrap();
+            let report = super::super::read_all(&path).unwrap();
             if !report.records.is_empty() {
                 failures.push(format!(
                     "{mode} wrote {} placeholder records",
                     report.records.len()
                 ));
             }
-            std::fs::remove_file(path).unwrap();
+            let _ = std::fs::remove_dir_all(&path);
         }
         assert!(failures.is_empty(), "{}", failures.join("; "));
     }

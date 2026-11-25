@@ -19,7 +19,7 @@
 //! An approval is answered by the probe: denied by default, with a reason
 //! the model reads, or approved with `--approve` -- which runs what the
 //! agent asked for on this machine. `--home` keeps the daemon's files (its
-//! event log is `<home>/data/horizon/agent-events.jsonl`) where given,
+//! session logs are in `<home>/data/horizon/sessions`) where given,
 //! otherwise in a fresh directory under the temp directory, printed first.
 
 use std::path::{Path, PathBuf};
@@ -133,7 +133,7 @@ fn run(args: Args) -> Result<(), String> {
     print(json!({
         "home": home,
         "dir": dir,
-        "events": data.join("horizon/agent-events.jsonl"),
+        "sessions": data.join("horizon/sessions"),
     }));
 
     let (agentd, _host_tools, _roots) = AgentdHandle::start(&socket, &control);

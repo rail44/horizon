@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn enforcing_gate_returns_pending_then_delivers_auto_approval() {
         let path = temp_event_log("auto");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![ask(0.05)]));
         let judge = JudgeHandle::for_test_decision("test-judge-model", client, writer);
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn enforcing_gate_delivers_escalation_on_model_error() {
         let path = temp_event_log("error");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![Err(
             anyhow::anyhow!("connection refused"),
         )]));
@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn timeout_delivers_fail_closed_escalation() {
         let path = temp_event_log("timeout");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let judge = JudgeHandle::for_test_with_limits(
             "test-judge-model",
             JudgeBackend {
@@ -686,7 +686,7 @@ mod tests {
         };
         assert_eq!(judgment.decision, JudgeDecision::Escalate);
         writer.flush().expect("flush timeout audit");
-        let report = crate::persistence::event_log::read(&path).expect("read timeout audit");
+        let report = crate::persistence::event_log::read_all(&path).expect("read timeout audit");
         let payload = report.records[0]
             .provider_payload
             .as_ref()
@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn rate_limit_exhaustion_preserves_human_flow_immediately() {
         let path = temp_event_log("rate");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let judge = JudgeHandle::for_test_with_limits(
             "test-judge-model",
             JudgeBackend {
@@ -727,7 +727,7 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
         writer.flush().expect("flush rate-limit audit");
-        let report = crate::persistence::event_log::read(&path).expect("read rate-limit audit");
+        let report = crate::persistence::event_log::read_all(&path).expect("read rate-limit audit");
         let payload = report.records[0]
             .provider_payload
             .as_ref()
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn an_outside_sandbox_call_with_judge_goes_to_the_judge() {
         let path = temp_event_log("git-plain");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![ask(0.05)]));
         let judge = JudgeHandle::for_test_decision("test-judge-model", client, writer);
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
@@ -819,7 +819,7 @@ mod tests {
         use std::time::Duration;
         for session_shutdown in [false, true] {
             let path = temp_event_log("cancel-judge");
-            let (writer, _) = crate::persistence::event_log::WriterHandle::open(&path);
+            let writer = crate::persistence::event_log::WriterHandle::open(&path);
             let (started_tx, started) = crossbeam_channel::unbounded();
             let (dropped_tx, dropped) = crossbeam_channel::unbounded();
             let judge = JudgeHandle::for_test_decision(
@@ -858,7 +858,7 @@ mod tests {
             assert!(rx.try_recv().is_err());
             writer.flush().unwrap();
             assert!(
-                crate::persistence::event_log::read(&path)
+                crate::persistence::event_log::read_all(&path)
                     .unwrap()
                     .records
                     .is_empty()
@@ -872,7 +872,7 @@ mod tests {
     fn a_replaced_judgment_is_cancelled_without_stopping_its_replacement() {
         use std::time::Duration;
         let path = temp_event_log("replace-judge");
-        let (writer, _) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let (started_tx, started) = crossbeam_channel::unbounded();
         let (dropped_tx, dropped) = crossbeam_channel::unbounded();
         let judge = JudgeHandle::for_test_decision(
@@ -926,7 +926,7 @@ mod tests {
     #[test]
     fn a_panicking_judge_retires_its_work_and_escalates_to_the_human() {
         let path = temp_event_log("panic-judge");
-        let (writer, _) = crate::persistence::event_log::WriterHandle::open(&path);
+        let writer = crate::persistence::event_log::WriterHandle::open(&path);
         let judge = JudgeHandle::for_test_decision("test", Arc::new(PanickingClient), writer);
         let tools = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_judge(Some(judge))

@@ -1,19 +1,32 @@
 pub mod event_log;
 pub mod projection;
 
-/// Read and rebuild a converted log without opening any live projection or
-/// writer. Unlike runtime recovery, preflight accepts no skipped records.
-pub fn validate_history(path: impl AsRef<std::path::Path>) -> anyhow::Result<usize> {
-    let path = path.as_ref();
+/// Read and rebuild the session logs in `dir` without opening any live
+/// projection or writer. Unlike runtime recovery, preflight accepts no
+/// skipped records. Sessions are checked in the order they began, so a
+/// fork's source comes before it.
+pub fn validate_history(dir: impl AsRef<std::path::Path>) -> anyhow::Result<usize> {
+    let dir = dir.as_ref();
     anyhow::ensure!(
-        path.is_file(),
-        "history file does not exist: {}",
-        path.display()
+        dir.is_dir(),
+        "session log directory does not exist: {}",
+        dir.display()
     );
-    let report = event_log::read(path)?;
-    if let Some(summary) = report.skipped_summary() {
-        anyhow::bail!("history is not ready for activation: {summary}");
+    let mut report = event_log::ReadReport::default();
+    let mut sessions = Vec::new();
+    for session_id in event_log::session_ids(dir)? {
+        let session = event_log::read_session(dir, session_id)?;
+        if let Some(summary) = session.skipped_summary() {
+            anyhow::bail!("history is not ready for activation: {summary}");
+        }
+        sessions.push(session.records);
     }
+    sessions.sort_by_key(|records| {
+        records
+            .first()
+            .map(|first| (first.created_at_unix_ms, first.session_id.as_uuid()))
+    });
+    report.records = sessions.into_iter().flatten().collect();
     crate::providers::rig::conversation::validate::validate_conversation_records(
         &report
             .records

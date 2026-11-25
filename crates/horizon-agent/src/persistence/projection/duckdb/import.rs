@@ -68,13 +68,6 @@ impl Store {
         self.replace_positioned(records.into_iter().map(|record| (record, None)))
     }
 
-    /// [`Self::replace_from_event_log_records`] over a whole-file read,
-    /// committing a log cursor with every chunk so a later start can verify
-    /// one line instead of re-reading the log.
-    pub(crate) fn replace_from_event_log(&self, report: ReadReport) -> Result<ApplyRecordsReport> {
-        self.replace_positioned(positioned(report))
-    }
-
     fn replace_positioned(
         &self,
         records: impl IntoIterator<Item = (Record, Option<u64>)>,
@@ -91,22 +84,6 @@ impl Store {
             )?;
         }
         Ok(report)
-    }
-
-    /// Incremental catch-up: appends a tail read (the records after the
-    /// projection's verified cursor) without clearing any existing state,
-    /// advancing the cursor with every chunk.
-    pub(crate) fn catch_up_from_event_log(&self, report: ReadReport) -> Result<ApplyRecordsReport> {
-        self.apply_records(positioned(report))
-    }
-
-    /// Removes the format stamp, so the next start rebuilds instead of
-    /// trusting the cursor. For a catch-up that skipped a record: chunks
-    /// after the skipped one still committed, with their cursor.
-    pub(crate) fn invalidate_format(&self) -> Result<()> {
-        self.conn
-            .execute_batch("DELETE FROM agent_projection_format;")?;
-        Ok(())
     }
 
     /// Appends every record in `records`, in order, in
@@ -132,7 +109,7 @@ impl Store {
     /// is retried in smaller pieces so only the offending record is skipped
     /// (counted in [`ApplyRecordsReport::skipped`], reported once by the
     /// caller) -- see [`Self::apply_chunk`].
-    fn apply_records(
+    pub(super) fn apply_records(
         &self,
         records: impl IntoIterator<Item = (Record, Option<u64>)>,
     ) -> Result<ApplyRecordsReport> {
@@ -223,7 +200,7 @@ impl Store {
         self.apply_chunk(tail, tail_ends, report);
     }
 
-    fn drop_all_agent_state(&self) -> Result<()> {
+    pub(super) fn drop_all_agent_state(&self) -> Result<()> {
         self.conn.execute_batch(DROP_ALL_AGENT_STATE_SQL)?;
         self.conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
         Ok(())
@@ -231,7 +208,7 @@ impl Store {
 }
 
 /// Pairs each record of a read with its line's end offset.
-fn positioned(report: ReadReport) -> impl Iterator<Item = (Record, Option<u64>)> {
+pub(super) fn positioned(report: ReadReport) -> impl Iterator<Item = (Record, Option<u64>)> {
     let line_ends = report.record_line_ends;
     report
         .records

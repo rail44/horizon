@@ -234,7 +234,7 @@ fn the_wiki_adds_its_role_skill_and_tools() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_thread_session_is_spawned_then_resumed_after_a_suspend() {
-    use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
+    use horizon_agent::persistence::event_log::WriterHandle;
     let (dir, store, page, question) = wiki();
     let state = horizon_agent_host::session::test_support::state_with_packages(
         false,
@@ -242,9 +242,8 @@ async fn a_thread_session_is_spawned_then_resumed_after_a_suspend() {
         add(horizon_agent::packages::Packages::builder()).build(),
     );
     let path = dir.path().join("agent-events.jsonl");
-    state.set_event_log_path(path.clone());
-    let (writer, ready) = WriterHandle::open(&path);
-    assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+    state.set_sessions_dir(path.clone());
+    let writer = WriterHandle::open(&path);
     state.set_writer(Some(writer));
     let session = SessionId::from_uuid(agent::thread_session(&question.id));
     let source = source_for(&dir, &store);
