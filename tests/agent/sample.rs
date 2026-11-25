@@ -9,8 +9,8 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::Set;
 
 use horizon_shell_runtime::agent_display::{
-    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message,
-    Receipt, Status, Transcript, Turn, TurnPart, TurnState, Unit,
+    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Message, Receipt,
+    Status, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 
 /// What a test gives the view to show.
@@ -56,7 +56,6 @@ impl Session {
         };
         for turn in 0..turns {
             session.push(Unit::User(Message {
-                label: Label::You,
                 text: format!("{turn} 番目の依頼: フォントサイズの設定がボードに適用されないのを修正してほしい"),
             }));
             let receipt = session.receipt(turn);
@@ -126,7 +125,6 @@ impl Session {
     /// A request, and the turn answering it, thinking.
     pub fn begin_turn(&mut self, request: &str) {
         self.push(Unit::User(Message {
-            label: Label::You,
             text: request.to_string(),
         }));
         self.push(Unit::Turn(Turn {

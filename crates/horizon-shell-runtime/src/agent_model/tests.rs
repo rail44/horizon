@@ -1,8 +1,8 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta,
-    SessionEventNotification, SessionId, ToolCallMeta, ToolOutcome, write_horizon_meta,
+    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, SessionEventNotification, SessionId, ToolCallMeta,
+    ToolOutcome, write_horizon_meta,
 };
 use serde_json::json;
 
@@ -160,31 +160,6 @@ fn replaying_the_same_snapshot_is_idempotent() {
         );
     }
     assert_eq!(model.frame.items.len(), 2);
-}
-
-#[test]
-fn message_meta_carries_system_authored_roles() {
-    let mut model = AgentModel::default();
-    let mut meta = None;
-    write_horizon_meta(
-        &mut meta,
-        &MessageMeta {
-            role: horizon_acp::MessageRole::TaskNotification,
-        },
-    )
-    .unwrap();
-    apply(
-        &mut model,
-        v2::SessionUpdate::UserMessage(
-            v2::UserMessage::new("t1")
-                .content(vec!["task done".into()])
-                .meta(meta.unwrap()),
-        ),
-    );
-    assert_eq!(
-        texts(&model),
-        [(MessageRole::TaskNotification, "task done".to_string())]
-    );
 }
 
 #[test]
@@ -416,18 +391,8 @@ fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
 fn the_model_option_sets_the_selection() {
     let mut model = AgentModel::default();
     let value = horizon_acp::encode_model_option_id("openrouter", "anthropic/claude-x");
-    let mut option_meta = None;
-    write_horizon_meta(
-        &mut option_meta,
-        &ModelOptionMeta {
-            provider: "openrouter".into(),
-            model: "anthropic/claude-x".into(),
-        },
-    )
-    .unwrap();
-    let mut entry =
+    let entry =
         v2::SessionConfigSelectOption::new(value.clone(), "openrouter · anthropic/claude-x");
-    entry.meta = option_meta;
     let option = v2::SessionConfigOption::select(MODEL_CONFIG_ID, "Model", value, vec![entry]);
     apply(
         &mut model,
@@ -440,7 +405,6 @@ fn the_model_option_sets_the_selection() {
         })
     );
 
-    // Without the entry meta the value id is decoded.
     let value = horizon_acp::encode_model_option_id("default", "gpt-5");
     let option = v2::SessionConfigOption::select(
         MODEL_CONFIG_ID,

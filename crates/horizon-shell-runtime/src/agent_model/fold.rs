@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, SessionEventNotification,
-    ToolCallMeta, decode_model_option_id, read_horizon_meta,
+    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, SessionEventNotification, ToolCallMeta,
+    decode_model_option_id, read_horizon_meta,
 };
 
 use super::types::*;
@@ -108,16 +108,15 @@ impl AgentModel {
     fn apply_update(&mut self, update: v2::SessionUpdate) {
         match update {
             v2::SessionUpdate::UserMessageChunk(chunk) => {
-                let role = chunk_role(chunk.meta.as_ref());
                 let text = block_text(&chunk.content);
-                self.append_message(chunk.message_id.to_string(), role, &text);
+                self.append_message(chunk.message_id.to_string(), MessageRole::User, &text);
             }
             v2::SessionUpdate::UserMessage(message) => {
-                let role = match &message.meta {
-                    MaybeUndefined::Value(meta) => chunk_role(Some(meta)),
-                    _ => MessageRole::User,
-                };
-                self.patch_message(message.message_id.to_string(), role, message.content);
+                self.patch_message(
+                    message.message_id.to_string(),
+                    MessageRole::User,
+                    message.content,
+                );
             }
             v2::SessionUpdate::AgentMessageChunk(chunk) => {
                 let text = block_text(&chunk.content);
@@ -197,12 +196,9 @@ impl AgentModel {
         }
     }
 
-    /// A user message opens a turn; a task notification opens one only
-    /// when none is open.
+    /// A user message opens a turn.
     fn note_new_message(&mut self, role: MessageRole) {
-        let opens = role == MessageRole::User
-            || (role == MessageRole::TaskNotification && self.clock.started_at.is_none());
-        if opens {
+        if role == MessageRole::User {
             self.open_turn();
         }
     }
@@ -460,18 +456,6 @@ fn turn_end_reason(reason: &v2::StopReason) -> TurnEndReason {
     }
 }
 
-fn chunk_role(meta: Option<&v2::Meta>) -> MessageRole {
-    match read_horizon_meta::<MessageMeta>(meta) {
-        Some(Ok(MessageMeta {
-            role: horizon_acp::MessageRole::TaskNotification,
-        })) => MessageRole::TaskNotification,
-        Some(Ok(MessageMeta {
-            role: horizon_acp::MessageRole::AutoContinue,
-        })) => MessageRole::AutoContinue,
-        _ => MessageRole::User,
-    }
-}
-
 fn block_text(block: &v2::ContentBlock) -> String {
     match block {
         v2::ContentBlock::Text(text) => text.text.clone(),
@@ -542,8 +526,7 @@ pub fn model_choices(options: &[v2::SessionConfigOption]) -> Option<ModelChoices
 }
 
 /// The provider and model of the `model` config option, if the set carries
-/// one: from its current entry's `ModelOptionMeta`, else by decoding the
-/// current value id.
+/// one: its current value id, decoded.
 pub fn model_selection(options: &[v2::SessionConfigOption]) -> Option<ModelSelection> {
     let option = options
         .iter()
@@ -560,17 +543,10 @@ pub fn model_selection(options: &[v2::SessionConfigOption]) -> Option<ModelSelec
             .collect(),
         _ => Vec::new(),
     };
-    let from_meta = entries
-        .into_iter()
-        .find(|entry| entry.value.0.as_ref() == current)
-        .and_then(|entry| read_horizon_meta::<ModelOptionMeta>(entry.meta.as_ref()))
-        .and_then(Result::ok);
-    match from_meta {
-        Some(meta) => Some(ModelSelection { model: meta.model }),
-        None => decode_model_option_id(current).map(|(_, model)| ModelSelection {
-            model: model.to_owned(),
-        }),
-    }
+    let _ = entries;
+    decode_model_option_id(current).map(|(_, model)| ModelSelection {
+        model: model.to_owned(),
+    })
 }
 
 /// A subagent reported running or waiting on the human is kept, in the

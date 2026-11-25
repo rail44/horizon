@@ -22,11 +22,9 @@ pub fn first_user_message_text(items: &[AgentFrameItem]) -> Option<String> {
     })
 }
 
-/// The title text for a transcript: the first user-authored message whose
-/// text survives [`derive_session_title`] (blank messages are skipped, as
-/// are system-authored ones -- [`MessageRole::TaskNotification`] and the
-/// other injected roles deliberately never title a tab), or `None` while
-/// no such message exists yet.
+/// The title text for a transcript: the first user message whose text
+/// survives [`derive_session_title`] (blank messages are skipped), or
+/// `None` while no such message exists yet.
 pub fn derive_title_from_items(items: &[AgentFrameItem]) -> Option<String> {
     first_user_message_text(items).and_then(|text| derive_session_title(&text))
 }
@@ -50,16 +48,9 @@ mod tests {
         message(MessageRole::User, text)
     }
 
-    fn task_notification(text: &str) -> AgentFrameItem {
-        message(MessageRole::TaskNotification, text)
-    }
-
     #[test]
     fn the_first_usable_user_message_supplies_the_title() {
-        let items = vec![
-            task_notification("task done"),
-            user_message("  fix the flaky test in\nsession.rs  "),
-        ];
+        let items = vec![user_message("  fix the flaky test in\nsession.rs  ")];
         assert_eq!(
             derive_title_from_items(&items),
             Some("fix the flaky test in session.rs".to_string())
@@ -81,25 +72,17 @@ mod tests {
         // clamp here would summarize the already-truncated label instead
         // of what the user actually asked.
         let long = "please investigate ".repeat(20);
-        let items = vec![task_notification("task done"), user_message(&long)];
+        let items = vec![user_message(&long)];
         assert_eq!(first_user_message_text(&items), Some(long.clone()));
         assert!(derive_title_from_items(&items).unwrap().chars().count() < long.chars().count());
     }
 
     #[test]
     fn first_user_message_text_follows_the_same_skip_rules_as_the_title() {
-        let items = vec![
-            user_message("   "),
-            task_notification("task done"),
-            user_message("real ask"),
-        ];
+        let items = vec![user_message("   "), user_message("real ask")];
         assert_eq!(
             first_user_message_text(&items),
             Some("real ask".to_string())
-        );
-        assert_eq!(
-            first_user_message_text(&[task_notification("task done")]),
-            None
         );
     }
 

@@ -36,13 +36,6 @@ pub const PERMISSION_OPTION_APPROVE: &str = "approve";
 /// `optionId` of the denying choice on every `session/request_permission`.
 pub const PERMISSION_OPTION_DENY: &str = "deny";
 
-/// Carried under `_meta.horizon` on each `model` config option entry.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ModelOptionMeta {
-    pub provider: String,
-    pub model: String,
-}
-
 /// The `model` option's value id: `provider/model`, split at the first `/`
 /// (provider names carry no `/`; model ids may).
 pub fn encode_model_option_id(provider: &str, model: &str) -> String {
@@ -148,19 +141,6 @@ pub enum ToolOutcome {
     Superseded { retry_occurrence_id: String },
 }
 
-/// Mirrors the non-human `contract::MessageRole` variants (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct MessageMeta {
-    pub role: MessageRole,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MessageRole {
-    TaskNotification,
-    AutoContinue,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,12 +202,6 @@ mod tests {
             auto_approved: None,
             policy_tier: None,
         });
-        round_trip(&MessageMeta {
-            role: MessageRole::TaskNotification,
-        });
-        round_trip(&MessageMeta {
-            role: MessageRole::AutoContinue,
-        });
     }
 
     #[test]
@@ -248,24 +222,26 @@ mod tests {
         }
     }
 
+    /// A payload for the helpers' own tests.
+    fn probe() -> InitializeMeta {
+        InitializeMeta {
+            ext_version: 1,
+            binary_id: "probe".into(),
+        }
+    }
+
     #[test]
     fn write_preserves_other_meta_keys() {
         let mut meta = Some(Meta::from_iter([
             ("other".to_owned(), json!({"keep": true})),
             (HORIZON_META_KEY.to_owned(), json!("stale")),
         ]));
-        write_horizon_meta(
-            &mut meta,
-            &MessageMeta {
-                role: MessageRole::AutoContinue,
-            },
-        )
-        .unwrap();
+        write_horizon_meta(&mut meta, &probe()).unwrap();
         let meta = meta.unwrap();
         assert_eq!(meta.get("other"), Some(&json!({"keep": true})));
         assert_eq!(
             meta.get(HORIZON_META_KEY),
-            Some(&json!({"role": "auto_continue"}))
+            Some(&json!({"ext_version": 1, "binary_id": "probe"}))
         );
         assert_eq!(meta.len(), 2);
     }
@@ -273,27 +249,22 @@ mod tests {
     #[test]
     fn write_creates_the_map_when_absent() {
         let mut meta = None;
-        write_horizon_meta(
-            &mut meta,
-            &MessageMeta {
-                role: MessageRole::AutoContinue,
-            },
-        )
-        .unwrap();
+        write_horizon_meta(&mut meta, &probe()).unwrap();
         assert_eq!(
             serde_json::Value::Object(meta.unwrap()),
-            json!({"horizon": {"role": "auto_continue"}})
+            json!({"horizon": {"ext_version": 1, "binary_id": "probe"}})
         );
     }
 
     #[test]
     fn read_distinguishes_absent_from_malformed() {
-        assert!(read_horizon_meta::<MessageMeta>(None).is_none());
+        assert!(read_horizon_meta::<InitializeMeta>(None).is_none());
         let without = Meta::from_iter([("other".to_owned(), json!(1))]);
-        assert!(read_horizon_meta::<MessageMeta>(Some(&without)).is_none());
-        let malformed = Meta::from_iter([(HORIZON_META_KEY.to_owned(), json!({"role": 7}))]);
+        assert!(read_horizon_meta::<InitializeMeta>(Some(&without)).is_none());
+        let malformed =
+            Meta::from_iter([(HORIZON_META_KEY.to_owned(), json!({"ext_version": "x"}))]);
         std::assert_matches!(
-            read_horizon_meta::<MessageMeta>(Some(&malformed)),
+            read_horizon_meta::<InitializeMeta>(Some(&malformed)),
             Some(Err(_))
         );
     }

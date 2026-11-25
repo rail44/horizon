@@ -23,7 +23,7 @@ use super::turns::{
 };
 use crate::agent_display::chrome;
 use crate::agent_display::{
-    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
+    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Message, Notice,
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 use crate::agent_model::{
@@ -296,7 +296,7 @@ fn span_units(
                         started = true;
                     }
                 }
-                role => {
+                MessageRole::User => {
                     if started {
                         units.append(&mut before);
                         units.push(Unit::Turn(Turn {
@@ -308,7 +308,6 @@ fn span_units(
                         started = false;
                     }
                     before.push(Unit::User(Message {
-                        label: label(role),
                         text: message.text.clone(),
                     }));
                 }
@@ -344,14 +343,6 @@ fn span_units(
     }
     units.extend(after);
     units
-}
-
-fn label(role: MessageRole) -> Label {
-    match role {
-        MessageRole::TaskNotification => Label::Task,
-        MessageRole::AutoContinue => Label::Continue,
-        MessageRole::User | MessageRole::Assistant => Label::You,
-    }
 }
 
 fn turn_state(reason: TurnEndReason) -> TurnState {
@@ -562,8 +553,7 @@ mod tests {
     };
     use super::*;
     use crate::agent_model::{
-        AgentFrameItem, Compaction, Message as FrameMessage, ModelSelection, Notice, SessionPhase,
-        Subagent,
+        AgentFrameItem, Compaction, ModelSelection, Notice, SessionPhase, Subagent,
     };
 
     fn turn_end(reason: TurnEndReason) -> AgentFrameItem {
@@ -656,7 +646,6 @@ mod tests {
         assert_eq!(
             *transcript.units[0],
             Unit::User(Message {
-                label: Label::You,
                 text: "fix it".to_string()
             })
         );
@@ -700,7 +689,6 @@ mod tests {
                     elapsed: None,
                 }),
                 Unit::User(Message {
-                    label: Label::You,
                     text: "q".to_string(),
                 }),
                 Unit::Turn(Turn {
@@ -975,40 +963,6 @@ mod tests {
         std::assert_matches!(*adapted.transcript.units[1], Unit::Notice(_));
         std::assert_matches!(*adapted.transcript.units[2], Unit::Turn(_));
         assert_eq!(adapted.transcript.status, Status::Terminated);
-    }
-
-    #[test]
-    fn task_and_continue_messages_carry_their_labels() {
-        let message = |role, text: &str| {
-            AgentFrameItem::Message(FrameMessage {
-                id: text.to_string(),
-                role,
-                text: text.to_string(),
-            })
-        };
-        let adapted = adapt(
-            &model(
-                SessionPhase::Idle,
-                vec![
-                    message(MessageRole::TaskNotification, "task done"),
-                    assistant_delta("ok"),
-                    turn_end(TurnEndReason::Completed),
-                    message(MessageRole::AutoContinue, "continue"),
-                ],
-            ),
-            false,
-            0,
-        );
-        let labels: Vec<Label> = adapted
-            .transcript
-            .units
-            .iter()
-            .filter_map(|unit| match unit.as_ref() {
-                Unit::User(message) => Some(message.label),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(labels, vec![Label::Task, Label::Continue]);
     }
 
     #[test]

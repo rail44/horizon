@@ -181,17 +181,7 @@ pub(super) fn parse_session_id(id: &v2::SessionId) -> Option<SessionId> {
 
 /// One model of a provider, as an entry of the `model` option.
 fn model_entry(provider: &str, model: &str, name: String) -> v2::SessionConfigSelectOption {
-    let mut meta = None;
-    acp::write_horizon_meta(
-        &mut meta,
-        &acp::ModelOptionMeta {
-            provider: provider.to_string(),
-            model: model.to_string(),
-        },
-    )
-    .expect("model option meta serializes");
     v2::SessionConfigSelectOption::new(acp::encode_model_option_id(provider, model), name)
-        .meta(meta)
 }
 
 /// The `model` config option at `(provider, model)`: the catalog's models,
@@ -478,20 +468,11 @@ impl Mapper {
                     MessageRole::Assistant => {
                         v2::SessionUpdate::AgentMessage(v2::AgentMessage::new(id).content(content))
                     }
-                    MessageRole::User => {
+                    // Whoever sent it, it is a user message.
+                    MessageRole::User
+                    | MessageRole::TaskNotification
+                    | MessageRole::AutoContinue => {
                         v2::SessionUpdate::UserMessage(v2::UserMessage::new(id).content(content))
-                    }
-                    MessageRole::TaskNotification | MessageRole::AutoContinue => {
-                        let role = if message.role == MessageRole::TaskNotification {
-                            acp::MessageRole::TaskNotification
-                        } else {
-                            acp::MessageRole::AutoContinue
-                        };
-                        v2::SessionUpdate::UserMessage(
-                            v2::UserMessage::new(id)
-                                .content(content)
-                                .meta(horizon_meta(&acp::MessageMeta { role })),
-                        )
                     }
                 };
                 outgoing.push(Outgoing::update(update));

@@ -28,19 +28,10 @@ pub enum Unit {
     Notice(Notice),
 }
 
-/// Something sent into the session: by the owner, by a task, or as an
-/// automatic continuation. Plain text, not markdown.
+/// Something sent into the session. Plain text, not markdown.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
-    pub label: Label,
     pub text: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Label {
-    You,
-    Task,
-    Continue,
 }
 
 /// One agent turn.

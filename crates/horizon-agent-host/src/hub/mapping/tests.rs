@@ -202,7 +202,7 @@ fn the_same_sequence_maps_to_the_same_updates() {
 }
 
 #[test]
-fn non_human_user_messages_carry_their_role() {
+fn non_human_user_messages_are_plain_user_messages() {
     let updates = updates(
         &mut mapper(),
         &[committed(MessageRole::TaskNotification, "task done")],
@@ -210,10 +210,7 @@ fn non_human_user_messages_carry_their_role() {
     let v2::SessionUpdate::UserMessage(message) = &updates[0] else {
         panic!("expected a user message, got {updates:?}");
     };
-    let meta: acp::MessageMeta = acp::read_horizon_meta(message.meta.as_opt_ref().flatten())
-        .unwrap()
-        .unwrap();
-    assert_eq!(meta.role, acp::MessageRole::TaskNotification);
+    assert_eq!(message.meta, MaybeUndefined::Undefined);
 }
 
 #[test]

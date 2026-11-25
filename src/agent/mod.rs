@@ -25,8 +25,8 @@ use keyboard_types::{Key, NamedKey};
 
 use horizon_shell_runtime::agent_display::chrome;
 use horizon_shell_runtime::agent_display::{
-    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, Label, Notice, Receipt, Status,
-    Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
+    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, Notice, Receipt, Status, Task,
+    Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 
 mod pane;
@@ -263,15 +263,7 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
     let key = |(index, unit): &(usize, Rc<Unit>)| (*index, Rc::as_ptr(unit) as usize);
     let unit = move |(_, unit): &(usize, Rc<Unit>)| {
         el("div").class(styles::UNIT).child(match unit.as_ref() {
-            Unit::User(message) => el("div")
-                .class((
-                    styles::USER,
-                    match message.label {
-                        Label::You => None,
-                        Label::Task | Label::Continue => Some(styles::MUTED),
-                    },
-                ))
-                .text(&message.text),
+            Unit::User(message) => el("div").class(styles::USER).text(&message.text),
             Unit::Notice(notice) => notice_line(notice),
             Unit::Turn(turn) => turn_card(turn, state),
         })

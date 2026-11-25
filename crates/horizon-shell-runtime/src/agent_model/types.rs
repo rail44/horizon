@@ -19,10 +19,6 @@ pub struct ToolCallIdentity {
 pub enum MessageRole {
     User,
     Assistant,
-    /// `MessageMeta{role: TaskNotification}` on a `user_message`.
-    TaskNotification,
-    /// `MessageMeta{role: AutoContinue}` on a `user_message`.
-    AutoContinue,
 }
 
 /// A `user_message`/`agent_message` and its chunks, folded by `messageId`.
