@@ -113,6 +113,9 @@ pub fn agentd_hermetic_command(binary: &Path, paths: &AgentdPaths) -> Command {
         .env("HORIZON_LOGD_SOCKET", &paths.logd_socket)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        // A test run from a Horizon pane must not reach that Horizon.
+        .env_remove("HORIZON_SOCKET")
+        .env_remove("HORIZON_SESSION_ID")
         // Sessions run in whatever directory a test gives them, often this
         // repository: no checkpoints or fork worktrees there. A test that
         // wants them removes this and gives its sessions a fixture.

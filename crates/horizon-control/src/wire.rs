@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::contract::{
     CONTROL_VERSION, Envelope, EnvelopeBody, ErrorMessage, Extensions, Hello, HelloAck, Invoke,
-    Query, Rejected, Sessions, State,
+    Query, Rejected, Sessions, State, Workspace,
 };
 
 /// Explicit, non-panicking failure modes for [`read_envelope`]. Unlike
@@ -113,6 +113,7 @@ fn parse_line(line: &str) -> Result<Envelope, WireError> {
         "extensions" => {
             EnvelopeBody::Extensions(serde_json::from_value::<Extensions>(raw.payload)?)
         }
+        "workspace" => EnvelopeBody::Workspace(serde_json::from_value::<Workspace>(raw.payload)?),
         other => EnvelopeBody::Unknown {
             kind: other.to_string(),
             payload: raw.payload,
@@ -177,6 +178,9 @@ mod tests {
                     "terminate-active-session".to_string(),
                     "terminate-all-detached-sessions".to_string(),
                 ],
+            }),
+            EnvelopeBody::Workspace(Workspace {
+                snapshot: serde_json::json!({"detached_session_count": 0, "sessions": []}),
             }),
         ]
     }

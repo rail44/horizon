@@ -23,7 +23,6 @@ pub enum Inbound {
         v2::RequestPermissionRequest,
         Responder<v2::RequestPermissionResponse>,
     ),
-    HostTool(acp::HostToolRequest, Responder<acp::HostToolResponse>),
     /// The answer to a request sent with [`AcpClient::send_ordered`], at its
     /// place among the notifications.
     Replied(Result<serde_json::Value, Error>),
@@ -104,7 +103,6 @@ where
     let builder = notification!(builder, v2::UpdateSessionNotification, Update);
     let builder = notification!(builder, acp::SessionEventNotification, SessionEvent);
     let builder = request!(builder, v2::RequestPermissionRequest, Permission);
-    let builder = request!(builder, acp::HostToolRequest, HostTool);
     let transport = ByteStreams::new(write.compat_write(), read.compat());
     let task = tokio::spawn(async move {
         let _ = builder

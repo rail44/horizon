@@ -66,7 +66,8 @@ impl Envelope {
 /// (server -> client) are [`EnvelopeBody::HelloAck`],
 /// [`EnvelopeBody::Rejected`], [`EnvelopeBody::Ok`],
 /// [`EnvelopeBody::Error`], [`EnvelopeBody::Sessions`],
-/// [`EnvelopeBody::State`], [`EnvelopeBody::Extensions`].
+/// [`EnvelopeBody::State`], [`EnvelopeBody::Extensions`],
+/// [`EnvelopeBody::Workspace`].
 ///
 /// [`EnvelopeBody::Unknown`] is this contract's forward-compatibility
 /// escape hatch: an envelope whose `kind` this build doesn't recognize is
@@ -93,6 +94,7 @@ pub enum EnvelopeBody {
     Sessions(Sessions),
     State(State),
     Extensions(Extensions),
+    Workspace(Workspace),
     /// See [`EnvelopeBody`]'s doc comment. Never constructed by
     /// [`Envelope::new`] callers on purpose -- only
     /// [`crate::wire::read_envelope`] produces this, as the fallback for an
@@ -176,6 +178,14 @@ pub struct ExtensionEntry {
     pub source: String,
     /// Its component's file.
     pub file: String,
+}
+
+/// Reply to `Query { what: "workspace" }`: the workspace's tabs, panes and
+/// sessions as the agent's `workspace_snapshot` tool reads them
+/// (`horizon_workspace::snapshot::workspace_snapshot`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Workspace {
+    pub snapshot: serde_json::Value,
 }
 
 /// Reply to `Query { what: "sessions" }`.

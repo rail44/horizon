@@ -15,8 +15,8 @@ use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
     AttachmentEnd, ContinueTurnRequest, EmptyResponse, EnsureBoardOrganizerRequest,
-    EnsureBoardOrganizerResponse, HORIZON_ACP_EXT_VERSION, HostToolRequest, HostToolResponse,
-    InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
+    EnsureBoardOrganizerResponse, HORIZON_ACP_EXT_VERSION, InitializeMeta,
+    PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
     SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
     write_horizon_meta,
 };
@@ -461,7 +461,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = pair();
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
+    let (agentd, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
 
     let terminal_id = uuid::Uuid::new_v4();
     let terminal = terminald.start_terminal(terminal_id, spec());
@@ -521,7 +521,7 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = pair();
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
+    let (agentd, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
 
     let terminal = terminald.start_terminal(uuid::Uuid::new_v4(), spec());
     let (mut terminal_calls, _tconn, _tserve) =
@@ -560,7 +560,7 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_root_updates_reach_their_own_channel() {
     let (client, server) = pair();
-    let (handle, _host_tools, workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (handle, workspace_roots) = AgentdHandle::start_on_stream(client);
     let session_id = SessionId::new();
     let mut agent = start_mock_session(&handle, session_id);
 
@@ -606,7 +606,7 @@ async fn workspace_root_updates_reach_their_own_channel() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
     let (client, _server) = pair();
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (handle, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let stopped = std::thread::spawn(move || handle.stop_and_wait());
     tokio::task::spawn_blocking(move || stopped.join().unwrap())
         .await
@@ -618,7 +618,7 @@ async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn established_disconnect_reports_errors_without_reconnecting() {
     let (client, server) = pair();
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (handle, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let mut ready = start_mock_session(&handle, SessionId::new());
     let mut restoring = handle.attach_session(SessionId::new());
 
@@ -672,7 +672,7 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
     let (client, server) = pair();
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (handle, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let _fake = serve_fake_agentd(
         server,
         FakeAgentBehavior {
@@ -702,7 +702,7 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn organizer_request_uses_existing_agent_connection() {
     let (client, server) = pair();
-    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (agentd, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
     let root = PathBuf::from("/project/organizer");
     let expected_root = root.clone();
@@ -718,7 +718,7 @@ async fn organizer_request_uses_existing_agent_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
     let (client, server) = pair();
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
     let id = SessionId::new();
     let old = agentd.attach_session(id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
@@ -742,7 +742,7 @@ async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() {
     let (client, server) = pair();
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
     let id = SessionId::new();
     let mut handle = agentd.attach_session(id);
     let mut fake = serve_fake_agentd(
@@ -799,7 +799,7 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn attachment_closed_notices_follow_the_resume_boundary() {
     let (client, server) = pair();
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
     let id = SessionId::new();
     let mut handle = agentd.attach_session(id);
     let mut fake = serve_fake_agentd(
@@ -841,7 +841,7 @@ async fn attachment_closed_notices_follow_the_resume_boundary() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permission_requests_are_answered_from_the_panes_decisions() {
     let (client, server) = pair();
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
     let id = SessionId::new();
     let mut handle = start_mock_session(&agentd, id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
@@ -927,7 +927,7 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     let (client, server) = pair();
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
     let id = SessionId::new();
     let mut handle = start_mock_session(&agentd, id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
@@ -946,35 +946,4 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     assert_eq!(text, "hello");
     handle.sender().send(AgentCommand::Close).unwrap();
     std::assert_matches!(fake.next_call().await, AgentCall::Close);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn host_tool_requests_are_answered_through_the_responder() {
-    let (client, server) = pair();
-    let (agentd, host_tools, _roots) = AgentdHandle::start_on_stream(client);
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    // The runtime answers requests only once initialized.
-    let listed = {
-        let agentd = agentd.clone();
-        tokio::task::spawn_blocking(move || agentd.session_list()).await
-    };
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-
-    let answer = fake.connection.send_request(HostToolRequest {
-        request_id: "req-1".into(),
-        tool_id: "workspace_snapshot".into(),
-        input: serde_json::json!({}),
-    });
-    let request = tokio::task::spawn_blocking(move || {
-        host_tools.recv_timeout(Duration::from_secs(5)).unwrap()
-    })
-    .await
-    .unwrap();
-    assert_eq!(request.request_id, "req-1");
-    agentd
-        .responder()
-        .respond_host_tool("req-1", serde_json::json!({"tabs": []}));
-    let HostToolResponse { output } = answer.block_task().await.unwrap();
-    assert_eq!(output, serde_json::json!({"tabs": []}));
 }

@@ -13,9 +13,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::contract::{
-    Event, JsonValue, ProviderEvent, ProviderId, RequestId, SessionId, TaskProgress,
-};
+use crate::contract::{Event, ProviderEvent, ProviderId, SessionId, TaskProgress};
 use crate::roles::RoleId;
 
 /// Everything a hosted agent session pushes to its attachment: the
@@ -222,23 +220,6 @@ pub struct SessionNew {
     /// active). It becomes `SessionSummary.parent_session_id` when the
     /// session enters a worktree; spawns do not create worktrees (board #65).
     pub spawn_source_session_id: Option<SessionId>,
-}
-
-/// The agent (child) asking the client to run a host-coupled tool (e.g.
-/// `workspace_snapshot`) over this same connection -- guardrail 4. Sent as
-/// `_horizon/host_tool`; the `request_id` correlates the reply because a
-/// session thread blocks on the matching [`HostToolResponse`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HostToolRequest {
-    pub request_id: RequestId,
-    pub tool_id: String,
-    pub input: JsonValue,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HostToolResponse {
-    pub request_id: RequestId,
-    pub output: JsonValue,
 }
 
 #[cfg(test)]

@@ -323,9 +323,8 @@ async fn recv_output(events: crossbeam_channel::Receiver<TerminalUpdate>, bytes:
 /// terminal — exactly the coupling `Reload Agent Runtime` made visible.
 #[test]
 fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
-    let (host_tools, _host_tools_rx) = unbounded();
     let (workspace_roots, _workspace_roots_rx) = unbounded();
-    let agent_routes = AgentRoutes::new(host_tools, workspace_roots);
+    let agent_routes = AgentRoutes::new(workspace_roots);
     let terminal_routes = TerminalRoutes::new();
 
     let terminal_id = Uuid::new_v4();

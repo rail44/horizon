@@ -8,11 +8,9 @@ use horizon_agent::config::ReasoningLevel;
 use horizon_agent::contract::Event;
 use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::hosting::{
-    HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, ReasoningSelection,
-    SessionNew, SessionSummary,
+    ModelSelection, ProviderSummary, ReasoningSelection, SessionNew, SessionSummary,
 };
 use horizon_agent::persistence::event_log::{Appender, PersistedSessionContext};
-use tokio::sync::mpsc::UnboundedSender;
 
 use super::spawn::spawn_session_thread;
 use super::state::{AgentdState, lock_unpoisoned};
@@ -126,24 +124,6 @@ impl Connection {
             .send(command)
             .map_err(|_| "Session is no longer accepting commands.".to_string())?;
         Ok(())
-    }
-
-    /// Installs the current connection's host-tool bridge (the local half
-    /// behind `_horizon/host_tool`) — the connection-global counterpart
-    /// of the per-attachment subscriptions installed by [`Self::attach`].
-    pub(crate) fn connect_host_tools(&self, outgoing: UnboundedSender<HostToolRequest>) {
-        *self.state.host_tools_outgoing.lock().unwrap() = Some(outgoing);
-    }
-
-    /// Clears the connection-global host-tool bridge on disconnect, so a
-    /// session thread's `execute_auto` fails fast instead of enqueueing
-    /// into a bridge whose pump already died with the connection. The
-    /// per-session subscribers are deliberately *not* swept here: each
-    /// attachment's bridge dies with its own pump, and
-    /// [`super::events::send_session_event`] already drops an entry lazily on its first
-    /// failed send (a fresh attach replaces it anyway).
-    pub(crate) fn disconnect(&self) {
-        *self.state.host_tools_outgoing.lock().unwrap() = None;
     }
 
     #[cfg(test)]
@@ -340,21 +320,6 @@ impl Connection {
             parent,
         );
         Ok(session_id)
-    }
-
-    /// Routes an incoming `Control::HostToolResponse` back to whichever
-    /// session thread's `host_tools::AgentdHostTools::execute_auto` call is blocked
-    /// waiting for this exact `request_id`.
-    pub(crate) fn handle_host_tool_response(&self, response: HostToolResponse) {
-        let sender = self
-            .state
-            .pending_host_tool_requests
-            .lock()
-            .unwrap()
-            .remove(&response.request_id.0);
-        if let Some(sender) = sender {
-            let _ = sender.send(response);
-        }
     }
 
     /// Delegates to [`AgentdState::wait_until_resume_ready`] -- see `main`'s

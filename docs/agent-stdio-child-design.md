@@ -102,8 +102,8 @@ What changes in `horizon-shell-runtime`'s `agent.rs` is how it reaches
 the agent: it starts `horizon-agent-acp` (from beside its own
 executable, as it finds the daemons today) with piped stdio, instead of
 connecting to a socket or spawning a daemon. The one host tool,
-`workspace_snapshot`, stays an `_horizon/host_tool` request answered on
-the UI thread.
+`workspace_snapshot`, asks the shell's control plane itself
+(`HORIZON_SOCKET`, the query `workspace`).
 
 While `_horizon/*` extensions remain, the shell compares
 `HORIZON_ACP_EXT_VERSION` in `initialize`'s `_meta.horizon`, since the
@@ -239,7 +239,7 @@ follows ACP where they differ (board #114):
 | `reload_provider_config` | Out of ACP: the child reads the config file again when it changes |
 | `task_progress` | `subagent_update`: the child's description is its title, its state is `running`, `requires_action` while it waits for an approval, `idle` when it is done; what it is doing and when it started are not sent |
 | `tool_call_progress` | Gone: only the mock provider sent it; rig gives a tool call whole |
-| `host_tool` (`workspace_snapshot`) | Out of ACP: the tool asks the control socket (`HORIZON_SOCKET`) itself |
+| `host_tool` (`workspace_snapshot`) | Out of ACP: the tool asks the control socket (`HORIZON_SOCKET`) itself, with the query `workspace` |
 | `session_event` | An error is the stop reason `Error`; resumption, a closed attachment, an exit and skipped lines have no use over a child's stdio; rate limits and history clearing are not shown |
 | `drain`, `watch_board`, `rewind_session` | Gone |
 

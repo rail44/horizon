@@ -116,6 +116,16 @@ async fn main() -> anyhow::Result<()> {
         .with_checkpoints(checkpoints)
         .with_extensions(extensions.clone()),
     );
+    // The shell that started this process puts its control plane here;
+    // `workspace_snapshot` asks it.
+    let state = match std::env::var_os("HORIZON_SOCKET").filter(|socket| !socket.is_empty()) {
+        Some(socket) => Arc::new(
+            Arc::into_inner(state)
+                .expect("nothing holds the state yet")
+                .with_control_socket(PathBuf::from(socket)),
+        ),
+        None => state,
+    };
 
     spawn_resume_task(
         state.clone(),

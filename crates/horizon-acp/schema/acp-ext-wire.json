@@ -113,34 +113,6 @@
       ],
       "type": "object"
     },
-    "HostToolRequest": {
-      "description": "Mirrors `hosting::HostToolRequest` (crates/horizon-agent/src/hosting.rs).",
-      "properties": {
-        "input": true,
-        "request_id": {
-          "type": "string"
-        },
-        "tool_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "request_id",
-        "tool_id",
-        "input"
-      ],
-      "type": "object"
-    },
-    "HostToolResponse": {
-      "description": "Mirrors `hosting::HostToolResponse` (crates/horizon-agent/src/hosting.rs).",
-      "properties": {
-        "output": true
-      },
-      "required": [
-        "output"
-      ],
-      "type": "object"
-    },
     "InitializeMeta": {
       "description": "`initialize` request and response, both directions.",
       "properties": {
@@ -641,16 +613,6 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "agent_to_client": {
-    "_horizon/host_tool": {
-      "reply": {
-        "$ref": "#/$defs/HostToolResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/HostToolRequest"
-      }
-    }
-  },
   "client_to_agent": {
     "_horizon/continue_turn": {
       "reply": {
@@ -729,5 +691,5 @@
     "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 14
+  "x-session-protocol-version": 15
 }

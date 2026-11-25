@@ -11,13 +11,11 @@ use crossbeam_channel::Sender;
 
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
-use horizon_agent::hosting::{HostToolRequest, HostToolResponse};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::persistence::projection::duckdb::Projection;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
 use tokio::sync::Notify;
-use tokio::sync::mpsc::UnboundedSender;
 
 use crate::worktree::WorktreeInfo;
 
@@ -64,18 +62,15 @@ pub struct AgentdState {
     /// thread happens to be running by then.
     writer: Mutex<Option<WriterHandle>>,
     pub(super) sessions: Mutex<HashMap<SessionId, SessionEntry>>,
-    pub(super) pending_host_tool_requests: Mutex<HashMap<String, Sender<HostToolResponse>>>,
     pub(super) agent_subscribers: super::attachment::Streams,
     /// In-process observers of a session's `contract::Event` stream,
     /// installed alongside (never instead of) the client-facing
     /// [`AgentSubscribers`] above -- see [`super::subscription`], which owns
     /// this map's whole vocabulary.
     pub(super) session_subscriptions: super::subscription::SessionSubscriptions,
-    /// The current connection's host-tool request bridge (the local half of
-    /// `_horizon/host_tool`), installed by a successful `initialize` and
-    /// cleared when the connection ends — connection-global, unlike the
-    /// session-scoped subscribers above.
-    pub(super) host_tools_outgoing: Mutex<Option<UnboundedSender<HostToolRequest>>>,
+    /// The control plane of the shell that started this process, which
+    /// `workspace_snapshot` asks (`HORIZON_SOCKET`).
+    control_socket: Option<std::path::PathBuf>,
     /// Flips once (see [`Self::mark_resume_ready`]) after
     /// [`super::resume::resume_persisted_sessions`] finishes populating `sessions` from the
     /// log. `session/list` and `session/resume` must not answer while
@@ -153,11 +148,10 @@ impl AgentdState {
             agent_config: Mutex::new(agent_config),
             writer: Mutex::new(writer),
             sessions: Mutex::new(HashMap::new()),
-            pending_host_tool_requests: Mutex::new(HashMap::new()),
             agent_subscribers: Mutex::new(HashMap::new()),
             task_seeds: Mutex::new(HashMap::new()),
             session_subscriptions: Mutex::new(HashMap::new()),
-            host_tools_outgoing: Mutex::new(None),
+            control_socket: None,
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
             skipped_lines_summary: Mutex::new(None),
@@ -185,6 +179,16 @@ impl AgentdState {
     /// mark. Called once by the thread's own exit cleanup.
     pub(super) fn take_suspending(&self, session_id: SessionId) -> bool {
         lock_unpoisoned(&self.suspending).remove(&session_id)
+    }
+
+    /// The control plane `workspace_snapshot` asks.
+    pub fn with_control_socket(mut self, socket: std::path::PathBuf) -> Self {
+        self.control_socket = Some(socket);
+        self
+    }
+
+    pub(crate) fn control_socket(&self) -> Option<&std::path::Path> {
+        self.control_socket.as_deref()
     }
 
     pub fn with_checkpoints(mut self, on: bool) -> Self {

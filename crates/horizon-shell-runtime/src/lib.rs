@@ -49,7 +49,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use horizon_acp::{HostToolRequest, ProviderSummary, SessionId, SessionNewMeta};
+use horizon_acp::{ProviderSummary, SessionId, SessionNewMeta};
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
@@ -99,10 +99,6 @@ impl Drop for RuntimeLifetime {
     fn drop(&mut self) {
         self.control.cancel();
     }
-}
-
-pub struct AgentdResponder {
-    routes: std::sync::Weak<AgentRoutes>,
 }
 
 /// A live view of `WorkspaceShell::terminald`, threaded into panes that can
@@ -200,14 +196,6 @@ impl Drop for TerminalSessionHandle {
     }
 }
 
-impl AgentdResponder {
-    pub fn respond_host_tool(&self, request_id: &str, output: serde_json::Value) {
-        if let Some(routes) = self.routes.upgrade() {
-            routes.respond_host_tool(request_id, output);
-        }
-    }
-}
-
 impl AgentdHandle {
     pub fn same_runtime(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.routes, &other.routes)
@@ -227,11 +215,7 @@ impl AgentdHandle {
     pub fn start(
         control_socket: &Path,
         log: &Path,
-    ) -> (
-        Self,
-        Receiver<HostToolRequest>,
-        Receiver<(SessionId, WorkspaceRootUpdate)>,
-    ) {
+    ) -> (Self, Receiver<(SessionId, WorkspaceRootUpdate)>) {
         Self::start_within(control_socket, log, Timeouts::default())
     }
 
@@ -241,12 +225,8 @@ impl AgentdHandle {
         control_socket: &Path,
         log: &Path,
         timeouts: Timeouts,
-    ) -> (
-        Self,
-        Receiver<HostToolRequest>,
-        Receiver<(SessionId, WorkspaceRootUpdate)>,
-    ) {
-        let (handle, host_tools, workspace_roots, ops) = Self::parts(timeouts);
+    ) -> (Self, Receiver<(SessionId, WorkspaceRootUpdate)>) {
+        let (handle, workspace_roots, ops) = Self::parts(timeouts);
         agent::spawn(
             horizon_wire::spawn::resolve_daemon_binary(AGENT_BINARY_NAME),
             control_socket.to_path_buf(),
@@ -255,22 +235,19 @@ impl AgentdHandle {
             handle.routes.clone(),
             handle.control.clone(),
         );
-        (handle, host_tools, workspace_roots)
+        (handle, workspace_roots)
     }
 
-    #[expect(clippy::type_complexity)]
     fn parts(
         timeouts: Timeouts,
     ) -> (
         Self,
-        Receiver<HostToolRequest>,
         Receiver<(SessionId, WorkspaceRootUpdate)>,
         tokio::sync::mpsc::UnboundedReceiver<agent::Op>,
     ) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (host_tool_tx, host_tool_rx) = unbounded();
         let (workspace_root_tx, workspace_root_rx) = unbounded();
-        let routes = Arc::new(AgentRoutes::new(host_tool_tx, workspace_root_tx));
+        let routes = Arc::new(AgentRoutes::new(workspace_root_tx));
         let control = Arc::new(RuntimeControl::new(timeouts));
         let lifetime = Arc::new(RuntimeLifetime {
             control: control.clone(),
@@ -282,26 +259,19 @@ impl AgentdHandle {
                 control,
                 _lifetime: lifetime,
             },
-            host_tool_rx,
             workspace_root_rx,
             ops_rx,
         )
     }
 
     #[cfg(test)]
-    fn start_on_stream<S>(
-        stream: S,
-    ) -> (
-        Self,
-        Receiver<HostToolRequest>,
-        Receiver<(SessionId, WorkspaceRootUpdate)>,
-    )
+    fn start_on_stream<S>(stream: S) -> (Self, Receiver<(SessionId, WorkspaceRootUpdate)>)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     {
-        let (handle, host_tools, workspace_roots, ops) = Self::parts(Timeouts::default());
+        let (handle, workspace_roots, ops) = Self::parts(Timeouts::default());
         agent::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
-        (handle, host_tools, workspace_roots)
+        (handle, workspace_roots)
     }
 
     /// `workspace_root` is computed shell-side (`WorkspaceShell::reconcile`)
@@ -379,12 +349,6 @@ impl AgentdHandle {
             },
             bridge_rx,
         )
-    }
-
-    pub fn responder(&self) -> AgentdResponder {
-        AgentdResponder {
-            routes: Arc::downgrade(&self.routes),
-        }
     }
 
     pub fn session_list(&self) -> Result<Vec<SessionSummary>, String> {

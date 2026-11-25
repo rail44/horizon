@@ -2,7 +2,9 @@
 //! shell carries out so far (terminals, agents, sessions), and the two
 //! queries.
 
-use horizon_control::contract::{EnvelopeBody, Query, SessionEntry, Sessions, State};
+use horizon_control::contract::{
+    EnvelopeBody, Query, SessionEntry, Sessions, State, Workspace as Snapshot,
+};
 use horizon_control::host::executor::{ControlRequest, error_body};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
@@ -405,6 +407,10 @@ impl Shell {
                     destructive_commands: destructive_commands(),
                 })
             }
+            "workspace" => EnvelopeBody::Workspace(Snapshot {
+                snapshot: (self.model)
+                    .with_untracked(horizon_workspace::snapshot::workspace_snapshot),
+            }),
             other => error_body(format!("unknown query `{other}`")),
         }
     }

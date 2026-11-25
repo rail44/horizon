@@ -73,9 +73,8 @@ fn connection_failure_keeps_diagnostics_and_closes_commands() {
 
 #[test]
 fn dropping_an_old_agent_registration_keeps_the_replacement() {
-    let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, _roots_rx) = crossbeam_channel::unbounded();
-    let routes = AgentRoutes::new(host, roots);
+    let routes = AgentRoutes::new(roots);
     let id = SessionId::new();
     let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
@@ -91,9 +90,8 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
 #[tokio::test]
 async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() {
     use agent_client_protocol::v2::schema as v2;
-    let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, roots_rx) = crossbeam_channel::unbounded();
-    let routes = AgentRoutes::new(host, roots);
+    let routes = AgentRoutes::new(roots);
     let id = SessionId::new();
     let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
@@ -154,9 +152,8 @@ fn stale_terminal_updates_and_cleanup_leave_the_replacement_live() {
 
 #[tokio::test]
 async fn replacing_a_route_cancels_a_send_blocked_by_a_slow_view() {
-    let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, _roots_rx) = crossbeam_channel::unbounded();
-    let routes = std::sync::Arc::new(AgentRoutes::new(host, roots));
+    let routes = std::sync::Arc::new(AgentRoutes::new(roots));
     let id = SessionId::new();
     let (old_tx, mut old_rx) = tokio::sync::mpsc::channel(1);
     let old = routes.register_agent(id, old_tx);

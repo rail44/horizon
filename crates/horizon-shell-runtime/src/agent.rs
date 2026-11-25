@@ -19,10 +19,10 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
 use horizon_acp::{
-    EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, HostToolRequest,
-    InitializeMeta, ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID,
-    ProviderSummary, ReloadProviderConfigRequest, SessionEventNotification, SessionId,
-    SessionInfoMeta, SessionNewMeta, read_horizon_meta, write_horizon_meta,
+    EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, InitializeMeta,
+    ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID, ProviderSummary,
+    ReloadProviderConfigRequest, SessionEventNotification, SessionId, SessionInfoMeta,
+    SessionNewMeta, read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -267,7 +267,6 @@ fn client(
     let updates = routes.clone();
     let session_events = routes.clone();
     let permissions = routes.clone();
-    let host_tools = routes.clone();
     Client
         .v2()
         .name("horizon")
@@ -294,17 +293,6 @@ fn client(
             >,
                         _connection: V2ConnectionTo<Agent>| {
                 permissions.route_permission(request, responder)
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: HostToolRequest,
-                        responder: agent_client_protocol::v2::Responder<
-                horizon_acp::HostToolResponse,
-            >,
-                        _connection: V2ConnectionTo<Agent>| {
-                host_tools.host_tool_request(request, responder);
-                Ok(())
             },
             agent_client_protocol::on_receive_request!(),
         )

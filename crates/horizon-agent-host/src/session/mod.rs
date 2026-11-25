@@ -63,7 +63,6 @@ pub mod test_support;
 pub(crate) use self::attachment::{AttachmentLease, Bootstrap};
 pub use self::connection::Connection;
 pub(crate) use self::connection::ForkError;
-pub(crate) use self::host_tools::HOST_TOOL_TIMEOUT;
 pub(crate) use self::resume::resume_persisted_sessions;
 pub use self::resume::resume_session;
 pub use self::spawn::spawn_session_thread;

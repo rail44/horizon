@@ -19,6 +19,7 @@
 //! processes. [`wire::write_envelope`]/[`wire::read_envelope`] are generic
 //! over `std::io::{Write, BufRead}`.
 
+pub mod client;
 pub mod contract;
 pub mod host;
 pub mod socket;

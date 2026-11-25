@@ -28,7 +28,7 @@ use agent_client_protocol::{Agent, ByteStreams, Client, Error};
 use horizon_acp as acp;
 use horizon_agent::config::ReasoningLevel;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
-use horizon_agent::hosting::{HostToolRequest, HostToolResponse, SessionNew};
+use horizon_agent::hosting::SessionNew;
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::roles::RoleId;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::DAEMON_NAME;
-use crate::session::{AgentdState, Connection, ForkError, HOST_TOOL_TIMEOUT};
+use crate::session::{AgentdState, Connection, ForkError};
 
 use attachment::Opening;
 
@@ -266,7 +266,6 @@ impl Shared {
         if !matched {
             return Ok(());
         }
-        self.connect_host_tools(cx.clone());
 
         // Startup diagnostics: at most one notice, after the resume
         // finishes.
@@ -279,40 +278,6 @@ impl Shared {
             }
         });
         Ok(())
-    }
-
-    /// Sessions push host-tool requests into the connection-global bridge;
-    /// each one is sent to the client from its own task, and its answer
-    /// wakes the session thread waiting on it.
-    fn connect_host_tools(&self, cx: V2ConnectionTo<Client>) {
-        let (requests, mut incoming) = mpsc::unbounded_channel::<HostToolRequest>();
-        self.connection.connect_host_tools(requests);
-        let connection = self.connection.clone();
-        tokio::spawn(async move {
-            while let Some(request) = incoming.recv().await {
-                let cx = cx.clone();
-                let connection = connection.clone();
-                tokio::spawn(async move {
-                    let sent = cx.send_request(acp::HostToolRequest {
-                        request_id: request.request_id.0.clone(),
-                        tool_id: request.tool_id,
-                        input: request.input.0,
-                    });
-                    match tokio::time::timeout(HOST_TOOL_TIMEOUT, sent.block_task()).await {
-                        Ok(Ok(response)) => {
-                            connection.handle_host_tool_response(HostToolResponse {
-                                request_id: request.request_id,
-                                output: response.output.into(),
-                            })
-                        }
-                        Ok(Err(error)) => {
-                            eprintln!("horizon-agent: host-tool request failed: {error}")
-                        }
-                        Err(_) => eprintln!("horizon-agent: host-tool request timed out"),
-                    }
-                });
-            }
-        });
     }
 
     fn new_session(
@@ -783,7 +748,6 @@ where
 
     let served = builder.connect_to(transport).await;
     shared.close();
-    connection.disconnect();
     served
 }
 

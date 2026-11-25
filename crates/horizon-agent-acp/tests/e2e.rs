@@ -400,7 +400,6 @@ fn wire(inbound: &Inbound) -> serde_json::Value {
         Inbound::Update(notification) => serde_json::to_value(notification),
         Inbound::SessionEvent(notification) => serde_json::to_value(notification),
         Inbound::Permission(request, _) => serde_json::to_value(request),
-        Inbound::HostTool(request, _) => serde_json::to_value(request),
         Inbound::Replied(_) => Ok(serde_json::Value::Null),
     }
     .unwrap()
@@ -754,44 +753,64 @@ async fn list_agents_reflects_live_sessions_after_new_agent() {
     assert_eq!(sessions[0].cwd, v2::AbsolutePath::new(test_cwd()));
 }
 
-/// An auto-allow *host* tool (`workspace_snapshot`) executes agentd-side
-/// but can't answer itself -- it round-trips a `_horizon/host_tool`
-/// request (guardrail 4) and folds the client's answer into the same
-/// finished tool call an ordinary auto tool would produce.
+/// Answers one control-plane connection at `socket`: the handshake, then
+/// `snapshot` as the workspace. Returns what was asked.
+fn serve_workspace_once(
+    socket: &Path,
+    snapshot: serde_json::Value,
+) -> std::thread::JoinHandle<String> {
+    use horizon_control::contract::{
+        CONTROL_VERSION, Envelope, EnvelopeBody, HelloAck, Query, Workspace,
+    };
+    use horizon_control::wire;
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let hello = wire::read_envelope(&mut reader).unwrap().unwrap();
+        let ack = EnvelopeBody::HelloAck(HelloAck {
+            control_version: CONTROL_VERSION,
+            binary_id: "e2e".into(),
+            capabilities: vec!["workspace".into()],
+        });
+        wire::write_envelope(&mut writer, &Envelope::new(hello.id, ack)).unwrap();
+        let query = wire::read_envelope(&mut reader).unwrap().unwrap();
+        let EnvelopeBody::Query(Query { what }) = query.body else {
+            panic!("a query, got {query:?}");
+        };
+        let reply = EnvelopeBody::Workspace(Workspace { snapshot });
+        wire::write_envelope(&mut writer, &Envelope::new(query.id, reply)).unwrap();
+        what
+    })
+}
+
+/// `workspace_snapshot` runs in the agent, which asks the control plane of
+/// the shell that started it (`HORIZON_SOCKET`) for the workspace, and the
+/// answer is the finished tool call's output.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
-    let mut agentd = spawn_agentd();
+async fn workspace_snapshot_asks_the_shells_control_plane() {
+    let socket = horizon_daemon_testkit::scratch_socket("agent-e2e-control");
+    let control = serve_workspace_once(&socket, serde_json::json!({ "tab_count": 1 }));
+    let mut agentd = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+        .env("HORIZON_SOCKET", &socket)
+        .spawn();
     let mut client = connect(&mut agentd).await;
 
     let session_id = SessionId::new();
     open_session(&client, session_new(session_id)).await;
     prompt(&client, session_id, "please take a snapshot").await;
 
-    let mut collected = collect_until(&mut client, |inbound| {
-        matches!(inbound, Inbound::HostTool(..))
+    let collected = collect_until(&mut client, |inbound| {
+        finished_tool(inbound).is_some_and(|(call, _)| {
+            call.raw_output
+                .as_opt_ref()
+                .flatten()
+                .is_some_and(|output| output["tab_count"] == 1)
+        })
     })
     .await;
-    let Some(Inbound::HostTool(request, responder)) = collected.pop() else {
-        unreachable!()
-    };
-    assert_eq!(request.tool_id, "workspace_snapshot");
-    responder
-        .respond(acp::HostToolResponse {
-            output: serde_json::json!({ "tab_count": 1 }),
-        })
-        .unwrap();
-
-    collected.extend(
-        collect_until(&mut client, |inbound| {
-            finished_tool(inbound).is_some_and(|(call, _)| {
-                call.raw_output
-                    .as_opt_ref()
-                    .flatten()
-                    .is_some_and(|output| output["tab_count"] == 1)
-            })
-        })
-        .await,
-    );
+    assert_eq!(control.join().unwrap(), "workspace");
     assert!(
         collected.iter().filter_map(tool_update).any(|call| {
             call.title == MaybeUndefined::Value("workspace_snapshot".to_string())

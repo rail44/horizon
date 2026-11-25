@@ -97,7 +97,7 @@ fn handshake(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<bool,
             EnvelopeBody::HelloAck(HelloAck {
                 control_version: CONTROL_VERSION,
                 binary_id: BINARY_ID.to_string(),
-                capabilities: ["sessions", "state", "extensions"]
+                capabilities: ["sessions", "state", "extensions", "workspace"]
                     .map(String::from)
                     .to_vec(),
             }),

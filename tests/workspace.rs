@@ -1047,6 +1047,21 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
     assert_eq!(listed.sessions.len(), 2);
     assert!(listed.sessions.iter().all(|session| session.attached));
 
+    // The workspace as the agent's `workspace_snapshot` reads it.
+    let EnvelopeBody::Workspace(workspace) = ask(ControlRequest::Query(Query {
+        what: "workspace".to_string(),
+    })) else {
+        panic!("no workspace");
+    };
+    assert_eq!(
+        opened.model(|model| horizon_workspace::snapshot::workspace_snapshot(model)),
+        workspace.snapshot
+    );
+    assert_eq!(
+        workspace.snapshot["sessions"].as_array().map(Vec::len),
+        Some(2)
+    );
+
     // Closed, the new one is detached; `attach` puts it back, and
     // `terminate-session` ends it.
     opened.model_closing(panes[1]);

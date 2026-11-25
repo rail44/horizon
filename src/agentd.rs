@@ -1,25 +1,21 @@
 //! The agent runtime as this shell uses it: `horizon-agent-acp` as its
-//! child, the sessions started in it, and what the runtime asks of the
-//! shell or tells it outside any session (a host tool to answer, the
-//! directory a session came to work in).
+//! child, the sessions started in it, and what the runtime tells the shell
+//! outside any session (the directory a session came to work in).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
-use horizon_acp::HostToolRequest;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_shell_runtime::{AgentdHandle, WorkspaceRootUpdate};
-use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
+use horizon_ui::reactive_graph::traits::Update;
 use horizon_workspace::SessionId;
-use horizon_workspace::snapshot::workspace_snapshot;
 
 use crate::agent::AgentSession;
 use crate::workspace::{AgentRuntime, Models, RunningAgent, Shell, SpawnAgent};
 
 enum Told {
-    HostTool(HostToolRequest),
     Directory(SessionId, WorkspaceRootUpdate),
 }
 
@@ -59,9 +55,9 @@ impl Agentd {
         tell: &Sender<Told>,
         waker: &Wake,
     ) -> AgentdHandle {
-        let (handle, host_tools, directories) = AgentdHandle::start(control_socket, log);
-        // Each of the runtime's two streams is passed on to the UI thread,
-        // which is woken to take it in.
+        let (handle, directories) = AgentdHandle::start(control_socket, log);
+        // The runtime's stream is passed on to the UI thread, which is woken
+        // to take it in.
         fn pass_on<T: Send + 'static>(
             from: Receiver<T>,
             to: crossbeam_channel::Sender<Told>,
@@ -79,7 +75,6 @@ impl Agentd {
                 }
             });
         }
-        pass_on(host_tools, tell.clone(), waker.clone(), Told::HostTool);
         pass_on(
             directories,
             tell.clone(),
@@ -180,15 +175,6 @@ impl Agentd {
         *self.waker.lock().unwrap() = Some(waker.clone());
         for told in self.told.try_iter() {
             match told {
-                Told::HostTool(request) => {
-                    let output = match request.tool_id.as_str() {
-                        "workspace_snapshot" => shell.model.with_untracked(workspace_snapshot),
-                        other => serde_json::json!({
-                            "error": format!("unknown host tool `{other}`")
-                        }),
-                    };
-                    (self.handle().responder()).respond_host_tool(&request.request_id, output);
-                }
                 Told::Directory(session, update) => shell.model.update(|model| {
                     model.set_session_directory(session, update.workspace_root);
                     if let Some(parent) = update.parent_session_id {

@@ -54,13 +54,6 @@ fn generate_wire_schema() -> Value {
         },
     });
 
-    let agent_to_client = json!({
-        "_horizon/host_tool": {
-            "request": schema_of(sub::<HostToolRequest>),
-            "reply": schema_of(sub::<HostToolResponse>),
-        },
-    });
-
     let notifications = json!({
         "_horizon/session_event": schema_of(sub::<SessionEventNotification>),
     });
@@ -90,7 +83,6 @@ fn generate_wire_schema() -> Value {
                      scripts/check-wire-schema.sh.",
         PROTOCOL_VERSION_KEY: HORIZON_ACP_EXT_VERSION,
         "client_to_agent": client_to_agent,
-        "agent_to_client": agent_to_client,
         "notifications": notifications,
         "meta": meta,
         "stop_reasons": stop_reasons,

@@ -195,6 +195,14 @@ load is the error the command prints, and nothing changes. The requests
 are `extension-use { file }` and `extension-reset { name }` as invokes
 and `extensions` as a query; the reply is an `extensions` body.
 
+## The workspace for an agent
+
+The query `workspace` is answered with a `workspace` body: the
+workspace's tabs, panes and sessions, as the agent's `workspace_snapshot`
+tool reads them. The agent asks it over the `HORIZON_SOCKET` the shell
+started it with (`horizon_control::client::query`); there is no CLI
+subcommand for it.
+
 ## Deferred
 
 - **Subscription streams** — v2, additive (see above).

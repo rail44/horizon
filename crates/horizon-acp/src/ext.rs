@@ -85,23 +85,6 @@ pub struct EnsureBoardOrganizerResponse {
 #[request(method = "_horizon/reload_provider_config", response = EmptyResponse)]
 pub struct ReloadProviderConfigRequest {}
 
-// -- agent → client request --
-
-/// Mirrors `hosting::HostToolRequest` (crates/horizon-agent/src/hosting.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
-#[request(method = "_horizon/host_tool", response = HostToolResponse)]
-pub struct HostToolRequest {
-    pub request_id: String,
-    pub tool_id: String,
-    pub input: serde_json::Value,
-}
-
-/// Mirrors `hosting::HostToolResponse` (crates/horizon-agent/src/hosting.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
-pub struct HostToolResponse {
-    pub output: serde_json::Value,
-}
-
 // -- agent → client notifications --
 
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
@@ -200,11 +183,6 @@ mod tests {
             workspace_root: PathBuf::from("/work/project"),
         });
         message_round_trip(&ReloadProviderConfigRequest {});
-        message_round_trip(&HostToolRequest {
-            request_id: "req-1".into(),
-            tool_id: "workspace_snapshot".into(),
-            input: serde_json::json!({"nested": [1, {"k": true}]}),
-        });
     }
 
     #[test]
@@ -218,9 +196,6 @@ mod tests {
         });
         round_trip(&EnsureBoardOrganizerResponse {
             session_id: SessionId::new(),
-        });
-        round_trip(&HostToolResponse {
-            output: serde_json::json!({"tabs": []}),
         });
     }
 
@@ -283,13 +258,6 @@ mod tests {
             .method()
             .to_owned(),
             ReloadProviderConfigRequest {}.method().to_owned(),
-            HostToolRequest {
-                request_id: String::new(),
-                tool_id: String::new(),
-                input: serde_json::Value::Null,
-            }
-            .method()
-            .to_owned(),
             SessionEventNotification::SessionResumed { session_id }
                 .method()
                 .to_owned(),
@@ -302,7 +270,6 @@ mod tests {
                 "_horizon/list_provider_models",
                 "_horizon/ensure_board_organizer",
                 "_horizon/reload_provider_config",
-                "_horizon/host_tool",
                 "_horizon/session_event",
             ]
         );

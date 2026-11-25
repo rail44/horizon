@@ -17,10 +17,7 @@ use crate::agent_model::AgentEvent;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use crossbeam_channel::Sender;
-use horizon_acp::{
-    HostToolRequest, HostToolResponse, SessionEventNotification, SessionId, SessionInfoMeta,
-    read_horizon_meta,
-};
+use horizon_acp::{SessionEventNotification, SessionId, SessionInfoMeta, read_horizon_meta};
 use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use uuid::Uuid;
 
@@ -76,9 +73,6 @@ impl Drop for AgentRoute {
 /// plus the two process-wide channels its connection-global traffic feeds.
 pub(super) struct AgentRoutes {
     state: Mutex<AgentRouteState>,
-    host_tools: Sender<HostToolRequest>,
-    /// Held `_horizon/host_tool` responders, by request id.
-    host_tool_responders: Mutex<HashMap<String, Responder<HostToolResponse>>>,
     workspace_roots: Sender<(SessionId, WorkspaceRootUpdate)>,
     /// The first extension-version rejection a request met on the current
     /// connection, and its wakeup for the connection's op loop.
@@ -132,17 +126,12 @@ pub(super) fn parse_session_id(id: &v2::SessionId) -> Option<SessionId> {
 }
 
 impl AgentRoutes {
-    pub(super) fn new(
-        host_tools: Sender<HostToolRequest>,
-        workspace_roots: Sender<(SessionId, WorkspaceRootUpdate)>,
-    ) -> Self {
+    pub(super) fn new(workspace_roots: Sender<(SessionId, WorkspaceRootUpdate)>) -> Self {
         Self {
             state: Mutex::new(AgentRouteState {
                 agent: HashMap::new(),
                 failure: None,
             }),
-            host_tools,
-            host_tool_responders: Mutex::new(HashMap::new()),
             workspace_roots,
             version_mismatch: Mutex::new(None),
             version_mismatch_signal: tokio::sync::Notify::new(),
@@ -366,25 +355,6 @@ impl AgentRoutes {
         }
     }
 
-    pub(super) fn host_tool_request(
-        &self,
-        request: HostToolRequest,
-        responder: Responder<HostToolResponse>,
-    ) {
-        self.host_tool_responders
-            .lock()
-            .unwrap()
-            .insert(request.request_id.clone(), responder);
-        let _ = self.host_tools.send(request);
-    }
-
-    pub(super) fn respond_host_tool(&self, request_id: &str, output: serde_json::Value) {
-        let responder = self.host_tool_responders.lock().unwrap().remove(request_id);
-        if let Some(responder) = responder {
-            let _ = responder.respond(HostToolResponse { output });
-        }
-    }
-
     /// Transport failures are attachment state, never conversation events.
     pub(super) fn agent_failed(&self, key: RouteKey<SessionId>, message: String) {
         let mut state = self.state.lock().unwrap();
@@ -427,7 +397,6 @@ impl AgentRoutes {
             let _ = route.events.try_send(AgentUpdate::State(phase));
         }
         drop(state);
-        self.host_tool_responders.lock().unwrap().clear();
     }
 }
 

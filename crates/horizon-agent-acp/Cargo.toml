@@ -23,6 +23,8 @@ serde_json = "1.0"
 uuid = { version = "1.18", features = ["v4"] }
 # The wire vocabulary `tests/e2e.rs` speaks.
 horizon-acp = { path = "../horizon-acp" }
+# The control plane the agent asks in `tests/e2e.rs`.
+horizon-control = { path = "../horizon-control" }
 horizon-agent-host = { path = "../horizon-agent-host", features = ["test-support"] }
 # Verify the real daemon's persisted turn projection after restart.
 duckdb = "1"

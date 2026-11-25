@@ -190,6 +190,8 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # `the_request_carries_the_state_and_one_choice_question`,
 # `the_threshold_reads_from_its_variable_with_clamping_and_a_default`) are
 # pure logic and stay in.
+# `horizon-control`'s `client::tests` bind a Unix socket in the system's
+# temporary directory, as `host::listener::tests` do.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -212,6 +214,7 @@ default-filter = '''
         + binary_id(horizon::extension)
         + binary_id(horizon::status_bar)
         + test(/^host::listener::tests::/)
+        + (binary_id(horizon-control) & test(/^client::tests::/))
         + binary_id(horizon-sandbox::fence)
         + test(/^tools::bash::tests::a_contained_call_reports_the_directory_it_moved_to$/)
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
