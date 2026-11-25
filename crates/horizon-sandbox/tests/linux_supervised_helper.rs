@@ -602,6 +602,69 @@ fn writable_root_exclusion_denies_writes_beneath_it_and_keeps_the_rest_writable(
     std::fs::remove_dir_all(root).expect("remove test directory");
 }
 
+/// Creating a name that already exists is answered as the kernel answers
+/// it, EEXIST, even when the name is an excluded path or one of its
+/// ancestors: `create_dir_all` on the workspace root (Cargo making
+/// `target/`) succeeds only on EEXIST. A new name beneath the exclusion is
+/// still refused.
+#[test]
+fn creating_an_existing_excluded_path_or_its_ancestor_fails_as_it_already_exists() {
+    let root = test_dir("root-exclusion-exists").canonicalize().unwrap();
+    let git_dir = root.join(".git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    let inside = git_dir.join("new");
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        writable_root_exclusions: vec![git_dir.clone()],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let mut command = Command::new("/bin/sh");
+    command.env("LC_ALL", "C").arg("-c").arg(format!(
+        "mkdir {} {} {} 2>&1; true",
+        shell_quote(&root),
+        shell_quote(&git_dir),
+        shell_quote(&inside)
+    ));
+    let sandboxed = horizon_sandbox::spawn(
+        command,
+        &policy,
+        horizon_sandbox::SandboxStdio::piped_output(),
+    )
+    .expect("spawn supervised sandbox");
+    let report = sandboxed.supervisor_report.expect("supervisor report");
+    let output = sandboxed.child.wait_with_output().expect("wait");
+    let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    let line = |path: &std::path::Path| {
+        printed
+            .lines()
+            .find(|line| line.contains(&format!("'{}'", path.display())))
+            .unwrap_or_else(|| panic!("no line for {} in {printed}", path.display()))
+            .to_string()
+    };
+    assert!(line(&root).ends_with("File exists"), "{printed}");
+    assert!(line(&git_dir).ends_with("File exists"), "{printed}");
+    assert!(
+        line(&inside).ends_with("Operation not permitted"),
+        "{printed}"
+    );
+    assert!(!inside.exists());
+    let outcome = report.read().expect("read report");
+    let reported = |denied: &std::path::Path| {
+        outcome.approvals.iter().any(|approval| {
+            matches!(
+                &approval.request,
+                nono::ApprovalRequest::Capability { path, .. } if path == denied
+            )
+        })
+    };
+    assert!(reported(&inside));
+    assert!(!reported(&git_dir), "an existing name is not a denial");
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
 #[test]
 fn a_tree_grant_on_the_excluded_path_lifts_it_but_keeps_its_own_exclusions() {
     let root = test_dir("root-exclusion-grant").canonicalize().unwrap();

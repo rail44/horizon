@@ -103,6 +103,15 @@ fn syscall_name(nr: i32) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
+/// Whether `nr` only creates its one operand: it fails with EEXIST when the
+/// name already exists, whatever it is.
+fn creates_only(nr: i32) -> bool {
+    matches!(
+        syscall_name(nr),
+        Some("mkdir" | "mkdirat" | "mknod" | "mknodat" | "symlink" | "symlinkat")
+    )
+}
+
 /// One path operand the syscall mutates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Operand {
@@ -198,6 +207,13 @@ pub(crate) fn handle_path_mutation_notification(
             Err(errno) => return respond_errno(notify_fd, notification.id, errno),
         };
         if let Some(path) = excluded_target(&target, context.initial_caps) {
+            // Creating a name that already exists changes nothing, and the
+            // kernel answers it with EEXIST before any permission check;
+            // so does this, rather than refusing it as a write (an existing
+            // workspace root is an ancestor of its excluded `.git`).
+            if creates_only(nr) && std::fs::symlink_metadata(&target).is_ok() {
+                return respond_errno(notify_fd, notification.id, libc::EEXIST);
+            }
             if !excluded.contains(&path) {
                 excluded.push(path);
             }
