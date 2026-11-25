@@ -48,7 +48,7 @@ pub enum SplitFlag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
     /// A new pane of a plugin: a terminal, an agent, a view, an extension.
-    /// `arguments`, and those `named` (`--prompt`, `--role`),
+    /// `arguments`, and those `named` (`--prompt`),
     /// are what the plugin's pane is made from, as the plugin says; the
     /// shell, which knows the plugin, reads them. A file among them is a
     /// path from `directory`, the caller's working directory, which
@@ -171,7 +171,7 @@ Subcommands:\n  \
   new <plugin> [<argument>...] [--split [<session-id>]] [--active]\n  \
       a new pane of a plugin, made from what the plugin takes:\n  \
       new terminal\n  \
-      new agent [--prompt <text>] [--role <id>]\n  \
+      new agent [--prompt <text>]\n  \
       new markdown <path>\n  \
       new wiki [<page>]\n  \
       new preview <extension.wasm> [<argument>...]\n  \
@@ -203,7 +203,7 @@ Subcommands:\n  \
   <command>    a command of the plugin the cursor's pane shows";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
-/// (`--socket`/`--json`/`--yes`/`--prompt`/`--role`/`--split`/`--active`)
+/// (`--socket`/`--json`/`--yes`/`--prompt`/`--split`/`--active`)
 /// are recognized anywhere in the argument list, not just before the
 /// subcommand name -- simpler than enforcing a strict positional grammar, and
 /// unambiguous because every subcommand's own positional arguments
@@ -230,10 +230,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
     let subcommand = match name.as_str() {
         "new" => {
             let plugin = next_required(&mut positionals, "new", "plugin")?;
-            let named = [
-                ("prompt", options.prompt.take()),
-                ("role", options.role.take()),
-            ];
+            let named = [("prompt", options.prompt.take())];
             Subcommand::New {
                 plugin,
                 arguments: positionals.by_ref().collect(),
@@ -544,10 +541,6 @@ mod tests {
                 .0,
             "--prompt is only valid with new"
         );
-        assert_eq!(
-            parse(&args(&["state", "--role=custom"])).unwrap_err().0,
-            "--role is only valid with new"
-        );
     }
 
     #[test]
@@ -591,15 +584,13 @@ mod tests {
     #[test]
     fn new_takes_what_is_given_by_name() {
         assert_eq!(
-            parse(&args(&[
-                "new", "agent", "--role", "config", "--split", "abc", "--active",
-            ]))
-            .unwrap()
-            .subcommand,
+            parse(&args(&["new", "agent", "--split", "abc", "--active"]))
+                .unwrap()
+                .subcommand,
             new(
                 "agent",
                 &[],
-                &[("role", "config")],
+                &[],
                 Some(SplitFlag::Explicit("abc".to_string())),
                 true,
             )
@@ -608,8 +599,6 @@ mod tests {
             parse(&args(&[
                 "new",
                 "agent",
-                "--role",
-                "config",
                 "--prompt",
                 "make it dark",
                 "--split",
@@ -621,25 +610,17 @@ mod tests {
             new(
                 "agent",
                 &[],
-                &[("prompt", "make it dark"), ("role", "config")],
+                &[("prompt", "make it dark")],
                 Some(SplitFlag::Explicit("s-1".to_string())),
                 true,
             )
-        );
-        assert_eq!(
-            parse(&args(&["new", "agent", "--role=keeper"]))
-                .unwrap()
-                .subcommand,
-            new("agent", &[], &[("role", "keeper")], None, false)
         );
     }
 
     #[test]
     fn what_is_given_by_name_is_only_for_new() {
-        for flag in ["--prompt", "--role"] {
-            let said = parse(&args(&["sessions", flag, "x"])).unwrap_err().0;
-            assert_eq!(said, format!("{flag} is only valid with new"));
-        }
+        let said = parse(&args(&["sessions", "--prompt", "x"])).unwrap_err().0;
+        assert_eq!(said, "--prompt is only valid with new");
     }
 
     #[test]
@@ -905,7 +886,6 @@ mod tests {
     fn dangling_flag_value_is_a_usage_error() {
         assert!(parse(&args(&["--socket"])).is_err());
         assert!(parse(&args(&["new", "agent", "--prompt"])).is_err());
-        assert!(parse(&args(&["new", "agent", "--role"])).is_err());
     }
 
     #[test]

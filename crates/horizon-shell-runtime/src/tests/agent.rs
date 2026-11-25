@@ -44,8 +44,6 @@ enum AgentCall {
     NewSession {
         /// The id the fake named the session with.
         named: SessionId,
-        /// The `mode` option's initial value.
-        mode: Option<String>,
         cwd: PathBuf,
         responder: Option<Responder<v2::NewSessionResponse>>,
     },
@@ -141,16 +139,11 @@ async fn serve_fake_agentd(
                 let named = SessionId::new();
                 named_by_new.lock().unwrap().push(named);
                 let cwd = request.cwd.0.clone();
-                let mode = (request.config_options.iter())
-                    .find(|option| &*option.config_id.0 == horizon_acp::MODE_CONFIG_ID)
-                    .and_then(|option| option.value.as_id())
-                    .map(|value| value.0.to_string());
                 if behavior.manual_bootstrap {
                     record(
                         &c2,
                         AgentCall::NewSession {
                             named,
-                            mode,
                             cwd,
                             responder: Some(responder),
                         },
@@ -162,7 +155,6 @@ async fn serve_fake_agentd(
                     &c2,
                     AgentCall::NewSession {
                         named,
-                        mode,
                         cwd,
                         responder: None,
                     },
@@ -198,24 +190,6 @@ async fn serve_fake_agentd(
                     },
                 );
                 responder.respond(v2::ResumeSessionResponse::new())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            // A new session starts in its default mode or as a planner.
-            async move |_request: v2::SessionOptionsRequest,
-                        responder: Responder<v2::SessionOptionsResponse>,
-                        _connection: V2ConnectionTo<Client>| {
-                let mode = v2::SessionConfigOption::select(
-                    horizon_acp::MODE_CONFIG_ID,
-                    "Mode",
-                    horizon_acp::DEFAULT_MODE,
-                    vec![
-                        v2::SessionConfigSelectOption::new(horizon_acp::DEFAULT_MODE, "Agent"),
-                        v2::SessionConfigSelectOption::new("planner", "Planner"),
-                    ],
-                );
-                responder.respond(v2::SessionOptionsResponse::new().config_options(vec![mode]))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -395,7 +369,7 @@ fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
 }
 
 fn start_mock_session(agentd: &AgentdHandle, session_id: SessionId) -> AgentSessionHandle {
-    agentd.start_session(session_id, None, Some(PathBuf::from("/work/project")))
+    agentd.start_session(session_id, Some(PathBuf::from("/work/project")))
 }
 
 fn is_idle_update(event: &AgentEvent) -> bool {
@@ -434,11 +408,9 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     assert_eq!(session_id, terminal_id);
 
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    let AgentCall::NewSession { mode, cwd, .. } = fake.next_call().await else {
+    let AgentCall::NewSession { cwd, .. } = fake.next_call().await else {
         panic!("the agent spawn must land on agentd");
     };
-    // No role: no mode option, and the agent's default model.
-    assert_eq!(mode, None);
     assert_eq!(cwd, PathBuf::from("/work/project"));
 
     let output = TerminalUpdate::Output(b"terminal".to_vec());
@@ -645,29 +617,6 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
         message.contains("answered initialize with an unexpected error")
             && message.contains("this agent does not take this client"),
         "error was: {message}"
-    );
-}
-
-/// Once connected, the runtime knows the modes the agent offers a new
-/// session, the default left out.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_modes_the_agent_offers_are_known_once_connected() {
-    let (client, server) = pair();
-    let (agentd, _news) = AgentdHandle::start_on_stream(client);
-    assert_eq!(agentd.modes(), Vec::new());
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while agentd.modes().is_empty() {
-        assert!(std::time::Instant::now() < deadline, "no modes");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(
-        agentd.modes(),
-        [crate::agent_model::Mode {
-            id: "planner".to_string(),
-            title: "Planner".to_string(),
-        }]
     );
 }
 

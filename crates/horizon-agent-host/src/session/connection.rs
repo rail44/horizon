@@ -54,13 +54,6 @@ impl Connection {
         }
     }
 
-    /// The roles a session can start with, as `(id, title)`.
-    pub(crate) fn modes(&self) -> Vec<(String, String)> {
-        (self.state.packages().user_launchable().into_iter())
-            .map(|role| (role.id.to_string(), role.title.to_string()))
-            .collect()
-    }
-
     /// The provider a new session starts on when none is named.
     pub(crate) fn default_provider_id(
         &self,

@@ -101,6 +101,10 @@ role deliberately has no filesystem access.
 
 ## The configuration agent
 
+(The `config` role is gone, and so are `--role` and the shell's list of
+roles a person can start an agent in: no role is left that a person
+starts, board #114, 2026-11-26.)
+
 The `config` role is the first role and the first skill consumer. It is
 launched as a named command — `New Configuration Agent` in the palette,
 `new agent --role config` over the control plane / CLI (beside `new agent`'s

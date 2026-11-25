@@ -230,7 +230,7 @@ follows ACP where they differ (board #114):
 |---|---|
 | `continue_turn` | A turn the token budget halts ends with the stop reason `MaxTurnRequests`; a new message goes on, as it already does |
 | `list_providers`, `list_provider_models` | The `Model` config option's values, a group for each provider with a key: the agent lists their models when it starts and when the config file changes, and every attachment gets the new set as a `config_option_update` |
-| `session/new`'s `_meta.horizon` | The agent names the session; the role is a `Mode` config option and the model a `Model` one, given at creation (`config_options`, unstable) |
+| `session/new`'s `_meta.horizon` | The agent names the session; the model is a `Model` config option given at creation (`config_options`, unstable). No role is given: none is left that a person starts an agent in, and the `Mode` option, `--role` and the shell's list of roles went with it (#114) |
 | A denial's reason in the permission response | A standard reject option; the reason is the next message |
 | `ensure_board_organizer` | Gone, with the board's automatic deliveries (a task registered, a task closed, the owner's comment to the task's session) and the `board-organizer` role, its skill and the `open-board-organizer` command (#114) |
 | `reload_provider_config` | Out of ACP: the child reads the config file again when it changes |

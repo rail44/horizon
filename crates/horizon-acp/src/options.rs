@@ -1,14 +1,6 @@
 //! The ids Horizon's agent and shell agree on inside standard ACP: the
 //! session config options' ids and values, and the permission options'.
 
-/// `configId` of the session config option that selects the role a session
-/// starts with (`category: mode`, `select`): a role's id, or
-/// [`DEFAULT_MODE`] for none. It is set when the session starts.
-pub const MODE_CONFIG_ID: &str = "mode";
-
-/// The `mode` option's value for a session with no role.
-pub const DEFAULT_MODE: &str = "default";
-
 /// `configId` of the session config option that selects the provider and
 /// model (`category: model`, `select`).
 pub const MODEL_CONFIG_ID: &str = "model";

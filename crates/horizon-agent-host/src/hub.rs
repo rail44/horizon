@@ -30,7 +30,6 @@ use horizon_agent::config::ReasoningLevel;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::hosting::SessionNew;
 use horizon_agent::persistence::event_log::WriterHandle;
-use horizon_agent::roles::RoleId;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -196,15 +195,11 @@ impl Shared {
         match self.connection.session_summary(session_id) {
             Some(summary) => mapping::SessionFacts {
                 provider_id: summary.provider_id.0,
-                role_id: summary.role_id.map(|role| role.0),
-                modes: self.connection.modes(),
                 parent_session_id: summary.parent_session_id,
                 workspace_root: summary.workspace_root,
             },
             None => mapping::SessionFacts {
                 provider_id: String::new(),
-                role_id: None,
-                modes: self.connection.modes(),
                 parent_session_id: None,
                 workspace_root: None,
             },
@@ -220,17 +215,13 @@ impl Shared {
         let provider_id = self.session_facts(session_id).provider_id;
         let (model, selection, reasoning) = self.connection.session_model_state(session_id);
         let catalog = self.connection.model_catalog().borrow().clone();
-        let facts = self.session_facts(session_id);
-        let mode = mapping::mode_option(&facts.modes, facts.role_id.as_deref());
-        std::iter::once(mode)
-            .chain(mapping::model_options(
-                &catalog,
-                &provider_id,
-                model.as_deref(),
-                selection.as_ref(),
-                reasoning.as_ref(),
-            ))
-            .collect()
+        mapping::model_options(
+            &catalog,
+            &provider_id,
+            model.as_deref(),
+            selection.as_ref(),
+            reasoning.as_ref(),
+        )
     }
 
     fn initialize(
@@ -279,23 +270,15 @@ impl Shared {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
         }
-        // The role and model are the options' initial values; one this
-        // agent does not take is left out.
-        let mut role_id = None;
-        let mut model = None;
-        for option in &request.config_options {
-            let value = option.value.as_id().map(|value| value.0.to_string());
-            match (&*option.config_id.0, value) {
-                (acp::MODE_CONFIG_ID, Some(mode)) if mode != acp::DEFAULT_MODE => {
-                    role_id = Some(RoleId(mode));
-                }
-                (acp::MODEL_CONFIG_ID, Some(value)) => {
-                    model = acp::decode_model_option_id(&value)
-                        .map(|(provider, model)| (provider.to_string(), model.to_string()));
-                }
-                _ => {}
-            }
-        }
+        // The model is the option's initial value; an option this agent
+        // does not take is left out.
+        let model = (request.config_options.iter())
+            .filter(|option| &*option.config_id.0 == acp::MODEL_CONFIG_ID)
+            .find_map(|option| {
+                let value = option.value.as_id()?;
+                acp::decode_model_option_id(&value.0)
+                    .map(|(provider, model)| (provider.to_string(), model.to_string()))
+            });
         let provider_id = match &model {
             Some((provider, _)) => ProviderId(provider.clone()),
             None => match self.connection.default_provider_id() {
@@ -307,7 +290,7 @@ impl Shared {
             // The agent names its sessions.
             session_id: SessionId::new(),
             provider_id,
-            role_id,
+            role_id: None,
             workspace_root: Some(request.cwd.into_inner()),
             spawn_source_session_id: None,
         };
@@ -551,9 +534,6 @@ impl Shared {
                         .set_session_model(session_id, provider.to_string(), model.to_string())
                         .map_err(call_error)?;
                 }
-                acp::MODE_CONFIG_ID => {
-                    return Err(call_error("A session's mode is set when it starts"));
-                }
                 acp::EFFORT_CONFIG_ID => {
                     let level = value
                         .ok_or_else(|| call_error("The effort option's value must be a level"))
@@ -589,11 +569,10 @@ impl Shared {
                 }
                 None => {
                     let catalog = self.connection.model_catalog().borrow().clone();
-                    let mode = mapping::mode_option(&self.connection.modes(), None);
-                    let model = (self.connection.default_model()).map(|(provider, model)| {
-                        mapping::model_option(&catalog, &provider, &model)
-                    });
-                    std::iter::once(mode).chain(model).collect()
+                    (self.connection.default_model())
+                        .map(|(provider, model)| mapping::model_option(&catalog, &provider, &model))
+                        .into_iter()
+                        .collect()
                 }
             };
             Ok(v2::SessionOptionsResponse::new().config_options(options))

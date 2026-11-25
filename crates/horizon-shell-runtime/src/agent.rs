@@ -46,8 +46,6 @@ impl SessionSummary {
 
 /// What `session/new` needs beyond the route.
 pub(super) struct SessionNew {
-    /// The role the session starts with: the `mode` option's initial value.
-    pub(super) role: Option<String>,
     pub(super) workspace_root: Option<PathBuf>,
 }
 
@@ -316,14 +314,6 @@ where
                 return Ok(error.into());
             }
             main_control.mark_established();
-            // The modes a new session can start in.
-            let request = send(&connection, v2::SessionOptionsRequest::new(resume_cwd()));
-            let asked = main_routes.clone();
-            tokio::spawn(async move {
-                if let Ok(response) = call(OP_TIMEOUT, "session options", request).await {
-                    asked.set_modes(crate::agent_model::mode_choices(&response.config_options));
-                }
-            });
             let end = loop {
                 tokio::select! {
                     _ = main_control.cancelled() => break StreamEnd::Cancelled,
@@ -444,16 +434,7 @@ fn handle_op(
                 routes.agent_failed(route, error);
                 return;
             };
-            let request = v2::NewSessionRequest::new(workspace_root).config_options(
-                (new.role.iter())
-                    .map(|role| {
-                        v2::InitialSessionConfigOption::new(
-                            horizon_acp::MODE_CONFIG_ID,
-                            v2::SessionConfigOptionValue::id(role.as_str()),
-                        )
-                    })
-                    .collect(),
-            );
+            let request = v2::NewSessionRequest::new(workspace_root);
             open_session(routes, route, connection, commands, |connection, routes| {
                 connection
                     .build_session_from(request)

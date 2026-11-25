@@ -122,7 +122,7 @@ agent. Panes get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment,
 so a subcommand run from inside a pane targets the enclosing instance and
 `--split` (bare) resolves to "here" by default. Subcommands:
 `new <plugin> [<argument>...]` (a new pane of a plugin, made from what the
-plugin takes: `new terminal`, `new agent [--prompt <text>] [--role config]`,
+plugin takes: `new terminal`, `new agent [--prompt <text>]`,
 `new markdown <path>`, `new wiki [<page>]`,
 `new preview <extension.wasm> [<argument>...]` for an extension still being
 written (`docs/preview-pane-design.md`), `new <extension's name> [<argument>...]`),

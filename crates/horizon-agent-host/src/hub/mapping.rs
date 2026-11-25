@@ -68,9 +68,6 @@ enum StateKind {
 #[derive(Clone, Debug)]
 pub(super) struct SessionFacts {
     pub(super) provider_id: String,
-    pub(super) role_id: Option<String>,
-    /// The roles a session can start with, as `(id, title)`.
-    pub(super) modes: Vec<(String, String)>,
     pub(super) parent_session_id: Option<SessionId>,
     pub(super) workspace_root: Option<PathBuf>,
 }
@@ -133,8 +130,6 @@ pub(super) fn fork_point(
 ) -> Result<Option<usize>, String> {
     let mut mapper = Mapper::new(SessionFacts {
         provider_id: String::new(),
-        role_id: None,
-        modes: Vec::new(),
         parent_session_id: None,
         workspace_root: None,
     });
@@ -219,28 +214,6 @@ pub(super) fn model_option(
     option.category(v2::SessionConfigOptionCategory::Model)
 }
 
-/// The `mode` config option: no role or one a session can start with, with
-/// `role` current and among them.
-pub(super) fn mode_option(
-    modes: &[(String, String)],
-    role: Option<&str>,
-) -> v2::SessionConfigOption {
-    let current = role.unwrap_or(acp::DEFAULT_MODE);
-    let mut entries = vec![v2::SessionConfigSelectOption::new(
-        acp::DEFAULT_MODE,
-        "Agent",
-    )];
-    entries.extend(
-        (modes.iter())
-            .map(|(id, title)| v2::SessionConfigSelectOption::new(id.as_str(), title.as_str())),
-    );
-    if !entries.iter().any(|entry| &*entry.value.0 == current) {
-        entries.push(v2::SessionConfigSelectOption::new(current, current));
-    }
-    v2::SessionConfigOption::select(acp::MODE_CONFIG_ID, "Mode", current, entries)
-        .category(v2::SessionConfigOptionCategory::Mode)
-}
-
 /// The `effort` config option for a session's reasoning: its current level
 /// among the levels the model takes. `None` when the model takes none.
 pub(super) fn effort_option(reasoning: &ReasoningSelection) -> Option<v2::SessionConfigOption> {
@@ -297,16 +270,13 @@ impl Mapper {
     }
 
     pub(super) fn config_options(&self) -> Vec<v2::SessionConfigOption> {
-        let mode = mode_option(&self.facts.modes, self.facts.role_id.as_deref());
-        std::iter::once(mode)
-            .chain(model_options(
-                &self.catalog,
-                &self.facts.provider_id,
-                self.model.as_deref(),
-                self.selection.as_ref(),
-                self.reasoning.as_ref(),
-            ))
-            .collect()
+        model_options(
+            &self.catalog,
+            &self.facts.provider_id,
+            self.model.as_deref(),
+            self.selection.as_ref(),
+            self.reasoning.as_ref(),
+        )
     }
 
     /// Takes a new model catalog in. Whether the options it offers changed.

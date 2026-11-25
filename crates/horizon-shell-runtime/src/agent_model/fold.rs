@@ -444,35 +444,6 @@ fn blocks_text(blocks: &[v2::ContentBlock]) -> String {
     blocks.iter().map(block_text).collect()
 }
 
-/// The modes the `mode` config option offers besides the default, each
-/// with its title, in the option's order.
-pub fn mode_choices(options: &[v2::SessionConfigOption]) -> Vec<Mode> {
-    let Some(option) = options
-        .iter()
-        .find(|option| option.config_id.0.as_ref() == horizon_acp::MODE_CONFIG_ID)
-    else {
-        return Vec::new();
-    };
-    let v2::SessionConfigKind::Select(select) = &option.kind else {
-        return Vec::new();
-    };
-    let entries: Vec<&v2::SessionConfigSelectOption> = match &select.options {
-        v2::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
-        v2::SessionConfigSelectOptions::Grouped(groups) => groups
-            .iter()
-            .flat_map(|group| group.options.iter())
-            .collect(),
-        _ => Vec::new(),
-    };
-    (entries.into_iter())
-        .filter(|entry| entry.value.0.as_ref() != horizon_acp::DEFAULT_MODE)
-        .map(|entry| Mode {
-            id: entry.value.0.to_string(),
-            title: entry.name.clone(),
-        })
-        .collect()
-}
-
 /// The `effort` config option's current level and entries, if the set
 /// carries one.
 pub fn effort_selection(options: &[v2::SessionConfigOption]) -> Option<EffortSelection> {

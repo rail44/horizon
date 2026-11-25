@@ -83,9 +83,6 @@ pub(super) struct AgentRoutes {
     /// The agent's name of each session the shell started, by the shell's
     /// own id: what the agent is asked by, and what it says back.
     names: Mutex<Names>,
-    /// The modes the agent offers a new session, as `session/options`
-    /// said them on the current connection.
-    modes: Mutex<Vec<crate::agent_model::Mode>>,
     /// Each subagent's parent session, as `subagent_update` announced it:
     /// where a subagent's permission requests are shown.
     parents: Mutex<HashMap<SessionId, SessionId>>,
@@ -148,7 +145,6 @@ impl AgentRoutes {
             }),
             news,
             names: Mutex::new(Names::default()),
-            modes: Mutex::new(Vec::new()),
             parents: Mutex::new(HashMap::new()),
         }
     }
@@ -314,14 +310,6 @@ impl AgentRoutes {
             was: local,
             is: named,
         });
-    }
-
-    pub(super) fn set_modes(&self, modes: Vec<crate::agent_model::Mode>) {
-        *self.modes.lock().unwrap() = modes;
-    }
-
-    pub(super) fn modes(&self) -> Vec<crate::agent_model::Mode> {
-        self.modes.lock().unwrap().clone()
     }
 
     /// Tells the shell the session it started as `local` did not start.

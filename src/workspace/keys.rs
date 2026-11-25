@@ -114,7 +114,7 @@ impl Act {
             Act::NewTab => shell.execute(CommandId::NewTab),
             Act::MoveToTab => shell.execute(CommandId::MoveToTab),
             Act::Split => shell.execute(CommandId::SplitRight),
-            Act::Agent => shell.create(SessionKind::Agent, None, Placement::NewTab),
+            Act::Agent => shell.create(SessionKind::Agent, Placement::NewTab),
             Act::Close => shell.close_pane(),
             Act::Commands => shell.open(Modal::Palette),
             Act::Commit => shell.change(Workspace::commit_workspace_mode),

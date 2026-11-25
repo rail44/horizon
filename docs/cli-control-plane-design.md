@@ -138,14 +138,14 @@ Four amendments settled after v1 shipped and was exercised end-to-end:
 A new pane is one command, and the plugin it shows is that command's
 argument: `horizon new <plugin> [<argument>...] [--split] [--active]`,
 for a terminal, an agent, a view of the shell's own and an extension
-alike (`new terminal`, `new agent --prompt .. --role ..`,
+alike (`new terminal`, `new agent --prompt ..`,
 `new markdown <path>`, `new wiki [<page>]`, `new preview <wasm>
 [--name ..]`). The subcommands each of those had (`new-terminal`,
 `new-agent`, `markdown`, `preview`, `wiki`) are gone.
 
 What follows the plugin's name is what the plugin says its pane is made
 from (`docs/extension-boundary-design.md`): the client sends it as it
-was typed -- in order, and what was given by name (`--prompt`, `--role`,
+was typed -- in order, and what was given by name (`--prompt`,
 `--name`) -- with its working directory, and the shell, which knows the
 plugin, reads it. A file among them is a path from that directory, and
 the project a wiki's page is of is the one that directory is in. What a

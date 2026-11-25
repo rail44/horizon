@@ -267,12 +267,11 @@ pub use keymap::Keymap;
 
 /// A session the model has just made, to start. A terminal's shell
 /// begins where the terminal it was made from is, or in a directory named
-/// for it; an agent works in the directory named, in the role named.
+/// for it; an agent works in the directory named.
 pub struct Starting {
     pub session: SessionId,
     pub from: Option<SessionId>,
     pub directory: Option<PathBuf>,
-    pub role: Option<String>,
 }
 
 use horizon_theme::spec::{FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -326,8 +325,6 @@ pub struct AgentRuntime {
     pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
     /// A session of the runtime, if it has it. Called off the UI thread.
     pub find: Asks<SessionId, Option<RunningAgent>>,
-    /// The modes the runtime offers a new session.
-    pub modes: Box<dyn Fn() -> Vec<horizon_shell_runtime::agent_model::Mode>>,
 }
 
 /// What `Reload Terminal Runtime` does with the runtime: has it hand its
@@ -431,7 +428,6 @@ struct Start {
     /// The session it was made from.
     from: Option<SessionId>,
     directory: Option<PathBuf>,
-    role: Option<String>,
 }
 
 impl Start {
@@ -715,7 +711,6 @@ impl Shell {
                             session: session_id,
                             from,
                             directory: start.directory,
-                            role: None,
                         }));
                         (kept.sessions.borrow_mut()).insert(session_id, session.clone());
                         session
@@ -761,7 +756,6 @@ impl Shell {
                             session: session_id,
                             from: start.from,
                             directory: directory.clone(),
-                            role: start.role,
                         }));
                         (kept.agents.borrow_mut()).insert(session_id, session.clone());
                         // Kept under this id until the agent names it.
@@ -1068,7 +1062,7 @@ impl Shell {
 
     /// A new pane at `placement` over a new session of `kind`, with the
     /// focus. A split goes beside what the cursor is on.
-    fn create(&self, kind: SessionKind, role: Option<String>, placement: Placement) {
+    fn create(&self, kind: SessionKind, placement: Placement) {
         let kept = self.kept();
         self.change(|model| {
             let from = model.active_session_id();
@@ -1081,7 +1075,6 @@ impl Shell {
                 let start = Start {
                     from,
                     directory: None,
-                    role,
                 };
                 kept.starting.borrow_mut().insert(made, start);
             }
@@ -1094,7 +1087,7 @@ impl Shell {
         if self.kept().spawn_agent.is_some() || !plugins::extensions().is_empty() {
             self.open(Modal::Chooser(placement));
         } else {
-            self.create(SessionKind::Terminal, None, placement);
+            self.create(SessionKind::Terminal, placement);
         }
     }
 
@@ -1276,13 +1269,6 @@ impl Shell {
     }
 
     /// The agent view a pane shows.
-    /// The modes the agent runtime offers a new session: none without one.
-    pub(crate) fn agent_modes(&self) -> Vec<horizon_shell_runtime::agent_model::Mode> {
-        (self.kept().agent_runtime.as_ref())
-            .map(|runtime| (runtime.modes)())
-            .unwrap_or_default()
-    }
-
     pub fn agent(&self, pane: PaneId) -> Option<Agent> {
         self.kept().panes.borrow().get(&pane)?.agent
     }

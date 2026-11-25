@@ -15,28 +15,20 @@ use std::sync::Arc;
 
 /// What a new pane shows.
 enum Choice {
-    Session(SessionKind, Option<String>),
+    Session(SessionKind),
     Plugin(PluginPane),
     Extension(Arc<Extension>),
 }
 
-/// The views to choose from whose titles hold `query`: an agent in each
-/// mode its runtime offers among them.
-fn matching(shell: Shell, query: &str) -> Vec<(String, Choice)> {
+/// The views to choose from whose titles hold `query`.
+fn matching(query: &str) -> Vec<(String, Choice)> {
     let mut choices = vec![
         (
             "Terminal".to_string(),
-            Choice::Session(SessionKind::Terminal, None),
+            Choice::Session(SessionKind::Terminal),
         ),
-        (
-            "Agent".to_string(),
-            Choice::Session(SessionKind::Agent, None),
-        ),
+        ("Agent".to_string(), Choice::Session(SessionKind::Agent)),
     ];
-    for mode in shell.agent_modes() {
-        let choice = Choice::Session(SessionKind::Agent, Some(mode.id));
-        choices.push((mode.title, choice));
-    }
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
     // (One with no view of its own for a pane is its commands only.)
     for extension in plugins::extensions()
@@ -54,8 +46,8 @@ fn matching(shell: Shell, query: &str) -> Vec<(String, Choice)> {
 /// sheet over the workspace, or as what a workspace with no tab shows,
 /// each searched by its own `search`.
 pub(super) fn view(shell: Shell, search: Search, placement: Placement) -> El {
-    let rows = move |query: &str| {
-        (matching(shell, query).into_iter())
+    let rows = |query: &str| {
+        (matching(query).into_iter())
             .map(|(title, ..)| Row {
                 key: title.clone(),
                 class: (styles::COMMAND, None),
@@ -65,12 +57,12 @@ pub(super) fn view(shell: Shell, search: Search, placement: Placement) -> El {
             .collect()
     };
     let picked = move |index: usize| {
-        let mut choices = matching(shell, &search.query.get_untracked());
+        let mut choices = matching(&search.query.get_untracked());
         if index < choices.len() {
             let (_, choice) = choices.swap_remove(index);
             shell.modal.set(None);
             match choice {
-                Choice::Session(kind, role) => shell.create(kind, role, placement),
+                Choice::Session(kind) => shell.create(kind, placement),
                 Choice::Plugin(plugin) => shell.create_plugin(plugin, placement),
                 Choice::Extension(extension) if extension.file_asked_for().is_some() => {
                     shell.open(Modal::Finder(extension.name, placement));

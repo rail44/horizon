@@ -212,16 +212,6 @@ impl Shell {
         }
         if name == AgentPlugin::NAME {
             let begins = AgentPlugin::begin(given)?;
-            if let Some(role) = &begins.role {
-                let modes = self.agent_modes();
-                if !modes.iter().any(|mode| &mode.id == role) {
-                    let available: Vec<&str> = modes.iter().map(|mode| mode.id.as_str()).collect();
-                    return Err(format!(
-                        "unknown role: {role} (available: {})",
-                        available.join(", ")
-                    ));
-                }
-            }
             return self.new_session(SessionKind::Agent, begins, split, issuer, activate);
         }
         let made = match plugins::created(name, given.clone()) {
@@ -302,7 +292,7 @@ impl Shell {
         if kind == SessionKind::Agent && kept.spawn_agent.is_none() {
             return Err(NOT_YET.to_string());
         }
-        let Begins { role, prompt } = begins;
+        let Begins { prompt } = begins;
         let mut made = None;
         self.model_changed(|model| {
             made = match split {
@@ -317,7 +307,6 @@ impl Shell {
                 let start = Start {
                     from: split.map(|(target, _)| target).or(issuer),
                     directory: None,
-                    role,
                 };
                 kept.starting.borrow_mut().insert(made, start);
             }

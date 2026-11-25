@@ -106,8 +106,8 @@ async fn an_unknown_request_is_refused_and_the_connection_goes_on() {
         .expect("the connection goes on");
 }
 
-/// `session/options` for a new session: the mode first, at no role, then
-/// the model a new session starts on.
+/// `session/options` for a new session: the model it starts on, and no
+/// mode to choose.
 #[tokio::test]
 async fn session_options_say_what_a_new_session_starts_with() {
     let state = crate::session::test_support::test_state();
@@ -132,13 +132,5 @@ async fn session_options_say_what_a_new_session_starts_with() {
     let ids: Vec<_> = (options.iter())
         .map(|option| option.config_id.0.to_string())
         .collect();
-    assert_eq!(ids[..2], [acp::MODE_CONFIG_ID, acp::MODEL_CONFIG_ID]);
-    let v2::SessionConfigKind::Select(mode) = &options[0].kind else {
-        panic!("the mode is a select");
-    };
-    assert_eq!(&*mode.current_value.0, acp::DEFAULT_MODE);
-    assert_eq!(
-        options[0].category,
-        Some(v2::SessionConfigOptionCategory::Mode)
-    );
+    assert!(ids.iter().all(|id| id == acp::MODEL_CONFIG_ID), "{ids:?}");
 }

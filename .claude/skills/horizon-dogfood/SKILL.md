@@ -38,8 +38,7 @@ session's root moves there at the next turn boundary (the pane's
 directory follows live). `--split [<session-id>]`
 to place it in a split (bare `--split` splits off the pane you're
 running in; pass a session-id to split off a different pane) /
-`--active` to activate the new pane, `--role config` for the
-config role. Destructive verbs need `--yes`.
+`--active` to activate the new pane. Destructive verbs need `--yes`.
 
 **Identify.** Since `6b0c57a` (2026-07-25), `new agent` echoes the created
 session id — `OK <session-id>` in human mode, `payload.session_id` under

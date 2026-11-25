@@ -277,17 +277,11 @@ mod tests {
         );
         assert_eq!(
             sent(
-                &new(
-                    "agent",
-                    &[],
-                    &[("prompt", "fix the bug"), ("role", "keeper")],
-                    None,
-                    false
-                ),
+                &new("agent", &[], &[("prompt", "fix the bug")], None, false),
                 None,
                 None,
             )["named"],
-            serde_json::json!({"prompt": "fix the bug", "role": "keeper"})
+            serde_json::json!({"prompt": "fix the bug"})
         );
     }
 

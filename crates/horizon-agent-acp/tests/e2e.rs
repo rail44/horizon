@@ -159,33 +159,21 @@ fn mock_provider_id() -> ProviderId {
 }
 
 /// A `session/new` on `provider_id`, confined to `cwd`.
-fn new_session_request(
-    provider_id: &str,
-    role_id: Option<&str>,
-    cwd: PathBuf,
-) -> v2::NewSessionRequest {
-    v2::NewSessionRequest::new(cwd).config_options(initial_options(provider_id, role_id))
+fn new_session_request(provider_id: &str, cwd: PathBuf) -> v2::NewSessionRequest {
+    v2::NewSessionRequest::new(cwd).config_options(initial_options(provider_id))
 }
 
-/// The initial `model` (on `provider_id`) and `mode` option values.
-fn initial_options(
-    provider_id: &str,
-    role_id: Option<&str>,
-) -> Vec<v2::InitialSessionConfigOption> {
-    let option = |id: &str, value: String| {
-        v2::InitialSessionConfigOption::new(id.to_string(), v2::SessionConfigOptionValue::id(value))
-    };
-    std::iter::once(option(
+/// The initial `model` option value, on `provider_id`.
+fn initial_options(provider_id: &str) -> Vec<v2::InitialSessionConfigOption> {
+    vec![v2::InitialSessionConfigOption::new(
         acp::MODEL_CONFIG_ID,
-        acp::encode_model_option_id(provider_id, "default"),
-    ))
-    .chain(role_id.map(|role| option(acp::MODE_CONFIG_ID, role.to_string())))
-    .collect()
+        v2::SessionConfigOptionValue::id(acp::encode_model_option_id(provider_id, "default")),
+    )]
 }
 
 /// A mock-provider session in the test's cwd.
 fn session_new() -> v2::NewSessionRequest {
-    new_session_request(&mock_provider_id().0, None, test_cwd())
+    new_session_request(&mock_provider_id().0, test_cwd())
 }
 
 /// Opens a session: the id the agent named it with.
@@ -599,7 +587,6 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
         &client,
         new_session_request(
             &horizon_agent::registry::named_rig_provider_id("initial").0,
-            None,
             test_cwd(),
         ),
     )
@@ -707,7 +694,6 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
         &client,
         new_session_request(
             &horizon_agent::registry::named_rig_provider_id("gateway").0,
-            None,
             test_cwd(),
         ),
     )
@@ -961,7 +947,7 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
 /// A session started in a plain checkout, the shape whose `bash` calls
 /// run sandboxed without approval and ask to run outside it.
 fn shared_session_in(cwd: PathBuf) -> v2::NewSessionRequest {
-    new_session_request(&mock_provider_id().0, None, cwd)
+    new_session_request(&mock_provider_id().0, cwd)
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call (a write
@@ -1294,38 +1280,6 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         )
         .unwrap();
     assert_eq!(Some(next_projected), next_turn.turn_id);
-}
-
-/// A crash-and-respawn must restore a session's role, not just its
-/// provider.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let mut client = connect(&mut agentd).await;
-
-    let session_id = open_session(
-        &client,
-        new_session_request(&mock_provider_id().0, Some("board-task"), test_cwd()),
-    )
-    .await;
-    // Drain the startup burst until its init message reaches the wire...
-    collect_until(&mut client, |inbound| {
-        agent_message(inbound).is_some() || user_message(inbound).is_some()
-    })
-    .await;
-    // ...and disk, before the hard kill.
-    wait_for_persisted_event(&sessions_dir, session_id, |event| {
-        matches!(event, Event::MessageCommitted(_))
-    })
-    .await;
-
-    drop(client);
-    agentd.kill_and_wait();
-
-    let mut respawned = spawn_agentd_at(sessions_dir);
-    let client = connect(&mut respawned).await;
-    assert_listed(&list_sessions(&client).await, session_id, Some(test_cwd()));
 }
 
 /// A daemon restart must preserve the authoritative root and tier-1
@@ -1959,7 +1913,7 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
     let mut client = connect(&mut daemon).await;
     let source = open_session(
         &client,
-        new_session_request(&mock_provider_id().0, None, repo.clone()),
+        new_session_request(&mock_provider_id().0, repo.clone()),
     )
     .await;
     prompt_and_settle(&mut client, source, "one").await;

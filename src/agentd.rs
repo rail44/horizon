@@ -107,15 +107,13 @@ impl Agentd {
 
     /// This runtime as the shell's reload command and board use it.
     pub fn runtime(&self) -> AgentRuntime {
-        let (restarted, attached, found, offered) =
-            (self.clone(), self.clone(), self.clone(), self.clone());
+        let (restarted, attached, found) = (self.clone(), self.clone(), self.clone());
         AgentRuntime {
             restart: Arc::new(move |()| {
                 restarted.restart();
                 restarted.running()
             }),
             attach: Box::new(move |session| attached.attach(session)),
-            modes: Box::new(move || offered.handle().modes()),
             find: Arc::new(move |session| {
                 Ok(found
                     .running()?
@@ -129,11 +127,9 @@ impl Agentd {
     pub fn spawn(&self) -> SpawnAgent {
         let runtime = self.clone();
         Box::new(move |starting| {
-            AgentSession::attached(runtime.handle().start_session(
-                starting.session,
-                starting.role,
-                starting.directory,
-            ))
+            AgentSession::attached(
+                (runtime.handle()).start_session(starting.session, starting.directory),
+            )
         })
     }
 
