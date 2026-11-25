@@ -1,7 +1,7 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
+    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta,
     SessionEventNotification, SessionId, ToolCallMeta, ToolOutcome, write_horizon_meta,
 };
 use serde_json::json;
@@ -342,7 +342,7 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
         (v2::StopReason::Cancelled, SessionStatus::Cancelled),
         (v2::StopReason::MaxTurnRequests, SessionStatus::Paused),
         (
-            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_FAILED)),
+            v2::StopReason::Error(v2::ErrorStopReason::new()),
             SessionStatus::Failed,
         ),
     ] {
@@ -594,4 +594,46 @@ fn a_frame_says_in_a_line_what_its_session_does_or_asks() {
     apply(&mut model, idle(Some(v2::StopReason::EndTurn)));
     assert_eq!(model.frame.status(), Some(SessionStatus::Completed));
     assert_eq!(model.frame.words().as_deref(), Some("Built."));
+}
+
+/// A notice and a compaction are lines where they arrive; a failed turn's
+/// error is a line before its end.
+#[test]
+fn notices_compactions_and_a_failed_turns_error_are_lines() {
+    let mut model = AgentModel::default();
+    apply(&mut model, running());
+    apply(
+        &mut model,
+        v2::SessionUpdate::Notice(
+            v2::Notice::new(v2::NoticeSeverity::Warning, "Provider rate limited")
+                .description("attempt 2".to_string()),
+        ),
+    );
+    apply(
+        &mut model,
+        v2::SessionUpdate::CompactionUpdate(
+            v2::CompactionUpdate::new("c1", v2::CompactionStatus::Completed)
+                .summary(vec!["2 tool outputs".into()]),
+        ),
+    );
+    apply(
+        &mut model,
+        v2::SessionUpdate::Notice(v2::Notice::new(v2::NoticeSeverity::Error, "a child failed")),
+    );
+    let stop = v2::ErrorStopReason::new().error(v2::Error::new(-32603, "provider unreachable"));
+    apply(&mut model, idle(Some(v2::StopReason::Error(stop))));
+    let items = &model.frame.items;
+    std::assert_matches!(&items[0], AgentFrameItem::Notice(Notice { warning: true, text })
+        if text == "Provider rate limited (attempt 2)");
+    std::assert_matches!(&items[1], AgentFrameItem::Compaction(Compaction { summary, .. })
+        if summary == "2 tool outputs");
+    std::assert_matches!(&items[2], AgentFrameItem::Error(text) if text == "a child failed");
+    std::assert_matches!(&items[3], AgentFrameItem::Error(text) if text == "provider unreachable");
+    std::assert_matches!(
+        &items[4],
+        AgentFrameItem::TurnEnded {
+            reason: TurnEndReason::Failed,
+            ..
+        }
+    );
 }

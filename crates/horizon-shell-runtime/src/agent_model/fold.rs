@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
-    SessionEventNotification, ToolCallMeta, decode_model_option_id, read_horizon_meta,
+    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, SessionEventNotification,
+    ToolCallMeta, decode_model_option_id, read_horizon_meta,
 };
 
 use super::types::*;
@@ -143,6 +143,8 @@ impl AgentModel {
                 }
             }
             v2::SessionUpdate::StateUpdate(state) => self.apply_state(state),
+            v2::SessionUpdate::Notice(notice) => self.apply_notice(notice),
+            v2::SessionUpdate::CompactionUpdate(update) => self.apply_compaction(update),
             v2::SessionUpdate::SubagentUpdate(update) => {
                 apply_subagent(&mut self.subagents, update)
             }
@@ -271,6 +273,12 @@ impl AgentModel {
             }
             v2::StateUpdate::Idle(idle) => {
                 let was_idle = self.frame.phase == Some(SessionPhase::Idle);
+                let failure = match &idle.stop_reason {
+                    Some(v2::StopReason::Error(stop)) => {
+                        stop.error.as_ref().map(|error| error.message.clone())
+                    }
+                    _ => None,
+                };
                 self.frame.phase = Some(SessionPhase::Idle);
                 let Some(reason) = idle.stop_reason.as_ref().map(turn_end_reason) else {
                     return;
@@ -284,6 +292,9 @@ impl AgentModel {
                 self.frame.turn_end_reason = Some(reason);
                 if repeated {
                     return;
+                }
+                if let Some(message) = failure.filter(|message| !message.is_empty()) {
+                    self.frame.items.push(AgentFrameItem::Error(message));
                 }
                 let elapsed = self
                     .clock
@@ -369,38 +380,67 @@ impl AgentModel {
 
     fn apply_session_event(&mut self, event: SessionEventNotification) {
         match event {
-            SessionEventNotification::ProviderRateLimited {
-                attempt,
-                backoff_ms,
-                ..
-            } => self
-                .frame
-                .items
-                .push(AgentFrameItem::ProviderRateLimited(ProviderRateLimited {
-                    attempt,
-                    backoff_ms,
-                })),
-            SessionEventNotification::HistoryCleared {
-                cleared_occurrence_ids,
-                recovered_chars,
-                ..
-            } => self
-                .frame
-                .items
-                .push(AgentFrameItem::HistoryCleared(HistoryCleared {
-                    cleared_occurrence_ids,
-                    recovered_chars,
-                })),
-            SessionEventNotification::Error { message, .. } => {
-                self.frame.items.push(AgentFrameItem::Error(message))
-            }
             SessionEventNotification::Exited { reason, .. } => {
                 self.frame.items.push(AgentFrameItem::Exited(reason));
                 self.frame.phase = Some(SessionPhase::Terminated);
             }
-            SessionEventNotification::SessionResumed { .. }
-            | SessionEventNotification::AttachmentClosed { .. }
-            | SessionEventNotification::SkippedLines { .. } => {}
+            SessionEventNotification::AttachmentClosed { .. } => {}
+        }
+    }
+
+    /// A notice is a line of the transcript where it arrives; an error
+    /// notice is an error line.
+    fn apply_notice(&mut self, notice: v2::Notice) {
+        let text = match notice
+            .description
+            .filter(|description| !description.is_empty())
+        {
+            Some(description) => format!("{} ({description})", notice.title),
+            None => notice.title,
+        };
+        let item = match notice.severity {
+            v2::NoticeSeverity::Error => AgentFrameItem::Error(text),
+            v2::NoticeSeverity::Warning => AgentFrameItem::Notice(Notice {
+                warning: true,
+                text,
+            }),
+            _ => AgentFrameItem::Notice(Notice {
+                warning: false,
+                text,
+            }),
+        };
+        self.frame.items.push(item);
+    }
+
+    /// A compaction keeps the place its first update gave it; a later one
+    /// patches its summary.
+    fn apply_compaction(&mut self, update: v2::CompactionUpdate) {
+        let id = update.compaction_id.0.to_string();
+        let index = self.frame.items.iter().position(
+            |item| matches!(item, AgentFrameItem::Compaction(compaction) if compaction.id == id),
+        );
+        let index = match index {
+            Some(index) => {
+                self.touched(index);
+                index
+            }
+            None => {
+                self.frame
+                    .items
+                    .push(AgentFrameItem::Compaction(Compaction {
+                        id,
+                        summary: String::new(),
+                    }));
+                self.frame.items.len() - 1
+            }
+        };
+        let AgentFrameItem::Compaction(compaction) = &mut self.frame.items[index] else {
+            unreachable!("index points at a compaction");
+        };
+        match update.summary {
+            MaybeUndefined::Undefined => {}
+            MaybeUndefined::Null => compaction.summary.clear(),
+            MaybeUndefined::Value(blocks) => compaction.summary = blocks_text(&blocks),
         }
     }
 }
@@ -410,9 +450,7 @@ fn turn_end_reason(reason: &v2::StopReason) -> TurnEndReason {
         v2::StopReason::EndTurn => TurnEndReason::Completed,
         v2::StopReason::Cancelled => TurnEndReason::Cancelled,
         v2::StopReason::MaxTurnRequests => TurnEndReason::HaltedByIterationCap,
-        v2::StopReason::Other(other) if other.stop_reason == STOP_REASON_FAILED => {
-            TurnEndReason::Failed
-        }
+        v2::StopReason::Error(_) => TurnEndReason::Failed,
         _ => TurnEndReason::Failed,
     }
 }

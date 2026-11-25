@@ -13,15 +13,6 @@ use horizon_wire::SessionId;
 /// The `_meta` key every Horizon payload lives under.
 pub const HORIZON_META_KEY: &str = "horizon";
 
-/// `stopReason` value for `contract::TurnEndReason::Failed`.
-pub const STOP_REASON_FAILED: &str = "_horizon/failed";
-
-/// A stop reason of Horizon's own, as the protocol carries one it does not
-/// name: the reason and no other field.
-pub fn other_stop_reason(reason: &str) -> agent_client_protocol::v2::schema::OtherStopReason {
-    agent_client_protocol::v2::schema::OtherStopReason::new(reason, Default::default())
-}
-
 /// `configId` of the session config option that selects the provider and
 /// model (`category: model`, `select`).
 pub const MODEL_CONFIG_ID: &str = "model";
@@ -300,10 +291,5 @@ mod tests {
             read_horizon_meta::<MessageMeta>(Some(&malformed)),
             Some(Err(_))
         );
-    }
-
-    #[test]
-    fn stop_reason_values_are_extension_prefixed() {
-        assert_eq!(STOP_REASON_FAILED, "_horizon/failed");
     }
 }

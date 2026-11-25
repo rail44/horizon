@@ -108,7 +108,7 @@ pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
                     .iter()
                     .all(ToolCallView::finished)
             }),
-            AgentFrameItem::TurnEnded { .. } | AgentFrameItem::HistoryCleared(_) => true,
+            AgentFrameItem::TurnEnded { .. } | AgentFrameItem::Compaction(_) => true,
             _ => false,
         };
         if closes_burst {

@@ -586,3 +586,107 @@ fn a_task_childs_progress_is_its_subagent_state() {
         MaybeUndefined::Value(v2::StateUpdate::Idle(_))
     );
 }
+
+fn failure(message: &str) -> Event {
+    Event::Error(horizon_agent::contract::Error {
+        message: message.into(),
+    })
+}
+
+fn notice(update: &v2::SessionUpdate) -> Option<(v2::NoticeSeverity, String)> {
+    match update {
+        v2::SessionUpdate::Notice(notice) => Some((notice.severity.clone(), notice.title.clone())),
+        _ => None,
+    }
+}
+
+/// An error in a turn the turn's failure carries; one the turn survives,
+/// or one outside a turn, is an error notice.
+#[test]
+fn errors_are_a_failed_turns_stop_reason_or_notices() {
+    let mut mapper = mapper();
+    let failed = updates(
+        &mut mapper,
+        &[
+            Event::StateChanged(SessionState::Running),
+            failure("provider unreachable"),
+            Event::TurnEnded(TurnEndReason::Failed),
+            Event::StateChanged(SessionState::WaitingForUser),
+        ],
+    );
+    let stop = v2::ErrorStopReason::new().error(v2::Error::new(-32603, "provider unreachable"));
+    assert_eq!(
+        failed.last(),
+        Some(&v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(
+            v2::IdleStateUpdate::new().stop_reason(v2::StopReason::Error(stop))
+        )))
+    );
+    assert!(failed.iter().all(|update| notice(update).is_none()));
+
+    let survived = updates(
+        &mut mapper,
+        &[
+            Event::StateChanged(SessionState::Running),
+            failure("a child failed"),
+            Event::TurnEnded(TurnEndReason::Completed),
+            Event::StateChanged(SessionState::WaitingForUser),
+            failure("outside a turn"),
+        ],
+    );
+    let notices: Vec<_> = survived.iter().filter_map(notice).collect();
+    assert_eq!(
+        notices,
+        [
+            (v2::NoticeSeverity::Error, "a child failed".to_string()),
+            (v2::NoticeSeverity::Error, "outside a turn".to_string()),
+        ]
+    );
+}
+
+/// A rate limit is a notice for now, left out of a replay; history
+/// clearing is a compaction, replayed where it happened.
+#[test]
+fn rate_limits_are_live_notices_and_clearing_is_a_compaction() {
+    let events = [
+        Event::ProviderRateLimited(horizon_agent::contract::ProviderRateLimited {
+            status: Some(429),
+            attempt: 2,
+            backoff_ms: 1500,
+        }),
+        Event::HistoryCleared(horizon_agent::contract::HistoryCleared {
+            cleared_occurrence_ids: vec![OccurrenceId("a".into()), OccurrenceId("b".into())],
+            recovered_chars: 4096,
+        }),
+    ];
+    let live = updates(&mut mapper(), &events);
+    assert_eq!(
+        notice(&live[0]),
+        Some((
+            v2::NoticeSeverity::Warning,
+            "Provider rate limited (HTTP 429)".to_string()
+        ))
+    );
+    let v2::SessionUpdate::CompactionUpdate(compaction) = &live[1] else {
+        panic!("a compaction, got {:?}", live[1]);
+    };
+    assert_eq!(compaction.status, v2::CompactionStatus::Completed);
+    assert_eq!(
+        compaction.summary,
+        MaybeUndefined::Value(vec!["2 tool outputs, 4096 characters reclaimed".into()])
+    );
+
+    let mut replaying = Mapper::new(SessionId::new(), facts());
+    let replayed: Vec<_> = events
+        .iter()
+        .flat_map(|event| replaying.map(&AgentWireEvent::Event(event.clone())))
+        .filter_map(|outgoing| match outgoing {
+            Outgoing::Update(update) => Some(*update),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replayed.len(), 1);
+    assert!(matches!(
+        replayed[0],
+        v2::SessionUpdate::CompactionUpdate(_)
+    ));
+}

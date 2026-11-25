@@ -240,7 +240,7 @@ follows ACP where they differ (board #114):
 | `task_progress` | `subagent_update`: the child's description is its title, its state is `running`, `requires_action` while it waits for an approval, `idle` when it is done; what it is doing and when it started are not sent |
 | `tool_call_progress` | Gone: only the mock provider sent it; rig gives a tool call whole |
 | `host_tool` (`workspace_snapshot`) | Out of ACP: the tool asks the control socket (`HORIZON_SOCKET`) itself, with the query `workspace` |
-| `session_event` | An error is the stop reason `Error`; resumption, a closed attachment, an exit and skipped lines have no use over a child's stdio; rate limits and history clearing are not shown |
+| `session_event` | A turn's errors are its stop reason `error` when it fails and `notice`s (error) otherwise, as is an error outside a turn; a rate limit is a `notice` (warning), left out of a replay; history clearing is a `compaction_update`; resumption is not sent; skipped log lines go to the child's stderr. A session's exit and a closed attachment have no standard form and stay `_horizon/session_event` (#114) |
 | `drain`, `watch_board`, `rewind_session` | Gone |
 
 The `_meta.horizon` on updates goes too: a tool call's verdict is in its

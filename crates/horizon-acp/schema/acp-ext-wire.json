@@ -232,91 +232,10 @@
       "type": "object"
     },
     "SessionEventNotification": {
-      "description": "Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,\nHistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),\n`hosting::AgentWireEvent::AttachmentClosed`\n(crates/horizon-agent/src/hosting.rs) and the daemon's startup\nevent-log skipped-lines diagnostic.",
+      "description": "Mirrors `contract::Event::Exited` (crates/horizon-agent/src/contract.rs)\nand `hosting::AgentWireEvent::AttachmentClosed`\n(crates/horizon-agent/src/hosting.rs).",
       "oneOf": [
         {
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "type": {
-              "const": "session_resumed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "session_id"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "attempt": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "backoff_ms": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "status": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "provider_rate_limited",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "session_id",
-            "attempt",
-            "backoff_ms"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "cleared_occurrence_ids": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "recovered_chars": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "type": {
-              "const": "history_cleared",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "session_id",
-            "cleared_occurrence_ids",
-            "recovered_chars"
-          ],
-          "type": "object"
-        },
-        {
+          "description": "The attachment ended: replaced, behind, detached, or the session is\ngone. ACP has no standard form for it.",
           "properties": {
             "reason": {
               "$ref": "#/$defs/AttachmentEnd"
@@ -337,28 +256,7 @@
           "type": "object"
         },
         {
-          "description": "A mid-session failure the daemon reports outside any request.",
-          "properties": {
-            "message": {
-              "type": "string"
-            },
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "type": {
-              "const": "error",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "session_id",
-            "message"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "The session's process-level exit.",
+          "description": "The session's process-level exit. ACP has no standard form for it.",
           "properties": {
             "reason": {
               "type": "string"
@@ -375,23 +273,6 @@
             "type",
             "session_id",
             "reason"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "The daemon's startup event-log corruption summary; not per-session.",
-          "properties": {
-            "summary": {
-              "type": "string"
-            },
-            "type": {
-              "const": "skipped_lines",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "summary"
           ],
           "type": "object"
         }
@@ -635,9 +516,6 @@
       "$ref": "#/$defs/SessionEventNotification"
     }
   },
-  "stop_reasons": [
-    "_horizon/failed"
-  ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 18
+  "x-session-protocol-version": 19
 }

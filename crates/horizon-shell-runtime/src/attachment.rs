@@ -11,10 +11,7 @@ use agent_client_protocol::Agent;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{
-    AttachmentEnd, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionEventNotification,
-    SessionId,
-};
+use horizon_acp::{AttachmentEnd, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionId};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::routing::{AgentRoutes, RouteKey, cancelled_permission};
@@ -348,11 +345,11 @@ impl Session {
     }
 }
 
-fn session_error(route: RouteKey<SessionId>, message: String) -> Inbound {
-    Inbound::Event(AgentEvent::Session(SessionEventNotification::Error {
-        session_id: route.session_id(),
-        message,
-    }))
+/// A failure of the attachment itself, shown as an error notice.
+fn session_error(_route: RouteKey<SessionId>, message: String) -> Inbound {
+    Inbound::Event(AgentEvent::Update(Box::new(v2::SessionUpdate::Notice(
+        v2::Notice::new(v2::NoticeSeverity::Error, message),
+    ))))
 }
 
 #[cfg(test)]

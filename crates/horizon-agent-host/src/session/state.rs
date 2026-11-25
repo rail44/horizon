@@ -81,13 +81,6 @@ pub struct AgentdState {
     /// at all, which is the whole point of binding first (see `main`).
     resume_ready: AtomicBool,
     resume_notify: Notify,
-    /// This process's own startup event-log corruption diagnostics
-    /// (`persistence::event_log::ReadReport::skipped_summary`), `None` until
-    /// [`Self::set_skipped_lines_summary`] runs (or forever, if the startup
-    /// read found nothing to skip) -- see [`Self::skipped_lines_summary`]
-    /// and `initialize` (`crate::hub`), which forwards this once per
-    /// connection as a `_horizon/session_event` `SkippedLines` notice.
-    skipped_lines_summary: Mutex<Option<String>>,
     /// The lock on the session logs' directory this process holds while it
     /// hosts them (`crate::startup`).
     host_lock: Mutex<Option<std::fs::File>>,
@@ -154,7 +147,6 @@ impl AgentdState {
             control_socket: None,
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
-            skipped_lines_summary: Mutex::new(None),
             host_lock: Mutex::new(None),
             config_path,
             project_grants,
@@ -286,18 +278,6 @@ impl AgentdState {
 
     pub fn set_writer(&self, writer: Option<WriterHandle>) {
         *self.writer.lock().unwrap() = writer;
-    }
-
-    /// Called once from [`crate::spawn_resume_task`], alongside
-    /// [`Self::set_writer`] -- before [`Self::mark_resume_ready`], so the
-    /// hub's readiness-gated summary send (the task `initialize` spawns in
-    /// `crate::hub`) always observes the final value.
-    pub(crate) fn set_skipped_lines_summary(&self, summary: Option<String>) {
-        *self.skipped_lines_summary.lock().unwrap() = summary;
-    }
-
-    pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
-        self.skipped_lines_summary.lock().unwrap().clone()
     }
 
     /// Called exactly once, after [`super::resume::resume_persisted_sessions`] returns --

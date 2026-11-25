@@ -82,6 +82,9 @@ pub(super) struct Mapper {
     open_stream: Option<v2::MessageId>,
     tool_ids: HashMap<String, String>,
     stop_reason: Option<v2::StopReason>,
+    /// Errors of the turn in flight, not shown yet: the turn's failure
+    /// carries them, or they become notices when it ends otherwise.
+    turn_errors: Vec<String>,
     state: Option<StateKind>,
     pending_approvals: Vec<Ask>,
     /// While set, approvals are only recorded; the bootstrap asks for the
@@ -236,6 +239,7 @@ impl Mapper {
             open_stream: None,
             tool_ids: HashMap::new(),
             stop_reason: None,
+            turn_errors: Vec::new(),
             state: None,
             pending_approvals: Vec::new(),
             replaying: true,
@@ -490,16 +494,29 @@ impl Mapper {
             Event::ApprovalResolved(resolved) => self.settle_approval(&resolved.occurrence_id.0),
             Event::TurnEnded(reason) => {
                 self.close_stream();
-                self.stop_reason = Some(stop_reason(*reason));
-                Vec::new()
+                let errors = std::mem::take(&mut self.turn_errors);
+                if *reason == TurnEndReason::Failed {
+                    self.stop_reason = Some(failed(&errors));
+                    Vec::new()
+                } else {
+                    self.stop_reason = Some(stop_reason(*reason));
+                    errors
+                        .iter()
+                        .flat_map(|error| self.error_notice(error))
+                        .collect()
+                }
             }
             Event::StateChanged(state) => self.map_state(*state),
+            // An error in a turn waits for how the turn ends; one outside a
+            // turn is a notice now.
             Event::Error(error) => {
                 self.close_stream();
-                session_event(acp::SessionEventNotification::Error {
-                    session_id,
-                    message: error.message.clone(),
-                })
+                if matches!(self.state, Some(StateKind::Idle) | None) {
+                    self.error_notice(&error.message)
+                } else {
+                    self.turn_errors.push(error.message.clone());
+                    Vec::new()
+                }
             }
             Event::Exited(exit) => {
                 self.close_stream();
@@ -507,9 +524,6 @@ impl Mapper {
                     session_id,
                     reason: exit.reason.clone(),
                 })
-            }
-            Event::SessionResumed => {
-                session_event(acp::SessionEventNotification::SessionResumed { session_id })
             }
             Event::Rewound { branch } => {
                 self.close_stream();
@@ -519,31 +533,46 @@ impl Mapper {
             // What the session now runs reaches the client as the applied
             // selection the provider announces.
             Event::ModelSelected { .. } | Event::ReasoningSelected { .. } => Vec::new(),
+            // A notice is for now, not the history: a replay leaves it out.
             Event::ProviderRateLimited(limited) => {
-                session_event(acp::SessionEventNotification::ProviderRateLimited {
-                    session_id,
-                    status: limited.status,
-                    attempt: limited.attempt,
-                    backoff_ms: limited.backoff_ms,
-                })
+                if self.replaying {
+                    return Vec::new();
+                }
+                let title = match limited.status {
+                    Some(status) => format!("Provider rate limited (HTTP {status})"),
+                    None => "Provider rate limited".to_string(),
+                };
+                let description = format!(
+                    "attempt {}, retrying in {}s",
+                    limited.attempt,
+                    limited.backoff_ms.div_ceil(1000)
+                );
+                vec![Outgoing::update(v2::SessionUpdate::Notice(
+                    v2::Notice::new(v2::NoticeSeverity::Warning, title).description(description),
+                ))]
             }
             Event::HistoryCleared(cleared) => {
-                session_event(acp::SessionEventNotification::HistoryCleared {
-                    session_id,
-                    cleared_occurrence_ids: cleared
-                        .cleared_occurrence_ids
-                        .iter()
-                        .map(|id| id.0.clone())
-                        .collect(),
-                    recovered_chars: cleared.recovered_chars,
-                })
+                self.message_seq += 1;
+                let summary = format!(
+                    "{} tool outputs, {} characters reclaimed",
+                    cleared.cleared_occurrence_ids.len(),
+                    cleared.recovered_chars
+                );
+                vec![Outgoing::update(v2::SessionUpdate::CompactionUpdate(
+                    v2::CompactionUpdate::new(
+                        self.id("compaction").to_string(),
+                        v2::CompactionStatus::Completed,
+                    )
+                    .summary(vec![summary.into()]),
+                ))]
             }
             Event::ProviderRequestSent(_) => {
                 // A retried request starts its text over.
                 self.close_stream();
                 Vec::new()
             }
-            Event::ProviderRequestFirstToken
+            Event::SessionResumed
+            | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::InputAccepted(_)
             | Event::InputStarted(_)
@@ -570,6 +599,16 @@ impl Mapper {
         } else {
             vec![Outgoing::AskPermission(ask)]
         }
+    }
+
+    /// An error shown now, not kept in the history: a replay leaves it out.
+    fn error_notice(&self, message: &str) -> Vec<Outgoing> {
+        if self.replaying {
+            return Vec::new();
+        }
+        vec![Outgoing::update(v2::SessionUpdate::Notice(
+            v2::Notice::new(v2::NoticeSeverity::Error, message),
+        ))]
     }
 
     fn settle_approval(&mut self, occurrence: &str) -> Vec<Outgoing> {
@@ -632,13 +671,21 @@ pub(super) fn tool_kind(tool_id: &str) -> v2::ToolKind {
     }
 }
 
+/// A failed turn's stop reason, with the errors the turn ran into.
+fn failed(errors: &[String]) -> v2::StopReason {
+    let stop = v2::ErrorStopReason::new();
+    v2::StopReason::Error(if errors.is_empty() {
+        stop
+    } else {
+        stop.error(v2::Error::new(-32603, errors.join("\n")))
+    })
+}
+
 fn stop_reason(reason: TurnEndReason) -> v2::StopReason {
     match reason {
         TurnEndReason::Completed => v2::StopReason::EndTurn,
         TurnEndReason::Cancelled => v2::StopReason::Cancelled,
-        TurnEndReason::Failed => {
-            v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_FAILED))
-        }
+        TurnEndReason::Failed => failed(&[]),
         TurnEndReason::HaltedByTokenBudget => v2::StopReason::MaxTurnRequests,
     }
 }

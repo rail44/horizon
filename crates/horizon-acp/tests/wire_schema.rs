@@ -60,8 +60,6 @@ fn generate_wire_schema() -> Value {
         "config_option": schema_of(sub::<ModelOptionMeta>),
     });
 
-    let stop_reasons = json!([STOP_REASON_FAILED]);
-
     let defs = Value::Object(generator.take_definitions(true));
 
     let mut schema = json!({
@@ -76,7 +74,6 @@ fn generate_wire_schema() -> Value {
         "client_to_agent": client_to_agent,
         "notifications": notifications,
         "meta": meta,
-        "stop_reasons": stop_reasons,
         "$defs": defs,
     });
     sort_object_keys(&mut schema);

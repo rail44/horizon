@@ -113,16 +113,18 @@ pub struct Subagent {
     pub seen_at_epoch_ms: u64,
 }
 
+/// A context compaction (`compaction_update`), where it first appeared.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HistoryCleared {
-    pub cleared_occurrence_ids: Vec<String>,
-    pub recovered_chars: u64,
+pub struct Compaction {
+    pub id: String,
+    pub summary: String,
 }
 
+/// A `notice` short of an error, which is an [`AgentFrameItem::Error`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProviderRateLimited {
-    pub attempt: u32,
-    pub backoff_ms: u64,
+pub struct Notice {
+    pub warning: bool,
+    pub text: String,
 }
 
 /// A turn's stop result, read from `state_update` idle's `stopReason`.
@@ -140,8 +142,8 @@ pub enum AgentFrameItem {
     Thought(Thought),
     ToolCall(Box<ToolCall>),
     Permission(Permission),
-    HistoryCleared(HistoryCleared),
-    ProviderRateLimited(ProviderRateLimited),
+    Compaction(Compaction),
+    Notice(Notice),
     Error(String),
     Exited(String),
     /// Folded from an idle `state_update` carrying a stop reason, plus the

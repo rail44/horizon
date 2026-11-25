@@ -356,11 +356,21 @@ fn is_state(inbound: &Inbound) -> bool {
     matches!(update(inbound), Some(v2::SessionUpdate::StateUpdate(_)))
 }
 
+/// An error the agent reports: an error notice, or the error a failed
+/// turn's stop reason carries.
 fn session_error(inbound: &Inbound) -> Option<&str> {
-    match inbound {
-        Inbound::SessionEvent(acp::SessionEventNotification::Error { message, .. }) => {
-            Some(message)
+    match update(inbound)? {
+        v2::SessionUpdate::Notice(notice) if notice.severity == v2::NoticeSeverity::Error => {
+            Some(&notice.title)
         }
+        v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(idle)) => match &idle.stop_reason {
+            Some(v2::StopReason::Error(stop)) => Some(
+                stop.error
+                    .as_ref()
+                    .map_or("", |error| error.message.as_str()),
+            ),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1037,7 +1047,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection() {
+async fn corrupt_event_log_lines_are_reported_in_the_agents_log() {
     let sessions_dir = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-sessions-{}-{}",
         std::process::id(),
@@ -1060,22 +1070,15 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
             .expect("write corrupt line and a tail split inside UTF-8");
     }
 
-    let mut agentd = spawn_agentd_at(sessions_dir);
-    let mut client = connect(&mut agentd).await;
-
-    let collected = collect_until(&mut client, |inbound| {
-        matches!(
-            inbound,
-            Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { .. })
+    let mut agentd = agentd_spawn(AgentdPaths::scratch_at("agentd-e2e", sessions_dir))
+        .capture_stderr()
+        .spawn();
+    let _client = connect(&mut agentd).await;
+    agentd
+        .wait_for_stderr_line(
+            "skipped 1 corrupt line and a torn trailing line while reading the session logs",
         )
-    })
-    .await;
-    let Some(Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { summary })) =
-        collected.last()
-    else {
-        unreachable!()
-    };
-    assert_eq!(summary, "skipped 1 corrupt line and a torn trailing line");
+        .await;
 
     // The ignored tail must not join the first record the resumed session
     // writes.

@@ -317,21 +317,11 @@ impl AgentRoutes {
     /// One `_horizon/session_event` from the connection.
     pub(super) fn route_session_event(&self, event: SessionEventNotification) {
         let session_id = match &event {
-            SessionEventNotification::SkippedLines { summary } => {
-                // No pane consumes the startup corruption summary; the log
-                // keeps it visible.
-                eprintln!("horizon-agentd event log: {summary}");
-                return;
-            }
             SessionEventNotification::AttachmentClosed { session_id, reason } => {
                 let _ = self.deliver(*session_id, Inbound::Closed(*reason));
                 return;
             }
-            SessionEventNotification::SessionResumed { session_id }
-            | SessionEventNotification::ProviderRateLimited { session_id, .. }
-            | SessionEventNotification::HistoryCleared { session_id, .. }
-            | SessionEventNotification::Error { session_id, .. }
-            | SessionEventNotification::Exited { session_id, .. } => *session_id,
+            SessionEventNotification::Exited { session_id, .. } => *session_id,
         };
         let _ = self.deliver(session_id, Inbound::Event(AgentEvent::Session(event)));
     }

@@ -73,46 +73,23 @@ pub struct EnsureBoardOrganizerResponse {
 
 // -- agent → client notifications --
 
-/// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
-/// HistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),
-/// `hosting::AgentWireEvent::AttachmentClosed`
-/// (crates/horizon-agent/src/hosting.rs) and the daemon's startup
-/// event-log skipped-lines diagnostic.
+/// Mirrors `contract::Event::Exited` (crates/horizon-agent/src/contract.rs)
+/// and `hosting::AgentWireEvent::AttachmentClosed`
+/// (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
 #[notification(method = "_horizon/session_event")]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEventNotification {
-    SessionResumed {
-        session_id: SessionId,
-    },
-    ProviderRateLimited {
-        session_id: SessionId,
-        status: Option<u16>,
-        attempt: u32,
-        backoff_ms: u64,
-    },
-    HistoryCleared {
-        session_id: SessionId,
-        cleared_occurrence_ids: Vec<String>,
-        recovered_chars: u64,
-    },
+    /// The attachment ended: replaced, behind, detached, or the session is
+    /// gone. ACP has no standard form for it.
     AttachmentClosed {
         session_id: SessionId,
         reason: AttachmentEnd,
     },
-    /// A mid-session failure the daemon reports outside any request.
-    Error {
-        session_id: SessionId,
-        message: String,
-    },
-    /// The session's process-level exit.
+    /// The session's process-level exit. ACP has no standard form for it.
     Exited {
         session_id: SessionId,
         reason: String,
-    },
-    /// The daemon's startup event-log corruption summary; not per-session.
-    SkippedLines {
-        summary: String,
     },
 }
 
@@ -185,31 +162,10 @@ mod tests {
     #[test]
     fn notifications_round_trip() {
         let session_id = SessionId::new();
-        for event in [
-            SessionEventNotification::SessionResumed { session_id },
-            SessionEventNotification::ProviderRateLimited {
-                session_id,
-                status: Some(429),
-                attempt: 2,
-                backoff_ms: 1500,
-            },
-            SessionEventNotification::HistoryCleared {
-                session_id,
-                cleared_occurrence_ids: vec!["occ-1".into(), "occ-2".into()],
-                recovered_chars: 4096,
-            },
-            SessionEventNotification::Error {
-                session_id,
-                message: "provider unreachable".into(),
-            },
-            SessionEventNotification::Exited {
-                session_id,
-                reason: "terminated".into(),
-            },
-            SessionEventNotification::SkippedLines {
-                summary: "2 lines skipped".into(),
-            },
-        ]
+        for event in [SessionEventNotification::Exited {
+            session_id,
+            reason: "terminated".into(),
+        }]
         .into_iter()
         .chain(
             [
@@ -239,9 +195,12 @@ mod tests {
             }
             .method()
             .to_owned(),
-            SessionEventNotification::SessionResumed { session_id }
-                .method()
-                .to_owned(),
+            SessionEventNotification::Exited {
+                session_id,
+                reason: String::new(),
+            }
+            .method()
+            .to_owned(),
         ];
         assert_eq!(
             methods,

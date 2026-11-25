@@ -307,10 +307,10 @@ fn describe(item: &AgentFrameItem) -> Option<Value> {
             "turn_ended": format!("{reason:?}"),
             "seconds": elapsed.as_secs_f64(),
         }),
-        AgentFrameItem::ProviderRateLimited(_) => json!({ "rate_limited": true }),
+        AgentFrameItem::Notice(notice) => json!({ "notice": notice.text }),
         AgentFrameItem::Thought(_)
         | AgentFrameItem::Permission(_)
-        | AgentFrameItem::HistoryCleared(_) => return None,
+        | AgentFrameItem::Compaction(_) => return None,
     })
 }
 

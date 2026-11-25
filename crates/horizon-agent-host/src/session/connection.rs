@@ -343,13 +343,6 @@ impl Connection {
         self.state.wait_until_resume_ready().await;
     }
 
-    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see
-    /// `initialize` (`crate::hub`), which waits for [`Self::wait_until_resume_ready`]
-    /// first so this always reflects the finished startup read.
-    pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
-        self.state.skipped_lines_summary()
-    }
-
     /// Every session a client may see. Exploration sessions
     /// (`docs/agent-explore-design.md` decision 3: "invisible to the UI")
     /// are withheld: they are never attached to a pane, they live only as

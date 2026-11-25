@@ -212,7 +212,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::InitializeRequest,
         responder: Responder<v2::InitializeResponse>,
-        cx: V2ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if self.initialized.load(Ordering::Acquire) {
             return responder.respond_with_error(Error::new(
@@ -266,17 +266,6 @@ impl Shared {
         if !matched {
             return Ok(());
         }
-
-        // Startup diagnostics: at most one notice, after the resume
-        // finishes.
-        let connection = self.connection.clone();
-        tokio::spawn(async move {
-            connection.wait_until_resume_ready().await;
-            if let Some(summary) = connection.skipped_lines_summary() {
-                let _ =
-                    cx.send_notification(acp::SessionEventNotification::SkippedLines { summary });
-            }
-        });
         Ok(())
     }
 

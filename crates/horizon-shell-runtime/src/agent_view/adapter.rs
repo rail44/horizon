@@ -19,7 +19,7 @@ use horizon_acp::ToolOutcome;
 
 use super::turns::{
     DiffLineKind, ToolCallBody, ToolCallView, build_tool_call_views, group_into_turns,
-    humanize_duration, pluralize, receipt_summary, segment_bursts, str_field, tool_call_body,
+    humanize_duration, receipt_summary, segment_bursts, str_field, tool_call_body,
 };
 use crate::agent_display::chrome;
 use crate::agent_display::{
@@ -366,42 +366,21 @@ fn turn_state(reason: TurnEndReason) -> TurnState {
 fn notice(item: &AgentFrameItem) -> Option<Notice> {
     let (tone, text) = match item {
         AgentFrameItem::Error(text) | AgentFrameItem::Exited(text) => (Tone::Danger, text.clone()),
-        AgentFrameItem::ProviderRateLimited(limited) => (
-            Tone::Warning,
-            format!(
-                "Provider rate limited (attempt {}, retrying in {}s)",
-                limited.attempt,
-                limited.backoff_ms.div_ceil(1000)
-            ),
+        AgentFrameItem::Notice(notice) => (
+            if notice.warning {
+                Tone::Warning
+            } else {
+                Tone::Muted
+            },
+            notice.text.clone(),
         ),
-        AgentFrameItem::HistoryCleared(cleared) => (
+        AgentFrameItem::Compaction(compaction) => (
             Tone::Muted,
-            format!(
-                "History compacted: {} ({} chars) reclaimed",
-                pluralize(
-                    cleared.cleared_occurrence_ids.len(),
-                    "tool output",
-                    "tool outputs"
-                ),
-                grouped(cleared.recovered_chars)
-            ),
+            format!("History compacted: {}", compaction.summary),
         ),
         _ => return None,
     };
     Some(Notice { tone, text })
-}
-
-/// `31204` as `31,204`.
-fn grouped(value: u64) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(digit);
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -583,8 +562,8 @@ mod tests {
     };
     use super::*;
     use crate::agent_model::{
-        AgentFrameItem, HistoryCleared, Message as FrameMessage, ModelSelection,
-        ProviderRateLimited, SessionPhase, Subagent,
+        AgentFrameItem, Compaction, Message as FrameMessage, ModelSelection, Notice, SessionPhase,
+        Subagent,
     };
 
     fn turn_end(reason: TurnEndReason) -> AgentFrameItem {
@@ -823,9 +802,9 @@ mod tests {
                 json!({"base_path": ".", "pattern": "x"}),
                 json!({"returned_count": 1, "matches": [], "truncated": false}),
             ),
-            AgentFrameItem::HistoryCleared(HistoryCleared {
-                cleared_occurrence_ids: vec![],
-                recovered_chars: 0,
+            AgentFrameItem::Compaction(Compaction {
+                id: "c1".to_string(),
+                summary: String::new(),
             }),
             run("b3", "make"),
             assistant_delta("between"),
@@ -955,14 +934,14 @@ mod tests {
     fn system_items_read_as_notices_after_the_turn() {
         let items = vec![
             user_message("q"),
-            AgentFrameItem::ProviderRateLimited(ProviderRateLimited {
-                attempt: 2,
-                backoff_ms: 1500,
+            AgentFrameItem::Notice(Notice {
+                warning: true,
+                text: "Provider rate limited (attempt 2, retrying in 2s)".to_string(),
             }),
             assistant_delta("a"),
-            AgentFrameItem::HistoryCleared(HistoryCleared {
-                cleared_occurrence_ids: Vec::from_fn(12, |i| i.to_string()),
-                recovered_chars: 31_204,
+            AgentFrameItem::Compaction(Compaction {
+                id: "c1".to_string(),
+                summary: "12 tool outputs, 31204 characters reclaimed".to_string(),
             }),
             AgentFrameItem::Error("boom".to_string()),
             turn_end(TurnEndReason::Failed),
@@ -987,7 +966,7 @@ mod tests {
                 ),
                 (
                     Tone::Muted,
-                    "History compacted: 12 tool outputs (31,204 chars) reclaimed".to_string()
+                    "History compacted: 12 tool outputs, 31204 characters reclaimed".to_string()
                 ),
                 (Tone::Danger, "boom".to_string()),
                 (Tone::Danger, "gone".to_string()),

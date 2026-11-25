@@ -108,7 +108,6 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>) {
     if !skipped.is_empty() {
         let summary = skipped.join("; ");
         eprintln!("horizon-agent: {summary} while reading the session logs");
-        state.set_skipped_lines_summary(Some(summary));
     }
     tally.deliver();
     tally.report();
