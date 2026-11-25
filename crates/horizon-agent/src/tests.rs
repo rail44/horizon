@@ -1164,8 +1164,7 @@ fn operator_intervention_event_kind_discriminators_are_stable() {
 /// `Event` has no `#[serde(tag = "...")]` -- serde's default externally
 /// tagged representation is `{"VariantName": {...}}`, which is what both
 /// the wire (the `AgentWireEvent::Event` envelope around it) and the
-/// JSONL log store. The wire-schema generator (`crates/horizon-agentd/
-/// tests/wire_schema.rs`) consumes this same shape.
+/// JSONL log store.
 #[test]
 fn operator_intervention_events_round_trip_through_serde_json() {
     // ApprovalResolved: Approve with no deny reason -> no reason field.

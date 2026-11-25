@@ -166,20 +166,16 @@ pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
     pub role_id: Option<RoleId>,
-    /// The directory `horizon-agentd`'s file tools should confine this
-    /// session to (`tools::state::ToolSessionState::workspace_root`).
-    /// `None` keeps today's behavior -- the session falls back to
-    /// `horizon-agentd`'s own process cwd (`session::run_session`'s
-    /// `ToolSessionState::for_current_dir` call). Passed into
-    /// `AgentdHandle::start_session` by the workspace layer
-    /// (`WorkspaceShell::reconcile`), which computes the Horizon process's
-    /// own cwd once per session (falling back to `None` only if that cwd
-    /// can't be read) and records the same value on the session's
-    /// `WorkspaceSession::workspace_root` -- so a session's workspace root
-    /// tracks whichever Horizon window spawned it, not `horizon-agentd`'s
-    /// own cwd (one shared, long-lived daemon per user, started from
-    /// whatever directory happened to be current the first time it was
-    /// launched).
+    /// The directory this session's file tools should confine it to
+    /// (`tools::state::ToolSessionState::workspace_root`): the root the
+    /// client supplied for this session -- `session/new`'s `cwd`, which the
+    /// workspace layer (`WorkspaceShell::reconcile`) computes per session
+    /// and passes in with the spawn. `None` keeps today's behavior -- the
+    /// session falls back to this process's own cwd (`session::environment`'s
+    /// `tool_session_builder_for`, whose `None` arm is
+    /// `ToolSessionBuilder::for_current_dir`). A session therefore takes its
+    /// root from the client that named it, and only from this process's cwd
+    /// when that client supplied none.
     pub workspace_root: Option<PathBuf>,
     /// The pane/session this spawn was invoked "from" -- e.g. the split
     /// target, or whatever pane was active/named at spawn time. `None` for a

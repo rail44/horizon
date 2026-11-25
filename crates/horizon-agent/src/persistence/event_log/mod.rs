@@ -1012,11 +1012,12 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// Models `horizon-agentd`'s normal-exit shutdown path
-    /// (`flush_event_log_before_exit`, called on `SessionControl::Drain`
-    /// right before `std::process::exit(0)`): flush the writer before the
-    /// process tears the background thread down, and confirm whatever was
-    /// enqueued beforehand actually reached disk.
+    /// Models the shutdown path `horizon-agent-acp` takes
+    /// (`crates/horizon-agent-acp/src/main.rs`): when SIGTERM arrives or
+    /// `hub::serve` returns, it calls `flush_event_log_before_exit` and only
+    /// then ends the process. Confirm whatever was enqueued beforehand
+    /// actually reached disk, before the writer's background thread goes
+    /// away.
     #[test]
     fn flush_makes_pending_records_durable_before_shutdown() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));

@@ -30,13 +30,9 @@ impl Store {
     /// in this same transaction, to mean "everything up to this line is
     /// already fully present", so a cursor that disagreed with the rows
     /// would make the next catch-up insert the same `event_id` again and
-    /// fail on `agent_events`'s primary key -- reproduced (against the
-    /// sequence high-water mark that preceded the cursor) by
-    /// `horizon-agentd`'s own e2e suite (`stale_log_triggers_duckdb_
-    /// rebuild_on_respawn`) once a resumed session's own live thread
-    /// appended a record while a hard `SIGKILL` landed nearby. Wrapping
-    /// this one record's several statements and the cursor in a transaction
-    /// makes them atomic: either every table sees it, or none does.
+    /// fail on `agent_events`'s primary key. Wrapping this one record's
+    /// several statements and the cursor in a transaction makes them atomic:
+    /// either every table sees it, or none does.
     /// Test-only: [`Self::append_record_at`] without a log position.
     #[cfg(test)]
     pub(crate) fn append_record(&self, record: &Record) -> Result<()> {
