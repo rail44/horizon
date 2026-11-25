@@ -185,12 +185,14 @@ impl Shared {
             Some(summary) => mapping::SessionFacts {
                 provider_id: summary.provider_id.0,
                 role_id: summary.role_id.map(|role| role.0),
+                modes: self.connection.modes(),
                 parent_session_id: summary.parent_session_id,
                 workspace_root: summary.workspace_root,
             },
             None => mapping::SessionFacts {
                 provider_id: String::new(),
                 role_id: None,
+                modes: self.connection.modes(),
                 parent_session_id: None,
                 workspace_root: None,
             },
@@ -206,13 +208,17 @@ impl Shared {
         let provider_id = self.session_facts(session_id).provider_id;
         let (model, selection, reasoning) = self.connection.session_model_state(session_id);
         let catalog = self.connection.model_catalog().borrow().clone();
-        mapping::model_options(
-            &catalog,
-            &provider_id,
-            model.as_deref(),
-            selection.as_ref(),
-            reasoning.as_ref(),
-        )
+        let facts = self.session_facts(session_id);
+        let mode = mapping::mode_option(&facts.modes, facts.role_id.as_deref());
+        std::iter::once(mode)
+            .chain(mapping::model_options(
+                &catalog,
+                &provider_id,
+                model.as_deref(),
+                selection.as_ref(),
+                reasoning.as_ref(),
+            ))
+            .collect()
     }
 
     fn initialize(
@@ -265,7 +271,9 @@ impl Shared {
             )
             .capabilities(
                 v2::AgentCapabilities::new().session(
-                    v2::SessionCapabilities::new().fork(v2::SessionForkCapabilities::new()),
+                    v2::SessionCapabilities::new()
+                        .fork(v2::SessionForkCapabilities::new())
+                        .options(v2::SessionOptionsCapabilities::new()),
                 ),
             )
             .meta(meta),
@@ -297,10 +305,34 @@ impl Shared {
                 ));
             }
         };
+        // The role and model are the options' initial values; one this
+        // agent does not take is left out.
+        let mut role_id = None;
+        let mut model = None;
+        for option in &request.config_options {
+            let value = option.value.as_id().map(|value| value.0.to_string());
+            match (&*option.config_id.0, value) {
+                (acp::MODE_CONFIG_ID, Some(mode)) if mode != acp::DEFAULT_MODE => {
+                    role_id = Some(RoleId(mode));
+                }
+                (acp::MODEL_CONFIG_ID, Some(value)) => {
+                    model = acp::decode_model_option_id(&value)
+                        .map(|(provider, model)| (provider.to_string(), model.to_string()));
+                }
+                _ => {}
+            }
+        }
+        let provider_id = match &model {
+            Some((provider, _)) => ProviderId(provider.clone()),
+            None => match self.connection.default_provider_id() {
+                Ok(provider) => provider,
+                Err(error) => return responder.respond_with_error(call_error(error)),
+            },
+        };
         let new = SessionNew {
             session_id: meta.session_id,
-            provider_id: ProviderId(meta.provider_id),
-            role_id: meta.role_id.map(RoleId),
+            provider_id,
+            role_id,
             workspace_root: Some(request.cwd.into_inner()),
             spawn_source_session_id: meta.spawn_source_session_id,
         };
@@ -317,6 +349,12 @@ impl Shared {
                 .and_then(|started| started);
             match started {
                 Ok(()) => {
+                    if let Some((provider, model)) = model {
+                        // A model the session cannot switch to is left out.
+                        let _ = this
+                            .connection
+                            .set_session_model(session_id, provider, model);
+                    }
                     this.open_attachment(session_id, Opening::New(responder), cx)
                         .await
                 }
@@ -533,6 +571,9 @@ impl Shared {
                         .set_session_model(session_id, provider.to_string(), model.to_string())
                         .map_err(call_error)?;
                 }
+                acp::MODE_CONFIG_ID => {
+                    return Err(call_error("A session's mode is set when it starts"));
+                }
                 acp::EFFORT_CONFIG_ID => {
                     let level = value
                         .ok_or_else(|| call_error("The effort option's value must be a level"))
@@ -546,6 +587,36 @@ impl Shared {
             Ok(v2::SetSessionConfigOptionResponse::new(
                 self.session_model_options(session_id),
             ))
+        })();
+        answer(responder, result)
+    }
+
+    /// `session/options`: what a session would start with, or what one has.
+    fn session_options(
+        self: &Arc<Self>,
+        request: v2::SessionOptionsRequest,
+        responder: Responder<v2::SessionOptionsResponse>,
+        _cx: V2ConnectionTo<Client>,
+    ) -> Result<(), Error> {
+        let result = (|| {
+            self.gate()?;
+            let options = match &request.session_id {
+                Some(id) => {
+                    let session_id = mapping::parse_session_id(id)
+                        .filter(|session| self.connection.session_summary(*session).is_some())
+                        .ok_or_else(|| call_error(format!("Unknown agent session {id}")))?;
+                    self.session_model_options(session_id)
+                }
+                None => {
+                    let catalog = self.connection.model_catalog().borrow().clone();
+                    let mode = mapping::mode_option(&self.connection.modes(), None);
+                    let model = (self.connection.default_model()).map(|(provider, model)| {
+                        mapping::model_option(&catalog, &provider, &model)
+                    });
+                    std::iter::once(mode).chain(model).collect()
+                }
+            };
+            Ok(v2::SessionOptionsResponse::new().config_options(options))
         })();
         answer(responder, result)
     }
@@ -637,6 +708,7 @@ where
         v2::SetSessionConfigOptionRequest,
         set_config_option
     );
+    let builder = on_request!(builder, v2::SessionOptionsRequest, session_options);
     let builder = on_request!(
         builder,
         agent_client_protocol::UntypedMessage,

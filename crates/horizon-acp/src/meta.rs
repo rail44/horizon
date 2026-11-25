@@ -13,6 +13,14 @@ use horizon_wire::SessionId;
 /// The `_meta` key every Horizon payload lives under.
 pub const HORIZON_META_KEY: &str = "horizon";
 
+/// `configId` of the session config option that selects the role a session
+/// starts with (`category: mode`, `select`): a role's id, or
+/// [`DEFAULT_MODE`] for none. It is set when the session starts.
+pub const MODE_CONFIG_ID: &str = "mode";
+
+/// The `mode` option's value for a session with no role.
+pub const DEFAULT_MODE: &str = "default";
+
 /// `configId` of the session config option that selects the provider and
 /// model (`category: model`, `select`).
 pub const MODEL_CONFIG_ID: &str = "model";
@@ -74,12 +82,11 @@ pub struct InitializeMeta {
     pub binary_id: String,
 }
 
-/// Mirrors `hosting::SessionNew` minus `workspace_root` (crates/horizon-agent/src/hosting.rs).
+/// Mirrors `hosting::SessionNew`'s id and spawn source (crates/horizon-agent/src/hosting.rs):
+/// its role and model are the `mode` and `model` options' initial values.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionNewMeta {
     pub session_id: SessionId,
-    pub provider_id: String,
-    pub role_id: Option<String>,
     pub spawn_source_session_id: Option<SessionId>,
 }
 
@@ -186,8 +193,6 @@ mod tests {
         });
         round_trip(&SessionNewMeta {
             session_id: SessionId::new(),
-            provider_id: "default".into(),
-            role_id: Some("reviewer".into()),
             spawn_source_session_id: Some(SessionId::new()),
         });
         round_trip(&SessionInfoMeta {

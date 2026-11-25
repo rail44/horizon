@@ -170,13 +170,29 @@ fn new_session_request(
         &mut meta,
         &acp::SessionNewMeta {
             session_id,
-            provider_id: provider_id.to_string(),
-            role_id: role_id.map(str::to_string),
             spawn_source_session_id: None,
         },
     )
     .unwrap();
-    v2::NewSessionRequest::new(cwd).meta(meta)
+    v2::NewSessionRequest::new(cwd)
+        .config_options(initial_options(provider_id, role_id))
+        .meta(meta)
+}
+
+/// The initial `model` (on `provider_id`) and `mode` option values.
+fn initial_options(
+    provider_id: &str,
+    role_id: Option<&str>,
+) -> Vec<v2::InitialSessionConfigOption> {
+    let option = |id: &str, value: String| {
+        v2::InitialSessionConfigOption::new(id.to_string(), v2::SessionConfigOptionValue::id(value))
+    };
+    std::iter::once(option(
+        acp::MODEL_CONFIG_ID,
+        acp::encode_model_option_id(provider_id, "default"),
+    ))
+    .chain(role_id.map(|role| option(acp::MODE_CONFIG_ID, role.to_string())))
+    .collect()
 }
 
 /// A mock-provider session in the test's cwd.
@@ -1465,15 +1481,15 @@ async fn worktree_enter_records_the_spawn_source_as_parent() {
         &mut meta,
         &acp::SessionNewMeta {
             session_id: child,
-            provider_id: mock_provider_id().0,
-            role_id: None,
             spawn_source_session_id: Some(parent),
         },
     )
     .unwrap();
     open_session(
         &client,
-        v2::NewSessionRequest::new(repo.path().to_path_buf()).meta(meta),
+        v2::NewSessionRequest::new(repo.path().to_path_buf())
+            .config_options(initial_options(&mock_provider_id().0, None))
+            .meta(meta),
     )
     .await;
     let listed = list_sessions(&client)
@@ -1561,15 +1577,15 @@ async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent
         &mut meta,
         &acp::SessionNewMeta {
             session_id: child,
-            provider_id: mock_provider_id().0,
-            role_id: None,
             spawn_source_session_id: Some(parent),
         },
     )
     .unwrap();
     open_session(
         &client,
-        v2::NewSessionRequest::new(repo.path().to_path_buf()).meta(meta),
+        v2::NewSessionRequest::new(repo.path().to_path_buf())
+            .config_options(initial_options(&mock_provider_id().0, None))
+            .meta(meta),
     )
     .await;
 

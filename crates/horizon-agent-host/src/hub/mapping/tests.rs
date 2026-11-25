@@ -9,6 +9,7 @@ fn facts() -> SessionFacts {
     SessionFacts {
         provider_id: "builtin.agent.mock".into(),
         role_id: None,
+        modes: Vec::new(),
         parent_session_id: None,
         workspace_root: None,
     }
@@ -404,11 +405,19 @@ fn model_announcements_become_one_select_option() {
     let v2::SessionUpdate::ConfigOptionUpdate(update) = &**update else {
         panic!("expected a config option update, got {outgoing:?}");
     };
+    // The mode comes first: no role, the default.
     assert_eq!(
         update.config_options,
-        vec![model_option(&[], "openai", "gpt-4o")]
+        vec![
+            mode_option(&[], None),
+            model_option(&[], "openai", "gpt-4o")
+        ]
     );
-    let option = &update.config_options[0];
+    let v2::SessionConfigKind::Select(mode) = &update.config_options[0].kind else {
+        panic!("expected a select option");
+    };
+    assert_eq!(&*mode.current_value.0, acp::DEFAULT_MODE);
+    let option = &update.config_options[1];
     assert_eq!(&*option.config_id.0, acp::MODEL_CONFIG_ID);
     assert_eq!(
         option.category,

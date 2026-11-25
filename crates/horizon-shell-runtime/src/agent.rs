@@ -65,6 +65,8 @@ impl SessionSummary {
 /// What `session/new` needs beyond the route.
 pub(super) struct SessionNew {
     pub(super) meta: SessionNewMeta,
+    /// The role the session starts with: the `mode` option's initial value.
+    pub(super) role: Option<String>,
     pub(super) workspace_root: Option<PathBuf>,
 }
 
@@ -466,7 +468,16 @@ fn handle_op(
                 routes.agent_failed(route, "the new session has no workspace root".to_string());
                 return;
             };
-            let mut request = v2::NewSessionRequest::new(workspace_root);
+            let mut request = v2::NewSessionRequest::new(workspace_root).config_options(
+                (new.role.iter())
+                    .map(|role| {
+                        v2::InitialSessionConfigOption::new(
+                            horizon_acp::MODE_CONFIG_ID,
+                            v2::SessionConfigOptionValue::id(role.as_str()),
+                        )
+                    })
+                    .collect(),
+            );
             if let Err(error) = write_horizon_meta(&mut request.meta, &new.meta) {
                 routes.agent_failed(route, format!("failed to encode the new session: {error}"));
                 return;

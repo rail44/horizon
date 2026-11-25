@@ -237,17 +237,8 @@
       "type": "object"
     },
     "SessionNewMeta": {
-      "description": "Mirrors `hosting::SessionNew` minus `workspace_root` (crates/horizon-agent/src/hosting.rs).",
+      "description": "Mirrors `hosting::SessionNew`'s id and spawn source (crates/horizon-agent/src/hosting.rs):\nits role and model are the `mode` and `model` options' initial values.",
       "properties": {
-        "provider_id": {
-          "type": "string"
-        },
-        "role_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "session_id": {
           "$ref": "#/$defs/SessionId"
         },
@@ -263,8 +254,7 @@
         }
       },
       "required": [
-        "session_id",
-        "provider_id"
+        "session_id"
       ],
       "type": "object"
     },
@@ -420,5 +410,5 @@
     }
   },
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 20
+  "x-session-protocol-version": 21
 }

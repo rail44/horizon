@@ -66,8 +66,8 @@ remoc = { version = "=0.20.6", default-features = false, features = ["rtc"] }
 # The ACP SDK and its schema crate: exact pins, upgraded together
 # (docs/acp-agentd-implementation-plan.md). The two ends of the line must
 # be built with the same pair: `HORIZON_ACP_EXT_VERSION` moves with them.
-agent-client-protocol = { version = "=5.4.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors"] }
-agent-client-protocol-schema = { version = "=1.19.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors"] }
+agent-client-protocol = { version = "=5.4.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors", "unstable_session_options"] }
+agent-client-protocol-schema = { version = "=1.19.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors", "unstable_session_options"] }
 # The UI stack (`docs/ui-foundation-migration-design.md`): Blitz is a beta,
 # pinned to one release and patched below past it.
 blitz-dom = "=0.3.0-beta.5"

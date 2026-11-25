@@ -19,7 +19,6 @@ use horizon_acp::{
     SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
     write_horizon_meta,
 };
-use horizon_agent::contract::ProviderId;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -53,6 +52,8 @@ enum AgentCall {
     Initialize,
     NewSession {
         meta: SessionNewMeta,
+        /// The `mode` option's initial value.
+        mode: Option<String>,
         cwd: PathBuf,
         responder: Option<Responder<v2::NewSessionResponse>>,
     },
@@ -169,11 +170,16 @@ async fn serve_fake_agentd(
                     .expect("session/new carries SessionNewMeta")
                     .unwrap();
                 let cwd = request.cwd.0.clone();
+                let mode = (request.config_options.iter())
+                    .find(|option| &*option.config_id.0 == horizon_acp::MODE_CONFIG_ID)
+                    .and_then(|option| option.value.as_id())
+                    .map(|value| value.0.to_string());
                 if behavior.manual_bootstrap {
                     record(
                         &c2,
                         AgentCall::NewSession {
                             meta,
+                            mode,
                             cwd,
                             responder: Some(responder),
                         },
@@ -187,8 +193,8 @@ async fn serve_fake_agentd(
                     &SessionInfoMeta {
                         workspace_root: Some(cwd.clone()),
                         parent_session_id: None,
-                        role_id: meta.role_id.clone(),
-                        provider_id: meta.provider_id.clone(),
+                        role_id: mode.clone(),
+                        provider_id: "mock".to_string(),
                     },
                 )
                 .unwrap();
@@ -196,6 +202,7 @@ async fn serve_fake_agentd(
                     &c2,
                     AgentCall::NewSession {
                         meta,
+                        mode,
                         cwd,
                         responder: None,
                     },
@@ -424,13 +431,7 @@ fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
 }
 
 fn start_mock_session(agentd: &AgentdHandle, session_id: SessionId) -> AgentSessionHandle {
-    agentd.start_session(
-        session_id,
-        ProviderId("mock".into()),
-        None,
-        Some(PathBuf::from("/work/project")),
-        None,
-    )
+    agentd.start_session(session_id, None, Some(PathBuf::from("/work/project")), None)
 }
 
 fn is_idle_update(event: &AgentEvent) -> bool {
@@ -469,11 +470,15 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     assert_eq!(session_id, terminal_id);
 
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    let AgentCall::NewSession { meta, cwd, .. } = fake.next_call().await else {
+    let AgentCall::NewSession {
+        meta, mode, cwd, ..
+    } = fake.next_call().await
+    else {
         panic!("the agent spawn must land on agentd");
     };
     assert_eq!(meta.session_id, agent_id);
-    assert_eq!(meta.provider_id, "mock");
+    // No role: no mode option, and the agent's default model.
+    assert_eq!(mode, None);
     assert_eq!(cwd, PathBuf::from("/work/project"));
 
     let output = TerminalUpdate::Output(b"terminal".to_vec());

@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
-use horizon_agent::registry::ProviderRegistry;
 use horizon_shell_runtime::{AgentdHandle, WorkspaceRootUpdate};
 use horizon_ui::reactive_graph::traits::Update;
 use horizon_workspace::SessionId;
@@ -156,7 +155,6 @@ impl Agentd {
         Box::new(move |starting| {
             AgentSession::attached(runtime.handle().start_session(
                 starting.session,
-                ProviderRegistry::default().default_provider_id(),
                 starting.role,
                 starting.directory,
                 starting.from,

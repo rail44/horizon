@@ -190,3 +190,40 @@ async fn an_extension_answers_its_request_and_an_unknown_one_is_refused() {
         .await
         .expect("the connection goes on");
 }
+
+/// `session/options` for a new session: the mode first, at no role, then
+/// the model a new session starts on.
+#[tokio::test]
+async fn session_options_say_what_a_new_session_starts_with() {
+    let state = crate::session::test_support::test_state();
+    state.mark_resume_ready();
+    let cx = connect(state).await;
+    let initialized = cx
+        .send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
+        .block_task()
+        .await
+        .expect("initialize");
+    assert!(
+        (initialized.capabilities.session.as_ref())
+            .is_some_and(|session| session.options.is_some()),
+        "the agent says it takes initial option values"
+    );
+    let options = cx
+        .send_request(v2::SessionOptionsRequest::new("/project"))
+        .block_task()
+        .await
+        .expect("session/options")
+        .config_options;
+    let ids: Vec<_> = (options.iter())
+        .map(|option| option.config_id.0.to_string())
+        .collect();
+    assert_eq!(ids[..2], [acp::MODE_CONFIG_ID, acp::MODEL_CONFIG_ID]);
+    let v2::SessionConfigKind::Select(mode) = &options[0].kind else {
+        panic!("the mode is a select");
+    };
+    assert_eq!(&*mode.current_value.0, acp::DEFAULT_MODE);
+    assert_eq!(
+        options[0].category,
+        Some(v2::SessionConfigOptionCategory::Mode)
+    );
+}

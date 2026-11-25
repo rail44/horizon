@@ -28,7 +28,6 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use horizon_acp::SessionId;
-use horizon_agent::registry::ProviderRegistry;
 use horizon_shell_runtime::agent_model::{
     AgentEvent, AgentFrameItem, AgentModel, Permission, ToolCall,
 };
@@ -142,13 +141,7 @@ fn run(args: Args) -> Result<(), String> {
 
 fn drive(agentd: &AgentdHandle, dir: &Path, args: &Args) -> Result<(), String> {
     let session_id = SessionId::new();
-    let mut session = agentd.start_session(
-        session_id,
-        ProviderRegistry::default().default_provider_id(),
-        None,
-        Some(dir.to_path_buf()),
-        None,
-    );
+    let mut session = agentd.start_session(session_id, None, Some(dir.to_path_buf()), None);
     let commands = session.sender();
     let mut updates = session.take_events();
     let mut model = AgentModel::default();

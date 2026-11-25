@@ -283,10 +283,10 @@ impl AgentdHandle {
     /// Once the session enters a worktree, the daemon reports the worktree
     /// path back via `SessionInfoMeta::workspace_root` (see
     /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`).
+    /// Starts a session with `role_id`, on the agent's default model.
     pub fn start_session(
         &self,
         session_id: SessionId,
-        provider_id: horizon_agent::contract::ProviderId,
         role_id: Option<horizon_agent::roles::RoleId>,
         workspace_root: Option<std::path::PathBuf>,
         spawn_source_session_id: Option<SessionId>,
@@ -297,10 +297,9 @@ impl AgentdHandle {
             new: Box::new(agent::SessionNew {
                 meta: SessionNewMeta {
                     session_id,
-                    provider_id: provider_id.0,
-                    role_id: role_id.map(|role| role.0),
                     spawn_source_session_id,
                 },
+                role: role_id.map(|role| role.0),
                 workspace_root,
             }),
             commands,

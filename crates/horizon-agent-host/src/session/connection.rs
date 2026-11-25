@@ -54,6 +54,32 @@ impl Connection {
         }
     }
 
+    /// The roles a session can start with, as `(id, title)`.
+    pub(crate) fn modes(&self) -> Vec<(String, String)> {
+        (self.state.packages().user_launchable().into_iter())
+            .map(|role| (role.id.to_string(), role.title.to_string()))
+            .collect()
+    }
+
+    /// The provider a new session starts on when none is named.
+    pub(crate) fn default_provider_id(
+        &self,
+    ) -> Result<horizon_agent::contract::ProviderId, String> {
+        self.state.default_provider_id()
+    }
+
+    /// The provider and model a new session starts on.
+    pub(crate) fn default_model(&self) -> Option<(String, String)> {
+        let config = lock_unpoisoned(&self.state.agent_config);
+        if let Some(pair) = &config.providers.default_model {
+            return Some((pair.provider.clone(), pair.model.clone()));
+        }
+        drop(config);
+        let provider = self.state.default_provider_id().ok()?;
+        let model = lock_unpoisoned(&self.state.agent_config).rig.model.clone();
+        Some((provider.0, model))
+    }
+
     /// The model catalog as it is now, and as it changes.
     pub(crate) fn model_catalog(
         &self,
