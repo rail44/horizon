@@ -243,10 +243,16 @@ follows ACP where they differ (board #114):
 | `session_event` | A turn's errors are its stop reason `error` when it fails and `notice`s (error) otherwise, as is an error outside a turn; a rate limit is a `notice` (warning), left out of a replay; history clearing is a `compaction_update`; resumption is not sent; skipped log lines go to the child's stderr. A session's exit and a closed attachment have no standard form and stay `_horizon/session_event` (#114) |
 | `drain`, `watch_board`, `rewind_session` | Gone |
 
-The `_meta.horizon` on updates goes too: a tool call's verdict is in its
-`rawOutput` and its outcome in its `status`; an approval's kind is in
-its options' wording; where an input came from is not marked; a child
-session's parent is not shown (#114).
+The `_meta.horizon` on updates goes too: a tool call is its `toolCallId`
+and its name, its verdict is in its `rawOutput` and its outcome in its
+`status` (the shell calls a failed call denied when it denied the call's
+approval); an approval names its tool call and its kind is in its title;
+a subagent's approval is asked with the subagent's session id and shown
+where its parent is, from the subagent's `subagent_update`; where an
+input came from is not marked; a session's directory is its
+`session/list` `cwd`, read again after a `session_info_update`; a child
+session's parent is not shown, and `session/new` carries no spawn
+source (#114).
 
 ## Stages
 

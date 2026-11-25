@@ -45,7 +45,6 @@ fn generate_wire_schema() -> Value {
     let meta = json!({
         "initialize": schema_of(sub::<InitializeMeta>),
         "session_new": schema_of(sub::<SessionNewMeta>),
-        "session_info": schema_of(sub::<SessionInfoMeta>),
     });
 
     let defs = Value::Object(generator.take_definitions(true));

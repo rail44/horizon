@@ -334,7 +334,7 @@ impl Shared {
             provider_id,
             role_id,
             workspace_root: Some(request.cwd.into_inner()),
-            spawn_source_session_id: meta.spawn_source_session_id,
+            spawn_source_session_id: None,
         };
         let this = self.clone();
         tokio::spawn(async move {
@@ -492,14 +492,7 @@ impl Shared {
                         .workspace_root
                         .clone()
                         .unwrap_or_else(|| fallback.clone());
-                    v2::SessionInfo::new(mapping::acp_session_id(summary.session_id), cwd).meta(
-                        mapping::horizon_meta(&acp::SessionInfoMeta {
-                            workspace_root: summary.workspace_root,
-                            parent_session_id: summary.parent_session_id,
-                            role_id: summary.role_id.map(|role| role.0),
-                            provider_id: summary.provider_id.0,
-                        }),
-                    )
+                    v2::SessionInfo::new(mapping::acp_session_id(summary.session_id), cwd)
                 })
                 .collect();
             let _ = responder.respond(v2::ListSessionsResponse::new(sessions));

@@ -289,16 +289,12 @@ impl AgentdHandle {
         session_id: SessionId,
         role_id: Option<horizon_agent::roles::RoleId>,
         workspace_root: Option<std::path::PathBuf>,
-        spawn_source_session_id: Option<SessionId>,
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::NewAgent {
             route: handle.route,
             new: Box::new(agent::SessionNew {
-                meta: SessionNewMeta {
-                    session_id,
-                    spawn_source_session_id,
-                },
+                meta: SessionNewMeta { session_id },
                 role: role_id.map(|role| role.0),
                 workspace_root,
             }),

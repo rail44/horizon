@@ -13,7 +13,7 @@ use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd};
 use tokio::sync::{mpsc, oneshot};
 
-use super::mapping::{self, Ask, Mapper, Outgoing, horizon_meta};
+use super::mapping::{self, Ask, Mapper, Outgoing};
 use super::{Shared, call_error};
 use crate::session::{AttachmentLease, Bootstrap, ModelGroup};
 
@@ -252,15 +252,13 @@ async fn run(
     let resume = match opening {
         Opening::New(responder) => {
             let response = v2::NewSessionResponse::new(sink.acp_id.clone())
-                .config_options(mapper.config_options())
-                .meta(horizon_meta(&mapper.session_info_meta()));
+                .config_options(mapper.config_options());
             let _ = responder.respond(response);
             None
         }
         Opening::Fork(responder) => {
             let response = v2::ForkSessionResponse::new(sink.acp_id.clone())
-                .config_options(mapper.config_options())
-                .meta(horizon_meta(&mapper.session_info_meta()));
+                .config_options(mapper.config_options());
             let _ = responder.respond(response);
             None
         }

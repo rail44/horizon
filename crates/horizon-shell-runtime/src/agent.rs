@@ -20,8 +20,8 @@ use agent_client_protocol::{
 };
 use horizon_acp::{
     EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, InitializeMeta,
-    MODEL_CONFIG_ID, SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta,
-    read_horizon_meta, write_horizon_meta,
+    MODEL_CONFIG_ID, SessionEventNotification, SessionId, SessionNewMeta, read_horizon_meta,
+    write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -39,25 +39,14 @@ const CLIENT_BINARY_ID: &str = concat!("horizon/", env!("CARGO_PKG_VERSION"));
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSummary {
     pub session_id: SessionId,
-    pub parent_session_id: Option<SessionId>,
     pub workspace_root: Option<PathBuf>,
 }
 
 impl SessionSummary {
     fn from_info(info: v2::SessionInfo) -> Option<Self> {
-        let session_id = parse_session_id(&info.session_id)?;
-        let meta = read_horizon_meta::<SessionInfoMeta>(info.meta.as_ref())
-            .and_then(Result::ok)
-            .unwrap_or(SessionInfoMeta {
-                workspace_root: Some(info.cwd.0.clone()),
-                parent_session_id: None,
-                role_id: None,
-                provider_id: String::new(),
-            });
         Some(Self {
-            session_id,
-            parent_session_id: meta.parent_session_id,
-            workspace_root: meta.workspace_root,
+            session_id: parse_session_id(&info.session_id)?,
+            workspace_root: Some(info.cwd.0.clone()),
         })
     }
 }
@@ -263,7 +252,23 @@ fn client(
         .name("horizon")
         .on_receive_notification(
             async move |notification: v2::UpdateSessionNotification,
-                        _connection: V2ConnectionTo<Agent>| {
+                        connection: V2ConnectionTo<Agent>| {
+                // A session whose information changed may work elsewhere
+                // now: its directory is read again from `session/list`.
+                if let v2::SessionUpdate::SessionInfoUpdate(_) = &notification.update
+                    && let Some(session_id) = parse_session_id(&notification.session_id)
+                {
+                    let routes = updates.clone();
+                    tokio::spawn(async move {
+                        if let Ok(sessions) = list_sessions(&routes, &connection).await
+                            && let Some(root) = (sessions.into_iter())
+                                .find(|summary| summary.session_id == session_id)
+                                .and_then(|summary| summary.workspace_root)
+                        {
+                            routes.route_session_info(session_id, root);
+                        }
+                    });
+                }
                 updates.route_update(notification);
                 Ok(())
             },
@@ -490,12 +495,6 @@ fn handle_op(
                         match result {
                             Ok(opened) => {
                                 let response = &opened.response;
-                                let session_id = route.session_id();
-                                if let Some(Ok(meta)) =
-                                    read_horizon_meta::<SessionInfoMeta>(response.meta.as_ref())
-                                {
-                                    routes.route_session_info(session_id, &meta);
-                                }
                                 routes.deliver_to(
                                     route,
                                     Inbound::Event(AgentEvent::Update(Box::new(

@@ -95,7 +95,7 @@ impl Agentd {
             .map(|agent| RunningAgent {
                 session: agent.session_id,
                 directory: agent.workspace_root,
-                parent: agent.parent_session_id,
+                parent: None,
             })
             .collect())
     }
@@ -157,7 +157,6 @@ impl Agentd {
                 starting.session,
                 starting.role,
                 starting.directory,
-                starting.from,
             ))
         })
     }
@@ -175,9 +174,6 @@ impl Agentd {
             match told {
                 Told::Directory(session, update) => shell.model.update(|model| {
                     model.set_session_directory(session, update.workspace_root);
-                    if let Some(parent) = update.parent_session_id {
-                        model.set_session_parent(session, parent);
-                    }
                 }),
             }
         }

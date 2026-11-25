@@ -16,8 +16,7 @@ use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
     AttachmentEnd, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse,
     HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
-    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
-    write_horizon_meta,
+    SessionEventNotification, SessionId, SessionNewMeta, read_horizon_meta, write_horizon_meta,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -46,6 +45,8 @@ struct FakeAgentBehavior {
     /// Hand `session/new` and `session/resume` responders to the test
     /// instead of answering them.
     manual_bootstrap: bool,
+    /// The session `session/list` lists, with its directory.
+    listed: Option<(SessionId, &'static str)>,
 }
 
 enum AgentCall {
@@ -186,18 +187,7 @@ async fn serve_fake_agentd(
                     );
                     return Ok(());
                 }
-                let mut response =
-                    v2::NewSessionResponse::new(meta.session_id.as_uuid().to_string());
-                write_horizon_meta(
-                    &mut response.meta,
-                    &SessionInfoMeta {
-                        workspace_root: Some(cwd.clone()),
-                        parent_session_id: None,
-                        role_id: mode.clone(),
-                        provider_id: "mock".to_string(),
-                    },
-                )
-                .unwrap();
+                let response = v2::NewSessionResponse::new(meta.session_id.as_uuid().to_string());
                 record(
                     &c2,
                     AgentCall::NewSession {
@@ -249,7 +239,10 @@ async fn serve_fake_agentd(
                 if behavior.mismatched_ext_version || behavior.reject_requests {
                     return responder.respond_with_error(mismatch_error());
                 }
-                responder.respond(v2::ListSessionsResponse::new(Vec::new()))
+                let sessions = (behavior.listed.into_iter())
+                    .map(|(session, cwd)| v2::SessionInfo::new(acp_session_id(session), cwd))
+                    .collect();
+                responder.respond(v2::ListSessionsResponse::new(sessions))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -426,7 +419,7 @@ fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
 }
 
 fn start_mock_session(agentd: &AgentdHandle, session_id: SessionId) -> AgentSessionHandle {
-    agentd.start_session(session_id, None, Some(PathBuf::from("/work/project")), None)
+    agentd.start_session(session_id, None, Some(PathBuf::from("/work/project")))
 }
 
 fn is_idle_update(event: &AgentEvent) -> bool {
@@ -541,9 +534,8 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     );
 }
 
-/// A session's resolved workspace root reaches the process-wide channel
-/// from both places the contract carries it: `session/new`'s response and a
-/// later `session_info_update`.
+/// A `session_info_update` sends the shell to `session/list` for the
+/// session's directory, which reaches the process-wide channel.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_root_updates_reach_their_own_channel() {
     let (client, server) = pair();
@@ -551,41 +543,31 @@ async fn workspace_root_updates_reach_their_own_channel() {
     let session_id = SessionId::new();
     let mut agent = start_mock_session(&handle, session_id);
 
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    let mut fake = serve_fake_agentd(
+        server,
+        FakeAgentBehavior {
+            listed: Some((session_id, "/tmp/repo/.horizon/worktrees/abcd1234")),
+            ..Default::default()
+        },
+    )
+    .await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
     wait_until_ready(&mut agent).await;
+
+    fake.update(
+        session_id,
+        v2::SessionUpdate::SessionInfoUpdate(v2::SessionInfoUpdate::new()),
+    );
+    std::assert_matches!(fake.next_call().await, AgentCall::List);
     let (received, update) = workspace_roots
         .recv_timeout(Duration::from_secs(5))
-        .expect("the session/new response's root");
-    assert_eq!(received, session_id);
-    assert_eq!(update.workspace_root, PathBuf::from("/work/project"));
-
-    let parent_id = SessionId::new();
-    let mut meta = None;
-    write_horizon_meta(
-        &mut meta,
-        &SessionInfoMeta {
-            workspace_root: Some("/tmp/repo/.horizon/worktrees/abcd1234".into()),
-            parent_session_id: Some(parent_id),
-            role_id: None,
-            provider_id: "mock".into(),
-        },
-    )
-    .unwrap();
-    let mut info = v2::SessionInfoUpdate::new();
-    info.meta = agent_client_protocol::schema::MaybeUndefined::Value(meta.unwrap());
-    fake.update(session_id, v2::SessionUpdate::SessionInfoUpdate(info));
-
-    let (received, update) = workspace_roots
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the session_info_update's root");
+        .expect("the listed directory");
     assert_eq!(received, session_id);
     assert_eq!(
         update,
         WorkspaceRootUpdate {
             workspace_root: "/tmp/repo/.horizon/worktrees/abcd1234".into(),
-            parent_session_id: Some(parent_id),
         }
     );
 }

@@ -17,7 +17,7 @@ use crate::agent_model::AgentEvent;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use crossbeam_channel::Sender;
-use horizon_acp::{SessionEventNotification, SessionId, SessionInfoMeta, read_horizon_meta};
+use horizon_acp::{SessionEventNotification, SessionId};
 use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use uuid::Uuid;
 
@@ -43,13 +43,11 @@ impl<I: Copy> RouteKey<I> {
     }
 }
 
-/// A session's authoritative workspace root and parent, from
-/// `SessionInfoMeta` on `session/new`'s response or a
+/// A session's working directory, as `session/list` has it after a
 /// `session_info_update`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceRootUpdate {
     pub workspace_root: PathBuf,
-    pub parent_session_id: Option<SessionId>,
 }
 
 struct AgentRoute {
@@ -294,12 +292,6 @@ impl AgentRoutes {
         {
             self.parents.lock().unwrap().insert(child, session_id);
         }
-        if let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update
-            && let agent_client_protocol::schema::MaybeUndefined::Value(meta) = &info.meta
-            && let Some(Ok(meta)) = read_horizon_meta::<SessionInfoMeta>(Some(meta))
-        {
-            self.route_session_info(session_id, &meta);
-        }
         let _ = self.deliver(
             session_id,
             Inbound::Event(AgentEvent::Update(Box::new(notification.update))),
@@ -308,18 +300,11 @@ impl AgentRoutes {
 
     /// Forwards a session's resolved workspace root to the process-wide
     /// channel while that session has a registered pane.
-    pub(super) fn route_session_info(&self, session_id: SessionId, meta: &SessionInfoMeta) {
-        let Some(workspace_root) = meta.workspace_root.clone() else {
-            return;
-        };
+    pub(super) fn route_session_info(&self, session_id: SessionId, workspace_root: PathBuf) {
         if self.state.lock().unwrap().agent.contains_key(&session_id) {
-            let _ = self.workspace_roots.send((
-                session_id,
-                WorkspaceRootUpdate {
-                    workspace_root,
-                    parent_session_id: meta.parent_session_id,
-                },
-            ));
+            let _ = self
+                .workspace_roots
+                .send((session_id, WorkspaceRootUpdate { workspace_root }));
         }
     }
 

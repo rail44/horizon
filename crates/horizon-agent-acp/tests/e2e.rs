@@ -166,14 +166,7 @@ fn new_session_request(
     cwd: PathBuf,
 ) -> v2::NewSessionRequest {
     let mut meta = None;
-    acp::write_horizon_meta(
-        &mut meta,
-        &acp::SessionNewMeta {
-            session_id,
-            spawn_source_session_id: None,
-        },
-    )
-    .unwrap();
+    acp::write_horizon_meta(&mut meta, &acp::SessionNewMeta { session_id }).unwrap();
     v2::NewSessionRequest::new(cwd)
         .config_options(initial_options(provider_id, role_id))
         .meta(meta)
@@ -228,30 +221,40 @@ async fn list_sessions(client: &AcpClient) -> Vec<v2::SessionInfo> {
         .sessions
 }
 
-fn info_meta(info: &v2::SessionInfo) -> acp::SessionInfoMeta {
-    acp::read_horizon_meta(info.meta.as_ref())
-        .expect("session info carries _meta.horizon")
-        .unwrap()
-}
-
-/// The one listed session, checked against its expected id and facts.
-fn assert_listed(
-    sessions: &[v2::SessionInfo],
-    session_id: SessionId,
-    role_id: Option<&str>,
-    workspace_root: Option<PathBuf>,
-) {
+/// The one listed session, checked against its expected id and, when
+/// given, its directory.
+fn assert_listed(sessions: &[v2::SessionInfo], session_id: SessionId, cwd: Option<PathBuf>) {
     assert_eq!(sessions.len(), 1, "{sessions:?}");
     assert_eq!(sessions[0].session_id, acp_id(session_id));
-    assert_eq!(
-        info_meta(&sessions[0]),
-        acp::SessionInfoMeta {
-            workspace_root,
-            parent_session_id: None,
-            role_id: role_id.map(str::to_string),
-            provider_id: mock_provider_id().0,
+    if let Some(cwd) = cwd {
+        assert_eq!(sessions[0].cwd.0, cwd);
+    }
+}
+
+/// The directory `session/list` gives `session_id`.
+async fn listed_root(client: &AcpClient, session_id: SessionId) -> PathBuf {
+    (list_sessions(client).await.into_iter())
+        .find(|info| info.session_id == acp_id(session_id))
+        .expect("the session is listed")
+        .cwd
+        .0
+}
+
+/// Waits for `session_id` to work outside `from`: each `session_info_update`
+/// sends the client to `session/list` for its directory.
+async fn moved_root(
+    client: &mut AcpClient,
+    session_id: SessionId,
+    from: &Path,
+) -> (Vec<Inbound>, PathBuf) {
+    let mut collected = Vec::new();
+    loop {
+        collected.extend(collect_until(client, |inbound| info_update(inbound, session_id)).await);
+        let root = listed_root(client, session_id).await;
+        if root != from {
+            return (collected, root);
         }
-    );
+    }
 }
 
 /// Reads the inbox until `predicate` matches, returning every message
@@ -791,13 +794,10 @@ async fn list_agents_reflects_live_sessions_after_new_agent() {
 
     let session_id = SessionId::new();
     let created = open_session(&client, session_new(session_id)).await;
-    let meta: acp::SessionInfoMeta = acp::read_horizon_meta(created.meta.as_ref())
-        .unwrap()
-        .unwrap();
-    assert_eq!(meta.provider_id, mock_provider_id().0);
+    assert_eq!(created.session_id, acp_id(session_id));
 
     let sessions = list_sessions(&client).await;
-    assert_listed(&sessions, session_id, None, Some(test_cwd()));
+    assert_listed(&sessions, session_id, Some(test_cwd()));
     assert_eq!(sessions[0].cwd, v2::AbsolutePath::new(test_cwd()));
 }
 
@@ -1166,12 +1166,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         .spawn();
     let mut client = connect(&mut respawned).await;
 
-    assert_listed(
-        &list_sessions(&client).await,
-        session_id,
-        None,
-        Some(test_cwd()),
-    );
+    assert_listed(&list_sessions(&client).await, session_id, Some(test_cwd()));
 
     let replayed = resume(&mut client, session_id).await.unwrap();
     assert!(
@@ -1320,12 +1315,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
 
     let mut respawned = spawn_agentd_at(sessions_dir);
     let client = connect(&mut respawned).await;
-    assert_listed(
-        &list_sessions(&client).await,
-        session_id,
-        Some("board-task"),
-        Some(test_cwd()),
-    );
+    assert_listed(&list_sessions(&client).await, session_id, Some(test_cwd()));
 }
 
 /// A daemon restart must preserve the authoritative root and tier-1
@@ -1347,11 +1337,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     .await;
 
     prompt(&client, session_id, "please enter a worktree").await;
-    let collected = collect_until(&mut client, |inbound| {
-        resolved_root(inbound, session_id).is_some_and(|root| root != repo.path())
-    })
-    .await;
-    let isolated_root = resolved_root(collected.last().unwrap(), session_id).unwrap();
+    let (_, isolated_root) = moved_root(&mut client, session_id, repo.path()).await;
     assert!(
         isolated_root.starts_with(
             repo.path()
@@ -1388,10 +1374,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
         .into_iter()
         .find(|info| info.session_id == acp_id(session_id))
         .expect("the isolated session should resume live");
-    assert_eq!(
-        info_meta(&resumed).workspace_root.as_ref(),
-        Some(&isolated_root)
-    );
+    assert_eq!(Some(&resumed.cwd.0), Some(&isolated_root));
 
     let _ = resume(&mut client, session_id).await.unwrap();
     if !horizon_agent::tools::sandbox::ready() {
@@ -1418,20 +1401,13 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     );
 }
 
-/// The workspace root a live `session_info_update` reports, if any.
-fn resolved_root(inbound: &Inbound, session_id: SessionId) -> Option<PathBuf> {
+/// Whether `inbound` is a `session_info_update` of `session_id`.
+fn info_update(inbound: &Inbound, session_id: SessionId) -> bool {
     let Inbound::Update(notification) = inbound else {
-        return None;
+        return false;
     };
-    if notification.session_id != acp_id(session_id) {
-        return None;
-    }
-    let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update else {
-        return None;
-    };
-    acp::read_horizon_meta::<acp::SessionInfoMeta>(info.meta.as_opt_ref().flatten())?
-        .ok()?
-        .workspace_root
+    notification.session_id == acp_id(session_id)
+        && matches!(notification.update, v2::SessionUpdate::SessionInfoUpdate(_))
 }
 
 fn fixture_git_output(dir: &Path, args: &[&str]) -> String {
@@ -1445,215 +1421,6 @@ fn fixture_git_output(dir: &Path, args: &[&str]) -> String {
     let output = command.output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-/// The `_meta.horizon` a live `session_info_update` carries, if any.
-fn resolved_info(inbound: &Inbound, session_id: SessionId) -> Option<acp::SessionInfoMeta> {
-    let Inbound::Update(notification) = inbound else {
-        return None;
-    };
-    if notification.session_id != acp_id(session_id) {
-        return None;
-    }
-    let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update else {
-        return None;
-    };
-    acp::read_horizon_meta::<acp::SessionInfoMeta>(info.meta.as_opt_ref().flatten())?.ok()
-}
-
-/// Delegation: a child spawned from a parent session, in the parent's
-/// directory, records no edge until it enters a worktree; `worktree_enter`
-/// then branches from that directory's HEAD and records the parent as the
-/// derivation edge, live and in the persisted context.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn worktree_enter_records_the_spawn_source_as_parent() {
-    let repo = isolated_session_fixture();
-    let head = fixture_git_output(repo.path(), &["rev-parse", "HEAD"]);
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let mut client = connect(&mut agentd).await;
-    let parent = SessionId::new();
-    open_session(
-        &client,
-        shared_session_in(parent, repo.path().to_path_buf()),
-    )
-    .await;
-
-    // What the shell sends for a control-plane spawn whose issuer is the
-    // parent: the parent's directory as `cwd`, the parent as spawn source.
-    let child = SessionId::new();
-    let mut meta = None;
-    acp::write_horizon_meta(
-        &mut meta,
-        &acp::SessionNewMeta {
-            session_id: child,
-            spawn_source_session_id: Some(parent),
-        },
-    )
-    .unwrap();
-    open_session(
-        &client,
-        v2::NewSessionRequest::new(repo.path().to_path_buf())
-            .config_options(initial_options(&mock_provider_id().0, None))
-            .meta(meta),
-    )
-    .await;
-    let listed = list_sessions(&client)
-        .await
-        .into_iter()
-        .find(|info| info.session_id == acp_id(child))
-        .unwrap();
-    assert_eq!(
-        info_meta(&listed).workspace_root.as_deref(),
-        Some(repo.path()),
-        "the child starts in the parent's directory"
-    );
-    assert_eq!(
-        info_meta(&listed).parent_session_id,
-        None,
-        "no edge before a worktree exists"
-    );
-
-    prompt(&client, child, "please enter a worktree").await;
-    let collected = collect_until(&mut client, |inbound| {
-        resolved_root(inbound, child).is_some_and(|root| root != repo.path())
-    })
-    .await;
-    let resolved = resolved_info(collected.last().unwrap(), child).unwrap();
-    assert_eq!(resolved.parent_session_id, Some(parent));
-    let root = resolved.workspace_root.unwrap();
-    assert_eq!(
-        root.parent(),
-        Some(
-            repo.path()
-                .canonicalize()
-                .unwrap()
-                .join(".horizon/worktrees")
-                .as_path()
-        )
-    );
-    assert_eq!(fixture_git_output(&root, &["rev-parse", "HEAD"]), head);
-
-    let listed = list_sessions(&client)
-        .await
-        .into_iter()
-        .find(|info| info.session_id == acp_id(child))
-        .unwrap();
-    assert_eq!(info_meta(&listed).parent_session_id, Some(parent));
-
-    wait_for_persisted_event(
-        &sessions_dir,
-        child,
-        |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
-    )
-    .await;
-    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir).unwrap();
-    let context = report
-        .records
-        .iter()
-        .rev()
-        .find(|record| record.session_id == child)
-        .and_then(|record| record.session_context.clone())
-        .expect("the child's latest record carries its context");
-    assert_eq!(context.parent_session_id, Some(parent));
-    assert!(context.isolated_worktree);
-    assert_eq!(context.workspace_root.as_ref(), Some(&root));
-}
-
-/// The spawn source survives a daemon restart that happens before the child
-/// enters a worktree: it is persisted in the child's session context, put
-/// back on the restored entry, and recorded as the parent on activation
-/// (board #70).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent() {
-    let repo = isolated_session_fixture();
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let client = connect(&mut agentd).await;
-    let parent = SessionId::new();
-    open_session(
-        &client,
-        shared_session_in(parent, repo.path().to_path_buf()),
-    )
-    .await;
-
-    let child = SessionId::new();
-    let mut meta = None;
-    acp::write_horizon_meta(
-        &mut meta,
-        &acp::SessionNewMeta {
-            session_id: child,
-            spawn_source_session_id: Some(parent),
-        },
-    )
-    .unwrap();
-    open_session(
-        &client,
-        v2::NewSessionRequest::new(repo.path().to_path_buf())
-            .config_options(initial_options(&mock_provider_id().0, None))
-            .meta(meta),
-    )
-    .await;
-
-    wait_for_persisted_event(&sessions_dir, child, |_| true).await;
-    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir).unwrap();
-    let context = report
-        .records
-        .iter()
-        .rev()
-        .find(|record| record.session_id == child)
-        .and_then(|record| record.session_context.clone())
-        .expect("the child's latest record carries its context");
-    assert_eq!(context.spawn_source_session_id, Some(parent));
-    assert_eq!(
-        context.parent_session_id, None,
-        "no edge before a worktree exists"
-    );
-    assert!(!context.isolated_worktree);
-
-    drop(client);
-    agentd.kill_and_wait();
-
-    let mut respawned = spawn_agentd_at(sessions_dir.clone());
-    let mut client = connect(&mut respawned).await;
-    let listed = list_sessions(&client)
-        .await
-        .into_iter()
-        .find(|info| info.session_id == acp_id(child))
-        .expect("the child resumes live");
-    assert_eq!(
-        info_meta(&listed).parent_session_id,
-        None,
-        "still no edge after the restart"
-    );
-    let _ = resume(&mut client, child).await.unwrap();
-
-    prompt(&client, child, "please enter a worktree").await;
-    let collected = collect_until(&mut client, |inbound| {
-        resolved_root(inbound, child).is_some_and(|root| root != repo.path())
-    })
-    .await;
-    let resolved = resolved_info(collected.last().unwrap(), child).unwrap();
-    assert_eq!(resolved.parent_session_id, Some(parent));
-    let root = resolved.workspace_root.unwrap();
-
-    wait_for_persisted_event(
-        &sessions_dir,
-        child,
-        |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
-    )
-    .await;
-    let report = horizon_agent::persistence::event_log::read_all(&sessions_dir).unwrap();
-    let context = report
-        .records
-        .iter()
-        .rev()
-        .find(|record| record.session_id == child)
-        .and_then(|record| record.session_context.clone())
-        .expect("the child's latest record carries its context");
-    assert_eq!(context.parent_session_id, Some(parent));
-    assert!(context.isolated_worktree);
-    assert_eq!(context.workspace_root.as_ref(), Some(&root));
 }
 
 /// `worktree_enter` end to end: a shared session asks for a worktree, the
@@ -1675,10 +1442,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     .await;
 
     prompt(&client, session_id, "please enter a worktree").await;
-    let collected = collect_until(&mut client, |inbound| {
-        resolved_root(inbound, session_id).is_some_and(|root| root != repo.path())
-    })
-    .await;
+    let (collected, root) = moved_root(&mut client, session_id, repo.path()).await;
     let call = collected
         .iter()
         .find_map(finished_tool)
@@ -1697,7 +1461,6 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         "worktree_enter is automatic: {collected:?}"
     );
 
-    let root = resolved_root(collected.last().unwrap(), session_id).unwrap();
     assert_eq!(
         root.parent(),
         Some(
@@ -1716,7 +1479,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         .into_iter()
         .find(|info| info.session_id == acp_id(session_id))
         .unwrap();
-    assert_eq!(info_meta(&listed).workspace_root.as_ref(), Some(&root));
+    assert_eq!(Some(&listed.cwd.0), Some(&root));
 
     if horizon_agent::tools::sandbox::ready() {
         prompt(&client, session_id, "please write the marker").await;
@@ -1776,7 +1539,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         .into_iter()
         .find(|info| info.session_id == acp_id(session_id))
         .expect("the session resumes live");
-    assert_eq!(info_meta(&resumed).workspace_root.as_ref(), Some(&root));
+    assert_eq!(Some(&resumed.cwd.0), Some(&root));
     let _ = resume(&mut client, session_id).await.unwrap();
 
     // The old root is now outside the session's root: `fs_write` refuses it.
@@ -1817,12 +1580,7 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
 
     let mut respawned = spawn_agentd_at(sessions_dir);
     let mut client = connect(&mut respawned).await;
-    assert_listed(
-        &list_sessions(&client).await,
-        session_id,
-        None,
-        Some(test_cwd()),
-    );
+    assert_listed(&list_sessions(&client).await, session_id, Some(test_cwd()));
 
     let replayed = resume(&mut client, session_id).await.unwrap();
     assert!(
@@ -1887,7 +1645,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
 
     let mut agentd = spawn_agentd_at(sessions_dir);
     let client = connect(&mut agentd).await;
-    assert_listed(&list_sessions(&client).await, live_session, None, None);
+    assert_listed(&list_sessions(&client).await, live_session, None);
 }
 
 /// Fix 1: `initialize` must answer well before a slow resume finishes, and
@@ -1934,7 +1692,7 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
     let sessions = tokio::time::timeout(NEVER, listing)
         .await
         .expect("session/list answers once the resume is let go");
-    assert_listed(&sessions, live_session, None, None);
+    assert_listed(&sessions, live_session, None);
     let _ = std::fs::remove_file(&gate);
 }
 
@@ -2231,11 +1989,8 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
         .expect("session/fork at an announced cursor succeeds");
     let fork = SessionId::from_uuid(forked.session_id.0.parse().unwrap());
     assert_ne!(fork, source);
-    let worktree = acp::read_horizon_meta::<acp::SessionInfoMeta>(forked.meta.as_ref())
-        .unwrap()
-        .unwrap()
-        .workspace_root
-        .expect("the fork works in a worktree of its own");
+    // The fork works in a worktree of its own.
+    let worktree = listed_root(&client, fork).await;
     assert!(
         worktree.starts_with(
             std::fs::canonicalize(&repo)
@@ -2278,7 +2033,7 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
         .iter()
         .find(|info| info.session_id == acp_id(fork))
         .expect("the fork is listed");
-    assert_eq!(info_meta(fork_info).workspace_root, Some(worktree));
+    assert_eq!(Some(fork_info.cwd.0.clone()), Some(worktree));
     assert_eq!(branch_user_messages(&log, fork), ["one", "three", "four"]);
     assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
 }

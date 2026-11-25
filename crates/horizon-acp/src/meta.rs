@@ -1,8 +1,6 @@
 //! Payloads carried under `_meta.horizon` on standard ACP messages, and the
 //! helpers that put them in and take them out of a [`Meta`] map.
 
-use std::path::PathBuf;
-
 use agent_client_protocol::v2::schema::Meta;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -75,21 +73,12 @@ pub struct InitializeMeta {
     pub binary_id: String,
 }
 
-/// Mirrors `hosting::SessionNew`'s id and spawn source (crates/horizon-agent/src/hosting.rs):
-/// its role and model are the `mode` and `model` options' initial values.
+/// The id the client gives a new session (`hosting::SessionNew::session_id`,
+/// crates/horizon-agent/src/hosting.rs): its role and model are the `mode`
+/// and `model` options' initial values.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionNewMeta {
     pub session_id: SessionId,
-    pub spawn_source_session_id: Option<SessionId>,
-}
-
-/// Mirrors `hosting::SessionSummary` minus `session_id` (crates/horizon-agent/src/hosting.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct SessionInfoMeta {
-    pub workspace_root: Option<PathBuf>,
-    pub parent_session_id: Option<SessionId>,
-    pub role_id: Option<String>,
-    pub provider_id: String,
 }
 
 #[cfg(test)]
@@ -124,13 +113,6 @@ mod tests {
         });
         round_trip(&SessionNewMeta {
             session_id: SessionId::new(),
-            spawn_source_session_id: Some(SessionId::new()),
-        });
-        round_trip(&SessionInfoMeta {
-            workspace_root: Some(PathBuf::from("/work/project/.horizon/worktrees/abcd")),
-            parent_session_id: None,
-            role_id: None,
-            provider_id: "default".into(),
         });
     }
 

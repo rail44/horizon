@@ -308,15 +308,6 @@ impl Mapper {
         }
     }
 
-    pub(super) fn session_info_meta(&self) -> acp::SessionInfoMeta {
-        acp::SessionInfoMeta {
-            workspace_root: self.facts.workspace_root.clone(),
-            parent_session_id: self.facts.parent_session_id,
-            role_id: self.facts.role_id.clone(),
-            provider_id: self.facts.provider_id.clone(),
-        }
-    }
-
     pub(super) fn config_options(&self) -> Vec<v2::SessionConfigOption> {
         let mode = mode_option(&self.facts.modes, self.facts.role_id.as_deref());
         std::iter::once(mode)
@@ -346,9 +337,11 @@ impl Mapper {
         })
     }
 
+    /// Says the session's information changed: its working directory, for
+    /// one, which the client reads again from `session/list`.
     pub(super) fn session_info_update(&self) -> Outgoing {
         Outgoing::update(v2::SessionUpdate::SessionInfoUpdate(
-            v2::SessionInfoUpdate::new().meta(horizon_meta(&self.session_info_meta())),
+            v2::SessionInfoUpdate::new(),
         ))
     }
 

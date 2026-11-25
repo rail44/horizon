@@ -107,31 +107,21 @@ async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() 
     routes.deliver_to(old, Inbound::Opened(Ok(())));
     assert!(inbound.try_recv().is_err());
 
-    let mut meta = None;
-    horizon_acp::write_horizon_meta(
-        &mut meta,
-        &SessionInfoMeta {
-            workspace_root: Some("/resolved".into()),
-            parent_session_id: None,
-            role_id: None,
-            provider_id: "default".into(),
-        },
-    )
-    .unwrap();
-    let mut info = v2::SessionInfoUpdate::new();
-    info.meta = agent_client_protocol::schema::MaybeUndefined::Value(meta.unwrap());
+    let info = v2::SessionInfoUpdate::new();
     let update = |session: SessionId| {
         v2::UpdateSessionNotification::new(
             session.as_uuid().to_string(),
             v2::SessionUpdate::SessionInfoUpdate(info.clone()),
         )
     };
-    routes.route_update(update(SessionId::new()));
+    routes.route_session_info(SessionId::new(), "/resolved".into());
     assert!(roots_rx.try_recv().is_err(), "an unregistered session");
-    routes.route_update(update(id));
+    routes.route_session_info(id, "/resolved".into());
     let (routed, root) = roots_rx.try_recv().unwrap();
     assert_eq!(routed, id);
     assert_eq!(root.workspace_root, std::path::PathBuf::from("/resolved"));
+    // The update itself reaches the session's pane.
+    routes.route_update(update(id));
     assert!(matches!(inbound.try_recv(), Ok(Inbound::Event(_))));
 }
 

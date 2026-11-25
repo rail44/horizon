@@ -104,55 +104,11 @@
       "format": "uuid",
       "type": "string"
     },
-    "SessionInfoMeta": {
-      "description": "Mirrors `hosting::SessionSummary` minus `session_id` (crates/horizon-agent/src/hosting.rs).",
-      "properties": {
-        "parent_session_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "provider_id": {
-          "type": "string"
-        },
-        "role_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "workspace_root": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "provider_id"
-      ],
-      "type": "object"
-    },
     "SessionNewMeta": {
-      "description": "Mirrors `hosting::SessionNew`'s id and spawn source (crates/horizon-agent/src/hosting.rs):\nits role and model are the `mode` and `model` options' initial values.",
+      "description": "The id the client gives a new session (`hosting::SessionNew::session_id`,\ncrates/horizon-agent/src/hosting.rs): its role and model are the `mode`\nand `model` options' initial values.",
       "properties": {
         "session_id": {
           "$ref": "#/$defs/SessionId"
-        },
-        "spawn_source_session_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionId"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -176,9 +132,6 @@
     "initialize": {
       "$ref": "#/$defs/InitializeMeta"
     },
-    "session_info": {
-      "$ref": "#/$defs/SessionInfoMeta"
-    },
     "session_new": {
       "$ref": "#/$defs/SessionNewMeta"
     }
@@ -189,5 +142,5 @@
     }
   },
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 23
+  "x-session-protocol-version": 24
 }
