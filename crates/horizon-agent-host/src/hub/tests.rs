@@ -7,7 +7,7 @@ use agent_client_protocol::ConnectionTo;
 async fn connect(state: Arc<AgentdState>) -> ConnectionTo<Agent> {
     let (daemon_side, client_side) = tokio::io::duplex(1 << 16);
     let (daemon_read, daemon_write) = tokio::io::split(daemon_side);
-    tokio::spawn(serve(daemon_read, daemon_write, state, "test-agentd"));
+    tokio::spawn(serve(daemon_read, daemon_write, state));
     let (client_read, client_write) = tokio::io::split(client_side);
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(agent_client_protocol::Builder::new(Client).connect_with(
@@ -21,15 +21,11 @@ async fn connect(state: Arc<AgentdState>) -> ConnectionTo<Agent> {
     cx_rx.await.unwrap()
 }
 
-fn initialize_request(ext_version: u32) -> v2::InitializeRequest {
+fn initialize_request() -> v2::InitializeRequest {
     v2::InitializeRequest::new(
         ProtocolVersion::V2,
         v2::Implementation::new("test-client", "0"),
     )
-    .meta(mapping::horizon_meta(&acp::InitializeMeta {
-        ext_version,
-        binary_id: "test-client".into(),
-    }))
 }
 
 fn ready_state() -> Arc<AgentdState> {
@@ -54,16 +50,11 @@ async fn methods_are_refused_until_initialize_succeeds() {
     );
 
     let response = cx
-        .send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
+        .send_request(initialize_request())
         .block_task()
         .await
-        .expect("a matching extension version initializes");
+        .expect("a v2 client initializes");
     assert_eq!(response.protocol_version, ProtocolVersion::V2);
-    let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
-        .unwrap()
-        .unwrap();
-    assert_eq!(meta.ext_version, acp::HORIZON_ACP_EXT_VERSION);
-    assert_eq!(meta.binary_id, "test-agentd");
     assert!(response.capabilities.session.is_some());
 
     let listed = cx
@@ -74,55 +65,11 @@ async fn methods_are_refused_until_initialize_succeeds() {
     assert!(listed.sessions.is_empty());
 
     assert!(
-        cx.send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
+        cx.send_request(initialize_request())
             .block_task()
             .await
             .is_err()
     );
-}
-
-/// A client at another extension version still initializes and learns the
-/// daemon's version; every later method but `_horizon/drain` (which exits
-/// the process, so it is covered end to end) is refused, naming both
-/// versions.
-#[tokio::test]
-async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
-    let cx = connect(ready_state()).await;
-    let client_version = acp::HORIZON_ACP_EXT_VERSION + 1;
-
-    let response = cx
-        .send_request(initialize_request(client_version))
-        .block_task()
-        .await
-        .expect("a v2 client initializes whatever its extension version");
-    let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
-        .unwrap()
-        .unwrap();
-    assert_eq!(meta.ext_version, acp::HORIZON_ACP_EXT_VERSION);
-
-    for refused in [
-        cx.send_request(v2::ListSessionsRequest::new())
-            .block_task()
-            .await
-            .map(drop),
-        cx.send_request(v2::ResumeSessionRequest::new("s", "/"))
-            .block_task()
-            .await
-            .map(drop),
-    ] {
-        let error = refused.unwrap_err();
-        assert!(
-            error.message.starts_with("horizon ext version mismatch"),
-            "{error:?}"
-        );
-        assert!(
-            error.message.contains(&client_version.to_string())
-                && error
-                    .message
-                    .contains(&acp::HORIZON_ACP_EXT_VERSION.to_string()),
-            "both versions are named: {error:?}"
-        );
-    }
 }
 
 /// A `_horizon/*` request is refused as unknown, and the connection goes
@@ -132,7 +79,7 @@ async fn an_unknown_request_is_refused_and_the_connection_goes_on() {
     let state = crate::session::test_support::test_state();
     state.mark_resume_ready();
     let cx = connect(state).await;
-    cx.send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
+    cx.send_request(initialize_request())
         .block_task()
         .await
         .unwrap();
@@ -167,7 +114,7 @@ async fn session_options_say_what_a_new_session_starts_with() {
     state.mark_resume_ready();
     let cx = connect(state).await;
     let initialized = cx
-        .send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
+        .send_request(initialize_request())
         .block_task()
         .await
         .expect("initialize");

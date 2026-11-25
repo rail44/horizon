@@ -36,7 +36,6 @@ use crate::session::ModelGroup;
 pub(super) enum Outgoing {
     /// (Boxed: an update is several times the size of anything else here.)
     Update(Box<v2::SessionUpdate>),
-    SessionEvent(acp::SessionEventNotification),
     /// An approval the client must be asked for with
     /// `session/request_permission`.
     AskPermission(Ask),
@@ -77,7 +76,6 @@ pub(super) struct SessionFacts {
 }
 
 pub(super) struct Mapper {
-    session_id: SessionId,
     facts: SessionFacts,
     model: Option<String>,
     selection: Option<ModelSelection>,
@@ -133,16 +131,13 @@ pub(super) fn fork_point(
     events: &[Event],
     cursor: Option<&v2::CursorId>,
 ) -> Result<Option<usize>, String> {
-    let mut mapper = Mapper::new(
-        SessionId::new(),
-        SessionFacts {
-            provider_id: String::new(),
-            role_id: None,
-            modes: Vec::new(),
-            parent_session_id: None,
-            workspace_root: None,
-        },
-    );
+    let mut mapper = Mapper::new(SessionFacts {
+        provider_id: String::new(),
+        role_id: None,
+        modes: Vec::new(),
+        parent_session_id: None,
+        workspace_root: None,
+    });
     let mut settled = Settled::new();
     let mut last_settled = None;
     for (index, event) in events.iter().enumerate() {
@@ -279,16 +274,9 @@ pub(super) fn model_options(
     options
 }
 
-pub(super) fn horizon_meta<T: serde::Serialize>(value: &T) -> Option<v2::Meta> {
-    let mut meta = None;
-    acp::write_horizon_meta(&mut meta, value).expect("horizon meta serializes");
-    meta
-}
-
 impl Mapper {
-    pub(super) fn new(session_id: SessionId, facts: SessionFacts) -> Self {
+    pub(super) fn new(facts: SessionFacts) -> Self {
         Self {
-            session_id,
             facts,
             model: None,
             selection: None,
@@ -400,9 +388,7 @@ impl Mapper {
             AgentWireEvent::TaskApprovalSettled { occurrence_id, .. } => {
                 self.settle_approval(&occurrence_id.0)
             }
-            AgentWireEvent::ReplayStarted
-            | AgentWireEvent::ReplayComplete
-            | AgentWireEvent::AttachmentClosed(_) => Vec::new(),
+            AgentWireEvent::ReplayStarted | AgentWireEvent::ReplayComplete => Vec::new(),
         }
     }
 
@@ -431,8 +417,6 @@ impl Mapper {
     }
 
     fn map_event(&mut self, event: &Event) -> Vec<Outgoing> {
-        let session_id = self.session_id;
-        let session_event = |event| vec![Outgoing::SessionEvent(event)];
         match event {
             Event::MessageCommitted(message) => {
                 let id = match message.role {
@@ -554,12 +538,10 @@ impl Mapper {
                     Vec::new()
                 }
             }
-            Event::Exited(exit) => {
+            // The session's end is the attachment's: see the pump.
+            Event::Exited(_) => {
                 self.close_stream();
-                session_event(acp::SessionEventNotification::Exited {
-                    session_id,
-                    reason: exit.reason.clone(),
-                })
+                Vec::new()
             }
             Event::Rewound { branch } => {
                 self.close_stream();
@@ -638,7 +620,7 @@ impl Mapper {
     }
 
     /// An error shown now, not kept in the history: a replay leaves it out.
-    fn error_notice(&self, message: &str) -> Vec<Outgoing> {
+    pub(super) fn error_notice(&self, message: &str) -> Vec<Outgoing> {
         if self.replaying {
             return Vec::new();
         }

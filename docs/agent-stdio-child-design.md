@@ -105,12 +105,9 @@ connecting to a socket or spawning a daemon. The one host tool,
 `workspace_snapshot`, asks the shell's control plane itself
 (`HORIZON_SOCKET`, the query `workspace`).
 
-While `_horizon/*` extensions remain, the shell compares
-`HORIZON_ACP_EXT_VERSION` in `initialize`'s `_meta.horizon`, since the
-binary can be rebuilt on its own. On a mismatch the agent panes say the
-app needs a restart; there is no drain and respawn loop, since the child
-is the shell's own. Once the extensions are replaced by standard forms
-(below), the check goes with them and ACP's own versioning is all.
+The line is standard ACP v2 with no extension of Horizon's: the
+`initialize` both ends send carries no `_meta.horizon`, and ACP's own
+protocol version is all they compare.
 
 ### What the child needs that agentd had
 
@@ -240,7 +237,7 @@ follows ACP where they differ (board #114):
 | `task_progress` | `subagent_update`: the child's description is its title, its state is `running`, `requires_action` while it waits for an approval, `idle` when it is done; what it is doing and when it started are not sent |
 | `tool_call_progress` | Gone: only the mock provider sent it; rig gives a tool call whole |
 | `host_tool` (`workspace_snapshot`) | Out of ACP: the tool asks the control socket (`HORIZON_SOCKET`) itself, with the query `workspace` |
-| `session_event` | A turn's errors are its stop reason `error` when it fails and `notice`s (error) otherwise, as is an error outside a turn; a rate limit is a `notice` (warning), left out of a replay; history clearing is a `compaction_update`; resumption is not sent; skipped log lines go to the child's stderr. A session's exit and a closed attachment have no standard form and stay `_horizon/session_event` (#114) |
+| `session_event` | A turn's errors are its stop reason `error` when it fails and `notice`s (error) otherwise, as is an error outside a turn; a rate limit is a `notice` (warning), left out of a replay; history clearing is a `compaction_update`; resumption is not sent; skipped log lines go to the child's stderr. A session the client closes has ended when `session/close` is answered: the agent answers once the session has sent its last. One that ends on its own (a failure) says so as an error `notice`, after which the shell reads `session/list` and takes a session it no longer lists as ended. The agent no longer drops a client that reads slowly: its queue to the connection has no bound (#114) |
 | `drain`, `watch_board`, `rewind_session` | Gone |
 
 The `_meta.horizon` on updates goes too: a tool call is its `toolCallId`

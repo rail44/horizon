@@ -24,8 +24,6 @@ pub enum AgentWireEvent {
     ReplayStarted,
     /// Every snapshot item precedes this marker; live updates follow it.
     ReplayComplete,
-    /// The attachment ended; the session itself may still be running.
-    AttachmentClosed(AttachmentEnd),
     /// A folded provider event — the transcript's raw material, identical
     /// to what the event log persists.
     Event(Event),
@@ -79,7 +77,6 @@ pub enum AgentWireEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AttachmentEnd {
     Replaced,
-    Lagged,
     Detached,
     SessionEnded,
 }
@@ -201,10 +198,6 @@ mod tests {
         let events = vec![
             AgentWireEvent::ReplayStarted,
             AgentWireEvent::ReplayComplete,
-            AgentWireEvent::AttachmentClosed(AttachmentEnd::Replaced),
-            AgentWireEvent::AttachmentClosed(AttachmentEnd::Lagged),
-            AgentWireEvent::AttachmentClosed(AttachmentEnd::Detached),
-            AgentWireEvent::AttachmentClosed(AttachmentEnd::SessionEnded),
             AgentWireEvent::Event(Event::ToolCallRequested(crate::contract::ToolCallRequest {
                 call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
                 tool_id: "fs_read".to_string(),

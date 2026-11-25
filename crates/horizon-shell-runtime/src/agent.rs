@@ -18,21 +18,15 @@ use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{
     Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
-use horizon_acp::{
-    EFFORT_CONFIG_ID, HORIZON_ACP_EXT_VERSION, InitializeMeta, MODEL_CONFIG_ID,
-    SessionEventNotification, SessionId, read_horizon_meta, write_horizon_meta,
-};
+use horizon_acp::{EFFORT_CONFIG_ID, MODEL_CONFIG_ID, SessionId};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::attachment::{AgentCommand, Inbound, acp_session_id};
 use super::common::{EstablishError, OP_TIMEOUT, RuntimeControl, StreamEnd};
-use super::routing::{AgentRoutes, EXT_VERSION_MISMATCH, RouteKey, parse_session_id};
+use super::routing::{AgentRoutes, RouteKey, parse_session_id};
 use crate::agent_model::AgentEvent;
-
-/// The binary id this client reports in `initialize`.
-const CLIENT_BINARY_ID: &str = concat!("horizon/", env!("CARGO_PKG_VERSION"));
 
 /// A daemon-side agent session as `session/list` reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,7 +233,6 @@ fn client(
     agent_client_protocol::NullRun,
 > {
     let updates = routes.clone();
-    let session_events = routes.clone();
     let permissions = routes.clone();
     Client
         .v2()
@@ -253,8 +246,9 @@ fn client(
                     && let Some(session_id) = parse_session_id(&notification.session_id)
                 {
                     let routes = updates.clone();
+                    let connection = connection.clone();
                     tokio::spawn(async move {
-                        if let Ok(sessions) = list_sessions(&routes, &connection).await
+                        if let Ok(sessions) = list_sessions(&connection).await
                             && let Some(root) = (sessions.into_iter())
                                 .find(|summary| summary.session_id == session_id)
                                 .and_then(|summary| summary.workspace_root)
@@ -263,15 +257,24 @@ fn client(
                         }
                     });
                 }
+                // After an error the session may have stopped: one
+                // `session/list` no longer lists has ended.
+                if let v2::SessionUpdate::Notice(notice) = &notification.update
+                    && notice.severity == v2::NoticeSeverity::Error
+                    && let Some(session_id) = parse_session_id(&notification.session_id)
+                {
+                    let routes = updates.clone();
+                    tokio::spawn(async move {
+                        if let Ok(sessions) = list_sessions(&connection).await
+                            && !sessions
+                                .iter()
+                                .any(|summary| summary.session_id == session_id)
+                        {
+                            routes.route_ended(session_id, "Session ended".into());
+                        }
+                    });
+                }
                 updates.route_update(notification);
-                Ok(())
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_notification(
-            async move |notification: SessionEventNotification,
-                        _connection: V2ConnectionTo<Agent>| {
-                session_events.route_session_event(notification);
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -303,7 +306,6 @@ where
     let main_control = control.clone();
     let main_routes = routes.clone();
     let establish = control.timeouts().establish;
-    routes.clear_version_mismatch();
     let result = client(&routes)
         .connect_with(transport, async move |connection: V2ConnectionTo<Agent>| {
             let initialized = tokio::select! {
@@ -318,7 +320,7 @@ where
             let request = send(&connection, v2::SessionOptionsRequest::new(resume_cwd()));
             let asked = main_routes.clone();
             tokio::spawn(async move {
-                if let Ok(response) = call(&asked, OP_TIMEOUT, "session options", request).await {
+                if let Ok(response) = call(OP_TIMEOUT, "session options", request).await {
                     asked.set_modes(crate::agent_model::mode_choices(&response.config_options));
                 }
             });
@@ -329,10 +331,6 @@ where
                         break StreamEnd::EstablishedFailure(
                             "the agent runtime disconnected".to_string(),
                         );
-                    }
-                    message = main_routes.version_mismatch() => {
-                        main_routes.connection_reset(message.clone());
-                        break StreamEnd::VersionRejected { message };
                     }
                     op = ops.recv() => {
                         let Some(op) = op else {
@@ -357,16 +355,10 @@ where
 }
 
 fn initialize_request() -> v2::InitializeRequest {
-    let mut request = v2::InitializeRequest::new(
+    v2::InitializeRequest::new(
         ProtocolVersion::V2,
         v2::Implementation::new("horizon", env!("CARGO_PKG_VERSION")),
-    );
-    let meta = InitializeMeta {
-        ext_version: HORIZON_ACP_EXT_VERSION,
-        binary_id: CLIENT_BINARY_ID.to_string(),
-    };
-    write_horizon_meta(&mut request.meta, &meta).expect("InitializeMeta serializes");
-    request
+    )
 }
 
 /// Sends `initialize` within the establish deadline and checks the
@@ -386,12 +378,6 @@ async fn initialize(
                 "the agent runtime did not answer initialize within {timeout:?}"
             )));
         }
-        Ok(Err(error)) if error.message.starts_with(EXT_VERSION_MISMATCH) => {
-            return Err(EstablishError::Rejected(format!(
-                "the agent runtime rejected the handshake: {}",
-                error.message
-            )));
-        }
         Ok(Err(error)) if is_incoming_transport_closed(&error) => {
             return Err(EstablishError::Transient(format!(
                 "the connection dropped during initialize: {error}"
@@ -404,21 +390,6 @@ async fn initialize(
         }
         Ok(Ok(response)) => response,
     };
-    match read_horizon_meta::<InitializeMeta>(response.meta.as_ref()) {
-        Some(Ok(meta)) if meta.ext_version == HORIZON_ACP_EXT_VERSION => {}
-        Some(Ok(meta)) => {
-            return Err(EstablishError::Rejected(format!(
-                "{EXT_VERSION_MISMATCH}: the agent runtime {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
-                meta.binary_id, meta.ext_version
-            )));
-        }
-        Some(Err(_)) | None => {
-            return Err(EstablishError::Rejected(format!(
-                "the agent runtime did not report a horizon extension version (this shell speaks \
-                 v{HORIZON_ACP_EXT_VERSION})"
-            )));
-        }
-    }
     if response.capabilities.session.is_none() {
         return Err(EstablishError::Fatal(
             "the agent runtime did not advertise the v2 session capability".to_string(),
@@ -430,17 +401,13 @@ async fn initialize(
 /// Bounds one established-phase request. A deadline expiry fails only that
 /// request; the connection stays up.
 async fn call<T>(
-    routes: &AgentRoutes,
     deadline: Duration,
     what: &str,
     request: agent_client_protocol::v2::SentRequest<T>,
 ) -> Result<T, String> {
     match tokio::time::timeout(deadline, request.block_task()).await {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => {
-            routes.note_error(&error);
-            Err(format!("{what} failed: {error}"))
-        }
+        Ok(Err(error)) => Err(format!("{what} failed: {error}")),
         Err(_elapsed) => Err(format!("{what} did not answer within {deadline:?}")),
     }
 }
@@ -512,7 +479,6 @@ fn handle_op(
                                 routes.deliver_to(route, Inbound::Opened(Ok(())));
                             }
                             Err(error) => {
-                                routes.note_error(&error);
                                 let error = format!("failed to start the agent session: {error}");
                                 routes.not_named(route.session_id(), error.clone());
                                 routes.deliver_to(route, Inbound::Opened(Err(error)))
@@ -532,7 +498,6 @@ fn handle_op(
                     .start_session()
                     .on_receiving_result(async move |result| {
                         let opened = result.map(|_| ()).map_err(|error| {
-                            routes.note_error(&error);
                             format!("failed to attach to the agent session: {error}")
                         });
                         routes.deliver_to(route, Inbound::Opened(opened));
@@ -542,9 +507,8 @@ fn handle_op(
         }
         Op::SessionList { reply } => {
             let connection = connection.clone();
-            let routes = routes.clone();
             tokio::spawn(async move {
-                let _ = reply.send(list_sessions(&routes, &connection).await);
+                let _ = reply.send(list_sessions(&connection).await);
             });
         }
         Op::SetSessionModel {
@@ -561,9 +525,8 @@ fn handle_op(
                 )),
             );
             let request = send(connection, request);
-            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(&routes, OP_TIMEOUT, "set session model", request).await;
+                let result = call(OP_TIMEOUT, "set session model", request).await;
                 let _ = reply.send(result.map(|_| ()));
             });
         }
@@ -578,9 +541,8 @@ fn handle_op(
                 v2::SessionConfigOptionValue::id(level),
             );
             let request = send(connection, request);
-            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(&routes, OP_TIMEOUT, "set session effort", request).await;
+                let result = call(OP_TIMEOUT, "set session effort", request).await;
                 let _ = reply.send(result.map(|_| ()));
             });
         }
@@ -619,16 +581,13 @@ fn open_session(
     ));
 }
 
-async fn list_sessions(
-    routes: &AgentRoutes,
-    connection: &V2ConnectionTo<Agent>,
-) -> Result<Vec<SessionSummary>, String> {
+async fn list_sessions(connection: &V2ConnectionTo<Agent>) -> Result<Vec<SessionSummary>, String> {
     let mut summaries = Vec::new();
     let mut cursor = None;
     loop {
         let mut request = v2::ListSessionsRequest::new();
         request.cursor = cursor;
-        let response = call(routes, OP_TIMEOUT, "agent list", send(connection, request)).await?;
+        let response = call(OP_TIMEOUT, "agent list", send(connection, request)).await?;
         summaries.extend(
             response
                 .sessions

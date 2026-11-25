@@ -11,7 +11,7 @@ use agent_client_protocol::Agent;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{AttachmentEnd, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionId};
+use horizon_acp::{PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionId};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::routing::{AgentRoutes, RouteKey, cancelled_permission};
@@ -28,23 +28,6 @@ pub enum AttachmentState {
     Ready,
     Failed(String),
     Disconnected(String),
-}
-
-/// A session's attachment closed by the daemon, as the pane reads it.
-fn attachment_end_state(reason: AttachmentEnd) -> AttachmentState {
-    match reason {
-        AttachmentEnd::Lagged => AttachmentState::Failed(
-            "Session updates exceeded the connection buffer; reopen the session to restore its history"
-                .into(),
-        ),
-        AttachmentEnd::Replaced => {
-            AttachmentState::Disconnected("Session opened by another attachment".into())
-        }
-        AttachmentEnd::Detached => AttachmentState::Disconnected("Session detached".into()),
-        AttachmentEnd::SessionEnded => {
-            AttachmentState::Disconnected("Session runtime ended".into())
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -82,7 +65,8 @@ pub enum Inbound {
     /// The response to the `session/new` or `session/resume` that opened
     /// this attachment.
     Opened(Result<(), String>),
-    Closed(AttachmentEnd),
+    /// The session is no longer running, for the reason said.
+    Ended(String),
 }
 
 impl AttachmentState {
@@ -215,21 +199,11 @@ pub(super) async fn run(
                         break;
                     }
                 }
-                // Before this attachment's own response, a `Replaced` closes
-                // the lease an earlier attachment of this session held on
-                // this connection; whatever arrived so far belonged to it.
-                Some(Inbound::Closed(AttachmentEnd::Replaced))
-                    if phase == AttachmentState::Restoring =>
-                {
-                    for (_, responder) in held.drain() {
-                        let _ = responder.respond(cancelled_permission());
-                    }
-                    if !routes.send_agent(route, AgentUpdate::State(phase.clone())).await {
-                        break;
-                    }
-                }
-                Some(Inbound::Closed(end)) => {
-                    phase = attachment_end_state(end);
+                Some(Inbound::Ended(reason)) => {
+                    routes
+                        .send_agent(route, AgentUpdate::Event(Box::new(AgentEvent::Ended)))
+                        .await;
+                    phase = AttachmentState::Disconnected(reason);
                     break;
                 }
                 None => break,
@@ -305,9 +279,19 @@ impl Session {
                 }
                 None => true,
             },
+            // Nothing of the session follows the answer.
             AgentCommand::Close => {
-                let request = v2::CloseSessionRequest::new(session_id);
-                self.report_failure("close", self.connection.send_request(request));
+                let request = self
+                    .connection
+                    .send_request(v2::CloseSessionRequest::new(session_id));
+                let (routes, route) = (self.routes.clone(), self.route);
+                tokio::spawn(async move {
+                    let inbound = match request.block_task().await {
+                        Ok(_) => Inbound::Ended("Session closed".into()),
+                        Err(error) => session_error(route, format!("close failed: {error}")),
+                    };
+                    routes.deliver_to(route, inbound);
+                });
                 true
             }
         }
@@ -331,7 +315,6 @@ impl Session {
         let route = self.route;
         tokio::spawn(async move {
             if let Err(error) = request.block_task().await {
-                routes.note_error(&error);
                 routes.deliver_to(
                     route,
                     session_error(route, format!("{what} failed: {error}")),
@@ -386,18 +369,5 @@ mod tests {
         let mut state = AttachmentState::Ready;
         state.stream_ended();
         std::assert_matches!(state, AttachmentState::Disconnected(_));
-
-        let mut state = attachment_end_state(AttachmentEnd::Lagged);
-        std::assert_matches!(state, AttachmentState::Failed(_));
-        let failure = state.clone();
-        state.stream_ended();
-        assert_eq!(state, failure);
-        for end in [
-            AttachmentEnd::Replaced,
-            AttachmentEnd::Detached,
-            AttachmentEnd::SessionEnded,
-        ] {
-            std::assert_matches!(attachment_end_state(end), AttachmentState::Disconnected(_));
-        }
     }
 }

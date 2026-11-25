@@ -111,7 +111,7 @@ impl Connection {
     pub(crate) fn subscribe_agent(
         &self,
         session_id: SessionId,
-    ) -> tokio::sync::mpsc::Receiver<horizon_agent::hosting::AgentWireEvent> {
+    ) -> tokio::sync::mpsc::UnboundedReceiver<horizon_agent::hosting::AgentWireEvent> {
         super::attachment::subscribe(&self.state, session_id)
     }
 

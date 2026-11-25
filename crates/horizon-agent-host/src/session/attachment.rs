@@ -14,9 +14,6 @@ use uuid::Uuid;
 
 use super::state::{AgentdState, lock_unpoisoned};
 
-// A slow attachment must not block the session or retain unbounded updates.
-const LIVE_CAPACITY: usize = 256;
-
 pub(super) type AttachRequest = oneshot::Sender<Bootstrap>;
 
 #[derive(Default)]
@@ -33,7 +30,7 @@ pub(super) struct SessionStream {
 
 struct Subscriber {
     id: Uuid,
-    events: mpsc::Sender<AgentWireEvent>,
+    events: mpsc::UnboundedSender<AgentWireEvent>,
     end: watch::Sender<Option<AttachmentEnd>>,
 }
 
@@ -70,14 +67,12 @@ impl SessionStream {
             }
             _ => {}
         }
+        // The one reader is the client's connection: a slow one is waited
+        // for, not dropped.
         if let Some(subscriber) = &self.subscriber
-            && let Err(error) = subscriber.events.try_send(event)
+            && subscriber.events.send(event).is_err()
         {
-            let reason = match error {
-                mpsc::error::TrySendError::Full(_) => AttachmentEnd::Lagged,
-                mpsc::error::TrySendError::Closed(_) => AttachmentEnd::Detached,
-            };
-            subscriber.end.send_replace(Some(reason));
+            subscriber.end.send_replace(Some(AttachmentEnd::Detached));
             self.subscriber = None;
         }
     }
@@ -90,13 +85,12 @@ impl SessionStream {
 
     fn install(
         &mut self,
-        capacity: usize,
     ) -> (
         Uuid,
-        mpsc::Receiver<AgentWireEvent>,
+        mpsc::UnboundedReceiver<AgentWireEvent>,
         watch::Receiver<Option<AttachmentEnd>>,
     ) {
-        let (events, receiver) = mpsc::channel(capacity);
+        let (events, receiver) = mpsc::unbounded_channel();
         let (end, ended) = watch::channel(None);
         let id = Uuid::new_v4();
         if let Some(previous) = self.subscriber.replace(Subscriber { id, events, end }) {
@@ -109,7 +103,7 @@ impl SessionStream {
 pub(crate) struct Bootstrap {
     pub(crate) history: Vec<Event>,
     pub(crate) metadata: Vec<AgentWireEvent>,
-    pub(crate) events: mpsc::Receiver<AgentWireEvent>,
+    pub(crate) events: mpsc::UnboundedReceiver<AgentWireEvent>,
     pub(crate) ended: watch::Receiver<Option<AttachmentEnd>>,
     pub(crate) lease: AttachmentLease,
 }
@@ -212,7 +206,7 @@ pub(super) fn capture(
                 request,
             },
         ));
-        let (id, events, ended) = stream.install(LIVE_CAPACITY);
+        let (id, events, ended) = stream.install();
         (
             id,
             events,
@@ -235,11 +229,14 @@ pub(super) fn capture(
 }
 
 #[cfg(test)]
-pub(super) fn subscribe(state: &AgentdState, session: SessionId) -> mpsc::Receiver<AgentWireEvent> {
+pub(super) fn subscribe(
+    state: &AgentdState,
+    session: SessionId,
+) -> mpsc::UnboundedReceiver<AgentWireEvent> {
     lock_unpoisoned(&state.agent_subscribers)
         .entry(session)
         .or_default()
-        .install(4096)
+        .install()
         .1
 }
 

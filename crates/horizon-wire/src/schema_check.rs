@@ -5,11 +5,11 @@
 //!
 //! The division of labor:
 //!
-//! - one `tests/wire_schema.rs` per wire-owning crate (`crates/horizon-acp`,
-//!   `crates/horizon-terminal-core`, `crates/horizon-board`) regenerates
+//! - one `tests/wire_schema.rs` per wire-owning crate
+//!   (`crates/horizon-terminal-core`, `crates/horizon-board`) regenerates
 //!   that wire's schema from its live types and fails on any drift from the
-//!   committed artifact (`schema/acp-ext-wire.json`,
-//!   `schema/terminal-wire.json`, `schema/log-wire.json`), so every wire
+//!   committed artifact (`schema/terminal-wire.json`,
+//!   `schema/log-wire.json`), so every wire
 //!   change is visible, reviewable text in its PR diff. The generators share
 //!   [`sort_object_keys`] from this module so the artifacts stay
 //!   mechanically comparable.
@@ -49,8 +49,7 @@
 use serde_json::{Map, Value};
 
 /// The artifact key carrying the protocol version of the hub the artifact
-/// documents — `horizon_acp::HORIZON_ACP_EXT_VERSION` in
-/// `acp-ext-wire.json`, `horizon_terminal_core::wire::
+/// documents — `horizon_terminal_core::wire::
 /// TERMINAL_PROTOCOL_VERSION` in `terminal-wire.json`,
 /// `horizon_board::wire::LOG_PROTOCOL_VERSION` in `log-wire.json`. A change to this
 /// value between the two compared schemas is the explicit version-bump

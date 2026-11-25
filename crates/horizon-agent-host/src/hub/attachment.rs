@@ -67,7 +67,6 @@ impl Sink {
                 self.acp_id.clone(),
                 *update,
             )),
-            Outgoing::SessionEvent(notification) => self.notify(notification),
             Outgoing::AskPermission(request) => {
                 asks.ask(self, request);
                 true
@@ -233,7 +232,7 @@ async fn run(
         session_id,
         generation,
     };
-    let mut mapper = Mapper::new(session_id, shared.session_facts(session_id));
+    let mut mapper = Mapper::new(shared.session_facts(session_id));
     let mut catalog = shared.model_catalog();
     mapper.set_catalog(catalog.borrow_and_update().clone());
     let mut asks = Asks::default();
@@ -300,22 +299,22 @@ async fn run(
         reason = ended.wait_for(|end| end.is_some()) => reason.ok().and_then(|end| *end),
         reason = live(&mut events, &mut commands, &mut catalog, &lease, &mut mapper, &sink, &mut asks) => reason,
     };
-    // Revoke before the final diagnostic.
     drop(lease);
-    drop(asks);
-    if let Some(reason) = reason {
-        sink.notify(acp::SessionEventNotification::AttachmentClosed {
-            session_id,
-            reason: attachment_end(reason),
-        });
+    // A session that ended on its own is a failure the client is told
+    // of; one the client closed is not news to it.
+    if reason == Some(AttachmentEnd::SessionEnded) && !shared.is_closing(session_id, generation) {
+        for outgoing in mapper.error_notice("The session ended") {
+            sink.emit(outgoing, &mut asks);
+        }
     }
+    drop(asks);
     shared.release(session_id, generation);
 }
 
 /// `None` when the attachment stopped being this connection's current one
 /// or the connection is gone; there is nobody left to tell then.
 async fn live(
-    events: &mut mpsc::Receiver<AgentWireEvent>,
+    events: &mut mpsc::UnboundedReceiver<AgentWireEvent>,
     commands: &mut mpsc::UnboundedReceiver<Command>,
     catalog: &mut tokio::sync::watch::Receiver<Arc<Vec<ModelGroup>>>,
     lease: &AttachmentLease,
@@ -357,14 +356,5 @@ async fn live(
                 None => return sink.is_current().then_some(AttachmentEnd::Detached),
             },
         }
-    }
-}
-
-fn attachment_end(end: AttachmentEnd) -> acp::AttachmentEnd {
-    match end {
-        AttachmentEnd::Replaced => acp::AttachmentEnd::Replaced,
-        AttachmentEnd::Lagged => acp::AttachmentEnd::Lagged,
-        AttachmentEnd::Detached => acp::AttachmentEnd::Detached,
-        AttachmentEnd::SessionEnded => acp::AttachmentEnd::SessionEnded,
     }
 }

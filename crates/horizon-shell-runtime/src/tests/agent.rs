@@ -13,10 +13,7 @@ use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
-use horizon_acp::{
-    AttachmentEnd, HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE,
-    PERMISSION_OPTION_DENY, SessionEventNotification, SessionId, write_horizon_meta,
-};
+use horizon_acp::{PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionId};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -31,14 +28,8 @@ use crate::agent_model::{AgentEvent, PermissionDecision, ToolCallIdentity};
 
 #[derive(Clone, Copy, Default)]
 struct FakeAgentBehavior {
-    /// Answer `initialize` with an error-shaped extension-version rejection.
+    /// Answer `initialize` with an error.
     reject_initialize: bool,
-    /// Report a different extension version on a successful `initialize`
-    /// and reject every later request except `_horizon/drain`.
-    mismatched_ext_version: bool,
-    /// Initialize normally but reject `session/list` with the
-    /// extension-version mismatch error.
-    reject_requests: bool,
     /// Never answer `initialize`.
     hang_initialize: bool,
     /// Hand `session/new` and `session/resume` responders to the test
@@ -89,15 +80,8 @@ struct FakeAgentd {
     task: JoinHandle<()>,
 }
 
-fn mismatch_error() -> agent_client_protocol::Error {
-    agent_client_protocol::Error::new(
-        -32600,
-        format!(
-            "horizon ext version mismatch: daemon {} client {}",
-            HORIZON_ACP_EXT_VERSION + 5,
-            HORIZON_ACP_EXT_VERSION
-        ),
-    )
+fn refusal() -> agent_client_protocol::Error {
+    agent_client_protocol::Error::new(-32600, "this agent does not take this client")
 }
 
 fn session_uuid(id: &v2::SessionId) -> SessionId {
@@ -137,27 +121,14 @@ async fn serve_fake_agentd(
                     return Ok(());
                 }
                 if behavior.reject_initialize {
-                    return responder.respond_with_error(mismatch_error());
+                    return responder.respond_with_error(refusal());
                 }
                 record(&c1, AgentCall::Initialize);
-                let ext_version = if behavior.mismatched_ext_version {
-                    HORIZON_ACP_EXT_VERSION + 5
-                } else {
-                    HORIZON_ACP_EXT_VERSION
-                };
-                let mut response = v2::InitializeResponse::new(
+                let response = v2::InitializeResponse::new(
                     ProtocolVersion::V2,
                     v2::Implementation::new("fake-agentd", "0.0.0"),
                 )
                 .capabilities(v2::AgentCapabilities::new().session(v2::SessionCapabilities::new()));
-                write_horizon_meta(
-                    &mut response.meta,
-                    &InitializeMeta {
-                        ext_version,
-                        binary_id: "fake-agentd".into(),
-                    },
-                )
-                .unwrap();
                 responder.respond(response)
             },
             agent_client_protocol::on_receive_request!(),
@@ -253,9 +224,6 @@ async fn serve_fake_agentd(
                         responder: Responder<v2::ListSessionsResponse>,
                         _connection: V2ConnectionTo<Client>| {
                 record(&c4, AgentCall::List);
-                if behavior.mismatched_ext_version || behavior.reject_requests {
-                    return responder.respond_with_error(mismatch_error());
-                }
                 let sessions = (behavior.listed.into_iter())
                     .flat_map(|cwd| {
                         (named_for_list.lock().unwrap().iter())
@@ -674,8 +642,8 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
         panic!("expected the rejection to fan out as an error, got {event:?}");
     };
     assert!(
-        message.contains("rejected the handshake")
-            && message.contains("horizon ext version mismatch"),
+        message.contains("answered initialize with an unexpected error")
+            && message.contains("this agent does not take this client"),
         "error was: {message}"
     );
 }
@@ -781,45 +749,39 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
     );
 }
 
-/// Before the attachment's own resume response, a `Replaced` closes the
-/// lease an earlier attachment held and is not this attachment's end; after
-/// it, `Lagged` fails the attachment.
+/// After an error notice the session is looked for in `session/list`: one
+/// the agent no longer lists has ended, and its pane is told.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn attachment_closed_notices_follow_the_resume_boundary() {
+async fn a_session_the_agent_no_longer_lists_after_an_error_has_ended() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
-    let id = SessionId::new();
-    let mut handle = agentd.attach_session(id);
-    let mut fake = serve_fake_agentd(
-        server,
-        FakeAgentBehavior {
-            manual_bootstrap: true,
-            ..Default::default()
-        },
-    )
-    .await;
+    let (agentd, _news) = AgentdHandle::start_on_stream(client);
+    let mut handle = start_mock_session(&agentd, SessionId::new());
+    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    let AgentCall::Resume { responder, .. } = fake.next_call().await else {
-        panic!("resume");
+    let AgentCall::NewSession { named: id, .. } = fake.next_call().await else {
+        panic!("a new session");
     };
-    let closed = |reason| SessionEventNotification::AttachmentClosed {
-        session_id: id,
-        reason,
-    };
-    fake.connection
-        .send_notification(closed(AttachmentEnd::Replaced))
-        .unwrap();
-    responder
-        .unwrap()
-        .respond(v2::ResumeSessionResponse::new())
-        .unwrap();
     wait_until_ready(&mut handle).await;
-    fake.connection
-        .send_notification(closed(AttachmentEnd::Lagged))
-        .unwrap();
-    std::assert_matches!(
-        next_agent_update(&mut handle).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("buffer")
+    fake.update(
+        id,
+        v2::SessionUpdate::Notice(v2::Notice::new(
+            v2::NoticeSeverity::Error,
+            "The session ended",
+        )),
     );
+    std::assert_matches!(fake.next_call().await, AgentCall::List);
+    let mut ended = false;
+    loop {
+        match next_agent_update(&mut handle).await {
+            AgentUpdate::Event(event) if matches!(*event, AgentEvent::Ended) => ended = true,
+            AgentUpdate::State(AttachmentState::Disconnected(reason)) => {
+                assert_eq!(reason, "Session ended");
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(ended, "the pane is told the session ended");
 }
 
 /// A permission request is held by the session's attachment and answered
@@ -940,6 +902,16 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     assert_eq!(text, "hello");
     handle.sender().send(AgentCommand::Close).unwrap();
     std::assert_matches!(fake.next_call().await, AgentCall::Close);
+    // Once the close is answered, the session has ended.
+    loop {
+        match next_agent_update(&mut handle).await {
+            AgentUpdate::State(AttachmentState::Disconnected(reason)) => {
+                assert_eq!(reason, "Session closed");
+                break;
+            }
+            _ => continue,
+        }
+    }
 }
 
 /// A subagent's permission request comes with its own session id: it is

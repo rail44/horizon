@@ -437,7 +437,6 @@ fn approve() -> v2::RequestPermissionResponse {
 fn wire(inbound: &Inbound) -> serde_json::Value {
     match inbound {
         Inbound::Update(notification) => serde_json::to_value(notification),
-        Inbound::SessionEvent(notification) => serde_json::to_value(notification),
         Inbound::Permission(request, _) => serde_json::to_value(request),
         Inbound::Replied(_) => Ok(serde_json::Value::Null),
     }
@@ -770,6 +769,44 @@ async fn new_agent_then_user_message_streams_events_in_order() {
     assert!(
         user_index < collected.len() - 1,
         "the assistant's reply must land after the user's message, got: {collected:?}"
+    );
+}
+
+/// `session/close` is answered once the session has sent its last: nothing
+/// of it follows the answer, and the agent no longer lists it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_session_sends_nothing_after_the_answer() {
+    let mut agentd = spawn_agentd();
+    let mut client = connect(&mut agentd).await;
+    let session_id = open_session(&client, session_new()).await;
+    prompt(&client, session_id, "slow word word word").await;
+    collect_until(&mut client, |inbound| update(inbound).is_some()).await;
+
+    client.send_ordered(v2::CloseSessionRequest::new(acp_id(session_id)));
+    let collected = collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::Replied(_))
+    })
+    .await;
+    let Some(Inbound::Replied(result)) = collected.last() else {
+        panic!("the close is answered");
+    };
+    assert!(result.is_ok(), "{result:?}");
+    let after = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.next(Duration::from_secs(5)),
+    )
+    .await;
+    assert!(
+        after.is_err(),
+        "nothing follows the answer: {:?}",
+        after.ok()
+    );
+    let sessions = list_sessions(&client).await;
+    assert!(
+        !sessions
+            .iter()
+            .any(|session| session.session_id == acp_id(session_id)),
+        "{sessions:?}"
     );
 }
 

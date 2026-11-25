@@ -23,9 +23,6 @@ use horizon_board_flow::BoardFlow;
 use horizon_wiki_flow::WikiFlow;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-/// Reported in this binary's `initialize` reply, as `_meta.horizon.binary_id`.
-const BINARY_ID: &str = concat!("horizon-agent-acp/", env!("CARGO_PKG_VERSION"));
-
 /// Test-only hook (`crates/horizon-agent-acp/tests/e2e.rs`): when set to a
 /// file's path, the host's startup waits until that file is there before
 /// opening the event log, so a test can prove that
@@ -178,7 +175,7 @@ where
         }
     };
     tokio::select! {
-        served = hub::serve(read, write, state.clone(), BINARY_ID) => {
+        served = hub::serve(read, write, state.clone()) => {
             if let Err(error) = served {
                 eprintln!("horizon-agent: the connection failed: {error}");
             }

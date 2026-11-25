@@ -16,7 +16,7 @@ fn facts() -> SessionFacts {
 }
 
 fn mapper() -> Mapper {
-    let mut mapper = Mapper::new(SessionId::new(), facts());
+    let mut mapper = Mapper::new(facts());
     mapper.finish_replay();
     mapper
 }
@@ -308,7 +308,7 @@ fn approval(occurrence: &str) -> Event {
 
 #[test]
 fn replayed_approvals_are_asked_after_the_bootstrap_only_while_pending() {
-    let mut mapper = Mapper::new(SessionId::new(), facts());
+    let mut mapper = Mapper::new(facts());
     let mut asked = Vec::new();
     for event in [
         approval("occ-1"),
@@ -350,7 +350,7 @@ fn a_task_childs_approval_is_asked_naming_the_child_and_withdrawn_when_settled()
     let Event::ApprovalRequested(request) = approval("occ-child") else {
         unreachable!()
     };
-    let mut replaying = Mapper::new(SessionId::new(), facts());
+    let mut replaying = Mapper::new(facts());
     assert!(
         replaying
             .map(&AgentWireEvent::TaskApproval {
@@ -677,7 +677,7 @@ fn rate_limits_are_live_notices_and_clearing_is_a_compaction() {
         MaybeUndefined::Value(vec!["2 tool outputs, 4096 characters reclaimed".into()])
     );
 
-    let mut replaying = Mapper::new(SessionId::new(), facts());
+    let mut replaying = Mapper::new(facts());
     let replayed: Vec<_> = events
         .iter()
         .flat_map(|event| replaying.map(&AgentWireEvent::Event(event.clone())))

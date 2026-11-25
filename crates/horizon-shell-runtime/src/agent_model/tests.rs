@@ -1,6 +1,6 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{MODEL_CONFIG_ID, SessionEventNotification, SessionId};
+use horizon_acp::MODEL_CONFIG_ID;
 use serde_json::json;
 
 use super::*;
@@ -293,10 +293,7 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
         Some(SessionStatus::WaitingForApproval)
     );
 
-    model.apply(AgentEvent::Session(SessionEventNotification::Exited {
-        session_id: SessionId::new(),
-        reason: "terminated".into(),
-    }));
+    model.apply(AgentEvent::Ended);
     assert_eq!(model.frame.status(), Some(SessionStatus::Terminated));
 }
 

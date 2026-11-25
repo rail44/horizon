@@ -17,7 +17,7 @@ use crate::agent_model::AgentEvent;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use crossbeam_channel::Sender;
-use horizon_acp::{SessionEventNotification, SessionId};
+use horizon_acp::SessionId;
 use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use uuid::Uuid;
 
@@ -83,10 +83,6 @@ pub(super) struct AgentRoutes {
     /// The agent's name of each session the shell started, by the shell's
     /// own id: what the agent is asked by, and what it says back.
     names: Mutex<Names>,
-    /// The first extension-version rejection a request met on the current
-    /// connection, and its wakeup for the connection's op loop.
-    version_mismatch: Mutex<Option<String>>,
-    version_mismatch_signal: tokio::sync::Notify,
     /// The modes the agent offers a new session, as `session/options`
     /// said them on the current connection.
     modes: Mutex<Vec<crate::agent_model::Mode>>,
@@ -94,10 +90,6 @@ pub(super) struct AgentRoutes {
     /// where a subagent's permission requests are shown.
     parents: Mutex<HashMap<SessionId, SessionId>>,
 }
-
-/// The message prefix of the daemon's rejection when the extension
-/// versions differ.
-pub(super) const EXT_VERSION_MISMATCH: &str = "horizon ext version mismatch";
 
 /// The two ways round between the shell's session ids and the agent's.
 #[derive(Default)]
@@ -156,35 +148,8 @@ impl AgentRoutes {
             }),
             news,
             names: Mutex::new(Names::default()),
-            version_mismatch: Mutex::new(None),
-            version_mismatch_signal: tokio::sync::Notify::new(),
             modes: Mutex::new(Vec::new()),
             parents: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Records a request error; an extension-version rejection wakes
-    /// [`Self::version_mismatch`].
-    pub(super) fn note_error(&self, error: &agent_client_protocol::Error) {
-        if error.message.starts_with(EXT_VERSION_MISMATCH) {
-            *self.version_mismatch.lock().unwrap() = Some(error.message.clone());
-            self.version_mismatch_signal.notify_one();
-        }
-    }
-
-    /// Forgets a rejection recorded on an earlier connection.
-    pub(super) fn clear_version_mismatch(&self) {
-        self.version_mismatch.lock().unwrap().take();
-    }
-
-    /// Resolves with the message of the next extension-version rejection a
-    /// request meets.
-    pub(super) async fn version_mismatch(&self) -> String {
-        loop {
-            if let Some(message) = self.version_mismatch.lock().unwrap().take() {
-                return message;
-            }
-            self.version_mismatch_signal.notified().await;
         }
     }
 
@@ -378,16 +343,9 @@ impl AgentRoutes {
         (self.names.lock().unwrap().agent.get(&session_id).copied()).unwrap_or(session_id)
     }
 
-    /// One `_horizon/session_event` from the connection.
-    pub(super) fn route_session_event(&self, event: SessionEventNotification) {
-        let session_id = match &event {
-            SessionEventNotification::AttachmentClosed { session_id, reason } => {
-                let _ = self.deliver(*session_id, Inbound::Closed(*reason));
-                return;
-            }
-            SessionEventNotification::Exited { session_id, .. } => *session_id,
-        };
-        let _ = self.deliver(session_id, Inbound::Event(AgentEvent::Session(event)));
+    /// The session the agent names `session_id` is no longer running.
+    pub(super) fn route_ended(&self, session_id: SessionId, reason: String) {
+        let _ = self.deliver(session_id, Inbound::Ended(reason));
     }
 
     /// One `session/request_permission`: held by the session's attachment
@@ -434,20 +392,8 @@ impl AgentRoutes {
     /// The connection is gone: a ready attachment is disconnected, one
     /// still opening has failed. Later registrations inherit the failure.
     pub(super) fn connection_failed(&self, message: String) {
-        self.settle_routes(message, true);
-    }
-
-    /// The connection is being replaced: every attachment on it ends as in
-    /// [`Self::connection_failed`], but later registrations are not failed.
-    pub(super) fn connection_reset(&self, message: String) {
-        self.settle_routes(message, false);
-    }
-
-    fn settle_routes(&self, message: String, sticky: bool) {
         let mut state = self.state.lock().unwrap();
-        if sticky {
-            state.failure = Some(message.clone());
-        }
+        state.failure = Some(message.clone());
         for (_, route) in state.agent.drain() {
             let mut phase = if route.ready {
                 AttachmentState::Ready

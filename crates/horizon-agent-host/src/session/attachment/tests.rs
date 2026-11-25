@@ -93,8 +93,10 @@ fn cancelled_bootstrap_never_replaces_a_live_attachment_and_dropped_reply_releas
     );
 }
 
+/// An attachment that reads nothing for a while is waited for: every event
+/// is there for it when it reads again.
 #[test]
-fn slow_attachment_is_revoked_and_reopening_recovers_every_committed_event() {
+fn a_slow_attachment_keeps_every_event() {
     let state = test_state();
     let session = SessionId::new();
     let _commands = state.install_test_session(session);
@@ -104,19 +106,11 @@ fn slow_attachment_is_revoked_and_reopening_recovers_every_committed_event() {
     }
     let slow = snapshot(&state, session, &live);
     assert_eq!(slow.history.len(), 4000);
-    for index in 4000..4000 + LIVE_CAPACITY + 1 {
+    for index in 4000..8000 {
         publish(&state, session, &live, message(index));
     }
-    assert_eq!(*slow.ended.borrow(), Some(AttachmentEnd::Lagged));
-    assert!(!slow.lease.command(Command::Suspend));
-    assert_eq!(slow.events.len(), LIVE_CAPACITY);
-    let recovered = snapshot(&state, session, &live);
-    assert_eq!(
-        recovered.history,
-        (0..4000 + LIVE_CAPACITY + 1)
-            .map(message)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(*slow.ended.borrow(), None);
+    assert_eq!(slow.events.len(), 4000);
 }
 
 #[test]

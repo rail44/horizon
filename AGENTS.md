@@ -43,13 +43,11 @@ to the rebuilt binary (`docs/terminald-handover-design.md`): the sessions,
 and whatever runs in them, go on. A terminal daemon built before handovers
 is drained instead, once, and its terminals end.
 
-**A protocol bump needs a full Horizon restart, not a runtime reload.**
-The shell and `horizon-agent-acp` compare `HORIZON_ACP_EXT_VERSION`
-(`crates/horizon-acp`) in `initialize`'s `_meta.horizon`; on a mismatch
-the agent panes say Horizon needs a restart. `Reload Agent Runtime`
-cannot fix this because it only replaces the child, not the shell. The
-terminal hub runs the same lockstep over its `hello` (`MIN_SUPPORTED ==
-current`). Rebuild, then restart the app itself.
+**A terminal protocol bump needs a full Horizon restart, not a runtime
+reload.** The terminal hub compares its protocol version in its `hello`
+(`MIN_SUPPORTED == current`). Rebuild, then restart the app itself. The
+line to `horizon-agent-acp` is standard ACP v2 with no extension of
+Horizon's, and has no version of its own to compare.
 
 The Markdown view, the wiki, the theme settings, the list of sessions,
 the image viewer and the status bar are extensions (`plugins/*`),
@@ -112,19 +110,16 @@ target installed (see Build setup).
 
 `check-wire-schema.sh` is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per wire —
-`crates/horizon-acp/schema/acp-ext-wire.json` (the `_horizon/*` and
-`_meta.horizon` vocabulary on the ACP line to `horizon-agent-acp`),
-`crates/horizon-terminal-core/schema/terminal-wire.json`, and
+`crates/horizon-terminal-core/schema/terminal-wire.json` and
 `crates/horizon-board/schema/log-wire.json`, each with its own version,
-so an agent-side bump never drains `horizon-terminald`'s PTYs — and the
+so a bump of one never drains the other's daemon — and the
 checker diffs each against the merge-base's copy, failing on
 any non-additive change that doesn't bump that wire's version
-(`HORIZON_ACP_EXT_VERSION` / `TERMINAL_PROTOCOL_VERSION` /
-`LOG_PROTOCOL_VERSION`) with it. If you changed a wire type, regenerate
-the artifacts first:
-`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp
--p horizon-terminal-core -p horizon-board wire_schema` (a stale artifact
-is itself a red nextest test).
+(`TERMINAL_PROTOCOL_VERSION` / `LOG_PROTOCOL_VERSION`) with it. If you
+changed a wire type, regenerate the artifacts first:
+`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-terminal-core
+-p horizon-board wire_schema` (a stale artifact is itself a red nextest
+test).
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the

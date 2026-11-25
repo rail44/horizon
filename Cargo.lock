@@ -143,7 +143,6 @@ checksum = "5d27fec60e79b5682eae06f9c94e028eb7043dfc972a4a38e7008701b4408d21"
 dependencies = [
  "anyhow",
  "derive_more",
- "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_with",
@@ -2728,12 +2727,7 @@ dependencies = [
 name = "horizon-acp"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
- "agent-client-protocol-schema",
  "horizon-wire",
- "schemars 1.2.3",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2907,7 +2901,6 @@ name = "horizon-daemon-testkit"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
- "horizon-acp",
  "horizon-wire",
  "remoc",
  "serde_json",

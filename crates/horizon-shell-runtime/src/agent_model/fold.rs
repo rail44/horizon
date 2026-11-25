@@ -4,9 +4,7 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{
-    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, SessionEventNotification, decode_model_option_id,
-};
+use horizon_acp::{EFFORT_CONFIG_ID, MODEL_CONFIG_ID, decode_model_option_id};
 
 use super::types::*;
 
@@ -14,7 +12,9 @@ use super::types::*;
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     Update(Box<v2::SessionUpdate>),
-    Session(SessionEventNotification),
+    /// The session is no longer running: the client closed it, or the
+    /// agent no longer lists it.
+    Ended,
     /// A `session/request_permission` the attachment now holds a responder for.
     PermissionRequested(Permission),
     /// The attachment answered a held permission request.
@@ -74,7 +74,7 @@ impl AgentModel {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Update(update) => self.apply_update(*update),
-            AgentEvent::Session(event) => self.apply_session_event(event),
+            AgentEvent::Ended => self.frame.phase = Some(SessionPhase::Terminated),
             AgentEvent::PermissionRequested(permission) => {
                 let existing = self.frame.items.iter().position(|item| {
                     matches!(item, AgentFrameItem::Permission(held) if held.identity == permission.identity)
@@ -363,16 +363,6 @@ impl AgentModel {
             MaybeUndefined::Undefined => {}
             MaybeUndefined::Null => call.output = None,
             MaybeUndefined::Value(output) => call.output = Some(output),
-        }
-    }
-
-    fn apply_session_event(&mut self, event: SessionEventNotification) {
-        match event {
-            SessionEventNotification::Exited { reason, .. } => {
-                self.frame.items.push(AgentFrameItem::Exited(reason));
-                self.frame.phase = Some(SessionPhase::Terminated);
-            }
-            SessionEventNotification::AttachmentClosed { .. } => {}
         }
     }
 

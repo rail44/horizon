@@ -1,18 +1,10 @@
-//! Horizon's extension vocabulary on the ACP line between the shell and
-//! `horizon-agentd` (`docs/acp-agentd-design.md`): the `_horizon/*` request
-//! and notification types, the `_meta.horizon` payloads carried on standard
-//! ACP messages, and the extension version both ends compare.
+//! What Horizon's agent and shell agree on inside standard ACP v2
+//! (`docs/agent-stdio-child-design.md`): the ids of the session config
+//! options and their values, and of the permission options. Nothing here
+//! extends the protocol.
 
-mod ext;
-mod meta;
+mod options;
 
-pub use ext::*;
-pub use meta::*;
+pub use options::*;
 
 pub use horizon_wire::SessionId;
-
-/// The extension version both ends compare in `initialize`'s
-/// `_meta.horizon.ext_version` ([`InitializeMeta::ext_version`]). It is
-/// also what tells the two ends they were built with the same ACP SDK: a
-/// change of the SDK's version moves it, the vocabulary changed or not.
-pub const HORIZON_ACP_EXT_VERSION: u32 = 26;

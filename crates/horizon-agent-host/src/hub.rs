@@ -32,7 +32,7 @@ use horizon_agent::hosting::SessionNew;
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::roles::RoleId;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::DAEMON_NAME;
@@ -47,6 +47,9 @@ pub(crate) fn call_error(message: impl Into<String>) -> Error {
     Error::new(CALL_ERROR_CODE, message)
 }
 
+/// How long a `session/close` waits for the session's last updates.
+const CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn not_initialized() -> Error {
     Error::new(
         agent_client_protocol::ErrorCode::INVALID_REQUEST,
@@ -58,26 +61,26 @@ fn not_initialized() -> Error {
 struct Slot {
     generation: u64,
     commands: Option<mpsc::UnboundedSender<Command>>,
+    /// The client closed the session: its end is not news to it.
+    closing: bool,
+    /// Dropped with the slot, when the attachment's pump has sent its
+    /// last: what a `session/close` waits on before it answers.
+    closed: Vec<oneshot::Sender<()>>,
 }
 
 /// One connection's state, shared by its handlers and its attachment pumps.
 pub(crate) struct Shared {
     connection: Connection,
-    binary_id: &'static str,
     initialized: AtomicBool,
-    /// Set when the client initialized at another extension version.
-    mismatch: Mutex<Option<String>>,
     slots: Mutex<HashMap<SessionId, Slot>>,
     next_generation: AtomicU64,
 }
 
 impl Shared {
-    fn new(connection: Connection, binary_id: &'static str) -> Self {
+    fn new(connection: Connection) -> Self {
         Self {
             connection,
-            binary_id,
             initialized: AtomicBool::new(false),
-            mismatch: Mutex::new(None),
             slots: Mutex::new(HashMap::new()),
             next_generation: AtomicU64::new(1),
         }
@@ -87,18 +90,7 @@ impl Shared {
         if !self.initialized.load(Ordering::Acquire) {
             return Err(not_initialized());
         }
-        match self
-            .mismatch
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .as_ref()
-        {
-            Some(message) => Err(Error::new(
-                agent_client_protocol::ErrorCode::INVALID_REQUEST,
-                message.clone(),
-            )),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     fn slots(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, Slot>> {
@@ -116,6 +108,8 @@ impl Shared {
             Slot {
                 generation,
                 commands: None,
+                closing: false,
+                closed: Vec::new(),
             },
         );
         generation
@@ -148,6 +142,24 @@ impl Shared {
         self.slots()
             .get(&session_id)
             .is_some_and(|slot| slot.generation == generation)
+    }
+
+    /// Marks the session's attachment on this connection as closed by the
+    /// client: what ends when the attachment has sent its last.
+    fn closing(&self, session_id: SessionId) -> Option<oneshot::Receiver<()>> {
+        let mut slots = self.slots();
+        let slot = slots.get_mut(&session_id)?;
+        slot.closing = true;
+        let (closed, ended) = oneshot::channel();
+        slot.closed.push(closed);
+        Some(ended)
+    }
+
+    /// Whether the client closed the session this attachment is of.
+    fn is_closing(&self, session_id: SessionId, generation: u64) -> bool {
+        self.slots()
+            .get(&session_id)
+            .is_some_and(|slot| slot.generation == generation && slot.closing)
     }
 
     /// Runs `send` while holding the slot table, so a replacement cannot
@@ -242,28 +254,7 @@ impl Shared {
                 ),
             ));
         }
-        let client = acp::read_horizon_meta::<acp::InitializeMeta>(request.meta.as_ref())
-            .and_then(Result::ok);
-        let matched =
-            client.as_ref().map(|meta| meta.ext_version) == Some(acp::HORIZON_ACP_EXT_VERSION);
-        if !matched {
-            let client = client
-                .map(|meta| meta.ext_version.to_string())
-                .unwrap_or_else(|| "none".to_string());
-            *self
-                .mismatch
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner()) = Some(format!(
-                "horizon ext version mismatch: client {client}, daemon {}",
-                acp::HORIZON_ACP_EXT_VERSION
-            ));
-        }
         self.initialized.store(true, Ordering::Release);
-
-        let meta = mapping::horizon_meta(&acp::InitializeMeta {
-            ext_version: acp::HORIZON_ACP_EXT_VERSION,
-            binary_id: self.binary_id.to_string(),
-        });
         responder.respond(
             v2::InitializeResponse::new(
                 ProtocolVersion::V2,
@@ -275,13 +266,8 @@ impl Shared {
                         .fork(v2::SessionForkCapabilities::new())
                         .options(v2::SessionOptionsCapabilities::new()),
                 ),
-            )
-            .meta(meta),
-        )?;
-        if !matched {
-            return Ok(());
-        }
-        Ok(())
+            ),
+        )
     }
 
     fn new_session(
@@ -516,16 +502,28 @@ impl Shared {
         answer(responder, result)
     }
 
+    /// Ends the session, and answers once its attachment on this connection
+    /// has sent its last: nothing of the session follows the answer.
     fn close_session(
         self: &Arc<Self>,
         request: v2::CloseSessionRequest,
         responder: Responder<v2::CloseSessionResponse>,
         _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
-        let result = self
-            .session_command(&request.session_id, Command::Shutdown)
-            .map(|()| v2::CloseSessionResponse::new());
-        answer(responder, result)
+        let ended = mapping::parse_session_id(&request.session_id)
+            .filter(|_| self.gate().is_ok())
+            .and_then(|session_id| self.closing(session_id));
+        if let Err(error) = self.session_command(&request.session_id, Command::Shutdown) {
+            return responder.respond_with_error(error);
+        }
+        let Some(ended) = ended else {
+            return responder.respond(v2::CloseSessionResponse::new());
+        };
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, ended).await;
+            let _ = responder.respond(v2::CloseSessionResponse::new());
+        });
+        Ok(())
     }
 
     /// Validation errors are caller bugs or a stale picker's view, so they
@@ -619,19 +617,14 @@ fn answer<T: agent_client_protocol::JsonRpcResponse>(
 /// Serves one accepted connection until the client goes away. A dropped
 /// connection is never a session lifecycle event: every attachment on it
 /// ends as `Detached` and the sessions keep running.
-pub async fn serve<R, W>(
-    read: R,
-    write: W,
-    state: Arc<AgentdState>,
-    binary_id: &'static str,
-) -> Result<(), Error>
+pub async fn serve<R, W>(read: R, write: W, state: Arc<AgentdState>) -> Result<(), Error>
 where
     R: AsyncRead + Send + 'static,
     W: AsyncWrite + Send + 'static,
 {
     let catalog = tokio::spawn(state.clone().keep_model_catalog());
     let connection = Connection::new(state);
-    let shared = Arc::new(Shared::new(connection.clone(), binary_id));
+    let shared = Arc::new(Shared::new(connection.clone()));
     let transport = ByteStreams::new(write.compat_write(), read.compat());
 
     macro_rules! on_request {

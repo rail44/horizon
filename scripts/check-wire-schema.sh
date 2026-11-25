@@ -13,10 +13,10 @@
 # horizon_wire::schema_check; this wrapper only supplies git plumbing.
 # A step of the quality gate (scripts/gate.sh).
 #
-# There is one artifact per wire: the ACP extension vocabulary between the
-# shell and horizon-agent-acp (acp-ext, versioned by HORIZON_ACP_EXT_VERSION),
-# the terminal hub (terminal), and the log hub (log). Each carries its own
-# version, so an agent-side bump never drains horizon-terminald's PTYs.
+# There is one artifact per wire: the terminal hub (terminal) and the log
+# hub (log). Each carries its own version, so a bump of one never drains
+# the other's daemon. The line between the shell and horizon-agent-acp is
+# standard ACP v2 alone and has none.
 # The set is *discovered*, not
 # listed, so a third runtime (the WASM plugin view is the expected next
 # one) cannot slip past this check by being unknown to the script.
@@ -32,9 +32,9 @@
 # one of two transition arms: for a merge-base that predates the artifact
 # split, the arm below that reassembles this tree's artifacts into the old
 # union `session-wire.json` and classifies *that* rather than skipping; and
-# for a merge-base that still has the remoc agent hub's `agent-wire.json`,
-# the arm that reports its retirement, provided its successor `acp-ext`
-# artifact is present (docs/acp-agentd-design.md).
+# for a merge-base that still has the remoc agent hub's `agent-wire.json`
+# or the ACP extension vocabulary's `acp-ext-wire.json`, the arm that
+# reports its retirement (docs/agent-stdio-child-design.md).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -44,10 +44,11 @@ artifact_pattern='^crates/[^/]+/schema/[^/]+-wire\.json$'
 # merge-base. It matches the pattern too, so it is special-cased only when
 # this tree no longer has it (i.e. the split happened on this branch).
 union_artifact="crates/horizon-session-protocol/schema/session-wire.json"
-# The remoc agent hub's artifact, retired by the ACP cutover, and the
-# artifact of the wire that replaced it.
+# The remoc agent hub's artifact, retired by the ACP cutover, and the ACP
+# extension vocabulary's, retired when the extensions were replaced by
+# standard ACP forms.
 retired_agent_artifact="crates/horizon-agent/schema/agent-wire.json"
-acp_ext_artifact="crates/horizon-acp/schema/acp-ext-wire.json"
+retired_acp_ext_artifact="crates/horizon-acp/schema/acp-ext-wire.json"
 # The ref additive-only evolution is measured against; override for a PR
 # stacked on another branch, e.g. WIRE_SCHEMA_BASE=origin/feature.
 base_ref="${WIRE_SCHEMA_BASE:-origin/main}"
@@ -104,19 +105,14 @@ status=0
 
 # An artifact the merge-base had and this tree does not is a removal, which
 # is never additive. The union artifact is exempt: losing it *is* the
-# artifact split, handled by the transition arm below. So is the retired
-# agent artifact while its ACP successor is present.
+# artifact split, handled by the transition arm below. So are the two
+# retired agent-line artifacts.
 for artifact in ${base_artifacts[@]+"${base_artifacts[@]}"}; do
   if [ "$artifact" = "$union_artifact" ] || [ -f "$artifact" ]; then
     continue
   fi
-  if [ "$artifact" = "$retired_agent_artifact" ]; then
-    if [ -f "$acp_ext_artifact" ]; then
-      echo "wire-schema: agent artifact retired since merge-base; the agent hub is ACP v2 now ($acp_ext_artifact)"
-      continue
-    fi
-    echo "RESHAPE:  $artifact is gone from this tree and its successor $acp_ext_artifact is missing"
-    status=1
+  if [ "$artifact" = "$retired_agent_artifact" ] || [ "$artifact" = "$retired_acp_ext_artifact" ]; then
+    echo "wire-schema: $(label_of "$artifact") artifact retired since merge-base; the agent line is standard ACP v2"
     continue
   fi
   echo "RESHAPE:  $artifact existed at merge-base $base and is gone from this tree"

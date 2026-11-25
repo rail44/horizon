@@ -8,7 +8,6 @@ use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client, Error, JsonRpcRequest};
-use horizon_acp as acp;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -18,7 +17,6 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 #[derive(Debug)]
 pub enum Inbound {
     Update(v2::UpdateSessionNotification),
-    SessionEvent(acp::SessionEventNotification),
     Permission(
         v2::RequestPermissionRequest,
         Responder<v2::RequestPermissionResponse>,
@@ -43,23 +41,12 @@ impl Drop for AcpClient {
     }
 }
 
-/// The `initialize` request a Horizon shell sends, with the given extension
-/// version in `_meta.horizon`.
-pub fn initialize_request(client_name: &str, ext_version: u32) -> v2::InitializeRequest {
-    let mut meta = None;
-    acp::write_horizon_meta(
-        &mut meta,
-        &acp::InitializeMeta {
-            ext_version,
-            binary_id: client_name.to_string(),
-        },
-    )
-    .expect("initialize meta serializes");
+/// The `initialize` request a Horizon shell sends.
+pub fn initialize_request(client_name: &str) -> v2::InitializeRequest {
     v2::InitializeRequest::new(
         ProtocolVersion::V2,
         v2::Implementation::new(client_name, "0.0.0"),
     )
-    .meta(meta)
 }
 
 /// An ACP client reading `read` and writing `write`: a child agent's
@@ -101,7 +88,6 @@ where
 
     let builder = Client.v2().name("horizon-daemon-testkit");
     let builder = notification!(builder, v2::UpdateSessionNotification, Update);
-    let builder = notification!(builder, acp::SessionEventNotification, SessionEvent);
     let builder = request!(builder, v2::RequestPermissionRequest, Permission);
     let transport = ByteStreams::new(write.compat_write(), read.compat());
     let task = tokio::spawn(async move {
@@ -129,13 +115,8 @@ impl AcpClient {
         self.cx.send_request(request).block_task().await
     }
 
-    /// `initialize` at this build's extension version.
     pub async fn initialize(&self, client_name: &str) -> Result<v2::InitializeResponse, Error> {
-        self.request(initialize_request(
-            client_name,
-            acp::HORIZON_ACP_EXT_VERSION,
-        ))
-        .await
+        self.request(initialize_request(client_name)).await
     }
 
     /// Sends `request`; its answer arrives on the inbox as
