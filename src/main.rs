@@ -69,10 +69,7 @@ fn run_window() {
         &horizon_wire::socket::default_terminald_socket_path(),
         &control_socket,
     );
-    let agentd = Agentd::start(
-        &horizon_wire::socket::default_agentd_socket_path(),
-        &control_socket,
-    );
+    let agentd = Agentd::start(&control_socket, &control_socket.with_file_name("agent.log"));
     let store = WorkspaceStateStore::from_environment();
     let wake = horizon::wake::Wake::default();
     let (poster, clicked) = desktop_notify::poster(wake.clone());

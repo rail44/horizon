@@ -2771,6 +2771,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-agent-acp"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "duckdb",
+ "horizon-acp",
+ "horizon-agent",
+ "horizon-agent-host",
+ "horizon-board-flow",
+ "horizon-config",
+ "horizon-daemon-testkit",
+ "horizon-sandbox",
+ "horizon-wiki-flow",
+ "horizon-wire",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-agent-host"
 version = "0.1.0"
 dependencies = [
@@ -2798,29 +2821,6 @@ dependencies = [
  "horizon-agent",
  "horizon-shell-runtime",
  "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "horizon-agentd"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "duckdb",
- "horizon-acp",
- "horizon-agent",
- "horizon-agent-host",
- "horizon-board-flow",
- "horizon-config",
- "horizon-daemon-testkit",
- "horizon-sandbox",
- "horizon-wiki-flow",
- "horizon-wire",
- "libc",
- "serde_json",
- "tempfile",
  "tokio",
  "uuid",
 ]

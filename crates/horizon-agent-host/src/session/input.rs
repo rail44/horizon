@@ -89,7 +89,7 @@ pub(super) fn checkpoint_a_settled_position(
         return;
     };
     if let Err(error) = crate::checkpoint::record(&dir, session_id.as_uuid(), &tip) {
-        eprintln!("horizon-agentd: no checkpoint for {session_id:?} at {tip}: {error}");
+        eprintln!("horizon-agent: no checkpoint for {session_id:?} at {tip}: {error}");
     }
 }
 

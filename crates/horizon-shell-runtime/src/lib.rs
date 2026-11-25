@@ -68,8 +68,12 @@ pub use notify::{NotifyCoalescer, NotifyDecision};
 /// of a UI hang.
 const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The client runtime for `horizon-agentd`: agent sessions and the
-/// connection-global host-tool exchange.
+/// The agent runtime's binary, found beside this executable (or named by
+/// `HORIZON_AGENT_ACP_BINARY`, `horizon_wire::spawn::resolve_daemon_binary`).
+pub const AGENT_BINARY_NAME: &str = "horizon-agent-acp";
+
+/// The client of the agent runtime (`horizon-agent-acp`, this process's
+/// child): agent sessions and the connection-global host-tool exchange.
 #[derive(Clone)]
 pub struct AgentdHandle {
     ops: tokio::sync::mpsc::UnboundedSender<agent::Op>,
@@ -209,30 +213,33 @@ impl AgentdHandle {
         Arc::ptr_eq(&self.routes, &other.routes)
     }
 
-    /// Starts the agent-runtime connection and returns before the
-    /// connection (or the `initialize` handshake) completes. Typed requests
-    /// enqueue onto the op queue meanwhile; once the hub is live each op
-    /// is *dispatched* in queue order but *executed* on its own task, so
-    /// there is no cross-op completion-order guarantee — a slow
+    /// Starts the agent runtime (`horizon-agent-acp` as this process's
+    /// child) and returns before it has started or answered `initialize`.
+    /// Typed requests enqueue onto the op queue meanwhile; once it answers,
+    /// each op is *dispatched* in queue order but *executed* on its own
+    /// task, so there is no cross-op completion-order guarantee -- a slow
     /// `session/new` does not delay a `session/list` behind it, and two lists
     /// may complete in either order. Per-session ordering is carried by
     /// each attachment's own channels, not the op queue.
+    ///
+    /// The child's own children reach this Horizon through
+    /// `control_socket`; its standard error is appended to `log`.
     pub fn start(
-        socket_path: &Path,
         control_socket: &Path,
+        log: &Path,
     ) -> (
         Self,
         Receiver<HostToolRequest>,
         Receiver<(SessionId, WorkspaceRootUpdate)>,
     ) {
-        Self::start_within(socket_path, control_socket, Timeouts::default())
+        Self::start_within(control_socket, log, Timeouts::default())
     }
 
-    /// [`Self::start`], waiting on the daemon for `timeouts` in place of
-    /// the runtime's own: a test's shorter ones.
+    /// [`Self::start`], waiting on the runtime for `timeouts` in place of
+    /// its own: a test's shorter ones.
     pub fn start_within(
-        socket_path: &Path,
         control_socket: &Path,
+        log: &Path,
         timeouts: Timeouts,
     ) -> (
         Self,
@@ -241,8 +248,9 @@ impl AgentdHandle {
     ) {
         let (handle, host_tools, workspace_roots, ops) = Self::parts(timeouts);
         agent::spawn(
-            socket_path.to_path_buf(),
+            horizon_wire::spawn::resolve_daemon_binary(AGENT_BINARY_NAME),
             control_socket.to_path_buf(),
+            log.to_path_buf(),
             ops,
             handle.routes.clone(),
             handle.control.clone(),
@@ -463,20 +471,6 @@ impl AgentdHandle {
         })?
     }
 
-    /// Register from a background task; the reply can wait for daemon startup.
-    pub fn watch_board(&self, root: std::path::PathBuf) -> Result<(), String> {
-        request(&self.ops, |reply| agent::Op::WatchBoard { root, reply }).map_err(|error| {
-            match error {
-                RequestError::NotSent => {
-                    "Agent runtime stopped before board registration".to_string()
-                }
-                RequestError::NoReply(error) => {
-                    format!("Board registration did not complete: {error}")
-                }
-            }
-        })?
-    }
-
     /// Call from a background task: organizer restoration may read persisted history.
     pub fn ensure_board_organizer(&self, root: std::path::PathBuf) -> Result<SessionId, String> {
         request(&self.ops, |reply| agent::Op::EnsureBoardOrganizer {
@@ -489,10 +483,6 @@ impl AgentdHandle {
         })?
     }
 
-    fn drain(&self) {
-        let _ = self.ops.send(agent::Op::Drain);
-    }
-
     /// Fire-and-forget: ask the running daemon to rebuild `[provider]` from
     /// the config file without a respawn. Paired with `Reload Config`, which
     /// already re-read the same file for `[theme]`/`[keybindings]` on the UI
@@ -503,20 +493,8 @@ impl AgentdHandle {
         let _ = self.ops.send(agent::Op::ReloadProviderConfig);
     }
 
-    /// Asks the daemon to exit, if this runtime ever reached it. `true`
-    /// means a drain was actually sent and the caller should wait for the
-    /// socket to stop accepting (`wait_for_drain`); `false` means there was
-    /// nothing live to drain and the runtime was simply cancelled.
-    pub fn begin_reload(&self) -> bool {
-        if self.control.is_established() {
-            self.drain();
-            true
-        } else {
-            self.control.cancel();
-            false
-        }
-    }
-
+    /// Stops the runtime and waits for its child to end: its input is
+    /// closed, and it flushes its session logs before it exits.
     pub fn stop_and_wait(&self) {
         self.control.cancel();
         self.control.wait_stopped();

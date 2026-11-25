@@ -145,7 +145,7 @@ fn grants_for_project(
             Ok(()) => true,
             Err(error) => {
                 eprintln!(
-                    "horizon-agentd: ignoring configured grant {} for project {}: {error}",
+                    "horizon-agent: ignoring configured grant {} for project {}: {error}",
                     grant.path.display(),
                     project_root.display()
                 );

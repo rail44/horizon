@@ -23,35 +23,33 @@ cargo run
 ```
 
 `cargo build --workspace` is the canonical build command: `cargo run` alone
-only rebuilds the root `horizon` binary, and Horizon's sessions run inside
-**two** daemons Horizon spawns on demand — `horizon-agentd`
-(`crates/horizon-agentd`) hosts agent sessions, `horizon-terminald`
-(`crates/horizon-terminald`) owns every PTY (see
-`docs/agent-runtime-split-design.md` and `docs/terminald-split-design.md`).
+only rebuilds the root `horizon` binary, and Horizon's sessions run in
+**two** other processes — `horizon-agent-acp` (`crates/horizon-agent-acp`)
+hosts agent sessions as Horizon's child, speaking ACP over its standard
+input and output (`docs/agent-stdio-child-design.md`), and
+`horizon-terminald` (`crates/horizon-terminald`), a daemon Horizon spawns
+on demand, owns every PTY (`docs/terminald-split-design.md`).
 If either binary was never built (or is stale after a change on its side),
 `cargo run` still starts Horizon but that domain's panes fail to spawn a
 runtime — run `cargo build --workspace` first (and again after touching
 `crates/horizon-agent`, `crates/horizon-agent-host`, the flows composed
 into it (`crates/horizon-board-flow`, `crates/horizon-wiki-flow`) or
-`crates/horizon-agentd`, or
+`crates/horizon-agent-acp`, or
 `crates/horizon-terminal-core`/`crates/horizon-terminald`), then use the
 matching reload command from the command palette to retry:
-`Reload Agent Runtime` restarts the agent daemon and leaves terminals
-alone, `Reload Terminal Runtime` has the terminal daemon hand its terminals
+`Reload Agent Runtime` restarts the agent's child on its current build
+(sessions resume from their logs) and leaves terminals alone, `Reload Terminal Runtime` has the terminal daemon hand its terminals
 to the rebuilt binary (`docs/terminald-handover-design.md`): the sessions,
 and whatever runs in them, go on. A terminal daemon built before handovers
 is drained instead, once, and its terminals end.
 
 **A protocol bump needs a full Horizon restart, not a runtime reload.**
-The shell and `horizon-agentd` compare `HORIZON_ACP_EXT_VERSION`
+The shell and `horizon-agent-acp` compare `HORIZON_ACP_EXT_VERSION`
 (`crates/horizon-acp`) in `initialize`'s `_meta.horizon`; on a mismatch
-the shell drains the daemon over `_horizon/drain` and respawns it, once
-per runtime. A shell built before an extension bump paired with a daemon
-built after it still needs a full app restart: the respawned daemon
-mismatches again. `Reload Agent Runtime` cannot fix this because it only
-replaces the daemon side. The terminal hub runs the same lockstep over
-its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
-itself.
+the agent panes say Horizon needs a restart. `Reload Agent Runtime`
+cannot fix this because it only replaces the child, not the shell. The
+terminal hub runs the same lockstep over its `hello` (`MIN_SUPPORTED ==
+current`). Rebuild, then restart the app itself.
 
 The Markdown view, the wiki, the theme settings, the list of sessions,
 the image viewer and the status bar are extensions (`plugins/*`),
@@ -84,7 +82,7 @@ instead of the default one** (`cargo nextest run --profile sandboxed
 --workspace --locked`; the other steps are unchanged). Some tests
 verify the host boundary the sandbox enforces — they bind real sockets,
 write to literal `/tmp`, need directories outside any repository, or
-spawn a real `horizon-agentd` — so they cannot pass from inside
+spawn a real `horizon-agent-acp` — so they cannot pass from inside
 containment, and making them pass would mean removing the containment
 they verify. The profile skips exactly those (`.config/nextest.toml`
 lists them with reasons); the integrator running the default profile
@@ -115,7 +113,7 @@ target installed (see Build setup).
 `check-wire-schema.sh` is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per wire —
 `crates/horizon-acp/schema/acp-ext-wire.json` (the `_horizon/*` and
-`_meta.horizon` vocabulary on the ACP line to `horizon-agentd`),
+`_meta.horizon` vocabulary on the ACP line to `horizon-agent-acp`),
 `crates/horizon-terminal-core/schema/terminal-wire.json`, and
 `crates/horizon-board/schema/log-wire.json`, each with its own version,
 so an agent-side bump never drains `horizon-terminald`'s PTYs — and the
@@ -130,7 +128,7 @@ is itself a red nextest test).
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the
-`horizon-agentd`/`horizon-terminald`/`horizon-agent` crates. nextest runs
+`horizon-agent-acp`/`horizon-terminald`/`horizon-agent` crates. nextest runs
 each test in its own process (no cross-test env leakage) but does not run
 doctests; the workspace currently has none — add `cargo test --doc` here if
 that changes.
@@ -156,7 +154,7 @@ cheap and catches what no longer compiles in the crates that use the
 changed ones. Some links are outside the dependency graph,
 so a filter by crate does not see them: the extensions (`plugins/*`) are
 tested by the root package's tests that load them (`tests/extension.rs`,
-`tests/wiki.rs`, ...), and the daemons (`horizon-agentd`,
+`tests/wiki.rs`, ...), and the processes (`horizon-agent-acp`,
 `horizon-terminald`, `horizon-logd`) by the root package's tests that
 spawn them (`tests/agentd.rs`, `tests/terminald.rs`, `tests/board_logd.rs`).
 A change to `Cargo.lock`, `.cargo/` or `.config/nextest.toml` reaches
@@ -181,7 +179,7 @@ binary or `go install github.com/fencesandbox/fence/cmd/fence@latest` on
 Linux, which also needs `bwrap` and `socat`. Without it Horizon runs and
 every `bash` call asks to run outside a sandbox; the tests that start it
 (`crates/horizon-sandbox/tests/fence.rs` and a few in `horizon-agent` and
-`horizon-agentd`) fail with a message saying so. `config.toml`'s
+`horizon-agent-acp`) fail with a message saying so. `config.toml`'s
 `[sandbox] fence` names the binary when it is not on the daemon's `PATH`.
 
 `crates/horizon-terminal-core` builds its terminal engine, libghostty-vt,
@@ -213,7 +211,7 @@ The rpath is load-bearing: libduckdb-sys links by name only, so without it
 the loader resolves `libduckdb.so` from the system — 1.5.0 on Void — and the
 binary runs a different engine than the bindings target. It is scoped to the
 host `cfg` on purpose, because a global `RUSTFLAGS` would also reach the
-`wasm32-wasip2` preview build. `ldd target/debug/horizon-agentd` must show
+`wasm32-wasip2` preview build. `ldd target/debug/horizon-agent-acp` must show
 the `~/opt/duckdb/current` path, and an rpath also survives a GUI started
 from a desktop entry, which inherits no shell environment.
 
@@ -317,7 +315,7 @@ probability thresholds, clamped 0..=1, see
 (`docs/provider-configuration.md`).
 
 `crates/horizon-config` is the loader — the single file-schema, parse, and
-path-resolution owner. `horizon-agentd` depends on it directly, and
+path-resolution owner. `horizon-agent-acp` depends on it directly, and
 `horizon-agent` takes resolved named provider values as plain arguments
 rather than parsing the file itself (see that crate's `config` module doc).
 
@@ -348,7 +346,7 @@ What the agent itself does with a build -- its tools, the sandbox, the
 approvals, with the real provider -- is seen without the running Horizon
 and without restarting it: `cargo build --workspace`, then
 `./target/debug/horizon-agent-probe --dir <directory> "<prompt>"
-["<prompt>"...]` starts the `horizon-agentd` beside it on a socket and data
+["<prompt>"...]` starts the `horizon-agent-acp` beside it as its child, with a data
 home of its own, runs one session there, and prints every message, tool
 call and approval as a JSON line (approvals are denied unless `--approve`;
 `crates/horizon-agent-probe/src/main.rs` says the rest). It reads the
@@ -427,7 +425,7 @@ their wiring:
   live in `crates/horizon-agent`; the sessions are hosted by
   `crates/horizon-agent-host` (with the board and the wiki composed in as
   extensions, `crates/horizon-board-flow` and `crates/horizon-wiki-flow`),
-  served over `crates/horizon-agentd`'s socket — see
+  served by `crates/horizon-agent-acp` over its standard input and output — see
   `docs/acp-agentd-design.md` and `docs/agent-stdio-child-design.md`.
 - `board/` — the task board as two session-less views, the list and the
   thread, over `crates/horizon-board`; what they decide from, with no
@@ -526,7 +524,7 @@ their wiring:
   preview's `Limits`), not set with `std::env::set_var` in the test's
   process. Only a process the test spawns (a daemon) is reached through
   its environment, and its own binary turns the variable into the
-  argument (`HORIZON_AGENTD_TEST_*_GATE` in `horizon-agentd`'s
+  argument (`HORIZON_AGENT_TEST_*_GATE` in `horizon-agent-acp`'s
   `main.rs`). Owner decision 2026-11-20.
 - **Design decisions are recorded under `docs/`** (e.g.
   `agent-pane-design.md`, `agent-provider-contract.md`,

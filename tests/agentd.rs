@@ -1,5 +1,6 @@
-//! The shell's agent pane over a real `horizon-agentd`, started for the
-//! test with sockets, a data home and a configuration of its own, and a
+//! The shell's agent pane over a real `horizon-agent-acp`, started as the
+//! shell's child for the test with a data home and a configuration of its
+//! own, and a
 //! provider that is a local stand-in (`scripts/mock-openai-provider.py`):
 //! a message typed into the composer is answered in the pane.
 //!
@@ -154,7 +155,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // SAFETY: nextest runs this test in a process of its own, and nothing
     // else in it has started yet.
     unsafe {
-        std::env::set_var("HORIZON_AGENTD_BINARY", binary("horizon-agentd"));
+        std::env::set_var("HORIZON_AGENT_ACP_BINARY", binary("horizon-agent-acp"));
         std::env::set_var("HORIZON_LOGD_BINARY", binary("horizon-logd"));
         std::env::set_var("HORIZON_CONFIG", &config);
         std::env::set_var("HORIZON_TEST_MOCK_KEY", "mock");
@@ -163,7 +164,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         std::env::set_var("HORIZON_LOGD_SOCKET", directory.join("logd.sock"));
         // The project directory may be inside a repository (a sandbox keeps
         // its temporary files in the worktree): no checkpoints there.
-        std::env::set_var("HORIZON_AGENTD_TEST_NO_CHECKPOINTS", "1");
+        std::env::set_var("HORIZON_AGENT_TEST_NO_CHECKPOINTS", "1");
         // The model catalog is not fetched from the network: the stand-in
         // has none, and the copy kept is the test's own.
         std::env::set_var(
@@ -191,8 +192,8 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     std::fs::create_dir_all(directory.join("run")).unwrap();
 
     let agentd = Agentd::start(
-        &directory.join("agentd.sock"),
         &directory.join("control.sock"),
+        &directory.join("agent.log"),
     );
     let (mut shell, mut top) = (None, None);
     let app = App::new(1200, 800, "Test", workspace::css(), || {
@@ -517,10 +518,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     });
     assert!(text().contains("Unreachable"), "{}", text());
 
-    // The daemon ends with the test.
+    // The agent runtime ends with the test.
     drop(app);
-    assert!(agentd.handle().begin_reload());
-    horizon_shell_runtime::wait_for_drain(&directory.join("agentd.sock"))
-        .expect("the daemon drained");
     agentd.handle().stop_and_wait();
 }

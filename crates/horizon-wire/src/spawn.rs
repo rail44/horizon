@@ -36,30 +36,17 @@ use crate::codec::WireCodec;
 /// log.
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
-/// The binary name `horizon-agentd` is spawned as/looked up as -- see
+/// The binary name `horizon-terminald` is spawned as/looked up as -- see
 /// [`resolve_daemon_binary`].
-const AGENTD_BINARY_NAME: &str = "horizon-agentd";
-
-/// [`AGENTD_BINARY_NAME`]'s terminal-daemon sibling
-/// (`docs/terminald-split-design.md` decision 1): same spawn-or-connect
-/// shape, same discovery rules, a different process on a different socket.
 const TERMINALD_BINARY_NAME: &str = "horizon-terminald";
 
 /// [`TERMINALD_BINARY_NAME`]'s log-daemon sibling (`docs/logd-design.md`).
 const LOGD_BINARY_NAME: &str = "horizon-logd";
 
-/// Connects immediately when agentd is already listening; otherwise starts
-/// it once and keeps retrying with capped backoff until its socket is ready.
-/// The caller's runtime client owns the handshake and all routing after this
-/// returns.
-pub async fn connect_or_spawn_agentd_retrying(
-    socket_path: &Path,
-    control_socket: &Path,
-) -> Result<UnixStream, String> {
-    connect_or_spawn_daemon(socket_path, control_socket, AGENTD_BINARY_NAME).await
-}
-
-/// [`connect_or_spawn_agentd_retrying`]'s `horizon-terminald` twin. The
+/// Connects immediately when `horizon-terminald` is already listening;
+/// otherwise starts it once and keeps retrying with capped backoff until its
+/// socket is ready. The caller's runtime client owns the handshake and all
+/// routing after this returns. The
 /// terminal daemon is deliberately long-lived (it survives every `Reload
 /// Agent Runtime`), so in practice this connects to an already-running
 /// process far more often than it spawns one -- but the on-demand spawn is
@@ -261,7 +248,7 @@ mod tests {
     #[test]
     fn daemon_command_injects_the_control_socket_env_var() {
         let command = daemon_command(
-            Path::new("/usr/bin/horizon-agentd"),
+            Path::new("/usr/bin/horizon-terminald"),
             Path::new("/tmp/x.sock"),
             Path::new("/tmp/horizon-control-test.sock"),
         );
@@ -283,9 +270,9 @@ mod tests {
     fn a_daemon_writes_to_the_log_beside_its_socket_not_to_the_spawner() {
         let dir = std::env::temp_dir().join(format!("hzn-spawn-log-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let socket = dir.join("agentd.sock");
+        let socket = dir.join("terminald.sock");
         let log = daemon_log_path(&socket);
-        assert_eq!(log, dir.join("agentd.log"));
+        assert_eq!(log, dir.join("terminald.log"));
         std::fs::write(&log, "earlier daemon\n").unwrap();
 
         let mut command = std::process::Command::new("/bin/sh");
@@ -302,17 +289,17 @@ mod tests {
         assert_eq!(written, "earlier daemon\nout\nerr\neof\n");
     }
 
-    /// Both daemons resolve through the same "next to the running
+    /// The daemons resolve through the same "next to the running
     /// executable, else `PATH`" rule, differing only in the file name --
     /// the property `Reload Terminal Runtime` relies on to respawn
     /// `horizon-terminald` from a `cargo build --workspace` tree.
     #[test]
-    fn both_daemon_binaries_resolve_by_name_through_the_same_rule() {
+    fn the_daemon_binaries_resolve_by_name_through_the_same_rule() {
         assert_eq!(
-            resolve_daemon_binary(AGENTD_BINARY_NAME)
+            resolve_daemon_binary("horizon-agent-acp")
                 .file_name()
                 .unwrap(),
-            std::ffi::OsStr::new("horizon-agentd")
+            std::ffi::OsStr::new("horizon-agent-acp")
         );
         assert_eq!(
             resolve_daemon_binary(TERMINALD_BINARY_NAME)

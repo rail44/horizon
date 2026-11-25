@@ -1,5 +1,5 @@
 [package]
-name = "horizon-agentd"
+name = "horizon-agent-acp"
 version = "0.1.0"
 edition = "2024"
 
@@ -14,7 +14,7 @@ horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-wire = { path = "../horizon-wire" }
 # `_exit`, for a drain.
 libc = "0.2"
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal", "sync", "time"] }
 
 [dev-dependencies]
 # The ACP client side and the JSON `tests/e2e.rs` speaks.

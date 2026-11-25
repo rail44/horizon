@@ -287,7 +287,7 @@ def main():
     parser.add_argument("--keep", action="store_true", help="Retain isolated artifacts even after success")
     args = parser.parse_args()
     binaries = args.bin_dir.resolve()
-    for name in ["horizon", "horizon-agentd", "horizon-logd"]:
+    for name in ["horizon", "horizon-agent-acp", "horizon-logd"]:
         if not (binaries / name).is_file():
             parser.error(f"Missing {binaries / name}; run cargo build --workspace")
     root = Path(tempfile.mkdtemp(prefix="horizon-board-flow-"))
@@ -301,7 +301,6 @@ def main():
         "XDG_RUNTIME_DIR": str(root / "runtime"), "HORIZON_CONFIG": str(root / "config.toml"),
         "HORIZON_AGENT_SESSIONS_DIR": str(root / "sessions"), "HORIZON_AGENT_STATE_DB": str(root / "agent.duckdb"),
         "HORIZON_LOGD_SOCKET": str(root / "logd.sock"), "HORIZON_LOGD_BINARY": str(binaries / "horizon-logd"),
-        "HORIZON_AGENTD_SOCKET": str(root / "agentd.sock"), "HORIZON_AGENTD_BINARY": str(binaries / "horizon-agentd"),
         "OPENAI_API_KEY": "local-fixture-only",
     })
     processes = []
@@ -336,8 +335,15 @@ def main():
                 process = subprocess.Popen([binaries / name, "--socket", root / socket], cwd=repository, env=environment, stdout=log, stderr=log)
             processes.append(process)
             return process
+        def start_agent():
+            # The agent serves one client on its stdin; none connects here,
+            # and the board flow runs without one. Closing the pipe ends it.
+            with (root / "horizon-agent-acp.log").open("a") as log:
+                process = subprocess.Popen([binaries / "horizon-agent-acp"], cwd=repository, env=environment, stdin=subprocess.PIPE, stdout=log, stderr=log)
+            processes.append(process)
+            return process
         start("horizon-logd", "logd.sock")
-        agentd = start("horizon-agentd", "agentd.sock")
+        agentd = start_agent()
 
         def cli(*arguments, json_output=True):
             result = subprocess.run([binaries / "horizon", "board", *arguments], cwd=repository, env=environment, capture_output=True, text=True, timeout=15)
@@ -351,7 +357,7 @@ def main():
                 if Provider.errors:
                     raise AssertionError(Provider.errors)
                 if agentd.poll() is not None:
-                    raise AssertionError(f"agentd exited ({agentd.returncode})")
+                    raise AssertionError(f"the agent exited ({agentd.returncode})")
                 value = predicate()
                 if value:
                     return value
@@ -380,9 +386,9 @@ def main():
         # Restart after a settled consultation. Replayed records must not
         # generate another organizer registration or duplicate final answer.
         before_ids = [m["id"] for m in initial["comments"]]
-        agentd.terminate()
+        agentd.stdin.close()
         agentd.wait(timeout=15)
-        agentd = start("horizon-agentd", "agentd.sock")
+        agentd = start_agent()
         cli("comment", "1", "--author", "owner", OWNER, json_output=False)
         wait_for("reviewed implementation and dependency notification", lambda: item(1)["is_closed"] and item(2)["is_closed"])
         wait_for("task's post-review final answer on the board", lambda: has_message(1, COMPLETE))

@@ -133,7 +133,7 @@ impl Extension for BoardFlow {
     }
 
     fn serves(&self, method: &str) -> bool {
-        method == WATCH_BOARD || method == ENSURE_BOARD_ORGANIZER
+        method == ENSURE_BOARD_ORGANIZER
     }
 
     fn request(
@@ -143,12 +143,6 @@ impl Extension for BoardFlow {
         params: Value,
     ) -> Result<Value, String> {
         match method {
-            WATCH_BOARD => {
-                let request: horizon_acp::WatchBoardRequest =
-                    serde_json::from_value(params).map_err(|error| error.to_string())?;
-                self.projects.register_project_of(&request.workspace_root)?;
-                to_value(horizon_acp::EmptyResponse {})
-            }
             ENSURE_BOARD_ORGANIZER => {
                 let request: horizon_acp::EnsureBoardOrganizerRequest =
                     serde_json::from_value(params).map_err(|error| error.to_string())?;
@@ -161,7 +155,6 @@ impl Extension for BoardFlow {
     }
 }
 
-const WATCH_BOARD: &str = "_horizon/watch_board";
 const ENSURE_BOARD_ORGANIZER: &str = "_horizon/ensure_board_organizer";
 
 fn to_value(response: impl Serialize) -> Result<Value, String> {
@@ -174,16 +167,9 @@ mod tests {
     use horizon_agent_host::session::test_support::state_with_rig_config;
 
     #[test]
-    fn the_board_methods_keep_their_wire_names() {
+    fn the_board_method_keeps_its_wire_name() {
         use agent_client_protocol::JsonRpcMessage;
         let root = PathBuf::from("/");
-        assert_eq!(
-            horizon_acp::WatchBoardRequest {
-                workspace_root: root.clone()
-            }
-            .method(),
-            WATCH_BOARD
-        );
         assert_eq!(
             horizon_acp::EnsureBoardOrganizerRequest {
                 workspace_root: root
@@ -194,13 +180,13 @@ mod tests {
     }
 
     #[test]
-    fn watching_a_directory_outside_a_repository_is_refused() {
+    fn an_organizer_outside_a_repository_is_refused() {
         let flow = BoardFlow::new(None);
         let dir = tempfile::tempdir().unwrap();
         let state = state_with_rig_config(false, "test");
         let refused = flow.request(
             &state,
-            WATCH_BOARD,
+            ENSURE_BOARD_ORGANIZER,
             serde_json::json!({ "workspaceRoot": dir.path() }),
         );
         assert!(refused.is_err(), "{refused:?}");

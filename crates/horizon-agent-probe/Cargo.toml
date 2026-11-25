@@ -1,5 +1,5 @@
 # A developer's way to see what the agent does, without a window and
-# without the running Horizon: a private `horizon-agentd` (its own socket
+# without the running Horizon: a private `horizon-agent-acp` (its own child
 # and data home), one session, prompts sent in turn, what happens printed
 # as JSON lines. See `src/main.rs`.
 [package]

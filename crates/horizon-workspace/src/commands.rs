@@ -212,8 +212,8 @@ impl CommandId {
                 "reload-agent-runtime",
                 "Reload Agent Runtime",
                 CommandCategory::Agent,
-                "Restart horizon-agentd and reconnect every agent session. \
-                          Terminals are unaffected.",
+                "Restart the agent runtime (horizon-agent-acp) on its current build; \
+                          agent sessions resume from their logs. Terminals are unaffected.",
             ),
             CommandId::ReloadTerminalRuntime => (
                 "reload-terminal-runtime",

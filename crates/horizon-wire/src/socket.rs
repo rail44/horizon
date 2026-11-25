@@ -24,22 +24,6 @@
 
 use std::path::PathBuf;
 
-/// `$HORIZON_AGENTD_SOCKET` (or its legacy alias `$HORIZON_SESSIOND_SOCKET`)
-/// if set to a non-empty value, otherwise `$XDG_RUNTIME_DIR/horizon/agentd.sock`,
-/// falling back to `/tmp/horizon-agentd-$UID.sock` when `XDG_RUNTIME_DIR` is also
-/// unset or empty.
-pub fn default_agentd_socket_path() -> PathBuf {
-    // Legacy fallback: `HORIZON_SESSIOND_SOCKET` (the pre-rename env var) is
-    // still honored so existing test scripts and environments don't break.
-    let override_path = std::env::var("HORIZON_AGENTD_SOCKET")
-        .ok()
-        .or_else(|| std::env::var("HORIZON_SESSIOND_SOCKET").ok());
-    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
-    // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
-    let uid = unsafe { libc::getuid() };
-    default_agentd_socket_path_from(override_path, xdg_runtime_dir, uid)
-}
-
 /// [`default_agentd_socket_path`]'s sibling for `horizon-terminald`
 /// (`docs/terminald-split-design.md` decision 1): the terminal daemon binds
 /// its own socket next to agentd's, so draining one never disturbs the
@@ -87,6 +71,7 @@ pub fn default_logd_socket_path() -> PathBuf {
 /// `cargo test` runs tests in parallel within one process, so real env
 /// mutation in a test would race every other test reading the same
 /// variable (same rationale as `horizon_config`'s `resolve_config_path_from`).
+#[cfg(test)]
 fn default_agentd_socket_path_from(
     override_path: Option<String>,
     xdg_runtime_dir: Option<String>,

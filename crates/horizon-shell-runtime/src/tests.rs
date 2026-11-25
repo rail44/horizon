@@ -622,38 +622,6 @@ fn bind_stub_listener(path: &std::path::Path) -> tokio::net::UnixListener {
     tokio::net::UnixListener::bind(path).unwrap()
 }
 
-/// Reads everything the client runtime wrote to a JSONL-generation stub
-/// until the connection closes, returning the raw bytes.
-async fn read_until_closed(stream: &mut tokio::net::UnixStream) -> Vec<u8> {
-    use tokio::io::AsyncReadExt;
-    let mut buffer = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        match tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await {
-            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
-            Ok(Ok(read)) => buffer.extend_from_slice(&chunk[..read]),
-        }
-    }
-    buffer
-}
-
-/// Holds accepted stub connections open, silently reading — the measured
-/// presentation of a real v9 JSONL daemon (its pre-hello `read_line`
-/// blocks forever on chmux bytes, which contain no newline).
-fn hold_silently(stream: tokio::net::UnixStream) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-        let mut stream = stream;
-        let mut chunk = [0_u8; 4096];
-        loop {
-            match stream.read(&mut chunk).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    })
-}
-
 /// The terminal runtime's own recovery, first step: a terminald whose hub
 /// rejects the range is asked, over the version-stable rtc surface, to
 /// hand its terminals to its next image, and the reconnect that reaches

@@ -1,7 +1,7 @@
-//! The agent runtime as this shell uses it: a `horizon-agentd` of its
-//! own, the sessions started in it, and what the daemon asks of the shell
-//! or tells it outside any session (a host tool to answer, the directory
-//! a session came to work in).
+//! The agent runtime as this shell uses it: `horizon-agent-acp` as its
+//! child, the sessions started in it, and what the runtime asks of the
+//! shell or tells it outside any session (a host tool to answer, the
+//! directory a session came to work in).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,7 @@ use std::task::Waker;
 use crossbeam_channel::{Receiver, Sender};
 use horizon_acp::HostToolRequest;
 use horizon_agent::registry::ProviderRegistry;
-use horizon_shell_runtime::{AgentdHandle, WorkspaceRootUpdate, wait_for_drain};
+use horizon_shell_runtime::{AgentdHandle, WorkspaceRootUpdate};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::SessionId;
 use horizon_workspace::snapshot::workspace_snapshot;
@@ -29,24 +29,24 @@ type Wake = Arc<Mutex<Option<Waker>>>;
 #[derive(Clone)]
 pub struct Agentd {
     handle: Arc<Mutex<AgentdHandle>>,
-    socket: PathBuf,
     control_socket: PathBuf,
+    log: PathBuf,
     tell: Sender<Told>,
     told: Receiver<Told>,
     waker: Wake,
 }
 
 impl Agentd {
-    /// Connects to the daemon on `socket`, starting it if it is not
-    /// running.
-    pub fn start(socket: &Path, control_socket: &Path) -> Self {
+    /// Starts the runtime. Its sessions' commands reach this shell
+    /// through `control_socket`; its diagnostics are appended to `log`.
+    pub fn start(control_socket: &Path, log: &Path) -> Self {
         let (tell, told) = crossbeam_channel::unbounded();
         let waker = Wake::default();
-        let handle = Self::connect(socket, control_socket, &tell, &waker);
+        let handle = Self::connect(control_socket, log, &tell, &waker);
         Self {
             handle: Arc::new(Mutex::new(handle)),
-            socket: socket.to_path_buf(),
             control_socket: control_socket.to_path_buf(),
+            log: log.to_path_buf(),
             tell,
             told,
             waker,
@@ -54,13 +54,13 @@ impl Agentd {
     }
 
     fn connect(
-        socket: &Path,
         control_socket: &Path,
+        log: &Path,
         tell: &Sender<Told>,
         waker: &Wake,
     ) -> AgentdHandle {
-        let (handle, host_tools, directories) = AgentdHandle::start(socket, control_socket);
-        // Each of the daemon's two streams is passed on to the UI thread,
+        let (handle, host_tools, directories) = AgentdHandle::start(control_socket, log);
+        // Each of the runtime's two streams is passed on to the UI thread,
         // which is woken to take it in.
         fn pass_on<T: Send + 'static>(
             from: Receiver<T>,
@@ -106,17 +106,13 @@ impl Agentd {
             .collect())
     }
 
-    /// Ends the daemon and starts one in its place, which has the
-    /// sessions the first kept. Waits for the first to be gone.
+    /// Ends the runtime and starts one in its place, which resumes the
+    /// sessions from their logs. Waits for the first to be gone: it flushes
+    /// its logs as it ends.
     pub fn restart(&self) {
         let old = self.handle();
-        if old.begin_reload()
-            && let Err(error) = wait_for_drain(&self.socket)
-        {
-            eprintln!("horizon-agentd did not drain cleanly: {error}");
-        }
         old.stop_and_wait();
-        let new = Self::connect(&self.socket, &self.control_socket, &self.tell, &self.waker);
+        let new = Self::connect(&self.control_socket, &self.log, &self.tell, &self.waker);
         *self.handle.lock().unwrap() = new;
     }
 

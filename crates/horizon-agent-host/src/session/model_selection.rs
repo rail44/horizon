@@ -68,7 +68,7 @@ pub(super) fn restore(
                 let _ = commands_tx.send(command);
             }
             Err(message) => eprintln!(
-                "horizon-agentd: session {session_id:?} keeps its default model: {message}"
+                "horizon-agent: session {session_id:?} keeps its default model: {message}"
             ),
         }
     }

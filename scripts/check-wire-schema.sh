@@ -14,7 +14,7 @@
 # A step of the quality gate (scripts/gate.sh).
 #
 # There is one artifact per wire: the ACP extension vocabulary between the
-# shell and horizon-agentd (acp-ext, versioned by HORIZON_ACP_EXT_VERSION),
+# shell and horizon-agent-acp (acp-ext, versioned by HORIZON_ACP_EXT_VERSION),
 # the terminal hub (terminal), and the log hub (log). Each carries its own
 # version, so an agent-side bump never drains horizon-terminald's PTYs.
 # The set is *discovered*, not

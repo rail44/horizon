@@ -12,7 +12,7 @@
 //! duplication decision has not been revisited.)
 //!
 //! The path is fixed per *user*, exactly like
-//! `horizon_wire::socket::default_agentd_socket_path` -- the single-instance norm
+//! `horizon_wire::socket::default_terminald_socket_path` -- the single-instance norm
 //! justifies this (a second Horizon finding a live owner at this path
 //! doesn't steal it: it starts without a control listener and logs a
 //! warning, see `host::listener::bind`/`host::listener::spawn`). At the

@@ -206,7 +206,7 @@ pub(super) fn spawn_session_thread_with_context(
         });
         if let Err(failure) = outcome {
             eprintln!(
-                "horizon-agentd: uncaught panic in session {session_id:?}: {}",
+                "horizon-agent: uncaught panic in session {session_id:?}: {}",
                 failure.message()
             );
             phase.set(SessionLoopPhase::RecordingPanic);
@@ -222,7 +222,7 @@ pub(super) fn spawn_session_thread_with_context(
             if let Err(report) = report_outcome {
                 let reporting_failure = SessionPanic::from_report(phase.get(), report);
                 eprintln!(
-                    "horizon-agentd: could not record panic for session {session_id:?}: {}",
+                    "horizon-agent: could not record panic for session {session_id:?}: {}",
                     reporting_failure.message()
                 );
             }
@@ -238,7 +238,7 @@ pub(super) fn spawn_session_thread_with_context(
         }) {
             let cleanup_failure = SessionPanic::from_report(phase.get(), report);
             eprintln!(
-                "horizon-agentd: cleanup panic in session {session_id:?}: {}",
+                "horizon-agent: cleanup panic in session {session_id:?}: {}",
                 cleanup_failure.message()
             );
         }
@@ -266,7 +266,7 @@ pub(super) fn spawn_session_thread_with_context(
                     Some(worktree.repo_root)
                 } else {
                     eprintln!(
-                        "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
+                        "horizon-agent: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
                         worktree.path.display()
                     );
                     None
@@ -278,9 +278,7 @@ pub(super) fn spawn_session_thread_with_context(
         if let Some(dir) = checkpoints_in
             && let Err(error) = crate::checkpoint::remove_all(&dir, session_id.as_uuid())
         {
-            eprintln!(
-                "horizon-agentd: could not remove the checkpoints of {session_id:?}: {error}"
-            );
+            eprintln!("horizon-agent: could not remove the checkpoints of {session_id:?}: {error}");
         }
     });
 }

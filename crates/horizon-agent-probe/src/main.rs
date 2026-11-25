@@ -1,15 +1,15 @@
-//! `horizon-agent-probe`: runs the agent in a `horizon-agentd` of its own
-//! and prints what it does, so a change to the agent can be seen without
-//! restarting the running Horizon and without a window.
+//! `horizon-agent-probe`: runs the agent in a `horizon-agent-acp` of its
+//! own and prints what it does, so a change to the agent can be seen
+//! without restarting the running Horizon and without a window.
 //!
-//! The daemon is the `horizon-agentd` beside this binary (the same build),
-//! listening on a socket of its own, with its event log and projection under
-//! a data home of its own; it reads the user's `config.toml` like any other.
-//! One session is started in `--dir`, each prompt is sent once the previous
-//! turn ends, and every message, tool call and approval of the session is
-//! printed as one JSON line. The session is ended and the daemon drained at
-//! the end: a session that entered a worktree leaves the worktree behind only
-//! when it holds changes, as a terminated session does.
+//! The agent is the `horizon-agent-acp` beside this binary (the same build),
+//! started as this process's child with its session logs and projection
+//! under a data home of its own; it reads the user's `config.toml` like any
+//! other. One session is started in `--dir`, each prompt is sent once the
+//! previous turn ends, and every message, tool call and approval of the
+//! session is printed as one JSON line. The session is ended and the child
+//! stopped at the end: a session that entered a worktree leaves the
+//! worktree behind only when it holds changes, as a terminated session does.
 //!
 //! ```text
 //! horizon-agent-probe [--dir DIR] [--home DIR] [--approve | --deny REASON]
@@ -18,9 +18,10 @@
 //!
 //! An approval is answered by the probe: denied by default, with a reason
 //! the model reads, or approved with `--approve` -- which runs what the
-//! agent asked for on this machine. `--home` keeps the daemon's files (its
-//! session logs are in `<home>/data/horizon/sessions`) where given,
-//! otherwise in a fresh directory under the temp directory, printed first.
+//! agent asked for on this machine. `--home` keeps the agent's files (its
+//! session logs are in `<home>/data/horizon/sessions`, its diagnostics in
+//! `<home>/agent.log`) where given, otherwise in a fresh directory under the
+//! temp directory, printed first.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -31,9 +32,7 @@ use horizon_agent::registry::ProviderRegistry;
 use horizon_shell_runtime::agent_model::{
     AgentEvent, AgentFrameItem, AgentModel, Permission, ToolCall,
 };
-use horizon_shell_runtime::{
-    AgentCommand, AgentUpdate, AgentdHandle, AttachmentState, wait_for_drain,
-};
+use horizon_shell_runtime::{AgentCommand, AgentUpdate, AgentdHandle, AttachmentState};
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: horizon-agent-probe [--dir DIR] [--home DIR] \
@@ -124,11 +123,10 @@ fn run(args: Args) -> Result<(), String> {
         .dir
         .canonicalize()
         .map_err(|error| format!("{}: {error}", args.dir.display()))?;
-    // The daemon this starts inherits this process's environment: its event
-    // log and projection go under `data`, not the user's own.
+    // The agent this starts inherits this process's environment: its
+    // session logs and projection go under `data`, not the user's own.
     // SAFETY: set before any thread of this process exists.
     unsafe { std::env::set_var("XDG_DATA_HOME", &data) };
-    let socket = home.join("agentd.sock");
     let control = home.join("control.sock");
     print(json!({
         "home": home,
@@ -136,11 +134,8 @@ fn run(args: Args) -> Result<(), String> {
         "sessions": data.join("horizon/sessions"),
     }));
 
-    let (agentd, _host_tools, _roots) = AgentdHandle::start(&socket, &control);
+    let (agentd, _host_tools, _roots) = AgentdHandle::start(&control, &home.join("agent.log"));
     let outcome = drive(&agentd, &dir, &args);
-    if agentd.begin_reload() {
-        let _ = wait_for_drain(&socket);
-    }
     agentd.stop_and_wait();
     outcome
 }

@@ -24,21 +24,6 @@ pub struct ContinueTurnRequest {
     pub session_id: SessionId,
 }
 
-/// Moves a session's leaf (`docs/agent-core-extension-design.md`, "二つの
-/// 操作"): the session goes on from the position of `cursor_id`, a cursor it
-/// announced (the one `session/fork` takes), and what followed stays in the
-/// log on a branch of its own. With `files`, the worktree the session owns
-/// gets the files it had at that position. The session's thread starts
-/// again: a client resumes it to see the history it now has.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
-#[request(method = "_horizon/rewind_session", response = EmptyResponse)]
-pub struct RewindSessionRequest {
-    pub session_id: SessionId,
-    pub cursor_id: String,
-    #[serde(default)]
-    pub files: bool,
-}
-
 /// Lists the configured providers.
 #[derive(
     Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
@@ -78,13 +63,6 @@ pub struct ListProviderModelsResponse {
     pub models: Vec<String>,
 }
 
-/// Starts watching a workspace's board.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
-#[request(method = "_horizon/watch_board", response = EmptyResponse)]
-pub struct WatchBoardRequest {
-    pub workspace_root: PathBuf,
-}
-
 /// Starts, or finds, a workspace's board organizer session.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(
@@ -106,13 +84,6 @@ pub struct EnsureBoardOrganizerResponse {
 )]
 #[request(method = "_horizon/reload_provider_config", response = EmptyResponse)]
 pub struct ReloadProviderConfigRequest {}
-
-/// Flushes the event log and exits the daemon.
-#[derive(
-    Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
-)]
-#[request(method = "_horizon/drain", response = EmptyResponse)]
-pub struct DrainRequest {}
 
 // -- agent → client request --
 
@@ -271,14 +242,10 @@ mod tests {
         message_round_trip(&ListProviderModelsRequest {
             provider: "default".into(),
         });
-        message_round_trip(&WatchBoardRequest {
-            workspace_root: PathBuf::from("/work/project"),
-        });
         message_round_trip(&EnsureBoardOrganizerRequest {
             workspace_root: PathBuf::from("/work/project"),
         });
         message_round_trip(&ReloadProviderConfigRequest {});
-        message_round_trip(&DrainRequest {});
         message_round_trip(&HostToolRequest {
             request_id: "req-1".into(),
             tool_id: "workspace_snapshot".into(),
@@ -395,21 +362,9 @@ mod tests {
         let session_id = SessionId::new();
         let methods = [
             ContinueTurnRequest { session_id }.method().to_owned(),
-            RewindSessionRequest {
-                session_id,
-                cursor_id: String::new(),
-                files: false,
-            }
-            .method()
-            .to_owned(),
             ListProvidersRequest {}.method().to_owned(),
             ListProviderModelsRequest {
                 provider: String::new(),
-            }
-            .method()
-            .to_owned(),
-            WatchBoardRequest {
-                workspace_root: PathBuf::new(),
             }
             .method()
             .to_owned(),
@@ -419,7 +374,6 @@ mod tests {
             .method()
             .to_owned(),
             ReloadProviderConfigRequest {}.method().to_owned(),
-            DrainRequest {}.method().to_owned(),
             HostToolRequest {
                 request_id: String::new(),
                 tool_id: String::new(),
@@ -451,13 +405,10 @@ mod tests {
             methods,
             [
                 "_horizon/continue_turn",
-                "_horizon/rewind_session",
                 "_horizon/list_providers",
                 "_horizon/list_provider_models",
-                "_horizon/watch_board",
                 "_horizon/ensure_board_organizer",
                 "_horizon/reload_provider_config",
-                "_horizon/drain",
                 "_horizon/host_tool",
                 "_horizon/task_progress",
                 "_horizon/tool_call_progress",

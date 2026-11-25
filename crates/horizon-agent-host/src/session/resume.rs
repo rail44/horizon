@@ -61,7 +61,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>) {
     let sessions = match session_ids(&dir) {
         Ok(sessions) => sessions,
         Err(error) => {
-            eprintln!("horizon-agentd: listing the session logs failed: {error:#}");
+            eprintln!("horizon-agent: listing the session logs failed: {error:#}");
             return;
         }
     };
@@ -73,7 +73,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>) {
             Ok(Some(summary)) => summary,
             Ok(None) => continue,
             Err(error) => {
-                eprintln!("horizon-agentd: reading session {session_id:?} failed: {error:#}");
+                eprintln!("horizon-agent: reading session {session_id:?} failed: {error:#}");
                 continue;
             }
         };
@@ -92,14 +92,14 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>) {
         match read_session(&dir, session_id) {
             Ok(own) => skipped.extend(own.skipped_summary()),
             Err(error) => {
-                eprintln!("horizon-agentd: reading session {session_id:?} failed: {error:#}");
+                eprintln!("horizon-agent: reading session {session_id:?} failed: {error:#}");
                 continue;
             }
         }
         let records = match read_branch(&dir, session_id) {
             Ok(records) => records,
             Err(error) => {
-                eprintln!("horizon-agentd: reading session {session_id:?} failed: {error:#}");
+                eprintln!("horizon-agent: reading session {session_id:?} failed: {error:#}");
                 continue;
             }
         };
@@ -107,7 +107,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>) {
     }
     if !skipped.is_empty() {
         let summary = skipped.join("; ");
-        eprintln!("horizon-agentd: {summary} while reading the session logs");
+        eprintln!("horizon-agent: {summary} while reading the session logs");
         state.set_skipped_lines_summary(Some(summary));
     }
     tally.deliver();
@@ -176,14 +176,14 @@ impl ResumeTally {
     fn report(&self) {
         if self.skipped_terminated > 0 {
             eprintln!(
-                "horizon-agentd: skipped resume of {} already-terminated session(s)",
+                "horizon-agent: skipped resume of {} already-terminated session(s)",
                 self.skipped_terminated
             );
         }
 
         if self.terminated_explorations > 0 {
             eprintln!(
-                "horizon-agentd: terminated {} orphaned exploration session(s) instead of \
+                "horizon-agent: terminated {} orphaned exploration session(s) instead of \
                  resuming them",
                 self.terminated_explorations
             );
@@ -238,7 +238,7 @@ fn resume_one_session(
     let restored = match environment::restore(session_id, &own_events, persisted_context.as_ref()) {
         Ok(restored) => restored,
         Err(error) => {
-            eprintln!("horizon-agentd: {error}");
+            eprintln!("horizon-agent: {error}");
             return ResumeOutcome::NotResumed;
         }
     };
@@ -268,7 +268,7 @@ fn resume_one_session(
             )),
             Err(error) => {
                 eprintln!(
-                    "horizon-agentd: failed to commit orphaned exploration termination for \
+                    "horizon-agent: failed to commit orphaned exploration termination for \
                      {session_id:?}: {error}"
                 );
                 ResumeOutcome::NotResumed
@@ -278,14 +278,14 @@ fn resume_one_session(
 
     if let Err(error) = settle_interrupted_turn(&mut appender, &frame, &mut events) {
         eprintln!(
-            "horizon-agentd: failed to commit interrupted work for {session_id:?}; \
+            "horizon-agent: failed to commit interrupted work for {session_id:?}; \
              skipping resume: {error}"
         );
         return ResumeOutcome::NotResumed;
     }
 
     eprintln!(
-        "horizon-agentd: resumed session {session_id:?} ({} event(s))",
+        "horizon-agent: resumed session {session_id:?} ({} event(s))",
         events.len()
     );
     super::spawn::spawn_session_thread_with_context(

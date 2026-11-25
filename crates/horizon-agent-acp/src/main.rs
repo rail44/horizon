@@ -1,42 +1,19 @@
-//! `horizon-agentd`: the agent host (`horizon-agent-host`) behind a Unix
-//! socket, composed with the board and the wiki (`docs/agent-runtime-split-design.md`;
-//! `docs/agent-stdio-child-design.md` replaces it). It owns the socket, the
-//! accept loop, what a drain and SIGTERM do to the process, and the test
-//! gates a spawning test reaches through the environment; the sessions, the
-//! event log and the ACP agent side are the host's.
+//! `horizon-agent-acp`: Horizon's agent as an ACP agent over standard input
+//! and output, one client per process (`docs/agent-stdio-child-design.md`).
+//! The shell starts it as its child; so can any ACP client. It composes the
+//! host (`horizon-agent-host`) with the board and the wiki, serves the one
+//! connection its stdio is, and ends when the client closes it (or on
+//! SIGTERM), flushing the session logs first. Its diagnostics go to
+//! standard error. A test reaches its gates through the environment.
 //!
-//! **Bind first (startup ordering).** [`main`] binds/listens on the socket
-//! as its first action after arg/config parsing -- before it ever reads the
-//! event log or resumes a single session. A large event log's read plus
-//! resuming many sessions can take real wall-clock time (seconds, not
-//! milliseconds), and the old ordering did all of that *before* binding: a
-//! client racing to connect during that window would time out its own
-//! retry budget, conclude nothing was listening, and spawn a second
-//! `horizon-agentd` -- which itself would replay the whole log a second
-//! time before discovering the first instance already owns the socket (see
-//! `horizon_wire::daemon::bind_listener`'s stale-socket handling). Binding
-//! first makes that whole failure mode structurally impossible in the
-//! normal path: a client's
-//! `connect` succeeds (queued by the kernel) the instant `listen` returns,
-//! long before any persistence work starts, and a genuine second instance
-//! now hits that function's "already accepting" bail immediately, before
-//! it ever opens its own log.
-//!
-//! The event-log read and session resume move to a background task
-//! (`horizon_agent_host::startup::spawn_resume_task`) that races the accept loop. `initialize` -- the one
-//! method that never touches session state -- is answered
-//! immediately regardless of whether that background work has finished;
-//! `session/list`/`session/resume`/`session/new` would return an incomplete (or,
-//! right after bind, empty) view of history if answered too early, so they
-//! block on the host's resume readiness first -- a
-//! readiness gate, not a protocol change.
-//!
+//! The session logs are read and the sessions resumed on a background task
+//! (`horizon_agent_host::startup::spawn_resume_task`); `initialize` is
+//! answered meanwhile, and the methods that read sessions wait for it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use horizon_agent::registry::ProviderRegistry;
-use horizon_agent_host::DAEMON_NAME;
 use horizon_agent_host::extension::Extensions;
 use horizon_agent_host::hub::{self, flush_event_log_before_exit};
 use horizon_agent_host::session::AgentdState;
@@ -44,31 +21,30 @@ use horizon_agent_host::startup::{StartupHooks, spawn_resume_task};
 use horizon_agent_host::{outbox, providers};
 use horizon_board_flow::BoardFlow;
 use horizon_wiki_flow::WikiFlow;
-use horizon_wire::daemon;
-use horizon_wire::socket::default_agentd_socket_path;
-use tokio::net::{UnixListener, UnixStream};
-/// Reported in this binary's `initialize` reply, as `_meta.horizon.binary_id`.
-const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
+use tokio::io::{AsyncRead, AsyncWrite};
 
-/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
+/// Reported in this binary's `initialize` reply, as `_meta.horizon.binary_id`.
+const BINARY_ID: &str = concat!("horizon-agent-acp/", env!("CARGO_PKG_VERSION"));
+
+/// Test-only hook (`crates/horizon-agent-acp/tests/e2e.rs`): when set to a
 /// file's path, the host's startup waits until that file is there before
-/// opening the event log, so a test can prove the bind-first ordering
-/// (`initialize` answers while the resume is held; `session/list`/
+/// opening the event log, so a test can prove that
+/// `initialize` answers while the resume is held (and `session/list`/
 /// `session/resume` don't) instead of relying on incidental timing. Never
 /// set in production.
-const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
+const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENT_TEST_RESUME_GATE";
 
-/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
+/// Test-only hook (`crates/horizon-agent-acp/tests/e2e.rs`): when set to a
 /// file's path, the mock provider's slow turns wait until that file is
 /// there once their first word is out
 /// (`ProviderRegistry::hold_mock_streams`), so a test can reattach while a
 /// turn is surely streaming. Never set in production.
-const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENTD_TEST_MOCK_STREAM_GATE";
+const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENT_TEST_MOCK_STREAM_GATE";
 
 /// Test-only hook (`horizon-daemon-testkit`'s hermetic command): when set,
 /// sessions record no file checkpoints and a fork gets no worktree, so a
 /// test's sessions leave the repository they run in alone.
-const TEST_NO_CHECKPOINTS_VAR: &str = "HORIZON_AGENTD_TEST_NO_CHECKPOINTS";
+const TEST_NO_CHECKPOINTS_VAR: &str = "HORIZON_AGENT_TEST_NO_CHECKPOINTS";
 
 /// The file the variable `var` names, when it is set: a test's gate
 /// ([`TEST_RESUME_GATE_VAR`]). The
@@ -100,22 +76,8 @@ fn extensions(start_dir: Option<PathBuf>) -> Extensions {
     ])
 }
 
-/// What a drain does once the log is flushed.
-fn exit_now() {
-    // `_exit`, not `exit`: `exit` runs the process's exit handlers and
-    // static destructors while the sessions' threads are still running,
-    // and the daemon then ends in a segmentation fault some of the time.
-    // Nothing they would do is wanted: the log is flushed, and standard
-    // error is not buffered.
-    // SAFETY: `_exit` only ends the process.
-    unsafe { libc::_exit(0) }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let socket_path = daemon::socket_path_from_args(std::env::args().skip(1))
-        .unwrap_or_else(default_agentd_socket_path);
-
     // One accepted snapshot supplies conversation and auxiliary providers.
     let raw_config = horizon_config::load();
     let fence = (raw_config.sandbox.fence_path())
@@ -125,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     if let Err(unavailable) = horizon_agent::tools::sandbox::availability() {
         eprintln!(
-            "horizon-agentd: the sandbox runtime is unavailable ({unavailable}); every bash \
+            "horizon-agent: the sandbox runtime is unavailable ({unavailable}); every bash \
              call will ask to run outside a sandbox"
         );
     }
@@ -134,15 +96,7 @@ async fn main() -> anyhow::Result<()> {
     agent_config.rig.packages = extensions.packages();
     // Resolved once at startup; a provider reload reads it again.
     let config_path = horizon_config::resolved_path();
-    eprintln!(
-        "horizon-agentd: starting on {} (model={})",
-        socket_path.display(),
-        agent_config.rig.model
-    );
-
-    // Bind-first (see the module doc): this is the first thing that touches
-    // the socket path, and it happens before the event log is even opened.
-    let listener = daemon::bind_listener(&socket_path, DAEMON_NAME).await?;
+    eprintln!("horizon-agent: starting (model={})", agent_config.rig.model);
 
     let mut providers = ProviderRegistry::builtin_with_config(agent_config.clone());
     if let Some(gate) = test_gate(TEST_MOCK_STREAM_GATE_VAR) {
@@ -170,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
             before_resume: test_gate(TEST_RESUME_GATE_VAR)
                 .map(|gate| Box::new(move || wait_for_gate(&gate)) as Box<dyn FnOnce() + Send>),
             refused: Box::new(|error| {
-                eprintln!("horizon-agentd: startup refused: {error:#}");
+                eprintln!("horizon-agent: startup refused: {error:#}");
                 std::process::exit(1);
             }),
         },
@@ -181,43 +135,55 @@ async fn main() -> anyhow::Result<()> {
         extensions.reply_sinks(),
     );
 
-    run(listener, &socket_path, state).await
+    run(tokio::io::stdin(), tokio::io::stdout(), state).await;
+    exit_now()
 }
 
-/// The accept loop, over `horizon-wire`'s shared daemon lifecycle
-/// ([`daemon::run`]): everything about "bind, accept, serve, unlink" is the
-/// same in both daemons, and the one thing that is not — what SIGTERM has
-/// to do before this process may exit — is the hook passed below. Here that
-/// is the same durability obligation a `drain` has, for the same reason: an
-/// `append` only enqueues, so exiting without flushing drops whatever the
-/// writer thread hadn't dequeued yet (see [`flush_event_log_before_exit`]).
-/// `horizon-terminald`'s hook kills its PTYs instead, and that asymmetry is
-/// the terminald split itself.
-async fn run(
-    listener: UnixListener,
-    socket_path: &Path,
-    state: Arc<AgentdState>,
-) -> anyhow::Result<()> {
-    let shutdown_state = state.clone();
-    daemon::run(
-        listener,
-        socket_path,
-        DAEMON_NAME,
-        |stream| handle_connection(stream, state.clone()),
-        move || flush_event_log_before_exit(shutdown_state.writer()),
-    )
-    .await
+/// Serves the client on `read`/`write` until it closes the connection or
+/// SIGTERM arrives, then flushes the session logs: an append only
+/// enqueues, so ending without the flush would drop what the writer thread
+/// has not taken yet.
+async fn run<R, W>(read: R, write: W, state: Arc<AgentdState>)
+where
+    R: AsyncRead + Send + 'static,
+    W: AsyncWrite + Send + 'static,
+{
+    let mut sigterm = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        Ok(signal) => Some(signal),
+        Err(error) => {
+            eprintln!("horizon-agent: cannot watch for SIGTERM: {error}");
+            None
+        }
+    };
+    let terminated = async {
+        match sigterm.as_mut() {
+            Some(signal) => {
+                signal.recv().await;
+            }
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        served = hub::serve(read, write, state.clone(), BINARY_ID) => {
+            if let Err(error) = served {
+                eprintln!("horizon-agent: the connection failed: {error}");
+            }
+        }
+        () = terminated => eprintln!("horizon-agent: terminated"),
+    }
+    flush_event_log_before_exit(state.writer());
 }
 
-/// Serves one connection's ACP agent side for as long as the client lives
-/// ([`hub::serve`]). The sessions themselves keep running after it ends
-/// (they are scoped to the process, not the connection); only their
-/// bridges to this connection die.
-async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyhow::Result<()> {
-    let (read, write) = stream.into_split();
-    hub::serve(read, write, state, BINARY_ID, Arc::new(exit_now))
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))
+/// Ends the process once the logs are flushed.
+fn exit_now() -> ! {
+    // `_exit`, not `exit`: `exit` runs the process's exit handlers and
+    // static destructors while the sessions' threads are still running,
+    // and the process then ends in a segmentation fault some of the time.
+    // Nothing they would do is wanted: the logs are flushed, and standard
+    // error is not buffered.
+    // SAFETY: `_exit` only ends the process.
+    unsafe { libc::_exit(0) }
 }
 
 #[cfg(test)]
@@ -277,7 +243,6 @@ mod tests {
     async fn sigterm_flushes_the_event_log_before_exiting() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sessions = dir.path().join("sessions");
-        let socket_path = dir.path().join("agentd.sock");
 
         let writer = WriterHandle::open_after(&sessions, || std::thread::sleep(GATED_FIRST_WRITE));
         let session_id = horizon_agent::contract::SessionId::new();
@@ -297,9 +262,9 @@ mod tests {
             Vec::new(),
             Vec::new(),
         ));
-        let listener = daemon::bind_listener(&socket_path, DAEMON_NAME)
-            .await
-            .expect("bind");
+        // The client keeps its end open: only SIGTERM ends the serve.
+        let (_client, served) = tokio::io::duplex(1 << 16);
+        let (read, write) = tokio::io::split(served);
 
         // Installed before anything raises SIGTERM, so this process can
         // never take the default (fatal) disposition: tokio's handler is
@@ -322,7 +287,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         });
-        run(listener, &socket_path, state).await.expect("run");
+        run(read, write, state).await;
         raiser.abort();
 
         let report =

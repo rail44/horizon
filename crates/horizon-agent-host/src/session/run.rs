@@ -295,7 +295,7 @@ pub(super) fn run_session(
 
     if let Err(failure) = loop_outcome {
         eprintln!(
-            "horizon-agentd: panic in session {session_id:?}: {}",
+            "horizon-agent: panic in session {session_id:?}: {}",
             failure.message()
         );
         phase.set(SessionLoopPhase::RecordingPanic);

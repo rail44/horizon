@@ -316,7 +316,7 @@ pub fn spawn(
                 Ok(()) => last_error = None,
                 Err(error) => {
                     if last_error.as_ref() != Some(&error) {
-                        eprintln!("horizon-agentd: outbox delivery: {error}");
+                        eprintln!("horizon-agent: outbox delivery: {error}");
                     }
                     last_error = Some(error);
                 }

@@ -1,8 +1,10 @@
 # The agent as a stdio ACP child of the shell
 
-Status: stages 1 and 2 implemented (the library and the two flow crates;
-one log file per session and the projection caught up on demand); stages
-3 and 4 not started. Board item #114 holds the decisions this design
+Status: stages 1 to 4 implemented (the library and the two flow crates;
+one log file per session and the projection caught up on demand; the
+stdio child, with agentd gone, its crate now `horizon-agent-acp`); stage
+5 not started. The end-to-end tests still start the binary: moving the
+ones not about the process to `Channel::duplex()` is not done yet. Board item #114 holds the decisions this design
 follows.
 
 ## Goal

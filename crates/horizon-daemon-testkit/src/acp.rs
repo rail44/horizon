@@ -9,12 +9,10 @@ use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client, Error, JsonRpcRequest};
 use horizon_acp as acp;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-
-use crate::hub::DRAIN_TIMEOUT;
 
 /// One message from the daemon.
 #[derive(Debug)]
@@ -67,13 +65,13 @@ pub fn initialize_request(client_name: &str, ext_version: u32) -> v2::Initialize
     .meta(meta)
 }
 
-fn byte_streams(stream: UnixStream) -> impl agent_client_protocol::ConnectTo<Client> + 'static {
-    let (read, write) = stream.into_split();
-    ByteStreams::new(write.compat_write(), read.compat())
-}
-
-/// Opens the connection without initializing it.
-pub async fn connect_acp(stream: UnixStream) -> AcpClient {
+/// An ACP client reading `read` and writing `write`: a child agent's
+/// standard output and input.
+pub async fn connect_acp<R, W>(read: R, write: W) -> AcpClient
+where
+    R: AsyncRead + Send + 'static,
+    W: AsyncWrite + Send + 'static,
+{
     let (inbox_tx, inbox) = mpsc::unbounded_channel();
     let (cx_tx, cx_rx) = oneshot::channel();
 
@@ -111,7 +109,7 @@ pub async fn connect_acp(stream: UnixStream) -> AcpClient {
     let builder = notification!(builder, acp::ToolCallProgressNotification, ToolCallProgress);
     let builder = request!(builder, v2::RequestPermissionRequest, Permission);
     let builder = request!(builder, acp::HostToolRequest, HostTool);
-    let transport = byte_streams(stream);
+    let transport = ByteStreams::new(write.compat_write(), read.compat());
     let task = tokio::spawn(async move {
         let _ = builder
             .connect_with(transport, async move |cx: V2ConnectionTo<Agent>| {
@@ -166,10 +164,6 @@ impl AcpClient {
     /// Asks the daemon to drain. It exits inside the call, so the answer
     /// never travels; the caller confirms the exit with
     /// [`crate::wait_for_exit`].
-    pub async fn drain(&self) {
-        let _ = tokio::time::timeout(DRAIN_TIMEOUT, self.request(acp::DrainRequest {})).await;
-    }
-
     /// Reads the next inbound message, panicking after `timeout`.
     pub async fn next(&mut self, timeout: Duration) -> Inbound {
         tokio::time::timeout(timeout, self.inbox.recv())
@@ -181,11 +175,16 @@ impl AcpClient {
 
 /// Connects, initializes at this build's extension version, and panics if
 /// the daemon refuses.
-pub async fn connect_initialized(stream: UnixStream, client_name: &str) -> AcpClient {
-    let client = connect_acp(stream).await;
+/// [`connect_acp`], then `initialize` at this build's extension version.
+pub async fn connect_initialized<R, W>(read: R, write: W, client_name: &str) -> AcpClient
+where
+    R: AsyncRead + Send + 'static,
+    W: AsyncWrite + Send + 'static,
+{
+    let client = connect_acp(read, write).await;
     client
         .initialize(client_name)
         .await
-        .expect("initialize should succeed at a matching extension version");
+        .expect("initialize should succeed");
     client
 }

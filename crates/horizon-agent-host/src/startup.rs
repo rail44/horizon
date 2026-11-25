@@ -63,10 +63,10 @@ fn catch_up_projection(state: &AgentdState) {
     let start = std::time::Instant::now();
     match projection.catch_up() {
         Ok(()) => eprintln!(
-            "horizon-agentd: history search caught up in {:.1}s",
+            "horizon-agent: history search caught up in {:.1}s",
             start.elapsed().as_secs_f64()
         ),
-        Err(error) => eprintln!("horizon-agentd: catching history search up failed: {error:#}"),
+        Err(error) => eprintln!("horizon-agent: catching history search up failed: {error:#}"),
     }
 }
 
@@ -128,7 +128,7 @@ fn split_shared_log(legacy: &Path, dir: &Path) -> Result<()> {
     if session_ids(dir)?.is_empty() {
         match split_legacy_log(legacy, dir) {
             Ok(report) => eprintln!(
-                "horizon-agentd: split {} into {} session log(s) ({} line(s){})",
+                "horizon-agent: split {} into {} session log(s) ({} line(s){})",
                 legacy.display(),
                 report.sessions,
                 report.lines,
@@ -147,7 +147,7 @@ fn split_shared_log(legacy: &Path, dir: &Path) -> Result<()> {
                 }
             ),
             Err(error) if error.is::<UnsupportedEventLogFormat>() => {
-                eprintln!("horizon-agentd: {error}");
+                eprintln!("horizon-agent: {error}");
                 move_aside(legacy, "pre")?;
                 return Ok(());
             }
@@ -169,7 +169,7 @@ fn move_aside(path: &Path, label: &str) -> Result<()> {
     std::fs::rename(path, &aside)
         .with_context(|| format!("move {} aside to {}", path.display(), aside.display()))?;
     eprintln!(
-        "horizon-agentd: moved {} aside to {}",
+        "horizon-agent: moved {} aside to {}",
         path.display(),
         aside.display()
     );

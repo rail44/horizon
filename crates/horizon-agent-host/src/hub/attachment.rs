@@ -155,7 +155,7 @@ async fn ask_permission(sink: Sink, ask: Ask, cancelled: oneshot::Receiver<()>) 
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            eprintln!("horizon-agentd: permission request failed: {error}");
+            eprintln!("horizon-agent: permission request failed: {error}");
             return;
         }
     };
@@ -178,7 +178,7 @@ async fn ask_permission(sink: Sink, ask: Ask, cancelled: oneshot::Receiver<()>) 
         }
         v2::RequestPermissionOutcome::Selected(selected) => {
             eprintln!(
-                "horizon-agentd: ignoring unknown permission option {}",
+                "horizon-agent: ignoring unknown permission option {}",
                 selected.option_id.0
             );
             return;
@@ -199,7 +199,7 @@ async fn ask_permission(sink: Sink, ask: Ask, cancelled: oneshot::Receiver<()>) 
             .map_err(|error| error.message),
     };
     if let Err(message) = sent {
-        eprintln!("horizon-agentd: dropping a permission answer: {message}");
+        eprintln!("horizon-agent: dropping a permission answer: {message}");
     }
 }
 

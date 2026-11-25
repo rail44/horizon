@@ -17,4 +17,4 @@ pub mod startup;
 pub mod worktree;
 
 /// The name every log line of the host starts with.
-pub const DAEMON_NAME: &str = "horizon-agentd";
+pub const DAEMON_NAME: &str = "horizon-agent";

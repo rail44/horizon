@@ -258,7 +258,7 @@ pub(super) fn forward_approval_outcome(
         // visible in agentd's own stderr.
         ApprovalOutcome::AlreadyResolved => {
             eprintln!(
-                "horizon-agentd: dropped duplicate approve/deny for session {session_id:?}, \
+                "horizon-agent: dropped duplicate approve/deny for session {session_id:?}, \
                  call {logged_call_id:?} (already resolved)"
             );
         }

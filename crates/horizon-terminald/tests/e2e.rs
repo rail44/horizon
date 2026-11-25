@@ -22,9 +22,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use horizon_daemon_testkit::{
-    AgentdPaths, AgentdProcess, AgentdSpawn, DaemonProcess, connect_hub_client,
-    connect_initialized, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
-    scratch_socket, sibling_daemon_binary, wait_for_exit,
+    AgentdPaths, AgentdProcess, AgentdSpawn, DaemonProcess, connect_hub_client, connect_with_retry,
+    drain_with_timeout, resolve_daemon_binary, scratch_socket, sibling_daemon_binary,
+    wait_for_exit,
 };
 use horizon_terminal_core::wire::TerminalAttachment;
 use horizon_terminal_core::wire::{
@@ -73,7 +73,7 @@ fn spawn_terminald() -> DaemonProcess {
 /// target directory.
 fn spawn_agentd() -> AgentdProcess {
     AgentdSpawn::new(
-        sibling_daemon_binary(&resolve_terminald_binary(), "horizon-agentd"),
+        sibling_daemon_binary(&resolve_terminald_binary(), "horizon-agent-acp"),
         AgentdPaths::scratch("agentd-td-e2e"),
     )
     .spawn()
@@ -523,20 +523,11 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// Drains a `horizon-agentd` over its own connection — exactly what
-/// `Reload Agent Runtime` sends (`_horizon/drain`). The answer never
-/// travels (the daemon exits inside the call); the caller confirms the
-/// exit with [`wait_for_exit`].
-async fn drain_agentd(socket_path: &Path) {
-    let client = connect_initialized(connect_with_retry(socket_path).await, "terminald-e2e").await;
-    client.drain().await;
-}
-
 /// **The terminald split's acceptance property**
 /// (`docs/terminald-split-design.md` decisions 1-2): the exact sequence
-/// `Reload Agent Runtime` performs against the *agent* daemon — graceful
-/// `_horizon/drain`, wait for the process to exit, spawn a fresh one on the
-/// same socket — leaves a `horizon-terminald` session fully usable: still listed,
+/// `Reload Agent Runtime` performs against the agent runtime — close its
+/// connection, wait for the process to exit, start a fresh one on the same
+/// session logs — leaves a `horizon-terminald` session fully usable: still listed,
 /// still attachable, its retained frame intact, and its shell still alive
 /// (proven by making the same PTY echo a *new* marker afterwards).
 ///
@@ -566,20 +557,20 @@ async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable(
     .await;
     let _ = screen_until(&mut attachment, "BEFORE_AGENT_RELOAD").await;
 
-    // `Reload Agent Runtime`, faithfully: drain the agent daemon over its
-    // own hub, confirm the process is gone, then bring a fresh one up on the
-    // same socket and event log.
-    drain_agentd(&agentd.socket_path).await;
+    // `Reload Agent Runtime`, faithfully: close the agent runtime's
+    // connection, confirm the process is gone, then start a fresh one on the
+    // same session logs.
+    drop(agentd.connect().await);
     let status = wait_for_exit(&mut agentd.child).await;
     assert_eq!(
         status.code(),
         Some(0),
-        "horizon-agentd should exit 0 after a drain, got {status:?}"
+        "the agent runtime should exit 0 once its client closes, got {status:?}"
     );
-    let agentd = agentd.respawn_at_same_paths();
-    // The replacement really is up (its bind-first startup makes this
-    // immediate), so the reload sequence is complete, not merely started.
-    drop(connect_with_retry(&agentd.socket_path).await);
+    let mut agentd = agentd.respawn_at_same_paths();
+    // The replacement really answers, so the reload sequence is complete,
+    // not merely started.
+    drop(agentd.connect().await);
 
     // The terminal daemon never noticed. Its session is still listed...
     assert_eq!(

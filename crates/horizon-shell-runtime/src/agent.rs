@@ -1,13 +1,13 @@
-//! The `horizon-agentd` client connection: an ACP v2 client over the agentd
-//! Unix socket (`docs/acp-agentd-design.md`). Connect, `initialize`,
-//! dispatch agent ops as ACP and `_horizon/*` requests, route the inbound
-//! traffic by session, and recover from a daemon of another extension
-//! version.
+//! The agent runtime's client: an ACP v2 client over the standard input and
+//! output of `horizon-agent-acp`, which this runtime starts as its child
+//! (`docs/agent-stdio-child-design.md`). Start it, `initialize`, dispatch
+//! agent ops as ACP and `_horizon/*` requests, and route the inbound
+//! traffic by session. Stopping the runtime closes the child's input, and
+//! the child flushes its session logs and ends.
 //!
 //! Terminal traffic has its own connection to its own daemon in
-//! [`super::terminal`], so a drain sent from here cannot take a PTY with it.
+//! [`super::terminal`], so restarting the agent cannot take a PTY with it.
 
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,22 +19,18 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
 use horizon_acp::{
-    DrainRequest, EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION,
-    HostToolRequest, InitializeMeta, ListProviderModelsRequest, ListProvidersRequest,
-    MODEL_CONFIG_ID, ProviderSummary, ReloadProviderConfigRequest, SessionEventNotification,
-    SessionId, SessionInfoMeta, SessionNewMeta, TaskProgressNotification,
-    ToolCallProgressNotification, WatchBoardRequest, read_horizon_meta, write_horizon_meta,
+    EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, HostToolRequest,
+    InitializeMeta, ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID,
+    ProviderSummary, ReloadProviderConfigRequest, SessionEventNotification, SessionId,
+    SessionInfoMeta, SessionNewMeta, TaskProgressNotification, ToolCallProgressNotification,
+    read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::attachment::{AgentCommand, Inbound, acp_session_id};
-use super::common::{
-    EstablishError, OP_TIMEOUT, RuntimeControl, SILENCE_MISMATCH_THRESHOLD, StreamEnd, Timeouts,
-    wait_until_refusing,
-};
-use super::connection::connect_or_spawn_agentd_retrying;
+use super::common::{EstablishError, OP_TIMEOUT, RuntimeControl, StreamEnd};
 use super::routing::{AgentRoutes, EXT_VERSION_MISMATCH, RouteKey, parse_session_id};
 use crate::agent_model::AgentEvent;
 
@@ -109,23 +105,27 @@ pub(super) enum Op {
         level: String,
         reply: crossbeam_channel::Sender<Result<(), String>>,
     },
-    WatchBoard {
-        root: PathBuf,
-        reply: crossbeam_channel::Sender<Result<(), String>>,
-    },
     EnsureBoardOrganizer {
         root: PathBuf,
         reply: crossbeam_channel::Sender<Result<SessionId, String>>,
     },
-    Drain,
     /// Fire-and-forget request to rebuild `[provider]` in the running
     /// daemon without a respawn.
     ReloadProviderConfig,
 }
 
+/// How long a child that was asked to end (its input closed) has to flush
+/// its logs and exit before it is killed.
+const CHILD_EXIT: Duration = Duration::from_secs(5);
+
+/// Starts `binary` as the agent runtime's child and serves `ops` over its
+/// standard input and output until the runtime is stopped or the child
+/// ends. Its standard error is appended to `log`; its own children reach
+/// this Horizon through `HORIZON_SOCKET`, the control socket.
 pub(super) fn spawn(
-    socket_path: PathBuf,
+    binary: PathBuf,
     control_socket: PathBuf,
+    log: PathBuf,
     mut ops: UnboundedReceiver<Op>,
     routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
@@ -138,154 +138,85 @@ pub(super) fn spawn(
             Ok(runtime) => runtime,
             Err(error) => {
                 routes.connection_failed(format!(
-                    "could not start the horizon-agentd client runtime: {error}"
+                    "could not start the agent runtime's client: {error}"
                 ));
                 control.mark_stopped();
                 return;
             }
         };
         runtime.block_on(async {
-            let mut mismatch_recovery_attempted = false;
-            let mut retry_delay = Duration::from_millis(50);
-            let mut consecutive_silences: u32 = 0;
-            loop {
-                let stream = tokio::select! {
-                    result = connect_or_spawn_agentd_retrying(
-                        &socket_path,
-                        &control_socket,
-                    ) => match result {
-                        Ok(stream) => stream,
-                        Err(error) => {
-                            eprintln!("horizon-agentd initial connection failed: {error}");
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            continue;
-                        }
-                    },
-                    _ = control.cancelled() => break,
-                };
-
-                match run_stream(stream, &mut ops, routes.clone(), control.clone()).await {
-                    StreamEnd::PreHelloTransport { message } => {
-                        // Transient: retry with backoff, never consuming the
-                        // recovery budget.
-                        consecutive_silences = 0;
-                        eprintln!(
-                            "horizon-agentd initialize transport failed, retrying: {message}"
-                        );
-                        tokio::select! {
-                            _ = tokio::time::sleep(retry_delay) => {}
-                            _ = control.cancelled() => {
-                                routes.connection_failed("agentd runtime stopped".to_string());
-                                break;
-                            }
-                        }
-                        retry_delay = (retry_delay * 2).min(Duration::from_secs(1));
-                        continue;
-                    }
-                    StreamEnd::Silence { message } => {
-                        consecutive_silences += 1;
-                        if consecutive_silences < SILENCE_MISMATCH_THRESHOLD {
-                            eprintln!(
-                                "horizon-agentd did not answer within the establish deadline \
-                                 ({consecutive_silences}/{SILENCE_MISMATCH_THRESHOLD} before \
-                                 mismatch recovery): {message}"
-                            );
-                            tokio::select! {
-                                _ = tokio::time::sleep(retry_delay) => {}
-                                _ = control.cancelled() => {
-                                    routes.connection_failed(
-                                        "agentd runtime stopped".to_string(),
-                                    );
-                                    break;
-                                }
-                            }
-                            retry_delay = (retry_delay * 2).min(Duration::from_secs(1));
-                            continue;
-                        }
-                        consecutive_silences = 0;
-                        if let ControlFlow::Break(()) = recover_generation_mismatch(
-                            &message,
-                            &mut mismatch_recovery_attempted,
-                            &socket_path,
-                            &routes,
-                            &control,
-                        )
-                        .await
-                        {
-                            break;
-                        }
-                    }
-                    StreamEnd::GenerationMismatch { message }
-                    | StreamEnd::VersionRejected { message } => {
-                        consecutive_silences = 0;
-                        if let ControlFlow::Break(()) = recover_generation_mismatch(
-                            &message,
-                            &mut mismatch_recovery_attempted,
-                            &socket_path,
-                            &routes,
-                            &control,
-                        )
-                        .await
-                        {
-                            break;
-                        }
-                    }
-                    StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
-                        eprintln!("horizon-agentd connection stopped: {error}");
-                        routes.connection_failed(error);
-                        break;
-                    }
-                    StreamEnd::Cancelled => {
-                        routes.connection_failed("agentd runtime stopped".to_string());
-                        break;
-                    }
-                    StreamEnd::Dropped => break,
+            let mut child = match start_child(&binary, &control_socket, &log) {
+                Ok(child) => child,
+                Err(error) => {
+                    routes.connection_failed(error);
+                    return;
                 }
+            };
+            let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
+                routes.connection_failed("the agent runtime has no standard streams".into());
+                return;
+            };
+            let end = run_stream(output, input, &mut ops, routes.clone(), control.clone()).await;
+            match end {
+                StreamEnd::Cancelled | StreamEnd::Dropped => {
+                    routes.connection_failed("the agent runtime stopped".to_string());
+                }
+                StreamEnd::GenerationMismatch { message }
+                | StreamEnd::VersionRejected { message } => {
+                    eprintln!("{message}");
+                    routes.connection_failed(format!(
+                        "{message} -- restart Horizon to use the rebuilt agent"
+                    ));
+                }
+                StreamEnd::PreHelloTransport { message } | StreamEnd::Silence { message } => {
+                    eprintln!("the agent runtime did not start: {message}");
+                    routes.connection_failed(message);
+                }
+                StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
+                    eprintln!("the agent runtime stopped: {error}");
+                    routes.connection_failed(error);
+                }
+            }
+            // The child's input is closed with the connection: it flushes
+            // its logs and ends.
+            if tokio::time::timeout(CHILD_EXIT, child.wait())
+                .await
+                .is_err()
+            {
+                eprintln!("the agent runtime did not end in {CHILD_EXIT:?}; killing it");
+                let _ = child.kill().await;
             }
         });
         control.mark_stopped();
     });
 }
 
-/// The once-per-runtime recovery for a daemon this build cannot initialize
-/// with: drain it, then let the caller's next
-/// `connect_or_spawn_agentd_retrying` start a fresh binary. `Break` means
-/// the runtime must stop (budget already spent, drain failed, or
-/// cancelled) and `connection_failed` has been fanned out; `Continue` means
-/// the caller should reconnect.
-async fn recover_generation_mismatch(
-    message: &str,
-    mismatch_recovery_attempted: &mut bool,
-    socket_path: &Path,
-    routes: &Arc<AgentRoutes>,
-    control: &Arc<RuntimeControl>,
-) -> ControlFlow<()> {
-    if *mismatch_recovery_attempted {
-        let error = format!(
-            "{message} -- automatic drain-and-restart was already attempted \
-             once; rebuild horizon-agentd (`cargo build --workspace`) and \
-             run `Reload Agent Runtime`"
-        );
-        eprintln!("horizon-agentd connection stopped: {error}");
-        routes.connection_failed(error);
-        return ControlFlow::Break(());
-    }
-    *mismatch_recovery_attempted = true;
-    eprintln!("{message}; draining and restarting the daemon");
-    let drained = tokio::select! {
-        drained = drain_stale_agentd(socket_path, control.timeouts()) => drained,
-        _ = control.cancelled() => {
-            routes.connection_failed("agentd runtime stopped".to_string());
-            return ControlFlow::Break(());
-        }
-    };
-    if let Err(error) = drained {
-        let error = format!("{message} -- and the automatic drain failed: {error}");
-        eprintln!("horizon-agentd connection stopped: {error}");
-        routes.connection_failed(error);
-        return ControlFlow::Break(());
-    }
-    ControlFlow::Continue(())
+/// Starts `binary` with piped standard input and output, its standard
+/// error appended to `log`.
+fn start_child(
+    binary: &Path,
+    control_socket: &Path,
+    log: &Path,
+) -> Result<tokio::process::Child, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::process::Stdio;
+
+    let stderr = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(log)
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
+    tokio::process::Command::new(binary)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr)
+        .env("HORIZON_SOCKET", control_socket)
+        .env_remove("HORIZON_SESSION_ID")
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("could not start {}: {error}", binary.display()))
 }
 
 #[cfg(test)]
@@ -302,8 +233,10 @@ pub(super) fn spawn_test_stream<S>(
             .enable_all()
             .build()
             .unwrap();
+        let (read, write) = tokio::io::split(stream);
         let end = runtime.block_on(run_stream(
-            stream,
+            read,
+            write,
             &mut ops,
             routes.clone(),
             control.clone(),
@@ -312,8 +245,6 @@ pub(super) fn spawn_test_stream<S>(
             StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
                 routes.connection_failed(error)
             }
-            // A test stream has no socket to drain and no daemon to respawn,
-            // so a mismatch surfaces as a terminal failure instead.
             StreamEnd::GenerationMismatch { message } | StreamEnd::VersionRejected { message } => {
                 routes.connection_failed(message)
             }
@@ -404,17 +335,18 @@ fn client(
         )
 }
 
-async fn run_stream<S>(
-    stream: S,
+async fn run_stream<R, W>(
+    read: R,
+    write: W,
     ops: &mut UnboundedReceiver<Op>,
     routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
 ) -> StreamEnd
 where
-    S: AsyncRead + AsyncWrite + Send + 'static,
+    R: AsyncRead + Send + 'static,
+    W: AsyncWrite + Send + 'static,
 {
-    let (read_half, write_half) = tokio::io::split(stream);
-    let transport = ByteStreams::new(write_half.compat_write(), read_half.compat());
+    let transport = ByteStreams::new(write.compat_write(), read.compat());
     let main_control = control.clone();
     let main_routes = routes.clone();
     let establish = control.timeouts().establish;
@@ -434,11 +366,10 @@ where
                     _ = main_control.cancelled() => break StreamEnd::Cancelled,
                     _ = connection.incoming_closed() => {
                         break StreamEnd::EstablishedFailure(
-                            "established agentd disconnected".to_string(),
+                            "the agent runtime disconnected".to_string(),
                         );
                     }
                     message = main_routes.version_mismatch() => {
-                        drain_on(&connection, establish).await;
                         main_routes.connection_reset(message.clone());
                         break StreamEnd::VersionRejected { message };
                     }
@@ -456,10 +387,10 @@ where
     match result {
         Ok(end) => end,
         Err(error) if control.is_established() => {
-            StreamEnd::EstablishedFailure(format!("agentd connection failed: {error}"))
+            StreamEnd::EstablishedFailure(format!("the agent runtime connection failed: {error}"))
         }
         Err(error) => StreamEnd::PreHelloTransport {
-            message: format!("agentd connection failed during initialize: {error}"),
+            message: format!("the agent runtime connection failed during initialize: {error}"),
         },
     }
 }
@@ -491,12 +422,12 @@ async fn initialize(
     {
         Err(_elapsed) => {
             return Err(EstablishError::Silence(format!(
-                "agentd did not answer initialize within {timeout:?}"
+                "the agent runtime did not answer initialize within {timeout:?}"
             )));
         }
         Ok(Err(error)) if error.message.starts_with(EXT_VERSION_MISMATCH) => {
             return Err(EstablishError::Rejected(format!(
-                "agentd rejected the handshake: {}",
+                "the agent runtime rejected the handshake: {}",
                 error.message
             )));
         }
@@ -507,44 +438,32 @@ async fn initialize(
         }
         Ok(Err(error)) => {
             return Err(EstablishError::Fatal(format!(
-                "agentd answered initialize with an unexpected error: {error}"
+                "the agent runtime answered initialize with an unexpected error: {error}"
             )));
         }
         Ok(Ok(response)) => response,
     };
     match read_horizon_meta::<InitializeMeta>(response.meta.as_ref()) {
         Some(Ok(meta)) if meta.ext_version == HORIZON_ACP_EXT_VERSION => {}
-        // The daemon accepts `initialize` across versions so that it can be
-        // drained on this same connection.
         Some(Ok(meta)) => {
-            drain_on(connection, timeout).await;
             return Err(EstablishError::Rejected(format!(
-                "{EXT_VERSION_MISMATCH}: agentd {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
+                "{EXT_VERSION_MISMATCH}: the agent runtime {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
                 meta.binary_id, meta.ext_version
             )));
         }
         Some(Err(_)) | None => {
             return Err(EstablishError::Rejected(format!(
-                "agentd did not report a horizon extension version (this shell speaks \
+                "the agent runtime did not report a horizon extension version (this shell speaks \
                  v{HORIZON_ACP_EXT_VERSION})"
             )));
         }
     }
     if response.capabilities.session.is_none() {
         return Err(EstablishError::Fatal(
-            "agentd did not advertise the v2 session capability".to_string(),
+            "the agent runtime did not advertise the v2 session capability".to_string(),
         ));
     }
     Ok(())
-}
-
-/// Sends `_horizon/drain` and waits, bounded, for the daemon to act on it.
-async fn drain_on(connection: &V2ConnectionTo<Agent>, timeout: Duration) {
-    let _ = tokio::time::timeout(
-        timeout,
-        connection.send_request(DrainRequest {}).block_task(),
-    )
-    .await;
 }
 
 /// Bounds one established-phase request. A deadline expiry fails only that
@@ -582,7 +501,7 @@ fn handle_op(
     op: Op,
     connection: &V2ConnectionTo<Agent>,
     routes: &Arc<AgentRoutes>,
-    establish: Duration,
+    _establish: Duration,
 ) {
     match op {
         Op::NewAgent {
@@ -718,19 +637,6 @@ fn handle_op(
                 let _ = reply.send(result.map(|_| ()));
             });
         }
-        Op::WatchBoard { root, reply } => {
-            let request = send(
-                connection,
-                WatchBoardRequest {
-                    workspace_root: root,
-                },
-            );
-            let routes = routes.clone();
-            tokio::spawn(async move {
-                let result = call(&routes, OP_TIMEOUT, "watch board", request).await;
-                let _ = reply.send(result.map(|_| ()));
-            });
-        }
         Op::EnsureBoardOrganizer { root, reply } => {
             let request = send(
                 connection,
@@ -744,15 +650,6 @@ fn handle_op(
                 let _ = reply.send(result.map(|response| response.session_id));
             });
         }
-        Op::Drain => {
-            let request = send(connection, DrainRequest {});
-            tokio::spawn(async move {
-                // The daemon exits inside this call, so the reply usually
-                // never arrives; the caller observes the socket refusing
-                // connections instead.
-                let _ = tokio::time::timeout(establish, request.block_task()).await;
-            });
-        }
         Op::ReloadProviderConfig => {
             let request = send(connection, ReloadProviderConfigRequest {});
             let routes = routes.clone();
@@ -760,7 +657,9 @@ fn handle_op(
                 if let Err(error) =
                     call(&routes, OP_TIMEOUT, "reload_provider_config", request).await
                 {
-                    eprintln!("horizon-agentd client: provider config reload failed: {error}");
+                    eprintln!(
+                        "horizon-the agent runtime client: provider config reload failed: {error}"
+                    );
                 }
             });
         }
@@ -819,52 +718,5 @@ async fn list_sessions(
             Some(next) => cursor = Some(next),
             None => return Ok(summaries),
         }
-    }
-}
-
-/// Gracefully stops a running agentd this build could not initialize with:
-/// a fresh connection, `initialize`, then `_horizon/drain`.
-async fn drain_stale_agentd(socket_path: &Path, timeouts: Timeouts) -> Result<(), String> {
-    let stream = match tokio::net::UnixStream::connect(socket_path).await {
-        Ok(stream) => stream,
-        Err(_) => return Ok(()),
-    };
-    let (read_half, write_half) = stream.into_split();
-    let transport = ByteStreams::new(write_half.compat_write(), read_half.compat());
-    let drained = tokio::time::timeout(
-        timeouts.establish * 2,
-        Client.v2().name("horizon-drain").connect_with(
-            transport,
-            async |connection: V2ConnectionTo<Agent>| {
-                if let Err(error) = connection
-                    .send_request(initialize_request())
-                    .block_task()
-                    .await
-                {
-                    return Ok(Err(format!("initialize for the drain failed: {error}")));
-                }
-                let _ = tokio::time::timeout(
-                    timeouts.establish,
-                    connection.send_request(DrainRequest {}).block_task(),
-                )
-                .await;
-                Ok(Ok(()))
-            },
-        ),
-    )
-    .await;
-    match drained {
-        Ok(Ok(Err(error))) => eprintln!("drain of the incompatible agentd failed: {error}"),
-        Ok(Err(error)) => eprintln!("drain connection to the incompatible agentd failed: {error}"),
-        Ok(Ok(Ok(()))) | Err(_) => {}
-    }
-    if wait_until_refusing(socket_path, timeouts.drain_exit).await {
-        Ok(())
-    } else {
-        Err(
-            "horizon-agentd kept accepting connections after the drain attempt; \
-             stop it manually"
-                .to_string(),
-        )
     }
 }

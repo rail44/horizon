@@ -2,7 +2,7 @@
 # full schema.
 
 # The two daemon `e2e` integration test binaries
-# (crates/horizon-agentd/tests/e2e.rs, crates/horizon-terminald/tests/e2e.rs)
+# (crates/horizon-agent-acp/tests/e2e.rs, crates/horizon-terminald/tests/e2e.rs)
 # spawn a real daemon child process per test -- terminald's spawn real PTYs
 # backed by a real shell, and its acceptance test spawns *both* daemons. Under
 # nextest's default per-binary parallelism, that means dozens of real
@@ -27,7 +27,7 @@
 # The shell's own tests over real daemons (`tests/terminald.rs`,
 # `tests/agentd.rs`, `tests/board_logd.rs`) are in the group for the same
 # reason: each starts a daemon and waits on it against a wall clock.
-filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e) + binary_id(horizon::terminald) + binary_id(horizon::agentd) + binary_id(horizon::board_logd)'
+filter = 'binary_id(horizon-agent-acp::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e) + binary_id(horizon::terminald) + binary_id(horizon::agentd) + binary_id(horizon::board_logd)'
 test-group = 'daemon-e2e'
 
 # Three at once, not one (2026-11-19): one at a time, the group's 53 tests
@@ -71,7 +71,7 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # --workspace --locked`). It excludes exactly the tests whose *subject
 # matter* is the host boundary the sandbox exists to enforce: they bind
 # real sockets, write to literal `/tmp`, need directories outside any
-# repository, or spawn a real `horizon-agentd`. Under containment those
+# repository, or spawn a real `horizon-agent-acp`. Under containment those
 # cannot pass, and making them pass would mean removing the containment
 # they verify -- so a sandboxed session skips them and the integrator's
 # full gate (`profile.default`) runs them (`docs/issues/010`).
@@ -121,15 +121,6 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # `TcpListener::bind` (Permission denied) before any adapter logic runs. Not a
 # real Exa network call -- a localhost mock stopped by the loopback bind denial.
 #
-# agentd's SIGTERM flush test --
-# `(binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))`.
-# It drives the real `run` accept loop, so it binds a real `UnixListener`
-# under `std::env::temp_dir()` -- the same SUN_LEN mechanism that excludes
-# `host::listener::tests` above: containment provisions $TMPDIR under this
-# session's (deep) worktree and `bind()` fails with `InvalidInput` before the
-# sandbox is even consulted. Raising SIGTERM at itself is fine under
-# containment; only the socket is.
-#
 # macOS setuid-exec denial --
 # `test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)`.
 # Reads the child's nice value back via `/bin/ps`, which is setuid on macOS
@@ -147,18 +138,6 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # enforces), so the collector's own soft-degrade path ("nothing new this
 # tick") is what runs, and the snapshot assertion cannot pass. The other
 # `macos::denials` tests are pure parsing/mapping logic and stay in.
-#
-# milestone::git fixture commits through the proto git shim --
-# `(binary_id(horizon-agentd::bin/horizon-agentd) & test(/^milestone::git::tests::(actual_changed_paths_must_fit_the_declared_scope|dirty_main_and_changed_candidates_are_preserved|main_advancing_requires_new_combined_verification_and_merge_is_recoverable)$/))`
-# (2026-09-16). These build a fixture repo and run a real `git commit`; on
-# this machine `git` is wrapped by the proto toolchain shim, which fetches
-# `https://nodejs.org/download/release/index.json` and writes
-# `~/.proto/cache/requests-v2/content-v2/...` during the commit. Containment
-# denies both (the run's denial log shows the proxy/DNS refusals and the
-# cache-build failure), so fixture setup dies before any assertion runs.
-# Only the three commit-flavored tests fail; the module's other tests are
-# pure logic and stay in. The integrator's full gate runs them outside
-# containment.
 #
 # Provider adapter contract tests bind a loopback HTTP/SSE mock and run in
 # the default profile; containment denies the listener.
@@ -214,7 +193,7 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.sandboxed]
 default-filter = '''
     not (
-        binary_id(horizon-agentd::e2e)
+        binary_id(horizon-agent-acp::e2e)
         + binary_id(horizon-terminald::e2e)
         + binary_id(horizon-logd::e2e)
         + binary_id(horizon::terminald)
@@ -223,7 +202,6 @@ default-filter = '''
         + (binary_id(horizon-shell-runtime) & test(/^tests::/))
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
         + test(/^worktree::tests::a_session_commits_in_its_own_worktree/)
-        + test(/^session::setup::tests::isolation_announcement::/)
         + test(/^worktree::tests::create_isolated_worktree_branches/)
         + test(/outside_a_git_repository$/)
         + test(/outside_any_repository_is_none$/)
@@ -243,9 +221,7 @@ default-filter = '''
         + test(/^providers::rig::session::turn::tests::cap_summary_request_disables_tools_without_changing_session_config$/)
         + test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing|a_listing_without_limits_defers_to_the_catalog)$/)
         + test(/process_table_snapshot_is_available$/)
-        + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
         + test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)
-        + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^milestone::git::tests::(actual_changed_paths_must_fit_the_declared_scope|dirty_main_and_changed_candidates_are_preserved|main_advancing_requires_new_combined_verification_and_merge_is_recoverable)$/))
         + test(/^providers::rig::session::continuation::tests::(a_confident_model_answer_continues_the_turn_once_without_ending_it|continuations_stop_at_the_per_turn_cap|client_errors_and_timeouts_hand_back_with_a_fallback_reason|a_model_answer_below_the_threshold_hands_back|a_user_answer_hands_back|a_pending_stop_or_queued_addition_is_left_to_the_turn_loop|no_request_without_a_check_or_with_an_empty_reply)$/)
     )
 '''

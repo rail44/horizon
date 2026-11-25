@@ -8,13 +8,7 @@ use horizon_agent::registry::ProviderRegistry;
 async fn connect(state: Arc<AgentdState>) -> ConnectionTo<Agent> {
     let (daemon_side, client_side) = tokio::io::duplex(1 << 16);
     let (daemon_read, daemon_write) = tokio::io::split(daemon_side);
-    tokio::spawn(serve(
-        daemon_read,
-        daemon_write,
-        state,
-        "test-agentd",
-        Arc::new(|| {}),
-    ));
+    tokio::spawn(serve(daemon_read, daemon_write, state, "test-agentd"));
     let (client_read, client_write) = tokio::io::split(client_side);
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(agent_client_protocol::Builder::new(Client).connect_with(
@@ -239,9 +233,13 @@ async fn an_extension_answers_its_request_and_an_unknown_one_is_refused() {
     assert_eq!(answered.session_id, SessionId::from_uuid(uuid::Uuid::nil()));
 
     let refused = cx
-        .send_request(acp::WatchBoardRequest {
-            workspace_root: "/project".into(),
-        })
+        .send_request(
+            agent_client_protocol::UntypedMessage::new(
+                "_horizon/no_such_method",
+                serde_json::json!({}),
+            )
+            .unwrap(),
+        )
         .block_task()
         .await
         .expect_err("no extension serves it");

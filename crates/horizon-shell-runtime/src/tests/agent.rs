@@ -14,7 +14,7 @@ use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
-    AttachmentEnd, ContinueTurnRequest, DrainRequest, EmptyResponse, EnsureBoardOrganizerRequest,
+    AttachmentEnd, ContinueTurnRequest, EmptyResponse, EnsureBoardOrganizerRequest,
     EnsureBoardOrganizerResponse, HORIZON_ACP_EXT_VERSION, HostToolRequest, HostToolResponse,
     InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
     SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
@@ -28,9 +28,8 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use super::super::attachment::acp_session_id;
 use super::super::*;
 use super::{
-    FakeBehavior, TerminalCall, bind_stub_listener, expect_terminald_handshake, hold_silently,
-    next_terminal_call, read_until_closed, recv_output, serve_fake_terminal_hub, spec,
-    stub_socket_paths,
+    FakeBehavior, TerminalCall, expect_terminald_handshake, next_terminal_call, recv_output,
+    serve_fake_terminal_hub, spec,
 };
 use crate::agent_model::{AgentEvent, PermissionDecision, ToolCallIdentity};
 
@@ -67,7 +66,6 @@ enum AgentCall {
     Cancel,
     Close,
     ContinueTurn,
-    Drain,
     EnsureBoardOrganizer(PathBuf, SessionId),
 }
 
@@ -82,7 +80,6 @@ impl std::fmt::Debug for AgentCall {
             AgentCall::Cancel => "Cancel",
             AgentCall::Close => "Close",
             AgentCall::ContinueTurn => "ContinueTurn",
-            AgentCall::Drain => "Drain",
             AgentCall::EnsureBoardOrganizer(..) => "EnsureBoardOrganizer",
         };
         f.write_str(name)
@@ -120,8 +117,7 @@ async fn serve_fake_agentd(
     let record = |calls: &Calls, call| {
         let _ = calls.send(call);
     };
-    let (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) = (
-        calls_tx.clone(),
+    let (c1, c2, c3, c4, c5, c6, c7, c8, c10) = (
         calls_tx.clone(),
         calls_tx.clone(),
         calls_tx.clone(),
@@ -293,15 +289,6 @@ async fn serve_fake_agentd(
                         responder: Responder<EmptyResponse>,
                         _connection: V2ConnectionTo<Client>| {
                 record(&c8, AgentCall::ContinueTurn);
-                responder.respond(EmptyResponse {})
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |_request: DrainRequest,
-                        responder: Responder<EmptyResponse>,
-                        _connection: V2ConnectionTo<Client>| {
-                record(&c9, AgentCall::Drain);
                 responder.respond(EmptyResponse {})
             },
             agent_client_protocol::on_receive_request!(),
@@ -526,10 +513,11 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     assert!(fake.calls.try_recv().is_err());
 }
 
-/// `Reload Agent Runtime`'s client-runtime core: the drain reaches only
-/// agentd and the terminal session keeps streaming frames through it.
+/// `Reload Agent Runtime`'s client-runtime core: stopping the agent runtime
+/// reaches only its own connection, and the terminal session keeps
+/// streaming frames.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
+async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = pair();
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
@@ -546,22 +534,23 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     };
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
-    // A full round trip proves the runtime is established, which is what
-    // `begin_reload` reads.
+    // A full round trip proves the runtime is established.
     let list_handle = agentd.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
     assert_eq!(listed.unwrap(), Ok(Vec::new()));
     std::assert_matches!(fake.next_call().await, AgentCall::List);
 
-    assert!(agentd.begin_reload(), "the agent runtime was established");
-    std::assert_matches!(fake.next_call().await, AgentCall::Drain);
+    let stopping = agentd.clone();
+    tokio::task::spawn_blocking(move || stopping.stop_and_wait())
+        .await
+        .unwrap();
 
     let output = TerminalUpdate::Output(b"still alive".to_vec());
     peer.events.send(output).await.unwrap();
     recv_output(terminal.events(), b"still alive").await;
     assert!(
         terminal_calls.try_recv().is_err(),
-        "draining agentd must not send anything to terminald"
+        "stopping the agent runtime must not send anything to terminald"
     );
 }
 
@@ -612,31 +601,6 @@ async fn workspace_root_updates_reach_their_own_channel() {
             parent_session_id: Some(parent_id),
         }
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn dropping_the_runtime_does_not_send_drain() {
-    let (client, server) = pair();
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let responder = handle.responder();
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-
-    drop(handle);
-
-    tokio::time::timeout(Duration::from_secs(5), fake.task)
-        .await
-        .expect("the fake daemon should stop after the runtime drops")
-        .unwrap();
-    let mut saw = Vec::new();
-    while let Ok(call) = fake.calls.try_recv() {
-        saw.push(call);
-    }
-    assert!(
-        !saw.iter().any(|call| matches!(call, AgentCall::Drain)),
-        "dropping the runtime must not drain the daemon: {saw:?}"
-    );
-    drop(responder);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -733,249 +697,6 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
             && message.contains("horizon ext version mismatch"),
         "error was: {message}"
     );
-}
-
-/// A peer that never answers `initialize` (a daemon generation that does
-/// not speak ACP) escalates after `SILENCE_MISMATCH_THRESHOLD` silences to
-/// the one recovery attempt, which dials a fresh ACP connection. The peer
-/// cannot answer that either, so the runtime reports the manual fix.
-/// The runtime's waits on a daemon, made short: the tests below are about
-/// what it does once they run out, not about how long they are.
-fn short_timeouts() -> crate::Timeouts {
-    crate::Timeouts {
-        establish: Duration::from_millis(300),
-        drain_exit: Duration::from_millis(300),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_silent_daemon_is_reported_as_needing_a_manual_stop() {
-    let (socket_path, control_socket) = stub_socket_paths("probe");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start_within(&socket_path, &control_socket, short_timeouts());
-    let mut agent = start_mock_session(&handle, SessionId::new());
-
-    let mut held = Vec::new();
-    for _ in 0..3 {
-        let (stream, _) = listener.accept().await.unwrap();
-        held.push(hold_silently(stream));
-    }
-
-    // Connection 4: the recovery, an ACP `initialize` line.
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let bytes = read_until_closed(&mut stream).await;
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(
-            text.starts_with('{') && text.contains("\"initialize\""),
-            "the recovery must dial ACP; got {text:?}"
-        );
-    }
-
-    let event = next_agent_update(&mut agent).await;
-    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
-        panic!("expected the unrecoverable mismatch to fan out as an error, got {event:?}");
-    };
-    assert!(message.contains("stop it manually"), "error was: {message}");
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// Recovery is attempted exactly once per runtime: a replacement daemon
-/// that is just as silent makes the runtime fail loudly with the rebuild
-/// hint instead of draining again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping() {
-    let (socket_path, control_socket) = stub_socket_paths("fatal");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start_within(&socket_path, &control_socket, short_timeouts());
-    let mut agent = start_mock_session(&handle, SessionId::new());
-
-    let mut held = Vec::new();
-    for _ in 0..3 {
-        let (stream, _) = listener.accept().await.unwrap();
-        held.push(hold_silently(stream));
-    }
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let _ = read_until_closed(&mut stream).await;
-    }
-    drop(listener);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(&socket_path);
-
-    for _ in 0..3 {
-        let (stream, _) = listener.accept().await.unwrap();
-        held.push(hold_silently(stream));
-    }
-
-    let event = next_agent_update(&mut agent).await;
-    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
-        panic!("expected the fatal mismatch to fan out as an error, got {event:?}");
-    };
-    assert!(
-        message.contains("already attempted") && message.contains("rebuild"),
-        "error was: {message}"
-    );
-    let no_more_connections =
-        tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
-    assert!(
-        no_more_connections.is_err(),
-        "the runtime must not reconnect (or drain again) after going fatal"
-    );
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// Serves `mismatched` on the stub's next connection and expects the
-/// runtime's recovery there: `initialize`, then `_horizon/drain`.
-async fn expect_drain(listener: &tokio::net::UnixListener) {
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut fake = serve_fake_agentd(
-        stream,
-        FakeAgentBehavior {
-            mismatched_ext_version: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    std::assert_matches!(fake.next_call().await, AgentCall::Drain);
-}
-
-/// Replaces the drained daemon with a compatible one and checks it is
-/// adopted.
-async fn expect_respawn_adopted(
-    listener: tokio::net::UnixListener,
-    socket_path: &std::path::Path,
-    handle: &AgentdHandle,
-) {
-    drop(listener);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(socket_path);
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-}
-
-/// A daemon that reports another extension version on a successful
-/// `initialize` is drained on that same connection; the recovery's fresh
-/// connection drains it again and the respawned daemon is adopted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_version_mismatched_daemon_is_drained_on_the_same_connection_and_the_respawn_adopted() {
-    let (socket_path, control_socket) = stub_socket_paths("rej");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    expect_drain(&listener).await;
-    expect_drain(&listener).await;
-    expect_respawn_adopted(listener, &socket_path, &handle).await;
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// A request the daemon rejects with the extension-version mismatch error
-/// enters the same recovery: drain on that connection, then respawn.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_request_rejected_for_the_extension_version_drains_and_respawns() {
-    let (socket_path, control_socket) = stub_socket_paths("reqrej");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut rejecting = serve_fake_agentd(
-        stream,
-        FakeAgentBehavior {
-            reject_requests: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    std::assert_matches!(rejecting.next_call().await, AgentCall::Initialize);
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert!(
-        listed
-            .unwrap()
-            .unwrap_err()
-            .contains("horizon ext version mismatch")
-    );
-    std::assert_matches!(rejecting.next_call().await, AgentCall::List);
-    std::assert_matches!(rejecting.next_call().await, AgentCall::Drain);
-
-    expect_drain(&listener).await;
-    expect_respawn_adopted(listener, &socket_path, &handle).await;
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_transient_failures_do_not_consume_the_recovery_budget() {
-    let (socket_path, control_socket) = stub_socket_paths("transient");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    for _ in 0..2 {
-        let (stream, _) = listener.accept().await.unwrap();
-        drop(stream);
-    }
-
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// A connection dropping while `initialize` is in flight is a transient,
-/// retried like any other pre-initialize drop.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_connection_drop_during_initialize_is_retried_not_fatal() {
-    let (socket_path, control_socket) = stub_socket_paths("initdrop");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    let (stream, _) = listener.accept().await.unwrap();
-    let hanging = serve_fake_agentd(
-        stream,
-        FakeAgentBehavior {
-            hang_initialize: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    hanging.task.abort();
-
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

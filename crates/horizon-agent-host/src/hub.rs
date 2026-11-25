@@ -1,13 +1,12 @@
-//! The daemon's ACP v2 agent side (`docs/acp-agentd-design.md`): one
-//! JSON-RPC connection per accepted socket connection, multiplexing every
-//! session by its id, plus the `_horizon/*` extension methods
+//! The host's ACP v2 agent side (`docs/agent-stdio-child-design.md`): one
+//! JSON-RPC connection, multiplexing every session by its id, plus the `_horizon/*` extension methods
 //! (`crates/horizon-acp`). The process-lifetime state stays in
 //! [`crate::session::AgentdState`], reached through the same
 //! [`Connection`] seam.
 //!
 //! `initialize` succeeds for any v2 client. A client at another extension
-//! version gets the daemon's version in the reply, and from then on only
-//! `_horizon/drain` is served on that connection.
+//! version gets the host's version in the reply, and every later request
+//! on that connection is refused.
 //!
 //! Handlers run one at a time on the connection's dispatch loop, so any
 //! handler that waits (resume readiness, a replay, a provider listing)
@@ -41,10 +40,6 @@ use crate::session::{AgentdState, Connection, ForkError, HOST_TOOL_TIMEOUT};
 
 use attachment::Opening;
 
-/// What a drain does once the event log is flushed: the hosting process
-/// ends.
-pub type Drained = Arc<dyn Fn() + Send + Sync>;
-
 /// JSON-RPC error code of a refused call.
 const CALL_ERROR_CODE: i32 = -32000;
 
@@ -69,7 +64,6 @@ struct Slot {
 pub(crate) struct Shared {
     connection: Connection,
     binary_id: &'static str,
-    drained: Drained,
     initialized: AtomicBool,
     /// Set when the client initialized at another extension version.
     mismatch: Mutex<Option<String>>,
@@ -78,11 +72,10 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    fn new(connection: Connection, binary_id: &'static str, drained: Drained) -> Self {
+    fn new(connection: Connection, binary_id: &'static str) -> Self {
         Self {
             connection,
             binary_id,
-            drained,
             initialized: AtomicBool::new(false),
             mismatch: Mutex::new(None),
             slots: Mutex::new(HashMap::new()),
@@ -313,9 +306,9 @@ impl Shared {
                             })
                         }
                         Ok(Err(error)) => {
-                            eprintln!("horizon-agentd: host-tool request failed: {error}")
+                            eprintln!("horizon-agent: host-tool request failed: {error}")
                         }
-                        Err(_) => eprintln!("horizon-agentd: host-tool request timed out"),
+                        Err(_) => eprintln!("horizon-agent: host-tool request timed out"),
                     }
                 });
             }
@@ -421,46 +414,6 @@ impl Shared {
                     let _ = responder.respond_with_error(call_error(message));
                 }
             }
-        });
-        Ok(())
-    }
-
-    /// `_horizon/rewind_session`: the session goes on from a cursor it
-    /// announced, on a new branch.
-    fn rewind_session(
-        self: &Arc<Self>,
-        request: acp::RewindSessionRequest,
-        responder: Responder<acp::EmptyResponse>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        if let Err(error) = self.gate() {
-            return responder.respond_with_error(error);
-        }
-        let session_id = request.session_id;
-        let cursor = v2::CursorId::new(request.cursor_id);
-        let files = request.files;
-        let connection = self.connection.clone();
-        tokio::spawn(async move {
-            connection.wait_until_resume_ready().await;
-            let moved = tokio::task::spawn_blocking(move || {
-                connection.handle_session_rewind(session_id, files, |events| {
-                    mapping::fork_point(events, Some(&cursor))
-                })
-            })
-            .await
-            .unwrap_or_else(|error| {
-                Err(ForkError::Failed(format!("Session rewind failed: {error}")))
-            });
-            let _ = match moved {
-                Ok(()) => responder.respond(acp::EmptyResponse {}),
-                Err(ForkError::Position(message)) => responder.respond_with_error(Error::new(
-                    agent_client_protocol::ErrorCode::INVALID_PARAMS,
-                    message,
-                )),
-                Err(ForkError::Failed(message)) => {
-                    responder.respond_with_error(call_error(message))
-                }
-            };
         });
         Ok(())
     }
@@ -703,27 +656,12 @@ impl Shared {
         let result = self.gate().map(|()| {
             if let Err(error) = self.connection.reload_provider_config() {
                 eprintln!(
-                    "horizon-agentd: provider config reload failed, keeping the previous config: {error}"
+                    "horizon-agent: provider config reload failed, keeping the previous config: {error}"
                 );
             }
             acp::EmptyResponse {}
         });
         answer(responder, result)
-    }
-
-    /// Served on a connection at another extension version too: the
-    /// recovery such a client uses. Flushes the event log and exits; every
-    /// PTY lives in `horizon-terminald`, so nothing else ends with it.
-    fn drain(
-        self: &Arc<Self>,
-        _request: acp::DrainRequest,
-        _responder: Responder<acp::EmptyResponse>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        flush_event_log_before_exit(self.connection.writer());
-        eprintln!("horizon-agentd: drained, exiting");
-        (self.drained)();
-        _responder.respond(acp::EmptyResponse {})
     }
 
     /// A request no core handler claims: an extension's
@@ -774,14 +712,13 @@ pub async fn serve<R, W>(
     write: W,
     state: Arc<AgentdState>,
     binary_id: &'static str,
-    drained: Drained,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Send + 'static,
     W: AsyncWrite + Send + 'static,
 {
     let connection = Connection::new(state);
-    let shared = Arc::new(Shared::new(connection.clone(), binary_id, drained));
+    let shared = Arc::new(Shared::new(connection.clone(), binary_id));
     let transport = ByteStreams::new(write.compat_write(), read.compat());
 
     macro_rules! on_request {
@@ -814,7 +751,6 @@ where
         set_config_option
     );
     let builder = on_request!(builder, acp::ContinueTurnRequest, continue_turn);
-    let builder = on_request!(builder, acp::RewindSessionRequest, rewind_session);
     let builder = on_request!(builder, acp::ListProvidersRequest, list_providers);
     let builder = on_request!(
         builder,
@@ -826,7 +762,6 @@ where
         acp::ReloadProviderConfigRequest,
         reload_provider_config
     );
-    let builder = on_request!(builder, acp::DrainRequest, drain);
     let builder = on_request!(
         builder,
         agent_client_protocol::UntypedMessage,
@@ -839,7 +774,7 @@ where
                 &notification.session_id,
                 Command::Cancel { request_id: None },
             ) {
-                eprintln!("horizon-agentd: dropping a cancel: {}", error.message);
+                eprintln!("horizon-agent: dropping a cancel: {}", error.message);
             }
             Ok(())
         },
@@ -858,7 +793,7 @@ pub fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     if let Some(writer) = writer
         && let Err(error) = writer.flush()
     {
-        eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
+        eprintln!("horizon-agent: failed to flush the session logs before exiting: {error}");
     }
 }
 

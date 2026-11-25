@@ -3,12 +3,8 @@
 //! a temporarily absent listener must never start a real daemon with user data.
 
 #[cfg(not(test))]
-pub(super) use horizon_wire::spawn::{
-    connect_or_spawn_agentd_retrying, connect_or_spawn_terminald_retrying,
-};
+pub(super) use horizon_wire::spawn::connect_or_spawn_terminald_retrying;
 
-#[cfg(test)]
-pub(super) use connect_to_stub_retrying as connect_or_spawn_agentd_retrying;
 #[cfg(test)]
 pub(super) use connect_to_stub_retrying as connect_or_spawn_terminald_retrying;
 

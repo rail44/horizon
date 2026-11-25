@@ -113,7 +113,7 @@ fn add(packages: PackagesBuilder) -> PackagesBuilder {
     match packages.tools(tools) {
         Ok(packages) => packages,
         Err((packages, error)) => {
-            eprintln!("horizon-agentd: wiki tools not added: {error}");
+            eprintln!("horizon-agent: wiki tools not added: {error}");
             packages
         }
     }

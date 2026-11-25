@@ -44,20 +44,12 @@ fn generate_wire_schema() -> Value {
             "request": schema_of(sub::<ListProviderModelsRequest>),
             "reply": schema_of(sub::<ListProviderModelsResponse>),
         },
-        "_horizon/watch_board": {
-            "request": schema_of(sub::<WatchBoardRequest>),
-            "reply": schema_of(sub::<EmptyResponse>),
-        },
         "_horizon/ensure_board_organizer": {
             "request": schema_of(sub::<EnsureBoardOrganizerRequest>),
             "reply": schema_of(sub::<EnsureBoardOrganizerResponse>),
         },
         "_horizon/reload_provider_config": {
             "request": schema_of(sub::<ReloadProviderConfigRequest>),
-            "reply": schema_of(sub::<EmptyResponse>),
-        },
-        "_horizon/drain": {
-            "request": schema_of(sub::<DrainRequest>),
             "reply": schema_of(sub::<EmptyResponse>),
         },
     });

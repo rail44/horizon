@@ -11,7 +11,7 @@ use horizon_agent::hosting::{
     HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, ReasoningSelection,
     SessionNew, SessionSummary,
 };
-use horizon_agent::persistence::event_log::{Appender, PersistedSessionContext, WriterHandle};
+use horizon_agent::persistence::event_log::{Appender, PersistedSessionContext};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::spawn::spawn_session_thread;
@@ -342,135 +342,6 @@ impl Connection {
         Ok(session_id)
     }
 
-    /// Moves `session_id`'s leaf to the position `point` picks from its
-    /// history: its thread ends as on a suspend (keeping its worktree and
-    /// checkpoints), the worktree gets that position's files back when
-    /// `files` asks, and the thread starts again on a new branch whose first
-    /// record (`Event::Rewound`) follows the position's record. The session
-    /// must be between turns, and `files` needs a worktree it owns and a
-    /// checkpoint of the position.
-    pub(crate) fn handle_session_rewind(
-        &self,
-        session_id: SessionId,
-        files: bool,
-        point: impl FnOnce(&[Event]) -> Result<Option<usize>, String>,
-    ) -> Result<(), ForkError> {
-        let position = |message: &str| ForkError::Position(message.to_string());
-        let failed = |error: String| ForkError::Failed(error);
-        let (writer, records, last, worktree, checkpoint) = {
-            let _lifecycle = lock_unpoisoned(&self.state.lifecycle);
-            let writer = (self.state.writer())
-                .ok_or_else(|| failed("Session persistence is unavailable".into()))?;
-            writer.flush().map_err(|error| failed(error.to_string()))?;
-            if !self.state.session_exists(session_id) {
-                return Err(position("The session is not running"));
-            }
-            let records = self
-                .state
-                .flushed_session_records(session_id)
-                .map_err(failed)?;
-            let events: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
-            let mut settled = horizon_agent::persistence::event_log::Settled::new();
-            for event in &events {
-                settled.apply(event);
-            }
-            if !settled.is_settled() {
-                return Err(position("The session is in the middle of a turn"));
-            }
-            let last = point(&events)
-                .map_err(ForkError::Position)?
-                .ok_or_else(|| position("The cursor is before the whole history"))?;
-            let worktree = lock_unpoisoned(&self.state.sessions)
-                .get(&session_id)
-                .and_then(|entry| entry.worktree.clone());
-            let checkpoint = match (files, &worktree) {
-                (false, _) => None,
-                (true, None) => {
-                    return Err(position(
-                        "Files go back only in a worktree the session owns",
-                    ));
-                }
-                (true, Some(worktree)) => Some(
-                    settled_stretch(&events, last)
-                        .rev()
-                        .find_map(|at| {
-                            let record = &records[at];
-                            crate::checkpoint::find(
-                                &worktree.path,
-                                record.session_id.as_uuid(),
-                                &record.event_id,
-                            )
-                        })
-                        .ok_or_else(|| position("No files were recorded at that position"))?,
-                ),
-            };
-            (writer, records, last, worktree, checkpoint)
-        };
-
-        if !self.state.suspend_session(session_id) {
-            return Err(position("The session is not running"));
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while self.state.session_exists(session_id) {
-            if std::time::Instant::now() >= deadline {
-                return Err(failed("The session's thread is still ending".into()));
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        let _lifecycle = lock_unpoisoned(&self.state.lifecycle);
-        if let (Some(worktree), Some(checkpoint)) = (&worktree, &checkpoint) {
-            crate::checkpoint::restore(&worktree.path, checkpoint).map_err(failed)?;
-        }
-        let own = || {
-            records
-                .iter()
-                .rev()
-                .filter(|record| record.session_id == session_id)
-        };
-        let provider_id = own()
-            .find_map(|record| record.provider_id.clone())
-            .ok_or_else(|| failed("The session has no provider identity".into()))?;
-        let role_id = own().find_map(|record| record.role_id.clone());
-        let context = own()
-            .find_map(|record| record.session_context.clone())
-            .ok_or_else(|| failed("The session has no environment context".into()))?;
-        let rewound = Event::Rewound {
-            branch: uuid::Uuid::new_v4().simple().to_string()[..8].to_string(),
-        };
-        let mut appender = Appender::new(
-            writer,
-            session_id,
-            Some(provider_id.clone()),
-            role_id.clone(),
-        )
-        .with_session_context(context.clone())
-        .with_parent(Some(records[last].event_id.clone()));
-        appender
-            .commit_provider_events(vec![rewound.clone().into()])
-            .map_err(|error| failed(error.to_string()))?;
-        let mut history: Vec<_> = records[..=last]
-            .iter()
-            .map(|record| record.event.clone())
-            .collect();
-        history.push(rewound);
-        super::spawn::spawn_session_thread_with_context(
-            self.state.clone(),
-            session_id,
-            provider_id,
-            role_id,
-            context.workspace_root.clone(),
-            context
-                .parent_session_id
-                .or(context.spawn_source_session_id),
-            worktree,
-            history,
-            Some(context),
-            appender.tip(),
-        );
-        Ok(())
-    }
-
     /// Routes an incoming `Control::HostToolResponse` back to whichever
     /// session thread's `host_tools::AgentdHostTools::execute_auto` call is blocked
     /// waiting for this exact `request_id`.
@@ -626,11 +497,6 @@ impl Connection {
             .unwrap()
             .get(&session_id)
             .and_then(|entry| entry.model.clone())
-    }
-
-    /// The hub's graceful-exit flush barrier, including non-session appends.
-    pub(crate) fn writer(&self) -> Option<WriterHandle> {
-        self.state.writer()
     }
 
     /// Capture and register on the session's own thread. Cancelling this wait

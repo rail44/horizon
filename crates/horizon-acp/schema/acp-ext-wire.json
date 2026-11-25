@@ -86,10 +86,6 @@
       ],
       "type": "object"
     },
-    "DrainRequest": {
-      "description": "Flushes the event log and exits the daemon.",
-      "type": "object"
-    },
     "EmptyResponse": {
       "description": "Reply of the extension requests that return nothing.",
       "type": "object"
@@ -747,18 +743,6 @@
           "type": "object"
         }
       ]
-    },
-    "WatchBoardRequest": {
-      "description": "Starts watching a workspace's board.",
-      "properties": {
-        "workspace_root": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "workspace_root"
-      ],
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -779,14 +763,6 @@
       },
       "request": {
         "$ref": "#/$defs/ContinueTurnRequest"
-      }
-    },
-    "_horizon/drain": {
-      "reply": {
-        "$ref": "#/$defs/EmptyResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/DrainRequest"
       }
     },
     "_horizon/ensure_board_organizer": {
@@ -819,14 +795,6 @@
       },
       "request": {
         "$ref": "#/$defs/ReloadProviderConfigRequest"
-      }
-    },
-    "_horizon/watch_board": {
-      "reply": {
-        "$ref": "#/$defs/EmptyResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/WatchBoardRequest"
       }
     }
   },
@@ -872,5 +840,5 @@
     "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 11
+  "x-session-protocol-version": 12
 }

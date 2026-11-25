@@ -40,8 +40,6 @@ fn stub_recovery_never_launches_inherited_daemon_binaries() {
     let attempts = scratch.0.join("spawned.txt");
 
     for case in [
-        "agent::a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping",
-        "agent::a_version_mismatched_daemon_is_drained_on_the_same_connection_and_the_respawn_adopted",
         "a_range_rejecting_terminald_is_asked_to_hand_over_and_its_next_image_adopted",
         "a_terminald_still_rejecting_after_the_handover_is_drained_and_the_respawn_adopted",
     ] {
@@ -52,7 +50,6 @@ fn stub_recovery_never_launches_inherited_daemon_binaries() {
                 .args(["--exact", &format!("tests::{case}"), "--nocapture"])
                 // Configure only the child: parallel cargo-test cases must
                 // not race over this process's environment.
-                .env("HORIZON_AGENTD_BINARY", &recorder)
                 .env("HORIZON_TERMINALD_BINARY", &recorder)
                 .env("HORIZON_LOGD_BINARY", &recorder)
                 .env("HORIZON_TEST_SPAWN_RECORD", &attempts)

@@ -27,7 +27,7 @@ PROFILE="${PROFILE:-debug}"
 BIN_DIR="target/$PROFILE"
 APP="$BIN_DIR/Horizon.app"
 
-BINARIES=(horizon horizon-agentd horizon-terminald horizon-logd)
+BINARIES=(horizon horizon-agent-acp horizon-terminald horizon-logd)
 for binary in "${BINARIES[@]}"; do
   if [[ ! -x "$BIN_DIR/$binary" ]]; then
     echo "missing $BIN_DIR/$binary — run 'cargo build --workspace' first" >&2
