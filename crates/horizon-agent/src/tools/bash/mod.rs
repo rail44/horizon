@@ -2,7 +2,7 @@
 //! calls. [`BashJob`] captures thread-safe inputs; a call runs contained by
 //! the sandbox runtime or, once approved, with the host's authority. Both
 //! enqueue work through one per-session FIFO and deliver completions to the
-//! daemon session loop without blocking it.
+//! host session loop without blocking it.
 //!
 //! Job panic handling sends a failure completion, while the registry's
 //! advance-on-drop guard independently keeps later jobs from getting stuck.

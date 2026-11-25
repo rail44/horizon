@@ -56,7 +56,7 @@ impl State {
                     self.events.push(*event);
                 }
                 ProviderEvent::SettleTools { .. } => {}
-                // The view owns the live child rows; the daemon keeps the
+                // The view owns the live child rows; the host keeps the
                 // session's model, selection and reasoning level for its
                 // attachments.
                 ProviderEvent::TaskProgress(_)
@@ -99,7 +99,7 @@ impl LiveState {
     }
 
     /// Commit persistent events before applying them. In-memory views and
-    /// explicitly disabled test stores fold directly; daemon sessions use the log.
+    /// explicitly disabled test stores fold directly; hosted sessions use the log.
     pub fn extend_provider_events(
         &self,
         events: impl IntoIterator<Item = ProviderEvent>,
@@ -165,7 +165,7 @@ impl LiveState {
 
     /// Test-only: production always seeds `history` explicitly (even if
     /// empty, from a fresh session) via [`Self::with_event_log_and_history`]
-    /// -- `horizon-agentd`'s `run_session` is the one real caller. Kept as
+    /// -- `horizon-agent-host`'s `run_session` is the one real caller. Kept as
     /// a shorthand for tests that don't care about history.
     #[cfg(test)]
     pub(crate) fn with_event_log(
@@ -179,7 +179,7 @@ impl LiveState {
 
     /// Same as [`Self::with_event_log`], seeded with `history` (already-
     /// committed events, e.g. read back from the JSONL log at
-    /// `horizon-agentd` startup) so a resumed session's very first fold
+    /// `horizon-agent-acp` startup) so a resumed session's very first fold
     /// reflects the whole transcript, not just what arrives from here on —
     /// `docs/agent-runtime-split-design.md` step 4's "agentd restart ...
     /// sessions are live again". `history` itself is never re-appended (it's
@@ -205,7 +205,7 @@ impl LiveState {
 
     /// Production counterpart to [`Self::with_event_log_and_history`]: the
     /// session host supplies its authoritative placement so every new
-    /// record can restore the same confinement after a daemon restart, and
+    /// record can restore the same confinement after a `horizon-agent-acp` restart, and
     /// the record `history` ends with (`parent`), which the session's next
     /// record follows on its branch.
     pub fn with_event_log_context_and_history(
@@ -266,8 +266,8 @@ impl LiveState {
     }
 
     /// The session's current accumulated frame. Used outside tests too:
-    /// `horizon-agentd`'s `fold_bash_completion`
-    /// (`crates/horizon-agentd/src/session/completion.rs`) reads this to check
+    /// `horizon-agent-host`'s `fold_bash_completion`
+    /// (`crates/horizon-agent-host/src/session/completion.rs`) reads this to check
     /// whether a call already has a `ToolCallFinished` before folding a late
     /// result — the async-execution analogue of `agent::tools::approval`'s
     /// `ApprovalOutcome::AlreadyResolved` guard.
@@ -281,7 +281,7 @@ impl LiveState {
 
     /// Every fold-relevant event this session has accumulated so far
     /// (already-committed history plus everything folded in since) — the
-    /// source `horizon-agentd`'s `session_load` handling re-emits to a
+    /// source `horizon-agent-host`'s `session_load` handling re-emits to a
     /// (re)connecting client (`docs/agent-runtime-split-design.md` step 4's
     /// "agentd re-emits the fold-relevant committed events for that
     /// session"). Deliberately the same list a fresh `agent_frame_from_events`

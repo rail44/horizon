@@ -4,7 +4,7 @@ use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult}
 use crate::frame::AgentFrame;
 
 /// A tool or approval outcome, delivered from its worker
-/// back to the session loop. `crates/horizon-agentd/src/session/setup.rs`
+/// back to the session loop. `crates/horizon-agent-host/src/session/run.rs`
 /// registers an unbounded `crossbeam_channel` per session (see
 /// `register_session_runtime`) and selects on it alongside provider events,
 /// folding a received completion into the session's `LiveState`/`Frames`
@@ -19,7 +19,7 @@ pub enum ToolCompletion<R = ToolCallResult> {
     Finished(R),
     /// A host-side web request discovered a valid next hop whose domain has
     /// not been granted to this session. No contact with that domain has
-    /// occurred. `horizon-agentd` turns this into `ApprovalKind::DomainGrant`, and
+    /// occurred. `horizon-agent-host` turns this into `ApprovalKind::DomainGrant`, and
     /// an approval retries the same tool call from its original URL.
     DomainGrantRequired {
         call_id: ToolCallId,
@@ -79,7 +79,7 @@ impl ToolCompletion {
 /// discarded — the same idempotence pattern
 /// `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved` uses for a
 /// duplicate approve/deny. Called from
-/// `horizon_agentd::session::fold_bash_completion`, on the session loop,
+/// `horizon_agent_host::session::fold_bash_completion`, on the session loop,
 /// right before folding.
 ///
 /// Occurrence-scoped rather than call_id-keyed

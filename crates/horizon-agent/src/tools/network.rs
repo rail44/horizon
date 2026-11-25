@@ -15,7 +15,7 @@ pub struct SessionDomainPolicy {
 }
 
 impl SessionDomainPolicy {
-    /// A policy with `domains` already allowed: `horizon-agentd` seeds it
+    /// A policy with `domains` already allowed: `horizon-agent-host` seeds it
     /// with the project's configured `network` domains.
     pub fn with_allowed(domains: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {

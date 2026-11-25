@@ -53,7 +53,7 @@ pub(crate) trait Provider: Send + Sync {
     /// going to call one (the rig provider's deterministic fallback mode,
     /// used when no API key is configured -- see
     /// `providers::rig::Provider::resolved_model`'s doc comment). Used by
-    /// `horizon-agentd` to surface a session's model to the UI from
+    /// `horizon-agent-host` to surface a session's model to the UI from
     /// session start, ahead of any turn's `Event::ProviderRequestSent` --
     /// see `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
     fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String>;
@@ -96,7 +96,7 @@ impl ProviderRegistry {
     /// registered under the standing shell-facing id
     /// ([`Self::default_provider_id`]'s `builtin.agent.rig`), so a session
     /// spawn that names no provider keeps starting on the default provider
-    /// unchanged -- including a caller (`horizon-agentd`'s own test seams)
+    /// unchanged -- including a caller (`horizon-agent-host`'s own test seams)
     /// that adjusts `config.rig` after construction, which is why the
     /// default entry passes `config.rig` itself rather than re-resolving:
     /// the state's own view is authoritative for the default entry. An
@@ -194,7 +194,7 @@ impl ProviderRegistry {
     /// dispatching to the provider -- an unresolvable role id returns
     /// `None` here exactly like an unknown `provider_id` does, so a caller
     /// that already treats `None` as "fail loudly, don't start a role-less
-    /// session instead" (see `roles`'s module doc; `horizon-agentd`'s
+    /// session instead" (see `roles`'s module doc; `horizon-agent-host`'s
     /// `session::run_session` is the one production caller) gets that
     /// behavior for both failure modes without extra plumbing. This is the
     /// single choke point every session start goes through, so a role is
@@ -225,7 +225,7 @@ impl ProviderRegistry {
     /// Delegates to the named provider's [`Provider::resolved_model`].
     /// `None` for an unknown `provider_id` too -- same "nothing to report"
     /// shape as an unresolvable model, since the caller
-    /// (`horizon-agentd`'s session spawn) already handles an unknown
+    /// (`horizon-agent-host`'s session spawn) already handles an unknown
     /// provider as a hard session-start failure separately (see
     /// [`Self::start_session`]).
     pub fn resolved_model(

@@ -322,7 +322,7 @@ impl AgentConfig {
     }
 }
 
-/// One resolved `[[providers]]` entry as the caller (`horizon-agentd`'s
+/// One resolved `[[providers]]` entry as the caller (`horizon-agent-acp`'s
 /// `main` / `AgentdState::reload_provider_config`) translates it from
 /// `horizon_config`'s own resolution. Secrets stay out: the
 /// config file records at most the environment variable's **name**
@@ -771,7 +771,7 @@ pub(crate) fn default_state_db_path_from(
 /// always resolves to `Some` in practice) rather than switching to a bare
 /// `PathBuf`, so [`AgentPersistenceConfig::duckdb_path`]'s existing
 /// `Option<PathBuf>` shape -- and every `if let Some(duckdb_path) = ...`
-/// built on it (e.g. `horizon-agentd`'s startup rebuild) -- doesn't need
+/// built on it (e.g. `horizon-agent-host`'s startup rebuild) -- doesn't need
 /// to change shape along with this default.
 pub(crate) fn resolve_state_db_path(
     env_value: Option<String>,

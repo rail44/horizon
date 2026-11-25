@@ -41,14 +41,14 @@ pub(crate) use catalog::{
 pub use completion::{BashCompletion, ToolCompletion, should_fold_completion};
 pub use fs::restore_file_versions;
 pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_refusal};
-// The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
-// because `horizon-agentd` implements it and installs it on every
+// The `task` host seam (`docs/agent-explore-design.md`): `pub`
+// because `horizon-agent-host` implements it and installs it on every
 // session's `ToolSessionState`, the same way it constructs the network
 // proxy and judge handles this module also exposes.
 pub use explore::{ExplorationHost, StartedExploration, TaskStart, deliver_restart_notice};
 pub use input::TaskAccess;
-// The board daemon seam (`docs/board-keeper-design.md`): `pub` for the
-// same reason as `ExplorationHost` — `horizon-agentd` implements
+// The board host seam (`docs/board-keeper-design.md`): `pub` for the
+// same reason as `ExplorationHost` — `horizon-board-flow` implements
 // `BoardHost` and installs it on every session's `ToolSessionState`.
 pub use board::BoardHost;
 // The model-visible ids of that tool and its companion fetch tool, named

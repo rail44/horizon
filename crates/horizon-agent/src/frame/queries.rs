@@ -101,7 +101,7 @@ impl AgentFrame {
     /// double-folding a late result that arrives after the call already
     /// resolved: `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
     /// check, and the bash tool's `should_fold_completion` (called from
-    /// `horizon-agentd`'s `fold_bash_completion`), both key off this.
+    /// `horizon-agent-host`'s `fold_bash_completion`), both key off this.
     ///
     /// Scoped to items at-or-after the latest `ToolCallRequested` for
     /// `call_id` (same "most recent occurrence" reading
@@ -113,7 +113,7 @@ impl AgentFrame {
     /// Scanning the whole session here mistook that stale earlier finish
     /// for the current occurrence's, permanently short-circuiting every
     /// approve/deny for the new call as `AlreadyResolved` and wedging the
-    /// turn — the daemon-side half of the "session stuck on an edit call
+    /// turn — the host-side half of the "session stuck on an edit call
     /// with no working Approve" report; [`Self::tool_call_request`]'s own
     /// `.rev()` scoping was already immune to this.
     pub(crate) fn has_tool_call_finished(&self, call_id: &ToolCallId) -> bool {
@@ -258,7 +258,7 @@ fn pending_approval_identities_in(items: &[AgentFrameItem]) -> Vec<ToolCallIdent
 /// unresolved -- next-turn delivery is deliberate even mid-flight,
 /// decision 6) can leave one behind, and the session loop that owned its
 /// approval gate has since moved on to a different turn entirely, so
-/// there is no live daemon-side gate left to answer a decision for it.
+/// there is no live host-side gate left to answer a decision for it.
 ///
 /// [`pending_approval_call_ids_in`] itself is deliberately left alone --
 /// `turns::is_approval_still_pending` (the completed-turn transcript's
@@ -451,7 +451,7 @@ mod field_scoped_reads_tests {
 
     #[test]
     fn pending_approval_call_ids_in_resolves_on_tool_call_started() {
-        // The daemon's approve ack for `bash` folds `ToolCallStarted`
+        // The host's approve ack for `bash` folds `ToolCallStarted`
         // synchronously, one IPC hop after the click, with the eventual
         // `ToolCallFinished` arriving later and asynchronously -- see
         // `resolve_bash`/`ToolUpdate::Started`

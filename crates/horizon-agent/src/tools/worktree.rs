@@ -1,5 +1,5 @@
-//! `worktree_enter`: asks the daemon to move the calling session into a fresh
-//! worktree. The daemon resolves the base and queues the same
+//! `worktree_enter`: asks the host to move the calling session into a fresh
+//! worktree. The host resolves the base and queues the same
 //! `Command::ActivateWorktree` the board's `implement` action sends; the
 //! switch itself happens at the provider's next turn boundary.
 

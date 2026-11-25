@@ -1,6 +1,6 @@
 //! The dedicated tokio runtime every enforcing-judge call is spawned onto.
 //!
-//! `horizon-agentd` starts the gate after deriving a typed approval candidate on its
+//! `horizon-agent-host` starts the gate after deriving a typed approval candidate on its
 //! plain `crossbeam_channel`-driven session thread. That thread must remain
 //! free to handle cancellation while the prompt is held, so completion is
 //! sent back through the session's `ToolCompletion` channel. `Runtime::spawn`

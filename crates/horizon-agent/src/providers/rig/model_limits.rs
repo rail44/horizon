@@ -35,7 +35,7 @@
 //!
 //! One lookup per process per `(vendor, base_url, api_key_env, model)`, negative
 //! results cached too -- a provider that doesn't publish limits must not be
-//! re-asked once per session for the life of the daemon. The key variable's
+//! re-asked once per session for the life of the process. The key variable's
 //! name is part of the cache key because two entries can share a base URL
 //! and a model while authenticating differently: one entry's `401` is not
 //! the other's answer.

@@ -1,4 +1,4 @@
-//! Board tools use a daemon-provided capability so the agent runtime and
+//! Board tools use a host-provided capability so the agent runtime and
 //! board data crate remain independent. Tool calls carry the actual session
 //! identity; models cannot impersonate another author. Operating policy lives
 //! in the board skills, while the host validates ordinary data operations.
@@ -37,20 +37,20 @@ pub(crate) fn session_schema() -> Value {
     }})
 }
 
-/// The daemon capability `board_read` and `board_comment` are built on: read
+/// The host capability `board_read` and `board_comment` are built on: read
 /// the board (list items or show one) and append a comment. Implemented by
-/// `horizon-agentd` (`session::AgentdBoardHost`) using `horizon_board::Store`
+/// `horizon-board-flow` (`AgentdBoardHost`) using `horizon_board::Store`
 /// and installed on each session's `ToolSessionState` via
 /// [`ToolSessionState::with_board_host`].
 ///
 /// Methods are synchronous: board reads are file folds, and board writes
-/// (comment) go through `horizon-logd` via a tokio round-trip the daemon
+/// (comment) go through `horizon-logd` via a tokio round-trip the host
 /// implementation blocks on internally. The caller (the session thread) is
 /// never async, so the trait stays sync — mirroring how `ExplorationHost`
-/// presents a sync interface despite the daemon's async internals.
+/// presents a sync interface despite the host's async internals.
 ///
 /// Returns `serde_json::Value` for reads so this crate never imports
-/// `horizon-board`'s `Item`/`ListResult` types. The daemon serializes board
+/// `horizon-board`'s `Item`/`ListResult` types. The host serializes board
 /// types to JSON; the tool executor passes them straight through to the model.
 pub trait BoardHost: Send + Sync {
     /// Lists board items in rank order, optionally filtered by status.
@@ -62,12 +62,12 @@ pub trait BoardHost: Send + Sync {
     fn show(&self, id: u64) -> Result<Value, String>;
 
     /// Appends a comment to item `id`. `author` is set by the caller (the
-    /// daemon, from the session id) — the model never controls the author
+    /// host, from the session id) — the model never controls the author
     /// field. `Err` carries a message suitable for the model to read.
     fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), String>;
 
     /// Performs an ordinary task update or a task-session operation. The
-    /// daemon supplies board types and session routing; this crate keeps the
+    /// host supplies board types and session routing; this crate keeps the
     /// two domains independent. Caller identity comes from the tool runtime.
     /// Outgoing requests are returned as events so the runtime persists them
     /// before returning the tool result to the provider.

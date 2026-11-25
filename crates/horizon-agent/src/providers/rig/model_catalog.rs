@@ -62,7 +62,7 @@ pub(super) fn current() -> Arc<Catalog> {
 }
 
 /// The process's catalog, loaded on first use. A load that found no copy is
-/// kept too: the catalog is per daemon start, not per session.
+/// kept too: the catalog is per process start, not per session.
 pub(super) async fn catalog() -> Arc<Catalog> {
     if let Some(loaded) = LOADED.get() {
         return loaded.clone();

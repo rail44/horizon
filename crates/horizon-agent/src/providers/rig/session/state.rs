@@ -263,7 +263,7 @@ impl SessionLoopState {
 }
 
 impl SessionLoopState {
-    /// Apply a daemon-resolved snapshot at a turn boundary, then acknowledge it.
+    /// Apply a host-resolved snapshot at a turn boundary, then acknowledge it.
     async fn handle_set_session_model(
         &mut self,
         selection: &crate::config::ResolvedModelSelection,

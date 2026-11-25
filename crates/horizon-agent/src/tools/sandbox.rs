@@ -1,6 +1,6 @@
 //! The sandbox runtime this process contains `bash` calls with
 //! (`docs/sandbox-runtime-design.md`), and whether it can contain one now.
-//! `horizon-agentd` names the runtime at start; until then, Fence on `PATH`.
+//! `horizon-agent-acp` names the runtime at start; until then, Fence on `PATH`.
 //! Whether it is ready is probed once and again at each turn's start, so a
 //! runtime installed or removed while sessions run is noticed by the next
 //! turn.

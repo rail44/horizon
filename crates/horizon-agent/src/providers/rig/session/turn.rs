@@ -354,7 +354,7 @@ impl SessionLoopState {
     /// This operates on normalized provider call ids, not tool implementations,
     /// so the same path covers synchronous filesystem/config tools, asynchronous
     /// bash/web tools, and approval-gated calls. No pending descriptor remains
-    /// for a retired call, so its result cannot advance the loop. The daemon
+    /// for a retired call, so its result cannot advance the loop. The host
     /// also checks async dispatch identity before forwarding a result when a
     /// later provider batch reuses the same call ID.
     pub(crate) async fn cancel_outstanding_tool_calls(&mut self) -> bool {

@@ -51,7 +51,7 @@ impl Execution {
         }
     }
 
-    /// The daemon checks attempt identity. A declined retry answers the
+    /// The host checks attempt identity. A declined retry answers the
     /// provider with the prior attempt, so this boundary is keyed by call ID.
     pub(crate) fn accept(&mut self, result: &ToolCallResult) -> Option<ToolCallDescriptor> {
         if result.is_superseded() {

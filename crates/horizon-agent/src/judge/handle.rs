@@ -1,7 +1,7 @@
 //! [`JudgeHandle`]: the per-session-installed bundle the approval gate fires
 //! through -- model id, the decision client and its ask threshold, rate
 //! limiter, and the event-log writer the verdict record rides.
-//! Constructed once per session (`horizon-agentd`'s `session::run_session`,
+//! Constructed once per session (`horizon-agent-host`'s `session::run_session`,
 //! mirroring how `tools::SessionNetworkProxy` is constructed there) and
 //! threaded onto `ToolSessionState` via `with_judge`, exactly like the
 //! network proxy.

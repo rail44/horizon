@@ -1,5 +1,5 @@
 //! What packages outside this crate add to the agent -- roles, skills and
-//! tools -- as one value the composition root (`horizon-agentd`) builds at
+//! tools -- as one value the composition root (`horizon-agent-acp`) builds at
 //! startup and hands to what needs it: the provider registry and every
 //! session's tool state. Nothing here is global; a process that builds no
 //! `Packages` has the built-in roles, skills and tools only.

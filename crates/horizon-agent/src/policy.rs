@@ -899,7 +899,7 @@ mod tests {
     }
 
     /// Both policy classes derive the same typed candidate shape.
-    /// `horizon-agentd` gates that candidate after this pure policy mapping
+    /// `horizon-agent-host` gates that candidate after this pure policy mapping
     /// returns.
     #[test]
     fn boundary_crossing_produces_the_same_events_as_always_ask() {

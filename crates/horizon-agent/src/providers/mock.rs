@@ -187,7 +187,7 @@ impl Provider for MockProvider {
                             // belongs to a call whose turn was cancelled.
                             continue;
                         }
-                        // The daemon validates worker identity. A declined retry
+                        // The host validates worker identity. A declined retry
                         // answers the provider call with its prior real result.
                         if pending_tool_call
                             .as_ref()
@@ -274,7 +274,7 @@ fn respond_to_user_message(
     );
     let lower_text = text.to_ascii_lowercase();
     // Test hooks for `worktree_enter` and what follows it, so
-    // `horizon-agentd`'s e2e suite can move a session into a worktree and
+    // `horizon-agent-acp`'s e2e suite can move a session into a worktree and
     // check where its later writes land without a network provider.
     if lower_text.contains("enter a worktree") {
         request_tool(
@@ -355,8 +355,8 @@ fn respond_to_user_message(
         // `bash` approval/execution path (not just the
         // approval-only `mock_approval_required` tool)
         // without a network provider -- used by
-        // `horizon-agentd`'s e2e suite to prove bash
-        // actually runs agentd-side.
+        // `horizon-agent-acp`'s e2e suite to prove bash
+        // actually runs host-side.
         let call_id = ToolCallId("mock-bash-1".to_string());
         let occurrence_id = OccurrenceId::new();
         *pending_tool_call = Some(ToolCallIdentity {
@@ -376,7 +376,7 @@ fn respond_to_user_message(
     }
     if let Some(query) = lower_text.strip_prefix("recall ") {
         // Test hook for the read-only `recall_search` tool over every
-        // session's history, so `horizon-agentd`'s e2e suite can exercise
+        // session's history, so `horizon-agent-acp`'s e2e suite can exercise
         // recall without a network provider.
         let call_id = ToolCallId("mock-recall-1".to_string());
         let occurrence_id = OccurrenceId::new();

@@ -5,7 +5,7 @@
 //! sending the sections, carrying out a verdict, running another round,
 //! recording what happened -- stays in the core (`providers::rig::session`,
 //! `tools::gate`). A session's modules are composed once when it starts
-//! ([`Modules::compose`], by `horizon-agentd`) and handed to both.
+//! ([`Modules::compose`], by `horizon-agent-host`) and handed to both.
 
 pub(crate) mod continuation;
 mod sections;

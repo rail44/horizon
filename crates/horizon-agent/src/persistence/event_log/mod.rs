@@ -55,7 +55,7 @@ impl std::fmt::Display for UnsupportedEventLogFormat {
 impl std::error::Error for UnsupportedEventLogFormat {}
 
 /// Host-resolved session placement needed to restore the same confinement
-/// after `horizon-agentd` restarts. This is deliberately event-log
+/// after `horizon-agent-acp` restarts. This is deliberately event-log
 /// metadata rather than a conversational [`Event`]: every newly appended
 /// record carries the latest authoritative value. `Record::session_context`
 /// is `None` only for the narrow panic-recording path that runs before a
@@ -79,7 +79,7 @@ pub struct PersistedSessionContext {
     pub filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     /// The session this one was spawned from (`SessionNew`'s spawn source),
     /// whether or not it has entered a worktree yet. Restore puts it back on
-    /// the session entry, so an activation after an agentd restart still
+    /// the session entry, so an activation after a `horizon-agent-acp` restart still
     /// records it as `parent_session_id` (board #70). `None` in records
     /// written before the field existed.
     #[serde(default)]
@@ -107,7 +107,7 @@ pub struct Record {
     /// Host-resolved placement/confinement metadata. `None` only for the
     /// narrow last-resort panic-recording path that runs before a
     /// session's `LiveState` exists
-    /// (`horizon_agentd::session::panic::record_uncaught_session_panic`);
+    /// (`horizon_agent_host::session::panic::record_uncaught_session_panic`);
     /// every normal session spawn always supplies it.
     pub session_context: Option<PersistedSessionContext>,
     pub event_kind: String,
@@ -347,7 +347,7 @@ impl ReadReport {
     /// A short human-readable summary of lines `read` had to skip, or
     /// `None` when the file parsed cleanly. Every consumer of the raw JSONL
     /// (the writer's own startup re-read in `event_log::writer`, the DuckDB
-    /// rebuild `open_silently` drives, and `horizon-agentd`'s
+    /// rebuild `open_silently` drives, and `horizon-agent-host`'s
     /// `open_persistence`) reports this instead of silently discarding
     /// evidence that the file has corrupt, torn, or undecodable lines.
     pub fn skipped_summary(&self) -> Option<String> {
@@ -1053,7 +1053,7 @@ mod tests {
     }
 
     /// Proves the chosen design: a single process-global `WriterHandle`
-    /// shared by every session hosted in a `horizon-agentd` process (see
+    /// shared by every session hosted in a `horizon-agent-acp` process (see
     /// the doc comment on `WriterHandle`) cannot tear lines no matter how
     /// many "sessions" hammer it concurrently, because all appends funnel
     /// through one channel to one thread with one open file.

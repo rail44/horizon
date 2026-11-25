@@ -142,7 +142,7 @@ pub fn resolve_auto_approval(
 /// `None` in an attended session, whose approval path is unchanged.
 ///
 /// This is the pre-fold shape, for a call whose `ToolCallRequested` has not
-/// been folded into the session's live frame yet — the daemon's
+/// been folded into the session's live frame yet — the host's
 /// synchronous approval gate. [`refuse_unattended`] is the same refusal for
 /// a request already in the frame.
 pub fn unattended_refusal_result(

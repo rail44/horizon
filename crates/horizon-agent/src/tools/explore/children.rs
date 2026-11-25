@@ -197,7 +197,7 @@ pub(super) fn take_pending(requester: SessionId) -> Vec<Completion> {
 
 /// Non-destructive: how many completions are queued for `requester` right
 /// now. A session loop starting with some already queued -- a notice left
-/// for it across a daemon restart -- wakes itself to take them; a test
+/// for it across a `horizon-agent-acp` restart -- wakes itself to take them; a test
 /// waits for several children to land *before* draining, which is what
 /// "coalesced between two rounds" means.
 pub(super) fn pending_count(requester: SessionId) -> usize {

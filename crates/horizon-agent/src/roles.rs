@@ -114,14 +114,14 @@ pub enum RoleWrites {
 
 /// [`EXPLORE_ROLE`]'s id, named as a constant because two things outside
 /// this module have to recognize it without constructing a
-/// [`RoleDefinition`]: `tools::explore` (which asks the daemon to spawn a
-/// session with it) and `horizon-agentd` (which refuses to resume one at
+/// [`RoleDefinition`]: `tools::explore` (which asks the host to spawn a
+/// session with it) and `horizon-agent-host` (which refuses to resume one at
 /// startup and keeps it out of the client-visible session list -- see
 /// [`is_exploration`]).
 ///
 /// Unchanged by the 2026-07-27 rename of the model-visible tool id to
 /// `task` (`tools::explore::TOOL_ID`): this string is a persistence and
-/// cleanup identity, written into the event log and matched at daemon
+/// cleanup identity, written into the event log and matched at host
 /// startup, and nothing the model ever sees.
 pub const EXPLORE_ROLE_ID: &str = "explore";
 
@@ -240,14 +240,14 @@ const WRITE_TASK_ROLE_PROMPT_SECTION: &str = "You are a task session: another ag
      result; say plainly what you could not finish.";
 
 /// Whether `role_id` names an exploration session -- [`EXPLORE_ROLE`], a
-/// `task` child. This is the one predicate `horizon-agentd` needs to tell
+/// `task` child. This is the one predicate `horizon-agent-host` needs to tell
 /// such sessions apart from every other session it hosts, without a wire
 /// field of its own (`docs/agent-explore-design.md` decision 8: the role id
 /// alone identifies them, so nothing additive had to be added to the
 /// session wire). It
 /// decides three things: no `task` host of its own,
 /// absence from the client-visible session list, and termination rather
-/// than resumption at daemon startup.
+/// than resumption at host startup.
 pub fn is_exploration(role_id: &RoleId) -> bool {
     is_exploration_id(&role_id.0)
 }

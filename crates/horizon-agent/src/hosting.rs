@@ -1,7 +1,7 @@
-//! The vocabulary between `horizon-agentd`'s session threads and the
+//! The vocabulary between `horizon-agent-host`'s session threads and the
 //! connections serving them: the per-attachment event stream
 //! ([`AgentWireEvent`]), the spawn request and listing summaries, and the
-//! host-tool exchange. `horizon-agentd` maps these onto ACP v2 and the
+//! host-tool exchange. `horizon-agent-host` maps these onto ACP v2 and the
 //! `_horizon/*` extensions (`crates/horizon-acp`,
 //! `docs/acp-agentd-design.md`); none of these types is serialized onto a
 //! socket itself.
@@ -38,10 +38,10 @@ pub enum AgentWireEvent {
     /// when activation fails (nothing to correct then).
     WorkspaceRootResolved(WorkspaceRootResolved),
     /// Live progress of one of this session's background `task` children —
-    /// the daemon-side task watcher mirroring what the child was last
+    /// the host-side task watcher mirroring what the child was last
     /// observed doing. Ephemeral: a completion is
     /// recorded durably as a `MessageRole::TaskNotification` message; this
-    /// event only drives the client's live progress rows. The daemon retains
+    /// event only drives the client's live progress rows. The host retains
     /// current running rows and seeds them during attachment bootstrap.
     TaskProgress(TaskProgress),
     /// The session's last applied *selection* — the `(provider, model)` pair
@@ -59,7 +59,7 @@ pub enum AgentWireEvent {
     /// One of this session's `task` children asks for an approval, shown to
     /// the human through this session (`docs/agent-subagent-design.md`
     /// decision 4). Ephemeral like [`Self::TaskProgress`]: the child's own
-    /// event log records the request; the daemon retains the ones still
+    /// event log records the request; the host retains the ones still
     /// pending and asks for them again during attachment bootstrap.
     TaskApproval {
         task_session_id: crate::contract::SessionId,
@@ -144,11 +144,11 @@ pub struct SessionSummary {
     /// that owns a worktree reports it again after the worktree has been
     /// revalidated.
     pub parent_session_id: Option<SessionId>,
-    /// This session's *actual* confinement directory, as `horizon-agentd`
+    /// This session's *actual* confinement directory, as `horizon-agent-host`
     /// itself resolved it -- the authoritative counterpart to `SessionNew.
     /// workspace_root` (that field is only ever the caller's pre-spawn
     /// value; once a session enters a worktree through environment
-    /// activation, `horizon-agentd` reports the worktree path instead).
+    /// activation, `horizon-agent-host` reports the worktree path instead).
     /// Populated from the same `SessionEntry.workspace_root` a resumed
     /// session's summary reads too. Event-log records persist this
     /// authoritative value, and worktree roots are revalidated against Git

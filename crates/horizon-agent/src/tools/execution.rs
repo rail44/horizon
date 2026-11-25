@@ -10,7 +10,7 @@ use crate::tools::state::ToolSessionState;
 use serde_json::Value;
 
 /// Boundary for tools needing shell-owned state, such as `workspace_snapshot`.
-/// The daemon supplies its host-channel adapter; implementations return `None`
+/// The host supplies its host-channel adapter; implementations return `None`
 /// only for unrecognized ids. Local synchronous tools use the closed registry.
 pub trait HostTools {
     /// Executes a host-owned auto-allow tool, returning `None` if `tool_id`

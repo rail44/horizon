@@ -86,7 +86,7 @@ fn store_dir_for_root(root: &Path) -> PathBuf {
 /// Strips inherited `GIT_*` environment variables from `cmd`. Git honors
 /// several (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, ...) as
 /// overrides that take precedence over `-C`. A duplicate of
-/// `horizon-agentd`'s `worktree::scrub_git_env` — this crate can't
+/// `horizon-agent-host`'s `worktree::scrub_git_env` — this crate can't
 /// depend on that module, and the same backlog-53 hazard (hook-exported
 /// `GIT_DIR` silently redirecting an invocation) applies here too.
 fn scrub_git_env(cmd: &mut std::process::Command) {
@@ -103,7 +103,7 @@ fn scrub_git_env(cmd: &mut std::process::Command) {
 
 /// The project's *main* repository root (canonicalized), resolved from
 /// `dir` via `git rev-parse --git-common-dir` — the same resolution
-/// `horizon-agentd`'s `worktree::project_root` uses, so a linked or
+/// `horizon-agent-host`'s `worktree::project_root` uses, so a linked or
 /// isolated worktree resolves back to its source repository's main
 /// toplevel. `None` when `dir` is not in a git repository or the path
 /// cannot be canonicalized. The knowledge store is keyed by this (not

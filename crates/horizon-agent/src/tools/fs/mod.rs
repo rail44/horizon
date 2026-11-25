@@ -43,7 +43,7 @@ fn version_mtime(version: &str) -> Option<std::time::SystemTime> {
 /// Records, from a session's history, the version each file was at when the
 /// session last read, wrote or edited it, as those calls recorded it while
 /// the session ran. A session started again over its history (a resume, a
-/// restart of the daemon) then edits what it read before without reading it
+/// restart of the agent process) then edits what it read before without reading it
 /// again, unless the file changed since.
 pub fn restore_file_versions(tool_state: &ToolSessionState, history: &[crate::contract::Event]) {
     use crate::contract::tool_output::{FileEdits, FileRead, FileWritten, decode};

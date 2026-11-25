@@ -56,7 +56,7 @@ pub struct ToolCallId(pub String);
 ///
 /// The string itself is a UUID v4 minted at the first emission point in
 /// `providers::rig::mapping::rig_tool_call_request` (and at
-/// `horizon_agentd::session::approval::begin_reissued_approval` for reissues) --
+/// `horizon_agent_host::session::approval::begin_reissued_approval` for reissues) --
 /// not the provider-supplied `call_id`, not a per-process counter, so a
 /// resumed session and a replayed log line up on the same value without any
 /// shared counter to coordinate.
@@ -89,13 +89,13 @@ pub(crate) struct StartSession {
     pub role_id: Option<RoleId>,
     /// This session's real working directory -- for a restored session that
     /// owns a worktree, that worktree (already resolved by the caller before this
-    /// reaches a provider), not wherever the daemon process happens to be
+    /// reaches a provider), not wherever the `horizon-agent-acp` process happens to be
     /// running from. `None` when no root is available at all. Consumed by
     /// the rig provider to build [`crate::prompt::SessionEnvironment`]
     /// (`providers::rig::session::spawn_rig_session`), so the system
     /// prompt's "Working directory at session start" line and the skills listing
     /// (`providers::rig::session::session_extra_sections`) both reflect the
-    /// session's actual root instead of the daemon's `cwd`.
+    /// session's actual root instead of the `horizon-agent-acp` process's `cwd`.
     pub workspace_root: Option<PathBuf>,
     /// Prior session events for a resumed session -- empty for a fresh
     /// `Control::SessionNew`. Carries the JSONL event log's events so the
@@ -109,7 +109,7 @@ pub(crate) struct StartSession {
     /// config list — when `false`, repository skills (`.horizon/skills/`)
     /// and repository instructions (`AGENTS.md`/`CLAUDE.md`) are not loaded
     /// into the system prompt, and only embedded skills are advertised.
-    /// Computed by `horizon-agentd` at session spawn (reusing the same
+    /// Computed by `horizon-agent-host` at session spawn (reusing the same
     /// `worktree::project_root` resolution as `[grants]`) and threaded in
     /// here so the rig provider's `session_extra_sections` can gate on it.
     /// `#[serde(default)]` defaults to `false` (untrusted) — fail-closed.
@@ -229,7 +229,7 @@ pub enum Command {
         reason: Option<String>,
     },
     ToolCallResult(ToolCallResult),
-    /// Request a model switch. The daemon resolves its current catalog before
+    /// Request a model switch. The host resolves its current catalog before
     /// forwarding an internal `ApplySessionModel`. The running turn finishes
     /// on its previous selection; the provider announces only after application.
     SetSessionModel {
@@ -247,13 +247,13 @@ pub enum Command {
     /// [`SessionState::Suspended`] rather than `Terminated`, startup does not
     /// resume it, and an explicit resume brings it back.
     Suspend,
-    /// Daemon-to-provider delivery of an already validated selection. Explicitly
+    /// Host-to-provider delivery of an already validated selection. Explicitly
     /// excluded from serialization/schema so clients cannot supply provider
     /// endpoints or key-variable names instead of selecting configured entries.
     #[serde(skip)]
     #[schemars(skip)]
     ApplySessionModel(Box<crate::config::ResolvedModelSelection>),
-    /// Daemon-owned retry identity for a still-pending provider call.
+    /// Host-owned retry identity for a still-pending provider call.
     #[serde(skip)]
     #[schemars(skip)]
     ToolCallReissued(ToolCallIdentity),
@@ -377,7 +377,7 @@ pub enum Event {
     /// A human resumed a turn the turn-loop guard halted via
     /// `Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-
     /// halts-real-work.md`'s decision 3 — "Continue is one action").
-    /// Emitted at the same agentd seam as `ApprovalResolved`.
+    /// Emitted at the same host seam as `ApprovalResolved`.
     /// `resumed_from` carries the `TurnEndReason` of the most recent
     /// `TurnEnded` event in this session's frame at the moment of
     /// dispatch — `AgentFrame::last_turn_end_reason` is the accessor —
@@ -471,7 +471,7 @@ pub fn event_kind(event: &Event) -> &'static str {
     }
 }
 
-/// Live progress of one background `task` child, observed by the daemon and
+/// Live progress of one background `task` child, observed by the host and
 /// forwarded to the requester's attached client. Purely a UI feedback signal:
 /// never folded into conversation history and never persisted — see
 /// [`ProviderEvent::task_progress`]. A child's completion is *also* recorded
@@ -740,8 +740,8 @@ impl ToolCallIdentity {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ApprovalRequest {
     pub call_id: ToolCallId,
-    /// Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the
-    /// agentd on every approval it emits (initial + every reissue) so the
+    /// Per-occurrence identity -- see [`OccurrenceId`]. Stamped by
+    /// `horizon-agent-host` on every approval it emits (initial + every reissue) so the
     /// approval attaches to the specific occurrence the user is deciding,
     /// not just to a call_id that may have already been resolved by an
     /// earlier occurrence.

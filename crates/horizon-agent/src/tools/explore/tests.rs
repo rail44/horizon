@@ -29,7 +29,7 @@ impl HostTools for NoHostTools {
     }
 }
 
-/// A scripted stand-in for `horizon-agentd`'s real task host: it hands
+/// A scripted stand-in for `horizon-agent-host`'s real task host: it hands
 /// the tool one half of a channel the test drives event by event, and
 /// records every `terminate` call so the teardown requirements are directly
 /// assertable. Deterministic and offline -- no provider, no session thread,
@@ -123,7 +123,7 @@ impl ExplorationHost for ScriptedHost {
     }
 }
 
-/// A requester session wired exactly as `horizon-agentd`'s `run_session`
+/// A requester session wired exactly as `horizon-agent-host`'s `run_session`
 /// wires one.
 struct Requester {
     session_id: SessionId,
@@ -163,7 +163,7 @@ impl Requester {
 
     /// Runs one tool call through the same entry point the session loop
     /// uses, folding whatever it produces into this session's live state
-    /// (as `horizon-agentd`'s `handle_provider_event` does), and returns
+    /// (as `horizon-agent-host`'s `handle_provider_event` does), and returns
     /// the call's own result output.
     fn call(&self, call_id: &str, tool_id: &str, input: serde_json::Value) -> serde_json::Value {
         let processing = process_agent_provider_event(
@@ -1177,9 +1177,9 @@ fn a_follow_up_to_an_unknown_or_ended_child_is_refused() {
     assert!(host.sent.lock().unwrap().is_empty());
 }
 
-// --- daemon restart (docs/agent-subagent-design.md decision 11) -----------
+// --- `horizon-agent-acp` restart (docs/agent-subagent-design.md decision 11) ---
 
-/// A write child ended by a daemon restart is reported to its requester
+/// A write child ended by a `horizon-agent-acp` restart is reported to its requester
 /// like any other ending, naming the branch its work was kept on; a session
 /// loop starting with such a notice queued wakes itself to take it.
 #[test]

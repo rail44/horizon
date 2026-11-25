@@ -4,7 +4,7 @@
 use crate::contract::{Event, SessionState, ToolCallIdentity, ToolCallRequest, ToolCallResult};
 use crate::live::LiveState;
 
-/// An update applied to LiveState, consumed by the daemon to publish events before handing
+/// An update applied to LiveState, consumed by the host to publish events before handing
 /// the terminal result to the provider. Starting a worker has no result yet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolUpdate {

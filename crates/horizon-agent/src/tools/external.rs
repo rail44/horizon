@@ -2,7 +2,7 @@
 //! beside the roles and skills it adds. A package supplies
 //! each tool's definition and an executor written against plain types (a
 //! session id, the session's roots, JSON in and out), so the package needs no
-//! `horizon-agent` types; `horizon-agentd` is where packages are composed.
+//! `horizon-agent` types; `horizon-agent-acp` is where packages are composed.
 //!
 //! Registering a tool declares it contained: it runs without an approval,
 //! and the core takes the package's word for it. There is no approval path

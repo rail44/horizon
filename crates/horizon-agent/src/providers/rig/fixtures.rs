@@ -1,7 +1,7 @@
 //! Prompts and tool results that make the deterministic fallback responder
 //! call tools, so tests drive the tool loop without a network provider.
 //! Compiled only for tests and for a build with the `test-fixtures`
-//! feature (the daemon binary the end-to-end tests spawn): a production
+//! feature (the `horizon-agent-acp` binary the end-to-end tests spawn): a production
 //! build without a model answers with plain text whatever it is sent.
 
 use rig_core::completion::{AssistantContent, Message};

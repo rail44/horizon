@@ -2,7 +2,7 @@
 
 use super::{NamedProviderConfig, ProvidersTable, RigAgentConfig, apply_provider_entry};
 
-/// A validated snapshot passed inside the daemon, never accepted over the wire.
+/// A validated snapshot passed inside the host, never accepted over the wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedModelSelection {
     entry: NamedProviderConfig,
@@ -30,7 +30,7 @@ impl ResolvedModelSelection {
     }
 }
 
-/// Resolve once against the daemon's current catalog before queuing a switch.
+/// Resolve once against the host's current catalog before queuing a switch.
 /// The provider's key presence is rechecked at application.
 pub fn resolve_model_selection(
     table: &ProvidersTable,

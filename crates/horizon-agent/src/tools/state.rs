@@ -115,7 +115,7 @@ struct Inner {
     /// embedded builtins plus any `.horizon/skills/` discovered from the
     /// session's cwd, per `skills`' module doc (v2). Empty
     /// ([`SkillRegistry::default`]) at every construction site except the
-    /// one production call site (`horizon-agentd`'s `session::run_session`),
+    /// one production call site (`horizon-agent-host`'s `session::run_session`),
     /// which installs the real per-session registry via
     /// [`ToolSessionBuilder::with_skills`] right after construction --
     /// mirroring how [`RecallContext`] is threaded in, except this seat is
@@ -133,7 +133,7 @@ struct Inner {
     /// refused tool result instead, so the session keeps running
     /// (`tools::approval::unattended_refusal_result`). Threaded in after
     /// construction through [`ToolSessionBuilder`]: only
-    /// `horizon-agentd`'s `session::run_session` knows the session's role.
+    /// `horizon-agent-host`'s `session::run_session` knows the session's role.
     /// `false` everywhere except that call site.
     unattended: bool,
     /// Why this session may write nothing at all, or `None` when it may
@@ -159,16 +159,16 @@ struct Inner {
     /// construction site in this crate's own tests except where a test
     /// explicitly installs one via [`ToolSessionBuilder::with_judge`]) -- see
     /// `JudgeHandle::new`. Injected post-construction: the one production call site
-    /// (`horizon-agentd`'s `session::run_session`) is the only place that
+    /// (`horizon-agent-host`'s `session::run_session`) is the only place that
     /// has both this session's resolved provider `base_url` and the
     /// process's event-log writer handle.
     /// The verdict stage's modules (`modules::verdict`): the tiers, and
     /// the judge when the session has one.
     modules: crate::modules::Modules,
-    /// This session's handle onto the daemon's spawn/subscribe/terminate
+    /// This session's handle onto the host's spawn/subscribe/terminate
     /// capability for parallel exploration sessions (`tools::explore`,
     /// `docs/agent-explore-design.md`). Injected post-construction the same
-    /// way [`Self::judge`] is: only `horizon-agentd`'s
+    /// way [`Self::judge`] is: only `horizon-agent-host`'s
     /// `session::run_session` can host a peer session, and only it knows
     /// this session's workspace root and provider -- both of which the
     /// exploration must share. `None` (every construction site in this
@@ -177,10 +177,10 @@ struct Inner {
     /// `task` resolve to an actionable error result rather than a
     /// silent no-op.
     exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
-    /// This session's handle onto the daemon's board read/comment capability
+    /// This session's handle onto the host's board read/comment capability
     /// (`tools::board`, `docs/board-keeper-design.md`). Injected
     /// post-construction the same way [`Self::exploration`] is: only
-    /// `horizon-agentd`'s `session::run_session` can construct a
+    /// `horizon-agent-host`'s `session::run_session` can construct a
     /// `horizon_board::Store` (it knows the workspace root and the logd
     /// socket). `None` (every construction site in this crate's own tests)
     /// makes `board_read`/`board_comment` resolve to an actionable error
@@ -271,7 +271,7 @@ impl ToolSessionState {
     }
 
     /// Copies every domain `previous` allows into this session's own store.
-    /// `horizon-agentd` calls this when an
+    /// `horizon-agent-host` calls this when an
     /// environment activation replaces the tool state, so a domain approved
     /// "for this session" stays approved after the session enters its
     /// worktree; the replacement otherwise starts from the project's
@@ -355,7 +355,7 @@ impl ToolSessionState {
     }
 
     /// Record the one session-scoped approval for direct primary-checkout
-    /// work. It is deliberately not persisted across a daemon restart.
+    /// work. It is deliberately not persisted across a `horizon-agent-acp` restart.
     pub(crate) fn approve_primary_checkout(&self) {
         if let Some(checkout) = &self.inner.primary_checkout {
             checkout.approved.set(true);
@@ -453,8 +453,8 @@ pub(crate) struct SessionRuntime {
 
 thread_local! {
     // LiveState's inner Rc<RefCell<..>> is confined to a single thread, so
-    // this registry is too. It bridges `horizon-agentd`'s session loop
-    // (`crates/horizon-agentd/src/session/`, where a session's runtime
+    // this registry is too. It bridges `horizon-agent-host`'s session loop
+    // (`crates/horizon-agent-host/src/session/`, where a session's runtime
     // is created via `register_session_runtime`) and the approve/deny
     // command handling on that same thread, which don't otherwise share
     // scope.

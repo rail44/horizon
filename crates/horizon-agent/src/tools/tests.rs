@@ -51,8 +51,8 @@ fn dummy_tool_state() -> ToolSessionState {
 
 /// A throwaway sender for tests that register a session runtime but never
 /// exercise the `bash` tool (which is what actually reads from the paired
-/// receiver — see `horizon-agentd`'s session loop,
-/// `crates/horizon-agentd/src/session/`).
+/// receiver — see `horizon-agent-host`'s session loop,
+/// `crates/horizon-agent-host/src/session/`).
 fn dummy_bash_results() -> crossbeam_channel::Sender<BashCompletion> {
     crossbeam_channel::unbounded().0
 }
@@ -2325,7 +2325,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     // occurrence's finish for the *second* occurrence's, so `try_execute`
     // permanently returned `AlreadyResolved` for a call nobody had ever
     // acted on -- no tool ran, no result reached the provider, the turn
-    // wedged forever with no way to recover (the daemon-side half of the
+    // wedged forever with no way to recover (the host-side half of the
     // "session stuck, no working Approve" report; the UI-side half is
     // `src/agent/turns.rs`'s `build_tool_call_views`/`tool_call_body`).
     let root = temp_workspace("approval-reused-call-id");
@@ -2881,7 +2881,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
     };
     let running_frame = live_state.frame();
     // The frame the second approve would actually see (production folds
-    // this exact frame, e.g. `horizon-agentd`'s `resolve_and_forward` reads
+    // this exact frame, e.g. `horizon-agent-host`'s `resolve_and_forward` reads
     // `live_state.frame()` fresh for every inbound command) already shows
     // `ToolCallStarted` but not yet `ToolCallFinished` -- the vulnerable
     // window.

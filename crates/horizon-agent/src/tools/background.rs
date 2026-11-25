@@ -245,7 +245,7 @@ fn close_group(group: &Group) {
     stop_all(entries);
 }
 
-/// Bounded waiting never pretends a timed-out worker has stopped. The daemon
+/// Bounded waiting never pretends a timed-out worker has stopped. The host
 /// retains the worktree when this returns false.
 pub fn drain_session_work(session: SessionId, timeout: Duration) -> bool {
     let Some(group) = lock(groups()).get(&session).cloned() else {

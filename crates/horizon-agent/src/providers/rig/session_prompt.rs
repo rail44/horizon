@@ -12,7 +12,7 @@ use crate::{
 /// Builds a session's [`SessionEnvironment`] from the `StartSession` request
 /// that started it. Extracted as its own function (rather than inlined at
 /// its one call site above) so the 2026-07-19 dogfooding fix -- an isolated
-/// session's prompt must reflect its own workspace root, not the daemon
+/// session's prompt must reflect its own workspace root, not the `horizon-agent-acp`
 /// process's `cwd` -- is directly unit-testable without spinning up the
 /// session's real thread.
 pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment {

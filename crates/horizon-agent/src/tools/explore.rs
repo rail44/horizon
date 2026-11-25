@@ -43,20 +43,20 @@
 //! survive `cancel-turn` -- interrupting the requester must not vaporize
 //! in-flight investigation -- and are terminated when the requesting
 //! session itself goes away ([`cancel_session`], reached from
-//! `unregister_session_runtime`). Daemon-restart cleanup is unchanged and
+//! `unregister_session_runtime`). Host-restart cleanup is unchanged and
 //! still keys on the explore role id alone (`roles::is_exploration`).
 //!
 //! **The seam.** This crate cannot spawn a session: hosting one is
-//! `horizon-agentd`'s job (`docs/agent-runtime-split-design.md`). So
-//! [`ExplorationHost`] is a daemon-provided capability handle, installed on
+//! `horizon-agent-host`'s job (`docs/agent-runtime-split-design.md`). So
+//! [`ExplorationHost`] is a host-provided capability handle, installed on
 //! `ToolSessionState` at session construction exactly like the recall
 //! store, the network proxy, and the judge already are
 //! (`ToolSessionBuilder::with_exploration_host`). `None` -- every test
 //! construction, and any future host that can't spawn peers -- degrades to
-//! an actionable error result, never a silent no-op. Its daemon-side
+//! an actionable error result, never a silent no-op. Its host-side
 //! implementation is written against a named "subscribe to another
 //! session's stop/completion events" abstraction
-//! (`horizon-agentd`'s `session::subscription`), so approval forwarding
+//! (`horizon-agent-host`'s `session::subscription`), so approval forwarding
 //! for future write-capable children is one more event kind on the same
 //! seam rather than a new one.
 //!
@@ -96,7 +96,7 @@ pub(crate) use notify::{register_wake, unregister_wake};
 /// Deliberately *not* the same string as `roles::EXPLORE_ROLE_ID`, which
 /// stays `"explore"`. That one is a persistence and cleanup identity -- it
 /// is written into the event log, decides which sessions
-/// `horizon-agentd` refuses to resume at startup, and filters the
+/// `horizon-agent-host` refuses to resume at startup, and filters the
 /// client-visible session list -- so renaming it would touch resume paths
 /// and already-persisted records while buying nothing the model can see.
 pub(crate) const TOOL_ID: &str = "task";
@@ -108,7 +108,7 @@ pub(crate) const TOOL_ID: &str = "task";
 /// [`TOOL_ID`] -- see `providers::rig::completion::rig_tool_definitions`.
 pub(crate) const OUTPUT_TOOL_ID: &str = "task_output";
 
-/// A running exploration session, as handed back by the daemon.
+/// A running exploration session, as handed back by the host.
 pub struct StartedExploration {
     /// The spawned session's own id. Returned to the requester for cost
     /// attribution -- it is the join key between the requester's
@@ -139,8 +139,8 @@ pub struct TaskStart {
     pub domains: Vec<String>,
 }
 
-/// The daemon capability `task` is built on: spawn a peer session,
-/// subscribe to its events, terminate it. Implemented by `horizon-agentd`
+/// The host capability `task` is built on: spawn a peer session,
+/// subscribe to its events, terminate it. Implemented by `horizon-agent-host`
 /// (`session::AgentdExplorationHost`) and installed on the requester's
 /// `ToolSessionState`; the requester's own workspace root, provider, and
 /// session id are baked into the implementation at construction, so this
@@ -200,7 +200,7 @@ pub trait ExplorationHost: Send + Sync {
 
     /// Forwards one live progress observation about `child` to whoever is
     /// watching the requesting session (its attached client). Called by the
-    /// child's watcher thread as the child acts; the daemon implementation
+    /// child's watcher thread as the child acts; the host implementation
     /// routes it onto the requester's attachment event channel and drops it
     /// when no client is attached — progress is ephemeral by design (see
     /// `contract::TaskProgress`). The default no-op covers hosts without a
@@ -404,7 +404,7 @@ fn follow_up(
     )
 }
 
-/// Tells `requester` that its write child `child` was ended by a daemon
+/// Tells `requester` that its write child `child` was ended by a `horizon-agent-acp`
 /// restart (`docs/agent-subagent-design.md` decision 11): queued as that
 /// child's last report, naming the branch its work was kept on, and
 /// delivered like any other -- at once if the requester's loop is running,
@@ -798,7 +798,7 @@ fn fold_until_terminal(
                     // host never sends `Initialize` after the user message,
                     // an approval that would need a human is refused rather
                     // than raised, and task children are never resumed
-                    // across a daemon restart; a follow-up is a new user
+                    // across a `horizon-agent-acp` restart; a follow-up is a new user
                     // message, which starts the next fold) — but `bash` is
                     // now allowed and can run in the background, and a
                     // write child will raise approvals, so this arm is a

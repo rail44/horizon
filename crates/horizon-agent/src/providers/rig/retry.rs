@@ -333,7 +333,7 @@ where
 }
 
 /// Keeps a provider error body (which can be arbitrarily long) from
-/// dominating agentd's stderr.
+/// dominating the agent's stderr.
 fn truncate_for_log(message: &str) -> String {
     const LIMIT: usize = 300;
     let (head, truncated) = crate::transcript::truncate_chars(message, LIMIT);
