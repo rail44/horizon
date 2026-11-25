@@ -3,14 +3,12 @@
 use horizon_agent::packages::PackagesBuilder;
 use horizon_agent::roles::{RoleDefinition, RoleWrites};
 
-pub(super) const ORGANIZER: &str = "board-organizer";
 pub(super) const TASK: &str = "board-task";
 pub(super) const REVIEWER: &str = "board-reviewer";
 
 /// Adds the board's roles and skills.
 pub(crate) fn add(packages: PackagesBuilder) -> PackagesBuilder {
     let definitions = [
-        (ORGANIZER, "Board Organizer", "board-organizer"),
         (TASK, "Board Task", "board-task"),
         (REVIEWER, "Board Reviewer", "board-reviewer"),
     ]
@@ -19,7 +17,6 @@ pub(crate) fn add(packages: PackagesBuilder) -> PackagesBuilder {
         id,
         title,
         prompt_section: match skill {
-            "board-organizer" => "Read the board-organizer skill before organizing tasks. Follow the project's instructions and integration policy.",
             "board-task" => "Read the board-task skill before working on your associated task. Keep the same session through consultation and implementation.",
             _ => "Read the board-reviewer skill before reviewing the requested task changes.",
         },
@@ -31,7 +28,6 @@ pub(crate) fn add(packages: PackagesBuilder) -> PackagesBuilder {
         writes: RoleWrites::InOwnWorktree,
         include_repository_instructions: true,
         skill_ids: match skill {
-            "board-organizer" => &["board-organizer"],
             "board-task" => &["board-task", "board-integration"],
             _ => &["board-reviewer"],
         },
@@ -41,7 +37,6 @@ pub(crate) fn add(packages: PackagesBuilder) -> PackagesBuilder {
     })
     .collect();
     packages.roles(definitions).skill_sources(vec![
-        horizon_board::agents::ORGANIZER_SKILL,
         horizon_board::agents::TASK_SKILL,
         horizon_board::agents::REVIEWER_SKILL,
     ])

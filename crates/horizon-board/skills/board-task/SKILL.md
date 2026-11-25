@@ -36,9 +36,8 @@ owner decisions before describing related work as outstanding; new findings do
 not silently invalidate an earlier closure decision.
 
 For a large task, propose concrete child tasks and record useful decomposition
-with board_update. Send findings that affect priorities or dependencies to the
-board organizer using board_session action=send. The organizer handles board-wide
-ordering. Both directly registered ideas and conversation-created tasks are valid.
+with board_update, including findings that affect priorities or dependencies.
+Both directly registered ideas and conversation-created tasks are valid.
 
 When the direction is sufficiently clear and prerequisite results permit work,
 continue implementation in this same session. Choose an explicit starting commit

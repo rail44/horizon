@@ -31,12 +31,7 @@ fn generate_wire_schema() -> Value {
         generator.subschema_for::<T>()
     }
 
-    let client_to_agent = json!({
-        "_horizon/ensure_board_organizer": {
-            "request": schema_of(sub::<EnsureBoardOrganizerRequest>),
-            "reply": schema_of(sub::<EnsureBoardOrganizerResponse>),
-        },
-    });
+    let client_to_agent = json!({});
 
     let notifications = json!({
         "_horizon/session_event": schema_of(sub::<SessionEventNotification>),

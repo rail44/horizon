@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::ReplyAddress;
 use super::roles;
-use horizon_agent_host::session::{AgentdState, resume_session, spawn_session_thread};
+use horizon_agent_host::session::{AgentdState, spawn_session_thread};
 
 static START_SESSION: Mutex<()> = Mutex::new(());
 
@@ -52,15 +52,11 @@ pub(crate) async fn operate(
     let source = format!("tool:{}:{}", caller.as_uuid(), request.occurrence_id.0);
     match operation {
         Operation::Consult { id, text } => {
-            let target = task_session(&state, store, root, id, false).await?;
-            let organizer = organizer_session(&state, root)?;
+            let target = task_session(&state, store, root, id).await?;
             let input = SessionInput {
                 id: source,
                 origin: format!("session:{}", caller.as_uuid()),
-                text: format!(
-                    "Task #{id}. Board organizer session: {}.\n\n{text}",
-                    organizer.as_uuid()
-                ),
+                text: format!("Task #{id}.\n\n{text}"),
                 reply_to: Some(ReplyAddress::board(root, id)?),
                 resume_work: false,
             };
@@ -226,12 +222,11 @@ fn queue(target: SessionId, input: SessionInput) -> Result<Vec<Event>, String> {
     }])
 }
 
-pub(super) async fn task_session(
+async fn task_session(
     state: &Arc<AgentdState>,
     store: &Store,
     root: &Path,
     id: u64,
-    resume: bool,
 ) -> Result<SessionId, String> {
     let candidate = SessionId::new().as_uuid().to_string();
     let item = store
@@ -242,88 +237,25 @@ pub(super) async fn task_session(
         .session_id
         .ok_or("Task session binding was not stored")?;
     let target = parse_session(&bound)?;
-    ensure_started(state, target, root, roles::TASK, resume)?;
+    ensure_started(state, target, root, roles::TASK)?;
     Ok(target)
 }
 
-pub(crate) fn organizer_session(
-    state: &Arc<AgentdState>,
-    root: &Path,
-) -> Result<SessionId, String> {
-    let _guard = START_SESSION.lock().map_err(|e| e.to_string())?;
-    let project = horizon_agent_host::worktree::project_root(root)
-        .ok_or("Board is not in a Git repository")?;
-    let live = horizon_agent_host::session::Connection::new(state.clone())
-        .session_list()
-        .into_iter()
-        .find(|session| {
-            session
-                .role_id
-                .as_ref()
-                .is_some_and(|role| role.0 == roles::ORGANIZER)
-                && session
-                    .workspace_root
-                    .as_deref()
-                    .and_then(horizon_agent_host::worktree::project_root)
-                    .as_ref()
-                    == Some(&project)
-        });
-    if let Some(session) = live {
-        return Ok(session.session_id);
-    }
-    flush(state)?;
-    let existing = state
-        .flushed_sessions_with_role(&RoleId(roles::ORGANIZER.into()))?
-        .into_iter()
-        .find(|(_, root)| {
-            root.as_deref()
-                .and_then(horizon_agent_host::worktree::project_root)
-                .as_ref()
-                == Some(&project)
-        })
-        .map(|(id, _)| id);
-    let id = existing.unwrap_or_else(SessionId::new);
-    start_locked(
-        state,
-        id,
-        &project,
-        roles::ORGANIZER,
-        true,
-        existing.is_some(),
-    )?;
-    Ok(id)
-}
 fn ensure_started(
     state: &Arc<AgentdState>,
     id: SessionId,
     root: &Path,
     role: &str,
-    resume: bool,
 ) -> Result<(), String> {
     if state.session_exists(id) {
         return Ok(());
     }
     let _guard = START_SESSION.lock().map_err(|e| e.to_string())?;
-    let recorded = !session_records(state, id)?.is_empty();
-    start_locked(state, id, root, role, resume, recorded)
-}
-/// `recorded`: whether the event log already holds records of `id`.
-fn start_locked(
-    state: &Arc<AgentdState>,
-    id: SessionId,
-    root: &Path,
-    role: &str,
-    resume: bool,
-    recorded: bool,
-) -> Result<(), String> {
     if state.session_exists(id) {
         return Ok(());
     }
-    if recorded {
-        if !resume {
-            return Err("The task session has been explicitly ended".into());
-        }
-        return resume_session(state, id);
+    if !session_records(state, id)?.is_empty() {
+        return Err("The task session has been explicitly ended".into());
     }
     if state.writer().is_none() {
         return Err("Task sessions require event persistence".into());
@@ -355,14 +287,6 @@ fn session_records(
 ) -> Result<Vec<event_log::Record>, String> {
     flush(state)?;
     state.flushed_session_records(id)
-}
-#[cfg(test)]
-pub(super) fn records(state: &Arc<AgentdState>) -> Result<Vec<event_log::Record>, String> {
-    flush(state)?;
-    let path = state.sessions_dir();
-    event_log::read_all(&path)
-        .map(|report| report.records)
-        .map_err(|e| e.to_string())
 }
 pub(super) fn same_project(
     state: &Arc<AgentdState>,
@@ -450,63 +374,6 @@ mod review_tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    #[test]
-    fn organizer_open_reuses_and_resumes_without_submitting_work() {
-        use horizon_agent::contract::{Command, Event, SessionState};
-        use horizon_agent::persistence::event_log::WriterHandle;
-        let repository = tempfile::tempdir().unwrap();
-        git(repository.path(), &["init", "-q", "-b", "main"]);
-        let state = horizon_agent_host::session::test_support::state_with_packages(
-            false,
-            "mock",
-            crate::roles::add(horizon_agent::packages::Packages::builder()).build(),
-        );
-        let path = repository.path().join("agent-events.jsonl");
-        state.set_sessions_dir(path.clone());
-        let writer = WriterHandle::open(&path);
-        state.set_writer(Some(writer));
-        let flow = crate::BoardFlow::new(None);
-        let ensure = |root: std::path::PathBuf| {
-            flow.projects.register_project_of(&root)?;
-            organizer_session(&state, &root)
-        };
-        let first = ensure(repository.path().into()).unwrap();
-        assert_eq!(ensure(repository.path().into()).unwrap(), first);
-        let stop = || {
-            state.send_command(first, Command::Shutdown);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while state.session_exists(first) {
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        };
-        stop();
-        assert_eq!(ensure(repository.path().into()).unwrap(), first);
-        stop();
-        let history = records(&state).unwrap();
-        assert!(history.iter().all(|record| record.session_id == first));
-        assert!(
-            history
-                .iter()
-                .any(|record| matches!(record.event, Event::SessionResumed))
-        );
-        assert!(
-            history.iter().any(|record| matches!(
-                record.event,
-                Event::StateChanged(SessionState::Terminated)
-            ))
-        );
-        assert!(!history.iter().any(|record| matches!(
-            record.event,
-            Event::InputAccepted(_)
-                | Event::InputStarted(_)
-                | Event::MessageCommitted(horizon_agent::contract::Message {
-                    role: horizon_agent::contract::MessageRole::User,
-                    ..
-                })
-        )));
     }
 
     #[test]

@@ -22,8 +22,7 @@ use horizon_ui::reactive_graph::traits::{
 };
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{
-    Callback, Component, El, OneOf, dispatched, each_layout, el, prevent_default, relayout,
-    stop_propagation,
+    Component, El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
 use keyboard_types::{Key, NamedKey};
 
@@ -106,23 +105,10 @@ fn dot(tone: Tone) -> Option<horizon_ui::Class> {
 const SLOP: f32 = 4.;
 
 /// What the list asks of whatever holds it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Asked {
     /// The selected task's thread.
     OpenThread(u64),
-    /// The board's organizer, in a pane. `failed` is told what went wrong.
-    OpenOrganizer { failed: Callback<String> },
-}
-
-/// (What is asked is the same whoever is to be told of a failure.)
-impl PartialEq for Asked {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::OpenThread(task), Self::OpenThread(other)) => task == other,
-            (Self::OpenOrganizer { .. }, Self::OpenOrganizer { .. }) => true,
-            _ => false,
-        }
-    }
 }
 
 /// What the view keeps that is not a signal.
@@ -179,15 +165,6 @@ enum Line {
 impl BoardList {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
-    }
-
-    /// Asks for the board's organizer: what goes wrong is said on the
-    /// notice line.
-    pub fn open_organizer(&self) {
-        let notice = self.notice;
-        (self.held().ask)(Asked::OpenOrganizer {
-            failed: Callback::new(move |error| notice.set(Some(error))),
-        });
     }
 
     /// Reads the store again.

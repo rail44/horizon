@@ -602,33 +602,6 @@ impl Shared {
         })();
         answer(responder, result)
     }
-
-    /// A request no core handler claims: an extension's
-    /// (`crate::extension::Extension::serves`), answered once the sessions
-    /// are resumed, or refused as unknown.
-    fn extension_request(
-        self: &Arc<Self>,
-        request: agent_client_protocol::UntypedMessage,
-        responder: Responder<serde_json::Value>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        let (method, params) = request.into_parts();
-        let Some(extension) = self.connection.extension_serving(&method) else {
-            return responder.respond_with_error(Error::method_not_found());
-        };
-        if let Err(error) = self.gate() {
-            return responder.respond_with_error(error);
-        }
-        let connection = self.connection.clone();
-        tokio::spawn(async move {
-            connection.wait_until_resume_ready().await;
-            let result = extension
-                .request(connection.state(), &method, params)
-                .map_err(call_error);
-            let _ = answer(responder, result);
-        });
-        Ok(())
-    }
 }
 
 /// Answers `responder` with `result`, turning a refusal into a JSON-RPC
@@ -691,11 +664,6 @@ where
         set_config_option
     );
     let builder = on_request!(builder, v2::SessionOptionsRequest, session_options);
-    let builder = on_request!(
-        builder,
-        agent_client_protocol::UntypedMessage,
-        extension_request
-    );
     let cancel = shared.clone();
     let builder = builder.on_receive_notification(
         async move |notification: v2::CancelSessionNotification, _cx: V2ConnectionTo<Client>| {

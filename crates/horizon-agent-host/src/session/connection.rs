@@ -308,18 +308,6 @@ impl Connection {
     /// must block on this before answering, so a client that connects while
     /// `resume_persisted_sessions` is still running doesn't see an
     /// incomplete (or, right after bind, empty) session list.
-    pub(crate) fn state(&self) -> &Arc<AgentdState> {
-        &self.state
-    }
-
-    /// The extension that serves the client request `method`, if any.
-    pub(crate) fn extension_serving(
-        &self,
-        method: &str,
-    ) -> Option<Arc<dyn crate::extension::Extension>> {
-        self.state.extensions().serving(method)
-    }
-
     pub(crate) async fn wait_until_resume_ready(&self) {
         self.state.wait_until_resume_ready().await;
     }

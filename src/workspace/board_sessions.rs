@@ -1,17 +1,16 @@
-//! The agent sessions the board leads to: its organizer, and the session
-//! a task is bound to. Either may be one this workspace does not have
-//! yet, which the agent runtime is asked about off the UI thread and
-//! which is then taken into the workspace.
+//! The agent sessions the board leads to: the session a task is bound to,
+//! which may be one this workspace does not have yet, which the agent
+//! runtime is asked about off the UI thread and which is then taken into
+//! the workspace.
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::board::activity::BoardSessionActivity;
 
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
 use horizon_ui::{Callable, Callback, relayout};
-use horizon_workspace::{PaneId, SessionId, SessionKind, Workspace};
+use horizon_workspace::{SessionId, SessionKind};
 
 use super::{RunningAgent, Shell};
 
@@ -120,57 +119,6 @@ impl Shell {
                 let kept = shell.kept();
                 for session in asked {
                     kept.looked_for.borrow_mut().insert(session, true);
-                }
-            },
-        );
-    }
-
-    /// The organizer of the board at `root`, asked for from `pane`, in a
-    /// pane: started if it is not running. `failed` is told what goes
-    /// wrong.
-    pub(super) fn open_board_organizer(
-        &self,
-        pane: PaneId,
-        root: Option<PathBuf>,
-        failed: Callback<String>,
-    ) {
-        let kept = self.kept();
-        let Some(root) = root else {
-            return;
-        };
-        let Some(runtime) = kept.agent_runtime.as_ref() else {
-            return;
-        };
-        let registered: HashSet<SessionId> = self.model.with_untracked(|model| {
-            (model.session_summaries().iter())
-                .map(|session| session.id)
-                .collect()
-        });
-        self.model.update(Workspace::commit_workspace_mode);
-        let organizer = runtime.organizer.clone();
-        self.in_background(
-            move || organizer(root),
-            move |shell, running| {
-                let shown = running.and_then(|running| {
-                    let session = running.session;
-                    // One ended while this was on its way is not put back.
-                    let known =
-                        (shell.model).with_untracked(|model| model.session_kind(session).is_some());
-                    if registered.contains(&session) && !known {
-                        return Ok(());
-                    }
-                    shell.adopt_agent(running)?;
-                    // The owner went elsewhere meanwhile: the session is
-                    // there to attach, and nothing moves.
-                    if shell.model.with_untracked(Workspace::cursor_pane_id) != Some(pane) {
-                        return Ok(());
-                    }
-                    shell.kept().refocus.set(true);
-                    shell.model.update(|model| _ = model.show_session(session));
-                    Ok(())
-                });
-                if let Err(error) = shown {
-                    failed.run(error);
                 }
             },
         );

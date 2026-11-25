@@ -56,7 +56,7 @@ use uuid::Uuid;
 
 use common::RuntimeControl;
 pub use common::Timeouts;
-use request::{RequestError, request};
+use request::request;
 
 pub use notify::{NotifyCoalescer, NotifyDecision};
 
@@ -393,18 +393,6 @@ impl AgentdHandle {
                 "the model switch did not complete in time",
                 "session runtime stopped before the model switch completed",
             )
-        })?
-    }
-
-    /// Call from a background task: organizer restoration may read persisted history.
-    pub fn ensure_board_organizer(&self, root: std::path::PathBuf) -> Result<SessionId, String> {
-        request(&self.ops, |reply| agent::Op::EnsureBoardOrganizer {
-            root,
-            reply,
-        })
-        .map_err(|error| match error {
-            RequestError::NotSent => "Agent runtime stopped before organizer creation".to_string(),
-            RequestError::NoReply(error) => format!("Organizer creation did not complete: {error}"),
         })?
     }
 

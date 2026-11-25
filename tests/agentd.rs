@@ -384,8 +384,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         text().matches("ACP-OK").count() >= 2
     });
 
-    // The board's organizer: a session the daemon starts, which the
-    // workspace did not have, in a pane beside the board.
+    // The board, beside the agent.
     let agents = || {
         shell.model.with_untracked(|model| {
             (model.session_summaries().iter())
@@ -407,29 +406,6 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     app.resolve();
     let board = shown()[0].0;
     assert_eq!(shell.plugin(board), Some("board-list"));
-    assert!(shell.execute_plugin("open-board-organizer"));
-    until("the organizer", &|| agents().len() == 2);
-    until("the organizer's pane", &|| {
-        shown().len() == 2 && shell.agent(shown()[1].0).is_some()
-    });
-    let organizer = shown()[1].1.expect("a session");
-    assert_ne!(
-        Some(organizer),
-        shell
-            .model
-            .with_untracked(|model| model.agent_session_id(pane))
-    );
-    // Asked for again, it is the same session, in the pane it has.
-    horizon_ui::reactive_graph::traits::Update::update(&shell.model, |model| {
-        model.activate_pane(board);
-    });
-    assert!(shell.execute_plugin("open-board-organizer"));
-    app.run_effects();
-    app.resolve();
-    std::thread::sleep(Duration::from_millis(300));
-    app.resolve();
-    assert_eq!(agents().len(), 2);
-    assert_eq!(shown().len(), 2);
 
     // A task's session this workspace does not have: one the daemon
     // runs is taken in and shown; one it does not run is said so.
@@ -462,7 +438,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     assert_eq!(notice.get_untracked(), None);
     shell.open_task_session(horizon_workspace::SessionId::new(), failed);
     until("the refusal", &|| notice.get_untracked().is_some());
-    assert_eq!(agents().len(), 3);
+    assert_eq!(agents().len(), 2);
 
     // The board says what the sessions its tasks are bound to are doing:
     // one this workspace has, one only the daemon has (which is taken

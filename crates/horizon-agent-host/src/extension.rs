@@ -1,15 +1,13 @@
 //! What a host's composer adds to the agent without the host naming it:
 //! roles, skills and tools, what starts sessions on its own and where
-//! their answers go, the board tool's host, and `_horizon/*` requests no
-//! core handler serves. The board and the wiki are the two today
-//! (`horizon-board-flow`, `horizon-wiki-flow`).
+//! their answers go, and the board tool's host. The board and the wiki are
+//! the two today (`horizon-board-flow`, `horizon-wiki-flow`).
 
 use std::path::Path;
 use std::sync::Arc;
 
 use horizon_agent::packages::{Packages, PackagesBuilder};
 use horizon_agent::tools::BoardHost;
-use serde_json::Value;
 
 use crate::outbox::{ReplySink, TriggerSource};
 use crate::session::AgentdState;
@@ -34,22 +32,6 @@ pub trait Extension: Send + Sync + 'static {
     /// The board tool's host for a session rooted at `root`.
     fn board_host(&self, _state: &Arc<AgentdState>, _root: &Path) -> Option<Arc<dyn BoardHost>> {
         None
-    }
-
-    /// Whether this extension serves the client request `method`.
-    fn serves(&self, _method: &str) -> bool {
-        false
-    }
-
-    /// Serves a client request [`Self::serves`] claimed, once the host has
-    /// resumed its sessions. Runs on the connection's async runtime.
-    fn request(
-        &self,
-        _state: &Arc<AgentdState>,
-        method: &str,
-        _params: Value,
-    ) -> Result<Value, String> {
-        Err(format!("{method} is not served"))
     }
 }
 
@@ -94,12 +76,5 @@ impl Extensions {
         self.0
             .iter()
             .find_map(|extension| extension.board_host(state, root))
-    }
-
-    pub(crate) fn serving(&self, method: &str) -> Option<Arc<dyn Extension>> {
-        self.0
-            .iter()
-            .find(|extension| extension.serves(method))
-            .cloned()
     }
 }

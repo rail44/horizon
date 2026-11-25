@@ -125,49 +125,17 @@ async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
     }
 }
 
-/// An extension answers the client request it serves, through the same
-/// typed request a client sends; a request nobody serves is refused as
-/// unknown, and the connection goes on.
+/// A `_horizon/*` request is refused as unknown, and the connection goes
+/// on.
 #[tokio::test]
-async fn an_extension_answers_its_request_and_an_unknown_one_is_refused() {
-    struct Organizer;
-    impl crate::extension::Extension for Organizer {
-        fn serves(&self, method: &str) -> bool {
-            method == "_horizon/ensure_board_organizer"
-        }
-        fn request(
-            &self,
-            _state: &Arc<AgentdState>,
-            _method: &str,
-            params: serde_json::Value,
-        ) -> Result<serde_json::Value, String> {
-            let request: acp::EnsureBoardOrganizerRequest =
-                serde_json::from_value(params).map_err(|error| error.to_string())?;
-            assert_eq!(request.workspace_root, std::path::Path::new("/project"));
-            let session_id = SessionId::from_uuid(uuid::Uuid::nil());
-            serde_json::to_value(acp::EnsureBoardOrganizerResponse { session_id })
-                .map_err(|error| error.to_string())
-        }
-    }
-    let state = Arc::into_inner(crate::session::test_support::test_state())
-        .expect("the fixture holds the only reference")
-        .with_extensions(crate::extension::Extensions::new(vec![Arc::new(Organizer)]));
-    let state = Arc::new(state);
+async fn an_unknown_request_is_refused_and_the_connection_goes_on() {
+    let state = crate::session::test_support::test_state();
     state.mark_resume_ready();
     let cx = connect(state).await;
     cx.send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
         .block_task()
         .await
         .unwrap();
-
-    let answered = cx
-        .send_request(acp::EnsureBoardOrganizerRequest {
-            workspace_root: "/project".into(),
-        })
-        .block_task()
-        .await
-        .expect("the extension serves it");
-    assert_eq!(answered.session_id, SessionId::from_uuid(uuid::Uuid::nil()));
 
     let refused = cx
         .send_request(
@@ -179,7 +147,7 @@ async fn an_extension_answers_its_request_and_an_unknown_one_is_refused() {
         )
         .block_task()
         .await
-        .expect_err("no extension serves it");
+        .expect_err("nothing serves it");
     assert_eq!(
         refused.code,
         agent_client_protocol::ErrorCode::METHOD_NOT_FOUND

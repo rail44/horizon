@@ -3,16 +3,14 @@ use horizon_agent::contract::{Command, Event, InputResult, SessionInputOutcome, 
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent_host::outbox::Outbox;
 use horizon_agent_host::outbox::log::Pending;
+use horizon_agent_host::session::AgentdState;
 use horizon_agent_host::session::test_support::record;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-/// The outbox with the board's source and sink plugged in, as agentd runs it.
+/// The outbox with the board's sink plugged in, as the host runs it.
 fn board_outbox(state: Arc<AgentdState>, path: PathBuf) -> Outbox {
-    Outbox::new(
-        state,
-        path,
-        vec![Box::new(BoardSource::default())],
-        vec![Arc::new(BoardSink)],
-    )
+    Outbox::new(state, path, Vec::new(), vec![Arc::new(BoardSink)])
 }
 
 pub(super) fn repository() -> tempfile::TempDir {

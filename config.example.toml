@@ -228,13 +228,13 @@ font_size = 13.0
 # pane's plugin has the command -- a terminal's copy-terminal-selection /
 # paste-into-terminal (bound by default to ctrl+shift+c / ctrl+shift+v, and on
 # macOS to cmd+c / cmd+v as well); an agent's approve-tool-call,
-# deny-tool-call, cancel-agent-turn, continue-agent-turn, switch-model; the
+# deny-tool-call, cancel-agent-turn, switch-model; the
 # board list's
 # toggle-board-expansion, toggle-board-finished-band, open-board-related-item,
 # add-board-task, move-board-task-up, move-board-task-down,
-# reorder-board-task, open-board-organizer; the board thread's
+# reorder-board-task; the board thread's
 # open-board-task-session, back-board-list, post-board-message,
-# save-board-state, toggle-board-closed, open-board-organizer; a preview
+# save-board-state, toggle-board-closed; a preview
 # pane's reload-preview (reload its plugin from disk).
 #
 # Likewise, the reserved pseudo-command `workspace-mode` overrides the

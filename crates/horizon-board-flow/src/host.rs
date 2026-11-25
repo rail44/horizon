@@ -13,21 +13,15 @@ pub(super) struct AgentdBoardHost {
     store: Store,
     root: PathBuf,
     state: Arc<AgentdState>,
-    projects: Arc<super::Projects>,
 }
 
 impl AgentdBoardHost {
-    pub(super) fn new(
-        root: &Path,
-        state: Arc<AgentdState>,
-        projects: Arc<super::Projects>,
-    ) -> Option<Self> {
+    pub(super) fn new(root: &Path, state: Arc<AgentdState>) -> Option<Self> {
         let store = Store::from_dir(root).ok()?;
         Some(Self {
             store,
             root: root.to_path_buf(),
             state,
-            projects,
         })
     }
 
@@ -95,16 +89,13 @@ impl AgentdBoardHost {
 
 impl BoardHost for AgentdBoardHost {
     fn list(&self, status_filter: Option<&str>) -> Result<Value, String> {
-        self.projects.register(self.root.clone());
         serde_json::to_value(self.store.list(status_filter, true).map_err(render)?.items)
             .map_err(render)
     }
     fn show(&self, id: u64) -> Result<Value, String> {
-        self.projects.register(self.root.clone());
         serde_json::to_value(self.store.show(id).map_err(render)?).map_err(render)
     }
     fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), String> {
-        self.projects.register(self.root.clone());
         runtime()?
             .block_on(self.store.comment(id, author, text))
             .map_err(render)
@@ -114,7 +105,6 @@ impl BoardHost for AgentdBoardHost {
         session: SessionId,
         request: &ToolCallRequest,
     ) -> Result<(Value, Vec<Event>), String> {
-        self.projects.register(self.root.clone());
         let runtime = runtime()?;
         match request.tool_id.as_str() {
             "board_update" => runtime

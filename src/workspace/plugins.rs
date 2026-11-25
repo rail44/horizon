@@ -181,9 +181,6 @@ impl Shell {
         match shown.name.as_str() {
             BoardListPlugin::NAME => {
                 let source = self.board_source();
-                // (The board's project, for what the view asks that is
-                // the project's.)
-                let project = source.root();
                 let plugin = BoardListPlugin {
                     source,
                     background: background(),
@@ -193,15 +190,11 @@ impl Shell {
                     ListAsked::View(list::Asked::OpenThread(task)) => {
                         shell.open_thread(pane, task);
                     }
-                    ListAsked::View(list::Asked::OpenOrganizer { failed }) => {
-                        shell.open_board_organizer(pane, project.clone(), failed);
-                    }
                     ListAsked::Bound(sessions) => bound.set(sessions),
                 })
             }
             BoardThreadPlugin::NAME => {
                 let source = self.board_source();
-                let project = source.root();
                 let plugin = BoardThreadPlugin {
                     source,
                     background: background(),
@@ -210,9 +203,6 @@ impl Shell {
                 self.mount(pane, plugin, state, move |asked| match asked {
                     ThreadAsked::View(thread::Asked::OpenSession { session, failed }) => {
                         shell.open_task_session(session, failed);
-                    }
-                    ThreadAsked::View(thread::Asked::OpenOrganizer { failed }) => {
-                        shell.open_board_organizer(pane, project.clone(), failed);
                     }
                     ThreadAsked::Bound(sessions) => bound.set(sessions),
                     ThreadAsked::BackToList => shell.back_to_board_list(pane),

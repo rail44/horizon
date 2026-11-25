@@ -5,7 +5,6 @@ mod environment;
 
 #[cfg(test)]
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -621,38 +620,6 @@ impl AgentdState {
     /// has just flushed the writer.
     pub fn flushed_session_records(&self, session_id: SessionId) -> Result<Vec<Record>, String> {
         read_branch(&self.sessions_dir(), session_id).map_err(|error| format!("{error:#}"))
-    }
-
-    /// The sessions of `role`, the one with the latest record first, each
-    /// with its last workspace root -- for a caller that has just flushed
-    /// the writer.
-    pub fn flushed_sessions_with_role(
-        &self,
-        role: &horizon_agent::roles::RoleId,
-    ) -> Result<Vec<(SessionId, Option<PathBuf>)>, String> {
-        let dir = self.sessions_dir();
-        let mut sessions = Vec::new();
-        for session_id in session_ids(&dir).map_err(|error| format!("{error:#}"))? {
-            let Some(summary) = session_summary(&session_path(&dir, session_id))
-                .map_err(|error| format!("{error:#}"))?
-            else {
-                continue;
-            };
-            if summary.role_id.as_ref() == Some(role) {
-                let root = summary
-                    .session_context
-                    .and_then(|context| context.workspace_root);
-                sessions.push((summary.last_at_unix_ms, session_id, root));
-            }
-        }
-        sessions.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then_with(|| a.1.as_uuid().cmp(&b.1.as_uuid()))
-        });
-        Ok(sessions
-            .into_iter()
-            .map(|(_, session_id, root)| (session_id, root))
-            .collect())
     }
 
     /// Acknowledge an outbox record even after its source session ended.

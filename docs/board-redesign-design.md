@@ -1,5 +1,15 @@
 # Board redesign: tasks, consultation, implementation, and review
 
+**Removed 2026-11-26 (board #114):** the agent side's automatic deliveries
+(a registered task to the organizer, a closed task to the organizer and
+to the sessions of the tasks that depend on it, and the owner's comment
+on a task to the task's session) and the `board-organizer` role with its
+skill and the `Open Board Organizer` command. What this document says of
+the organizer and of those deliveries describes them as they were. A
+task session is started by the board tool's `consult`; its answers and
+review results still reach the board's thread and the requesting
+session (`horizon-board-flow`'s sink).
+
 **Status: implementation and approved live cutover complete, 2026-09-16.**
 Commit `8e057dd` contains the replacement data model, view, session runtime
 changes and operating roles; the live cutover used revision `eb6c99c`.

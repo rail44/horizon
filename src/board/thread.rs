@@ -113,20 +113,14 @@ pub enum Asked {
         session: SessionId,
         failed: Callback<String>,
     },
-    /// The board's organizer, in a pane.
-    OpenOrganizer { failed: Callback<String> },
 }
 
 /// (What is asked is the same whoever is to be told of a failure.)
 impl PartialEq for Asked {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::OpenSession { session, .. }, Self::OpenSession { session: other, .. }) => {
-                session == other
-            }
-            (Self::OpenOrganizer { .. }, Self::OpenOrganizer { .. }) => true,
-            _ => false,
-        }
+        let (Self::OpenSession { session, .. }, Self::OpenSession { session: other, .. }) =
+            (self, other);
+        session == other
     }
 }
 
@@ -173,15 +167,6 @@ type Read = (Option<Item>, HashMap<u64, String>);
 impl BoardThread {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
-    }
-
-    /// The directory of the project whose board this is.
-    /// Asks for the board's organizer: what goes wrong is said on the
-    /// notice line.
-    pub fn open_organizer(&self) {
-        (self.held().ask)(Asked::OpenOrganizer {
-            failed: self.failed(),
-        });
     }
 
     /// Says what went wrong with something asked for, on the notice line.

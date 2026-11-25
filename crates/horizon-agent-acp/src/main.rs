@@ -71,7 +71,7 @@ fn wait_for_gate(gate: &Path) {
 /// (`RigAgentConfig::packages`) to the providers and every session.
 fn extensions(start_dir: Option<PathBuf>) -> Extensions {
     Extensions::new(vec![
-        Arc::new(BoardFlow::new(start_dir.clone())),
+        Arc::new(BoardFlow),
         Arc::new(WikiFlow::new(start_dir)),
     ])
 }

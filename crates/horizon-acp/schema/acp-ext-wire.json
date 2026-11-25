@@ -11,29 +11,6 @@
       ],
       "type": "string"
     },
-    "EnsureBoardOrganizerRequest": {
-      "description": "Starts, or finds, a workspace's board organizer session.",
-      "properties": {
-        "workspace_root": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "workspace_root"
-      ],
-      "type": "object"
-    },
-    "EnsureBoardOrganizerResponse": {
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
-      "type": "object"
-    },
     "InitializeMeta": {
       "description": "`initialize` request and response, both directions.",
       "properties": {
@@ -106,16 +83,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "client_to_agent": {
-    "_horizon/ensure_board_organizer": {
-      "reply": {
-        "$ref": "#/$defs/EnsureBoardOrganizerResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/EnsureBoardOrganizerRequest"
-      }
-    }
-  },
+  "client_to_agent": {},
   "meta": {
     "initialize": {
       "$ref": "#/$defs/InitializeMeta"
@@ -127,5 +95,5 @@
     }
   },
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 25
+  "x-session-protocol-version": 26
 }

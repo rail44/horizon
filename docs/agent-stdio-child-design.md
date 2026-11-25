@@ -83,9 +83,9 @@ session loop changes.
 
 ### Board and wiki flow are composed in, not part of the core
 
-Board flow and wiki flow (the triggers that start sessions from board
-and wiki writes, the replies they write back, the roles, skills and
-tools they add) move into crates of their own. They already plug in
+Board flow and wiki flow (the wiki's trigger that starts sessions from
+its writes, the replies both write back, the roles, skills and tools
+they add) move into crates of their own. They already plug in
 through seams: the outbox's `TriggerSource` and `ReplySink`, the
 `Packages` builder, and the `BoardHost` tool seam. The core keeps the
 outbox and the traits; the binary composes the two flows in.
@@ -235,7 +235,7 @@ follows ACP where they differ (board #114):
 | `list_providers`, `list_provider_models` | The `Model` config option's values, a group for each provider with a key: the agent lists their models when it starts and when the config file changes, and every attachment gets the new set as a `config_option_update` |
 | `session/new`'s `_meta.horizon` | The agent names the session; the role is a `Mode` config option and the model a `Model` one, given at creation (`config_options`, unstable) |
 | A denial's reason in the permission response | A standard reject option; the reason is the next message |
-| `ensure_board_organizer` | Out of ACP: board flow writes the organizer's session id to the board, whose view resumes it |
+| `ensure_board_organizer` | Gone, with the board's automatic deliveries (a task registered, a task closed, the owner's comment to the task's session) and the `board-organizer` role, its skill and the `open-board-organizer` command (#114) |
 | `reload_provider_config` | Out of ACP: the child reads the config file again when it changes |
 | `task_progress` | `subagent_update`: the child's description is its title, its state is `running`, `requires_action` while it waits for an approval, `idle` when it is done; what it is doing and when it started are not sent |
 | `tool_call_progress` | Gone: only the mock provider sent it; rig gives a tool call whole |

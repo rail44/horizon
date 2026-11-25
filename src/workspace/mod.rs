@@ -325,9 +325,6 @@ pub struct AgentRuntime {
     pub restart: Asks<(), Vec<RunningAgent>>,
     /// Attaches to a session of the runtime as it is now.
     pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
-    /// The organizer of the board of the project in a directory, started
-    /// if it is not running. Called off the UI thread.
-    pub organizer: Asks<PathBuf, RunningAgent>,
     /// A session of the runtime, if it has it. Called off the UI thread.
     pub find: Asks<SessionId, Option<RunningAgent>>,
 }

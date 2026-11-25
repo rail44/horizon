@@ -53,7 +53,6 @@ pub enum BoardListCommand {
     MoveUp,
     MoveDown,
     Reorder,
-    OpenOrganizer,
 }
 
 impl Plugin for BoardListPlugin {
@@ -115,12 +114,6 @@ impl Plugin for BoardListPlugin {
                 "Apply the dragged task position among its siblings.",
                 Reorder,
             ),
-            command(
-                "open-board-organizer",
-                "Open Board Organizer",
-                "Create or resume this board’s organizer and open its agent view.",
-                OpenOrganizer,
-            ),
         ]
     }
 
@@ -148,7 +141,6 @@ impl Plugin for BoardListPlugin {
                 BoardListCommand::MoveDown => ListCommand::MoveDown,
                 // (A drop carries its own move out where it lands.)
                 BoardListCommand::Reorder => ListCommand::Reorder,
-                BoardListCommand::OpenOrganizer => return list.open_organizer(),
             };
             list.execute(asked);
         });
@@ -191,7 +183,6 @@ pub enum BoardThreadCommand {
     PostMessage,
     SaveStatus,
     ToggleClosed,
-    OpenOrganizer,
 }
 
 impl Plugin for BoardThreadPlugin {
@@ -241,12 +232,6 @@ impl Plugin for BoardThreadPlugin {
                 "Close or reopen the task independently of its project-defined state.",
                 ToggleClosed,
             ),
-            command(
-                "open-board-organizer",
-                "Open Board Organizer",
-                "Create or resume this board’s organizer and open its agent view.",
-                OpenOrganizer,
-            ),
         ]
     }
 
@@ -278,7 +263,6 @@ impl Plugin for BoardThreadPlugin {
                 BoardThreadCommand::SaveStatus => ThreadCommand::SaveStatus,
                 BoardThreadCommand::ToggleClosed => ThreadCommand::ToggleClosed,
                 BoardThreadCommand::BackToList => return ask.run(ThreadAsked::BackToList),
-                BoardThreadCommand::OpenOrganizer => return shown.open_organizer(),
             });
         });
         Mounted {

@@ -19,8 +19,8 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
 use horizon_acp::{
-    EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, InitializeMeta,
-    MODEL_CONFIG_ID, SessionEventNotification, SessionId, read_horizon_meta, write_horizon_meta,
+    EFFORT_CONFIG_ID, HORIZON_ACP_EXT_VERSION, InitializeMeta, MODEL_CONFIG_ID,
+    SessionEventNotification, SessionId, read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -84,10 +84,6 @@ pub(super) enum Op {
         /// The level's word.
         level: String,
         reply: crossbeam_channel::Sender<Result<(), String>>,
-    },
-    EnsureBoardOrganizer {
-        root: PathBuf,
-        reply: crossbeam_channel::Sender<Result<SessionId, String>>,
     },
 }
 
@@ -578,19 +574,6 @@ fn handle_op(
             tokio::spawn(async move {
                 let result = call(&routes, OP_TIMEOUT, "set session effort", request).await;
                 let _ = reply.send(result.map(|_| ()));
-            });
-        }
-        Op::EnsureBoardOrganizer { root, reply } => {
-            let request = send(
-                connection,
-                EnsureBoardOrganizerRequest {
-                    workspace_root: root,
-                },
-            );
-            let routes = routes.clone();
-            tokio::spawn(async move {
-                let result = call(&routes, OP_TIMEOUT, "board organizer", request).await;
-                let _ = reply.send(result.map(|response| response.session_id));
             });
         }
     }

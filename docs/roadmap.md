@@ -826,6 +826,8 @@ external notification path.
   `Open Board Organizer` now creates or resumes the project's organizer from
   a board cursor and opens its ordinary agent view, reusing an existing pane.
   Opening supplies no work input; conversation begins with the owner's message.
+  (The organizer and the board's automatic deliveries were removed
+  2026-11-26, #114.)
   Board review requests now retain the originating task so that findings
   delivered to the task session also route its subsequent final report back
   to the board (2026-09-17; see the design's review continuation routing).

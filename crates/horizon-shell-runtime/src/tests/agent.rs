@@ -14,9 +14,8 @@ use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
-    AttachmentEnd, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse,
-    HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
-    SessionEventNotification, SessionId, write_horizon_meta,
+    AttachmentEnd, HORIZON_ACP_EXT_VERSION, InitializeMeta, PERMISSION_OPTION_APPROVE,
+    PERMISSION_OPTION_DENY, SessionEventNotification, SessionId, write_horizon_meta,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -67,7 +66,6 @@ enum AgentCall {
     Prompt(String),
     Cancel,
     Close,
-    EnsureBoardOrganizer(PathBuf, SessionId),
 }
 
 impl std::fmt::Debug for AgentCall {
@@ -80,7 +78,6 @@ impl std::fmt::Debug for AgentCall {
             AgentCall::Prompt(_) => "Prompt",
             AgentCall::Cancel => "Cancel",
             AgentCall::Close => "Close",
-            AgentCall::EnsureBoardOrganizer(..) => "EnsureBoardOrganizer",
         };
         f.write_str(name)
     }
@@ -119,8 +116,7 @@ async fn serve_fake_agentd(
     let record = |calls: &Calls, call| {
         let _ = calls.send(call);
     };
-    let (c1, c2, c3, c4, c5, c6, c7, c10) = (
-        calls_tx.clone(),
+    let (c1, c2, c3, c4, c5, c6, c7) = (
         calls_tx.clone(),
         calls_tx.clone(),
         calls_tx.clone(),
@@ -284,19 +280,6 @@ async fn serve_fake_agentd(
                         _connection: V2ConnectionTo<Client>| {
                 record(&c7, AgentCall::Close);
                 responder.respond(v2::CloseSessionResponse::new())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: EnsureBoardOrganizerRequest,
-                        responder: Responder<EnsureBoardOrganizerResponse>,
-                        _connection: V2ConnectionTo<Client>| {
-                let session_id = SessionId::new();
-                record(
-                    &c10,
-                    AgentCall::EnsureBoardOrganizer(request.workspace_root, session_id),
-                );
-                responder.respond(EnsureBoardOrganizerResponse { session_id })
             },
             agent_client_protocol::on_receive_request!(),
         );
@@ -677,22 +660,6 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
             && message.contains("horizon ext version mismatch"),
         "error was: {message}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn organizer_request_uses_existing_agent_connection() {
-    let (client, server) = pair();
-    let (agentd, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    let root = PathBuf::from("/project/organizer");
-    let expected_root = root.clone();
-    let request = tokio::task::spawn_blocking(move || agentd.ensure_board_organizer(root));
-    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
-    let AgentCall::EnsureBoardOrganizer(root, id) = fake.next_call().await else {
-        panic!("organizer request must reach the existing agent connection");
-    };
-    assert_eq!(root, expected_root);
-    assert_eq!(request.await.unwrap().unwrap(), id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
