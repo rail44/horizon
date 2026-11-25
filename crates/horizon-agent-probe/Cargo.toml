@@ -1,0 +1,21 @@
+# A developer's way to see what the agent does, without a window and
+# without the running Horizon: a private `horizon-agentd` (its own socket
+# and data home), one session, prompts sent in turn, what happens printed
+# as JSON lines. See `src/main.rs`.
+[package]
+name = "horizon-agent-probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+horizon-acp = { path = "../horizon-acp" }
+horizon-agent = { path = "../horizon-agent" }
+horizon-shell-runtime = { path = "../horizon-shell-runtime" }
+serde_json = "1.0"
+# The session's command and update channels, as `horizon-shell-runtime` hands them out.
+crossbeam-channel = "0.5"
+tokio = { version = "1.52", features = ["sync"] }
+uuid = { version = "1.18", features = ["v4"] }
+
+[lints]
+workspace = true

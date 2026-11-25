@@ -2771,6 +2771,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-agent-probe"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "horizon-acp",
+ "horizon-agent",
+ "horizon-shell-runtime",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-agentd"
 version = "0.1.0"
 dependencies = [

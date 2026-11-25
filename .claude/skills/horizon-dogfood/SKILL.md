@@ -17,6 +17,11 @@ The goal of a dogfooding pass: use Horizon's *own* agent (the built-in
 agent panes, not yourself) as a real user would, observe what actually
 happens, and report friction/bugs with evidence.
 
+For the agent alone -- a build's tools, sandbox and approvals -- without
+the running Horizon, or while it is on a build that predates the change,
+use `./target/debug/horizon-agent-probe` instead (AGENTS.md, "GUI
+Verification"): it needs no pane, no restart and no reload.
+
 ## The loop
 
 **Spawn.** `horizon new agent --prompt "<prompt>"` creates an agent

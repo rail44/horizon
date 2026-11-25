@@ -342,6 +342,17 @@ home of its own (the agent's provider is the local mock
 `scripts/mock-openai-provider.py`): a session created and typed into, the
 workspace coming back after the shell is closed, a runtime reloaded.
 
+What the agent itself does with a build -- its tools, the sandbox, the
+approvals, with the real provider -- is seen without the running Horizon
+and without restarting it: `cargo build --workspace`, then
+`./target/debug/horizon-agent-probe --dir <directory> "<prompt>"
+["<prompt>"...]` starts the `horizon-agentd` beside it on a socket and data
+home of its own, runs one session there, and prints every message, tool
+call and approval as a JSON line (approvals are denied unless `--approve`;
+`crates/horizon-agent-probe/src/main.rs` says the rest). It reads the
+user's `config.toml`, and a session that enters a worktree makes it in the
+real repository, ending it as a terminated session does.
+
 An extension -- a view built as a wasm component with its manifest in
 it, written as one module under `horizon_ui::plugin` (`plugins/markdown`),
 and either one Horizon comes with or one named by its file in

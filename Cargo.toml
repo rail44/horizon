@@ -4,6 +4,7 @@ members = [
     "crates/horizon-acp",
     "crates/horizon-agent",
     "crates/horizon-agentd",
+    "crates/horizon-agent-probe",
     "crates/horizon-daemon-testkit",
     "crates/horizon-shell-runtime",
     "crates/horizon-terminald",
