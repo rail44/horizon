@@ -15,4 +15,4 @@ pub use horizon_wire::SessionId;
 /// `_meta.horizon.ext_version` ([`InitializeMeta::ext_version`]). It is
 /// also what tells the two ends they were built with the same ACP SDK: a
 /// change of the SDK's version moves it, the vocabulary changed or not.
-pub const HORIZON_ACP_EXT_VERSION: u32 = 17;
+pub const HORIZON_ACP_EXT_VERSION: u32 = 18;

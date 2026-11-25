@@ -268,6 +268,12 @@ impl AgentdState {
     /// `[theme]`/`[keybindings]`. The swap takes effect for the *next* session
     /// -- a running session keeps its current `RigAgentConfig` until an
     /// explicit model switch resolves the newly loaded catalog.
+    /// The configuration file the providers are read from, when there is
+    /// one.
+    pub(crate) fn config_path(&self) -> Option<&std::path::Path> {
+        self.config_path.as_deref()
+    }
+
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
         let mut new_agent_config = crate::providers::agent_config(&raw);

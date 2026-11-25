@@ -8,6 +8,7 @@
 //! with [`hub::serve`].
 
 mod checkpoint;
+pub mod config_watch;
 pub mod extension;
 pub mod hub;
 pub mod outbox;

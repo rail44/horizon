@@ -127,6 +127,9 @@ async fn main() -> anyhow::Result<()> {
         None => state,
     };
 
+    // The providers follow the configuration file.
+    let _config_watch = horizon_agent_host::config_watch::watch_config(state.clone());
+
     spawn_resume_task(
         state.clone(),
         agent_config,

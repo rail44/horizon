@@ -74,10 +74,6 @@
       ],
       "type": "string"
     },
-    "EmptyResponse": {
-      "description": "Reply of the extension requests that return nothing.",
-      "type": "object"
-    },
     "EnsureBoardOrganizerRequest": {
       "description": "Starts, or finds, a workspace's board organizer session.",
       "properties": {
@@ -233,10 +229,6 @@
         "available",
         "default"
       ],
-      "type": "object"
-    },
-    "ReloadProviderConfigRequest": {
-      "description": "Reloads the provider configuration from the config file.",
       "type": "object"
     },
     "SessionEventNotification": {
@@ -613,14 +605,6 @@
       "request": {
         "$ref": "#/$defs/ListProvidersRequest"
       }
-    },
-    "_horizon/reload_provider_config": {
-      "reply": {
-        "$ref": "#/$defs/EmptyResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/ReloadProviderConfigRequest"
-      }
     }
   },
   "meta": {
@@ -655,5 +639,5 @@
     "_horizon/failed"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 17
+  "x-session-protocol-version": 18
 }

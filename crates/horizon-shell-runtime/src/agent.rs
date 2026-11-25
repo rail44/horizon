@@ -21,8 +21,8 @@ use agent_client_protocol::{
 use horizon_acp::{
     EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, InitializeMeta,
     ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID, ProviderSummary,
-    ReloadProviderConfigRequest, SessionEventNotification, SessionId, SessionInfoMeta,
-    SessionNewMeta, read_horizon_meta, write_horizon_meta,
+    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
+    write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -108,9 +108,6 @@ pub(super) enum Op {
         root: PathBuf,
         reply: crossbeam_channel::Sender<Result<SessionId, String>>,
     },
-    /// Fire-and-forget request to rebuild `[provider]` in the running
-    /// daemon without a respawn.
-    ReloadProviderConfig,
 }
 
 /// How long a child that was asked to end (its input closed) has to flush
@@ -611,19 +608,6 @@ fn handle_op(
             tokio::spawn(async move {
                 let result = call(&routes, OP_TIMEOUT, "board organizer", request).await;
                 let _ = reply.send(result.map(|response| response.session_id));
-            });
-        }
-        Op::ReloadProviderConfig => {
-            let request = send(connection, ReloadProviderConfigRequest {});
-            let routes = routes.clone();
-            tokio::spawn(async move {
-                if let Err(error) =
-                    call(&routes, OP_TIMEOUT, "reload_provider_config", request).await
-                {
-                    eprintln!(
-                        "horizon-the agent runtime client: provider config reload failed: {error}"
-                    );
-                }
             });
         }
     }

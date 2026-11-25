@@ -71,13 +71,6 @@ pub struct EnsureBoardOrganizerResponse {
     pub session_id: SessionId,
 }
 
-/// Reloads the provider configuration from the config file.
-#[derive(
-    Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
-)]
-#[request(method = "_horizon/reload_provider_config", response = EmptyResponse)]
-pub struct ReloadProviderConfigRequest {}
-
 // -- agent → client notifications --
 
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
@@ -173,7 +166,6 @@ mod tests {
         message_round_trip(&EnsureBoardOrganizerRequest {
             workspace_root: PathBuf::from("/work/project"),
         });
-        message_round_trip(&ReloadProviderConfigRequest {});
     }
 
     #[test]
@@ -247,7 +239,6 @@ mod tests {
             }
             .method()
             .to_owned(),
-            ReloadProviderConfigRequest {}.method().to_owned(),
             SessionEventNotification::SessionResumed { session_id }
                 .method()
                 .to_owned(),
@@ -258,7 +249,6 @@ mod tests {
                 "_horizon/list_providers",
                 "_horizon/list_provider_models",
                 "_horizon/ensure_board_organizer",
-                "_horizon/reload_provider_config",
                 "_horizon/session_event",
             ]
         );

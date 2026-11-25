@@ -447,16 +447,6 @@ impl AgentdHandle {
         })?
     }
 
-    /// Fire-and-forget: ask the running daemon to rebuild `[provider]` from
-    /// the config file without a respawn. Paired with `Reload Config`, which
-    /// already re-read the same file for `[theme]`/`[keybindings]` on the UI
-    /// side -- this pushes the `[provider]` half to the daemon. No reply is
-    /// waited on, so the UI thread never blocks on it; a failure is logged on
-    /// the runtime's task.
-    pub fn reload_provider_config(&self) {
-        let _ = self.ops.send(agent::Op::ReloadProviderConfig);
-    }
-
     /// Stops the runtime and waits for its child to end: its input is
     /// closed, and it flushes its session logs before it exits.
     pub fn stop_and_wait(&self) {

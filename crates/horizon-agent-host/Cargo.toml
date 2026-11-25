@@ -16,6 +16,7 @@ horizon-agent = { path = "../horizon-agent" }
 horizon-config = { path = "../horizon-config" }
 horizon-control = { path = "../horizon-control" }
 horizon-sandbox = { path = "../horizon-sandbox" }
+notify = "8"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "io-util", "sync", "time"] }

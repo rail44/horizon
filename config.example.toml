@@ -36,7 +36,8 @@
 # knobs still have an environment-variable-only override (no file key at
 # all) -- see "Environment-only overrides" near the bottom.
 #
-# Reload Config applies theme, keybindings, and provider configuration live.
+# Reload Config applies theme and keybindings live. The agent reads the
+# provider configuration again by itself whenever this file changes.
 # Provider changes affect new sessions and future title calls. Existing sessions
 # keep their conversation and decision connections; an explicit model switch can
 # select a newly configured conversation provider. [terminal]/[ui] need a restart,

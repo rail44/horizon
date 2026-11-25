@@ -1,6 +1,5 @@
 use super::*;
 use agent_client_protocol::ConnectionTo;
-use horizon_agent::registry::ProviderRegistry;
 
 /// Serves `state` over an in-process pipe and hands back a client
 /// connection without the protocol-version guard, so a test can send
@@ -124,68 +123,6 @@ async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
             "both versions are named: {error:?}"
         );
     }
-}
-
-/// `_horizon/reload_provider_config` re-reads the config file at the
-/// state's `config_path` and rebuilds the registry in place, so the next
-/// session sees the new model. Proven on both halves of the swap: the
-/// registry's `resolved_model` (which reads the rig provider's rebuilt
-/// config) and `agent_config.rig.model` (the judge's base-URL source).
-/// `OPENAI_API_KEY` only flips `api_key_present` on so `resolved_model`
-/// reports the model; nextest's per-test processes keep the `set_var`
-/// from racing another test.
-#[tokio::test]
-async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("OPENAI_API_KEY", "test-only") };
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let config = dir.path().join("config.toml");
-    std::fs::write(&config, "default_model = { provider = \"default\", model = \"before-model\" }\n[[providers]]\nname = \"default\"\n").unwrap();
-
-    let agent_config =
-        crate::providers::agent_config(&horizon_config::reload_from_path(Some(&config)).unwrap());
-    let providers = ProviderRegistry::builtin_with_config(agent_config.clone());
-    let state = Arc::new(AgentdState::new(
-        providers,
-        agent_config,
-        None,
-        Some(config.clone()),
-        Vec::new(),
-        Vec::new(),
-    ));
-    state.mark_resume_ready();
-    let cx = connect(state.clone()).await;
-    cx.send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
-        .block_task()
-        .await
-        .expect("initialize");
-
-    let provider_id = state.providers.lock().unwrap().default_provider_id();
-    assert_eq!(
-        state
-            .providers
-            .lock()
-            .unwrap()
-            .resolved_model(&provider_id, None),
-        Some("before-model".to_string()),
-    );
-
-    std::fs::write(&config, "default_model = { provider = \"default\", model = \"after-model\" }\n[[providers]]\nname = \"default\"\n").unwrap();
-    cx.send_request(acp::ReloadProviderConfigRequest {})
-        .block_task()
-        .await
-        .expect("reload");
-
-    assert_eq!(
-        state
-            .providers
-            .lock()
-            .unwrap()
-            .resolved_model(&provider_id, None),
-        Some("after-model".to_string()),
-    );
-    assert_eq!(state.agent_config.lock().unwrap().rig.model, "after-model");
 }
 
 /// An extension answers the client request it serves, through the same

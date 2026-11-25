@@ -596,26 +596,6 @@ impl Shared {
         Ok(())
     }
 
-    /// Rebuilds the provider registry from the config file in place. A parse
-    /// error keeps the previous registry and is logged; the call succeeds
-    /// either way, since no respawn is needed in both cases.
-    fn reload_provider_config(
-        self: &Arc<Self>,
-        _request: acp::ReloadProviderConfigRequest,
-        responder: Responder<acp::EmptyResponse>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        let result = self.gate().map(|()| {
-            if let Err(error) = self.connection.reload_provider_config() {
-                eprintln!(
-                    "horizon-agent: provider config reload failed, keeping the previous config: {error}"
-                );
-            }
-            acp::EmptyResponse {}
-        });
-        answer(responder, result)
-    }
-
     /// A request no core handler claims: an extension's
     /// (`crate::extension::Extension::serves`), answered once the sessions
     /// are resumed, or refused as unknown.
@@ -707,11 +687,6 @@ where
         builder,
         acp::ListProviderModelsRequest,
         list_provider_models
-    );
-    let builder = on_request!(
-        builder,
-        acp::ReloadProviderConfigRequest,
-        reload_provider_config
     );
     let builder = on_request!(
         builder,

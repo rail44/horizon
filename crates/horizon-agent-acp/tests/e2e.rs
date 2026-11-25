@@ -580,14 +580,20 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
         ),
     )
     .unwrap();
-    client
-        .request(acp::ReloadProviderConfigRequest {})
-        .await
-        .unwrap();
-    client
+    // The agent reads the file again once it has sat still: the new
+    // provider can be chosen then.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while client
         .request(set_model(session_id, "added/after-model"))
         .await
-        .unwrap();
+        .is_err()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the changed config file is never read again"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     applied(&mut client, "added/after-model").await;
 
     client

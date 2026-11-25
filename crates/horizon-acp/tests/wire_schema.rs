@@ -44,10 +44,6 @@ fn generate_wire_schema() -> Value {
             "request": schema_of(sub::<EnsureBoardOrganizerRequest>),
             "reply": schema_of(sub::<EnsureBoardOrganizerResponse>),
         },
-        "_horizon/reload_provider_config": {
-            "request": schema_of(sub::<ReloadProviderConfigRequest>),
-            "reply": schema_of(sub::<EmptyResponse>),
-        },
     });
 
     let notifications = json!({
