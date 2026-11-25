@@ -1054,7 +1054,7 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
         panic!("no workspace");
     };
     assert_eq!(
-        opened.model(|model| horizon_workspace::snapshot::workspace_snapshot(model)),
+        opened.model(horizon_workspace::snapshot::workspace_snapshot),
         workspace.snapshot
     );
     assert_eq!(
