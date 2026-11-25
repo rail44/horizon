@@ -667,6 +667,58 @@ impl Connection {
     }
 }
 
+/// Why a fork was not started.
+#[derive(Debug)]
+pub(crate) enum ForkError {
+    /// The source or the position in it cannot be forked.
+    Position(String),
+    /// The fork could not be started.
+    Failed(String),
+}
+
+/// A worktree of its own for the fork `session_id` of a session working in
+/// `dir`, holding the files of `checkpoint` (`crate::checkpoint`): branched
+/// at the commit the checkpoint was taken on, with what was not committed
+/// there not committed here either. Without a checkpoint it is branched at
+/// `dir`'s `HEAD`. `None` when `dir` is not in a git repository.
+fn fork_worktree(
+    dir: &std::path::Path,
+    session_id: SessionId,
+    checkpoint: Option<String>,
+) -> Result<Option<WorktreeInfo>, String> {
+    if crate::worktree::project_root(dir).is_none() {
+        return Ok(None);
+    }
+    let base = match &checkpoint {
+        Some(checkpoint) => crate::worktree::resolve_commit(dir, &format!("{checkpoint}^"))
+            .unwrap_or_else(|_| checkpoint.clone()),
+        None => "HEAD".to_string(),
+    };
+    let worktree = crate::worktree::create_isolated_worktree_at(dir, session_id.as_uuid(), &base)?;
+    if let Some(checkpoint) = &checkpoint {
+        crate::checkpoint::restore(&worktree.path, checkpoint)?;
+    }
+    Ok(Some(worktree))
+}
+
+/// The positions settled one after another up to `last` (itself settled):
+/// the event indexes after which a session sits between turns, from the
+/// first of that stretch to `last`.
+fn settled_stretch(
+    events: &[horizon_agent::contract::Event],
+    last: usize,
+) -> std::ops::RangeInclusive<usize> {
+    let mut settled = horizon_agent::persistence::event_log::Settled::new();
+    let mut start = 0;
+    for (index, event) in events[..=last].iter().enumerate() {
+        settled.apply(event);
+        if !settled.is_settled() {
+            start = index + 1;
+        }
+    }
+    start.min(last)..=last
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,56 +1025,4 @@ mod tests {
         assert!(connection.list_provider_models("claude").await.is_empty());
         assert!(connection.list_provider_models("typo").await.is_empty());
     }
-}
-
-/// Why a fork was not started.
-#[derive(Debug)]
-pub(crate) enum ForkError {
-    /// The source or the position in it cannot be forked.
-    Position(String),
-    /// The fork could not be started.
-    Failed(String),
-}
-
-/// A worktree of its own for the fork `session_id` of a session working in
-/// `dir`, holding the files of `checkpoint` (`crate::checkpoint`): branched
-/// at the commit the checkpoint was taken on, with what was not committed
-/// there not committed here either. Without a checkpoint it is branched at
-/// `dir`'s `HEAD`. `None` when `dir` is not in a git repository.
-fn fork_worktree(
-    dir: &std::path::Path,
-    session_id: SessionId,
-    checkpoint: Option<String>,
-) -> Result<Option<WorktreeInfo>, String> {
-    if crate::worktree::project_root(dir).is_none() {
-        return Ok(None);
-    }
-    let base = match &checkpoint {
-        Some(checkpoint) => crate::worktree::resolve_commit(dir, &format!("{checkpoint}^"))
-            .unwrap_or_else(|_| checkpoint.clone()),
-        None => "HEAD".to_string(),
-    };
-    let worktree = crate::worktree::create_isolated_worktree_at(dir, session_id.as_uuid(), &base)?;
-    if let Some(checkpoint) = &checkpoint {
-        crate::checkpoint::restore(&worktree.path, checkpoint)?;
-    }
-    Ok(Some(worktree))
-}
-
-/// The positions settled one after another up to `last` (itself settled):
-/// the event indexes after which a session sits between turns, from the
-/// first of that stretch to `last`.
-fn settled_stretch(
-    events: &[horizon_agent::contract::Event],
-    last: usize,
-) -> std::ops::RangeInclusive<usize> {
-    let mut settled = horizon_agent::persistence::event_log::Settled::new();
-    let mut start = 0;
-    for (index, event) in events[..=last].iter().enumerate() {
-        settled.apply(event);
-        if !settled.is_settled() {
-            start = index + 1;
-        }
-    }
-    start.min(last)..=last
 }

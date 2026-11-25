@@ -1,5 +1,7 @@
 //! Own the child through exit and output drain, then collect denial evidence.
-use super::super::{failed_output, infrastructure_output, stream::spawn_blocking_pump, take};
+#[cfg(target_os = "linux")]
+use super::super::infrastructure_output;
+use super::super::{failed_output, stream::spawn_blocking_pump, take};
 use crate::config::BashToolConfig;
 use crate::tools::bash::process::kill_process_tree;
 use crate::tools::bash::registry::Registration;

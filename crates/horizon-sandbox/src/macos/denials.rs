@@ -141,10 +141,10 @@ impl DenialCollector {
                 let stop = Arc::clone(&stop);
                 move || {
                     while !stop.load(Ordering::Relaxed) {
-                        if let Some(groups) = process_groups() {
-                            if let Ok(mut attributed) = sampled.lock() {
-                                mark_by_group(&groups, root_pid, &mut attributed);
-                            }
+                        if let Some(groups) = process_groups()
+                            && let Ok(mut attributed) = sampled.lock()
+                        {
+                            mark_by_group(&groups, root_pid, &mut attributed);
                         }
                         std::thread::sleep(SAMPLE_INTERVAL);
                     }

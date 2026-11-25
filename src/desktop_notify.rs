@@ -26,6 +26,8 @@ impl Clicked {
 
 /// Posts notifications, each from a thread of its own.
 #[derive(Clone)]
+// Only a desktop that says which banner was clicked reads the clicks' way back.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 pub struct Poster {
     clicked: Sender<SessionId>,
     wake: Wake,
