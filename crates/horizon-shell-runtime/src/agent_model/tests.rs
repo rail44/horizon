@@ -2,8 +2,8 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
-    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, SessionId, TaskProgressNotification,
-    TaskProgressState, ToolCallMeta, ToolOutcome, write_horizon_meta,
+    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, SessionId, ToolCallMeta, ToolOutcome,
+    write_horizon_meta,
 };
 use serde_json::json;
 
@@ -515,37 +515,64 @@ fn the_effort_option_sets_the_effort_and_its_absence_clears_it() {
     assert_eq!(model.effort, None);
 }
 
-fn progress(id: SessionId, state: TaskProgressState, activity: Option<&str>) -> AgentEvent {
-    AgentEvent::TaskProgress(TaskProgressNotification {
-        session_id: SessionId::new(),
-        task_session_id: id,
-        description: "investigate the flaky test".to_string(),
-        state,
-        activity: activity.map(str::to_string),
-        started_at_epoch_ms: 1_000,
-    })
+fn subagent(id: &str, state: Option<v2::StateUpdate>, title: Option<&str>) -> v2::SessionUpdate {
+    let mut update = v2::SubagentUpdate::new(id.to_string());
+    if let Some(state) = state {
+        update = update.state(state);
+    }
+    if let Some(title) = title {
+        update = update.title(title.to_string());
+    }
+    v2::SessionUpdate::SubagentUpdate(update)
+}
+
+fn at_work() -> Option<v2::StateUpdate> {
+    Some(v2::StateUpdate::Running(v2::RunningStateUpdate::new()))
 }
 
 #[test]
-fn running_task_progress_upserts_in_launch_order_and_finished_retires() {
+fn subagents_at_work_are_kept_in_first_seen_order_and_idle_ones_retire() {
     let mut model = AgentModel::default();
-    let first = SessionId::new();
-    let second = SessionId::new();
-    model.apply(progress(first, TaskProgressState::Running, None));
-    model.apply(progress(
-        second,
-        TaskProgressState::Running,
-        Some("fs_grep"),
-    ));
-    model.apply(progress(first, TaskProgressState::Running, Some("fs_read")));
-    assert_eq!(model.tasks.len(), 2);
-    assert_eq!(model.tasks[0].task_session_id, first);
-    assert_eq!(model.tasks[0].activity.as_deref(), Some("fs_read"));
-    model.apply(progress(first, TaskProgressState::Finished, None));
-    assert_eq!(model.tasks.len(), 1);
-    assert_eq!(model.tasks[0].task_session_id, second);
-    model.apply(progress(first, TaskProgressState::Finished, None));
-    assert_eq!(model.tasks.len(), 1);
+    apply(
+        &mut model,
+        subagent("first", at_work(), Some("investigate")),
+    );
+    apply(&mut model, subagent("second", at_work(), Some("map")));
+    apply(
+        &mut model,
+        subagent(
+            "first",
+            Some(v2::StateUpdate::RequiresAction(
+                v2::RequiresActionStateUpdate::new(),
+            )),
+            None,
+        ),
+    );
+    let rows: Vec<_> = model
+        .subagents
+        .iter()
+        .map(|row| (row.session_id.as_str(), row.title.as_deref(), row.waiting))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("first", Some("investigate"), true),
+            ("second", Some("map"), false)
+        ]
+    );
+    apply(
+        &mut model,
+        subagent(
+            "first",
+            Some(v2::StateUpdate::Idle(v2::IdleStateUpdate::new())),
+            None,
+        ),
+    );
+    assert_eq!(model.subagents.len(), 1);
+    assert_eq!(model.subagents[0].session_id, "second");
+    // A title alone does not bring a retired one back.
+    apply(&mut model, subagent("first", None, Some("again")));
+    assert_eq!(model.subagents.len(), 1);
 }
 
 #[test]

@@ -104,27 +104,6 @@ pub struct HostToolResponse {
 
 // -- agent → client notifications --
 
-/// Mirrors `contract::TaskProgress` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
-#[notification(method = "_horizon/task_progress")]
-pub struct TaskProgressNotification {
-    /// The requesting session the progress row belongs to.
-    pub session_id: SessionId,
-    pub task_session_id: SessionId,
-    pub description: String,
-    pub state: TaskProgressState,
-    pub activity: Option<String>,
-    pub started_at_epoch_ms: u64,
-}
-
-/// Mirrors `contract::TaskProgressState` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskProgressState {
-    Running,
-    Finished,
-}
-
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
 /// HistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),
 /// `hosting::AgentWireEvent::AttachmentClosed`
@@ -248,14 +227,6 @@ mod tests {
     #[test]
     fn notifications_round_trip() {
         let session_id = SessionId::new();
-        message_round_trip(&TaskProgressNotification {
-            session_id,
-            task_session_id: SessionId::new(),
-            description: "scan".into(),
-            state: TaskProgressState::Running,
-            activity: Some("fs_grep".into()),
-            started_at_epoch_ms: 1_700_000_000_000,
-        });
         for event in [
             SessionEventNotification::SessionResumed { session_id },
             SessionEventNotification::ProviderRateLimited {
@@ -319,16 +290,6 @@ mod tests {
             }
             .method()
             .to_owned(),
-            TaskProgressNotification {
-                session_id,
-                task_session_id: session_id,
-                description: String::new(),
-                state: TaskProgressState::Finished,
-                activity: None,
-                started_at_epoch_ms: 0,
-            }
-            .method()
-            .to_owned(),
             SessionEventNotification::SessionResumed { session_id }
                 .method()
                 .to_owned(),
@@ -342,7 +303,6 @@ mod tests {
                 "_horizon/ensure_board_organizer",
                 "_horizon/reload_provider_config",
                 "_horizon/host_tool",
-                "_horizon/task_progress",
                 "_horizon/session_event",
             ]
         );

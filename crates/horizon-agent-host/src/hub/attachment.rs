@@ -67,7 +67,6 @@ impl Sink {
                 self.acp_id.clone(),
                 *update,
             )),
-            Outgoing::TaskProgress(notification) => self.notify(notification),
             Outgoing::SessionEvent(notification) => self.notify(notification),
             Outgoing::AskPermission(request) => {
                 asks.ask(self, request);

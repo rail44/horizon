@@ -895,8 +895,7 @@ fn task_output_rejects_a_malformed_session_id() {
     );
 }
 
-/// A scripted child event: a tool call request with the given tool id -- the
-/// live-progress activity signal.
+/// A scripted child event: a tool call request with the given tool id.
 fn tool_request(tool_id: &str) -> Event {
     Event::ToolCallRequested(ToolCallRequest {
         call_id: (ToolCallId(format!("child-{tool_id}"))).clone(),
@@ -908,12 +907,12 @@ fn tool_request(tool_id: &str) -> Event {
     })
 }
 
-/// Live progress: while the child runs, the watcher mirrors what it is
-/// doing -- activity changes only, deduplicated -- and retires the row with
-/// one `Finished` observation when the child reaches its terminal state.
-/// The durable completion path (the notification) is unchanged.
+/// Live progress: while the child runs, the watcher mirrors its state --
+/// changes only, deduplicated -- and retires the row with one `Finished`
+/// observation when the child reaches its terminal state. The durable
+/// completion path (the notification) is unchanged.
 #[test]
-fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
+fn a_running_child_mirrors_its_state_and_retires_its_row_at_terminal() {
     let (host, _terminated) = ScriptedHost::new();
     let requester = Requester::new(Some(host.clone()));
     requester.launch("t1", "map the emit sites", "where are they?");
@@ -927,14 +926,6 @@ fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
         "the first running observation",
     );
     events.send(tool_request("fs_grep")).unwrap();
-    wait_until(
-        || {
-            host.progressed()
-                .iter()
-                .any(|p| p.activity.as_deref() == Some("fs_grep"))
-        },
-        "the fs_grep activity observation",
-    );
 
     // History-shaped events (the report landing) change nothing a row
     // would say -- no further observation may be emitted for them.
@@ -953,23 +944,15 @@ fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
     );
 
     let progress = host.progressed();
-    let observations: Vec<_> = progress
-        .iter()
-        .map(|p| (p.state, p.activity.clone()))
-        .collect();
+    let observations: Vec<_> = progress.iter().map(|p| p.state).collect();
     assert_eq!(
         observations,
-        vec![
-            (TaskProgressState::Running, None),
-            (TaskProgressState::Running, Some("fs_grep".to_string())),
-            (TaskProgressState::Finished, None),
-        ],
-        "activity changes only, and the row is retired exactly once"
+        vec![TaskProgressState::Running, TaskProgressState::Finished],
+        "state changes only, and the row is retired exactly once"
     );
     for observation in &progress {
         assert_eq!(observation.task_session_id, child_id);
         assert_eq!(observation.description, "map the emit sites");
-        assert!(observation.started_at_epoch_ms > 0, "{observation:?}");
     }
 
     // The durable path is untouched: the completion notification still lands.
@@ -977,11 +960,11 @@ fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
 }
 
 /// The fold's own decision table, driven directly: emit on the first
-/// observation and on every activity change; history-shaped events and
-/// repeated states deduplicate to nothing; the fold emits running
-/// observations only (the caller owns the terminal one).
+/// observation and on every state change; history-shaped events, tool calls
+/// and repeated states deduplicate to nothing; the fold emits the states
+/// before the terminal one only (the caller owns that).
 #[test]
-fn fold_emits_activity_changes_only() {
+fn fold_emits_state_changes_only() {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (_cancel_tx, cancel) = crossbeam_channel::bounded::<()>(1);
 
@@ -994,7 +977,17 @@ fn fold_emits_activity_changes_only() {
     events_tx.send(user("prompt")).unwrap();
     events_tx.send(assistant("a partial thought")).unwrap();
     events_tx.send(tool_request("fs_grep")).unwrap();
-    events_tx.send(tool_request("fs_grep")).unwrap();
+    events_tx
+        .send(Event::ApprovalRequested(approval_request("child-occ")))
+        .unwrap();
+    events_tx
+        .send(Event::ApprovalResolved(crate::contract::ApprovalResolved {
+            call_id: ToolCallId("child-occ".to_string()),
+            occurrence_id: crate::contract::OccurrenceId("child-occ".to_string()),
+            decision: crate::contract::ApprovalDecisionPayload::Approve,
+        }))
+        .unwrap();
+    events_tx.send(tool_request("fs_read")).unwrap();
     events_tx
         .send(Event::TurnEnded(TurnEndReason::Completed))
         .unwrap();
@@ -1004,21 +997,25 @@ fn fold_emits_activity_changes_only() {
     let outcome = fold_until_terminal(
         &events,
         &cancel,
-        &mut |activity| {
-            sink.lock().unwrap().push(activity);
+        &mut |state| {
+            sink.lock().unwrap().push(state);
         },
-        &mut |_| false,
+        &mut |_| true,
     );
     std::assert_matches!(outcome.terminal, Terminal::Completed);
     assert_eq!(
         *observed.lock().unwrap(),
-        vec![None, Some("fs_grep".to_string())],
-        "the first observation and each activity change, deduplicated"
+        vec![
+            TaskProgressState::Running,
+            TaskProgressState::WaitingForApproval,
+            TaskProgressState::Running,
+        ],
+        "the first observation and each state change, deduplicated"
     );
 }
 
 #[test]
-fn a_panicking_activity_observer_becomes_a_failed_outcome() {
+fn a_panicking_state_observer_becomes_a_failed_outcome() {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (_cancel_tx, cancel) = crossbeam_channel::bounded::<()>(1);
     events_tx.send(user("prompt")).unwrap();

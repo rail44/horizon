@@ -6,8 +6,8 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     EFFORT_CONFIG_ID, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta, STOP_REASON_FAILED,
-    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, TaskProgressNotification,
-    TaskProgressState, ToolCallMeta, decode_model_option_id, read_horizon_meta,
+    STOP_REASON_TOKEN_BUDGET, SessionEventNotification, ToolCallMeta, decode_model_option_id,
+    read_horizon_meta,
 };
 
 use super::types::*;
@@ -16,7 +16,6 @@ use super::types::*;
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     Update(Box<v2::SessionUpdate>),
-    TaskProgress(TaskProgressNotification),
     Session(SessionEventNotification),
     /// A `session/request_permission` the attachment now holds a responder for.
     PermissionRequested(Permission),
@@ -41,8 +40,9 @@ pub struct AgentModel {
     pub selection: Option<ModelSelection>,
     /// The session's reasoning effort, when its model takes one.
     pub effort: Option<EffortSelection>,
-    /// Running background-task rows in launch order.
-    pub tasks: Vec<TaskProgressNotification>,
+    /// The session's subagents with work under way, in the order they were
+    /// first announced.
+    pub subagents: Vec<Subagent>,
     clock: TurnClock,
 }
 
@@ -74,7 +74,6 @@ impl AgentModel {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Update(update) => self.apply_update(*update),
-            AgentEvent::TaskProgress(progress) => apply_task_progress(&mut self.tasks, progress),
             AgentEvent::Session(event) => self.apply_session_event(event),
             AgentEvent::PermissionRequested(permission) => {
                 let existing = self.frame.items.iter().position(|item| {
@@ -145,6 +144,9 @@ impl AgentModel {
                 }
             }
             v2::SessionUpdate::StateUpdate(state) => self.apply_state(state),
+            v2::SessionUpdate::SubagentUpdate(update) => {
+                apply_subagent(&mut self.subagents, update)
+            }
             v2::SessionUpdate::ToolCallUpdate(update) => self.apply_tool_call(update),
             v2::SessionUpdate::ConfigOptionUpdate(update) => {
                 if let Some(selection) = model_selection(&update.config_options) {
@@ -499,24 +501,50 @@ pub fn model_selection(options: &[v2::SessionConfigOption]) -> Option<ModelSelec
     }
 }
 
-/// A running observation upserts the child's row in launch order; a
-/// finished one retires it.
-pub fn apply_task_progress(
-    tasks: &mut Vec<TaskProgressNotification>,
-    progress: TaskProgressNotification,
-) {
-    match progress.state {
-        TaskProgressState::Running => match tasks
-            .iter_mut()
-            .find(|row| row.task_session_id == progress.task_session_id)
-        {
-            Some(row) => *row = progress,
-            None => tasks.push(progress),
-        },
-        TaskProgressState::Finished => {
-            tasks.retain(|row| row.task_session_id != progress.task_session_id);
+/// A subagent reported running or waiting on the human is kept, in the
+/// order it was first seen; one reported idle, or with its state cleared,
+/// is retired. An update that leaves the state alone patches the title.
+pub fn apply_subagent(subagents: &mut Vec<Subagent>, update: v2::SubagentUpdate) {
+    let id = update.session_id.to_string();
+    let index = subagents
+        .iter()
+        .position(|subagent| subagent.session_id == id);
+    let waiting = match &update.state {
+        MaybeUndefined::Undefined => index.map(|index| subagents[index].waiting),
+        MaybeUndefined::Value(v2::StateUpdate::Running(_)) => Some(false),
+        MaybeUndefined::Value(v2::StateUpdate::RequiresAction(_)) => Some(true),
+        MaybeUndefined::Value(_) | MaybeUndefined::Null => None,
+    };
+    let Some(waiting) = waiting else {
+        if let Some(index) = index {
+            subagents.remove(index);
         }
+        return;
+    };
+    let subagent = match index {
+        Some(index) => &mut subagents[index],
+        None => {
+            subagents.push(Subagent {
+                session_id: id,
+                title: None,
+                waiting,
+                seen_at_epoch_ms: epoch_ms(),
+            });
+            subagents.last_mut().expect("just pushed")
+        }
+    };
+    subagent.waiting = waiting;
+    match update.title {
+        MaybeUndefined::Undefined => {}
+        MaybeUndefined::Null => subagent.title = None,
+        MaybeUndefined::Value(title) => subagent.title = Some(title),
     }
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
 impl Permission {

@@ -399,7 +399,6 @@ fn wire(inbound: &Inbound) -> serde_json::Value {
     match inbound {
         Inbound::Update(notification) => serde_json::to_value(notification),
         Inbound::SessionEvent(notification) => serde_json::to_value(notification),
-        Inbound::TaskProgress(notification) => serde_json::to_value(notification),
         Inbound::Permission(request, _) => serde_json::to_value(request),
         Inbound::HostTool(request, _) => serde_json::to_value(request),
         Inbound::Replied(_) => Ok(serde_json::Value::Null),

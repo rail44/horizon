@@ -128,8 +128,6 @@ fn detached_progress_is_seeded_and_finished_tasks_stay_closed() {
         task_session_id: SessionId::new(),
         description: "research".into(),
         state: TaskProgressState::Running,
-        activity: Some("fs_read".into()),
-        started_at_epoch_ms: 0,
     };
     send_session_event(&state, session, AgentWireEvent::TaskProgress(task.clone()));
     let first = snapshot(&state, session, &live);

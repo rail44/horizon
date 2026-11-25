@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use horizon_acp::{TaskProgressNotification, ToolOutcome};
+use horizon_acp::ToolOutcome;
 
 use super::turns::{
     DiffLineKind, ToolCallBody, ToolCallView, build_tool_call_views, group_into_turns,
@@ -27,8 +27,9 @@ use crate::agent_display::{
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 use crate::agent_model::{
-    AgentFrameItem, AgentModel, MessageRole, SessionState, ToolCallIdentity, TurnEndReason,
-    TurnSpan, actionable_pending_approval_identities_in, state_indicates_turn_in_flight,
+    AgentFrameItem, AgentModel, MessageRole, SessionState, Subagent, ToolCallIdentity,
+    TurnEndReason, TurnSpan, actionable_pending_approval_identities_in,
+    state_indicates_turn_in_flight,
 };
 
 /// The display model, and the identity behind each approval id it carries.
@@ -155,23 +156,22 @@ fn task_lines(model: &AgentModel, pending: &[ToolCallIdentity], now_ms: u64) -> 
         })
         .collect();
     let mut lines: Vec<Task> = model
-        .tasks
+        .subagents
         .iter()
-        .map(|task| {
-            let id = task.task_session_id.as_uuid().to_string();
-            let mut line = task_line(task, now_ms);
+        .map(|subagent| {
+            let mut line = task_line(subagent, now_ms);
             line.approval = task_approvals
                 .iter()
-                .find(|(task, _)| *task == id)
+                .find(|(task, _)| *task == subagent.session_id)
                 .map(|(_, approval)| approval.clone());
             line
         })
         .collect();
     for (task, approval) in &task_approvals {
         let shown = model
-            .tasks
+            .subagents
             .iter()
-            .any(|line| line.task_session_id.as_uuid().to_string() == *task);
+            .any(|subagent| subagent.session_id == *task);
         if !shown {
             lines.push(Task {
                 description: "task".to_string(),
@@ -184,16 +184,18 @@ fn task_lines(model: &AgentModel, pending: &[ToolCallIdentity], now_ms: u64) -> 
     lines
 }
 
-fn task_line(task: &TaskProgressNotification, now_ms: u64) -> Task {
+fn task_line(subagent: &Subagent, now_ms: u64) -> Task {
     Task {
-        description: task.description.clone(),
+        description: subagent.title.clone().unwrap_or_else(|| "task".to_string()),
         elapsed: humanize_duration(Duration::from_millis(
-            now_ms.saturating_sub(task.started_at_epoch_ms),
+            now_ms.saturating_sub(subagent.seen_at_epoch_ms),
         )),
-        activity: task
-            .activity
-            .clone()
-            .unwrap_or_else(|| "running".to_string()),
+        activity: if subagent.waiting {
+            "waiting for approval"
+        } else {
+            "running"
+        }
+        .to_string(),
         approval: None,
     }
 }
@@ -584,7 +586,7 @@ mod tests {
     use super::*;
     use crate::agent_model::{
         AgentFrameItem, HistoryCleared, Message as FrameMessage, ModelSelection,
-        ProviderRateLimited, SessionPhase,
+        ProviderRateLimited, SessionPhase, Subagent,
     };
 
     fn turn_end(reason: TurnEndReason) -> AgentFrameItem {
@@ -1157,13 +1159,11 @@ mod tests {
                 task_approval_requested(&child.as_uuid().to_string(), "occ-child"),
             ],
         );
-        session.tasks.push(TaskProgressNotification {
-            session_id: horizon_wire::SessionId::new(),
-            task_session_id: child,
-            description: "map the module".to_string(),
-            state: horizon_acp::TaskProgressState::Running,
-            activity: Some("waiting for approval".to_string()),
-            started_at_epoch_ms: 0,
+        session.subagents.push(Subagent {
+            session_id: child.as_uuid().to_string(),
+            title: Some("map the module".to_string()),
+            waiting: true,
+            seen_at_epoch_ms: 0,
         });
         let adapted = adapt(&session, false, 0);
         let task = &adapted.transcript.tasks[0];
@@ -1178,7 +1178,7 @@ mod tests {
         assert_eq!(adapted.approvals[&approval.id].occurrence_id, "occ-child");
 
         // A line of its own when its task has none.
-        session.tasks.clear();
+        session.subagents.clear();
         let adapted = adapt(&session, false, 0);
         assert!(adapted.transcript.tasks[0].approval.is_some());
     }
@@ -1189,13 +1189,11 @@ mod tests {
         session.selection = Some(ModelSelection {
             model: "gpt-x".to_string(),
         });
-        session.tasks.push(TaskProgressNotification {
-            session_id: horizon_wire::SessionId::new(),
-            task_session_id: horizon_wire::SessionId::new(),
-            description: "cargo build".to_string(),
-            state: horizon_acp::TaskProgressState::Running,
-            activity: Some("compiling".to_string()),
-            started_at_epoch_ms: 1_000,
+        session.subagents.push(Subagent {
+            session_id: horizon_wire::SessionId::new().as_uuid().to_string(),
+            title: Some("cargo build".to_string()),
+            waiting: false,
+            seen_at_epoch_ms: 1_000,
         });
         session.effort = Some(crate::agent_model::EffortSelection {
             current: "high".to_string(),
@@ -1209,7 +1207,7 @@ mod tests {
             vec![Task {
                 description: "cargo build".to_string(),
                 elapsed: "1m 03s".to_string(),
-                activity: "compiling".to_string(),
+                activity: "running".to_string(),
                 approval: None,
             }]
         );

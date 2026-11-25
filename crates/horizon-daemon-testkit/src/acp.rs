@@ -19,7 +19,6 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 pub enum Inbound {
     Update(v2::UpdateSessionNotification),
     SessionEvent(acp::SessionEventNotification),
-    TaskProgress(acp::TaskProgressNotification),
     Permission(
         v2::RequestPermissionRequest,
         Responder<v2::RequestPermissionResponse>,
@@ -104,7 +103,6 @@ where
     let builder = Client.v2().name("horizon-daemon-testkit");
     let builder = notification!(builder, v2::UpdateSessionNotification, Update);
     let builder = notification!(builder, acp::SessionEventNotification, SessionEvent);
-    let builder = notification!(builder, acp::TaskProgressNotification, TaskProgress);
     let builder = request!(builder, v2::RequestPermissionRequest, Permission);
     let builder = request!(builder, acp::HostToolRequest, HostTool);
     let transport = ByteStreams::new(write.compat_write(), read.compat());

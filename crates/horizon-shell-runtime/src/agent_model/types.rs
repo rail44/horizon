@@ -102,6 +102,17 @@ pub struct Permission {
     pub task_session_id: Option<String>,
 }
 
+/// A subagent of the session with work under way (`subagent_update`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Subagent {
+    pub session_id: String,
+    pub title: Option<String>,
+    /// Its state is `requires_action`: it waits on the human.
+    pub waiting: bool,
+    /// When this attachment first saw it, epoch milliseconds.
+    pub seen_at_epoch_ms: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryCleared {
     pub cleared_occurrence_ids: Vec<String>,

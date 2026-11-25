@@ -495,28 +495,22 @@ pub fn event_kind(event: &Event) -> &'static str {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct TaskProgress {
     /// The child session whose progress this describes — the same id the
-    /// `task` tool call's started receipt carries, so a client can join the
-    /// live row against the transcript's own `task` tool-call record.
+    /// `task` tool call's started receipt carries.
     pub task_session_id: SessionId,
     /// The child's launch description (the `task` input's `description`),
     /// carried so the client can label the row without re-reading history.
     pub description: String,
     pub state: TaskProgressState,
-    /// What the child was last observed doing: the tool id of its most
-    /// recent `ToolCallRequested` (e.g. `"fs_grep"`), or `None` while it is
-    /// reasoning between tools.
-    pub activity: Option<String>,
-    /// When the child was launched, epoch milliseconds — lets a client show
-    /// elapsed time that survives re-attach.
-    pub started_at_epoch_ms: u64,
 }
 
-/// [`TaskProgress::state`] — a child is either running or has reached *some*
-/// terminal state. The terminal flavor (completed / failed / capped) is the
-/// notification's business, not the live row's.
+/// [`TaskProgress::state`] — a child is running, waiting for an approval
+/// shown through its requester, or has reached *some* terminal state. The
+/// terminal flavor (completed / failed / capped) is the notification's
+/// business, not the live row's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum TaskProgressState {
     Running,
+    WaitingForApproval,
     Finished,
 }
 

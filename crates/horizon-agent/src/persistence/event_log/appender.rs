@@ -179,8 +179,6 @@ mod tests {
                 task_session_id: SessionId::new(),
                 description: "inspect".into(),
                 state: TaskProgressState::Running,
-                activity: None,
-                started_at_epoch_ms: 1,
             }),
         ];
         let mut failures = Vec::new();

@@ -3037,8 +3037,6 @@ fn ephemeral_feedback_passes_processing_without_placeholder_events() {
             task_session_id: SessionId::new(),
             description: "inspect".into(),
             state: crate::contract::TaskProgressState::Running,
-            activity: None,
-            started_at_epoch_ms: 1,
         }),
     ] {
         let processing = process_agent_provider_event(

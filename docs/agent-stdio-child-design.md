@@ -237,7 +237,7 @@ follows ACP where they differ (board #114):
 | A denial's reason in the permission response | A standard reject option; the reason is the next message |
 | `ensure_board_organizer` | Out of ACP: board flow writes the organizer's session id to the board, whose view resumes it |
 | `reload_provider_config` | Out of ACP: the child reads the config file again when it changes |
-| `task_progress` | Updates of the `task` tool call (title, content, status) |
+| `task_progress` | `subagent_update`: the child's description is its title, its state is `running`, `requires_action` while it waits for an approval, `idle` when it is done; what it is doing and when it started are not sent |
 | `tool_call_progress` | Gone: only the mock provider sent it; rig gives a tool call whole |
 | `host_tool` (`workspace_snapshot`) | Out of ACP: the tool asks the control socket (`HORIZON_SOCKET`) itself |
 | `session_event` | An error is the stop reason `Error`; resumption, a closed attachment, an exit and skipped lines have no use over a child's stdio; rate limits and history clearing are not shown |

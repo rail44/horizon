@@ -548,3 +548,43 @@ fn an_uncommitted_stream_closes_at_the_next_provider_request() {
         ])
     );
 }
+
+#[test]
+fn a_task_childs_progress_is_its_subagent_state() {
+    let mut mapper = mapper();
+    let child = SessionId::new();
+    let mut state_of = |state| {
+        let outgoing = mapper.map(&AgentWireEvent::TaskProgress(
+            horizon_agent::contract::TaskProgress {
+                task_session_id: child,
+                description: "map the module".into(),
+                state,
+            },
+        ));
+        let [Outgoing::Update(update)] = outgoing.as_slice() else {
+            panic!("one update, got {outgoing:?}");
+        };
+        let v2::SessionUpdate::SubagentUpdate(subagent) = update.as_ref() else {
+            panic!("a subagent update, got {update:?}");
+        };
+        assert_eq!(subagent.session_id, acp_session_id(child));
+        assert_eq!(
+            subagent.title,
+            MaybeUndefined::Value("map the module".to_string())
+        );
+        subagent.state.clone()
+    };
+    use horizon_agent::contract::TaskProgressState;
+    std::assert_matches!(
+        state_of(TaskProgressState::Running),
+        MaybeUndefined::Value(v2::StateUpdate::Running(_))
+    );
+    std::assert_matches!(
+        state_of(TaskProgressState::WaitingForApproval),
+        MaybeUndefined::Value(v2::StateUpdate::RequiresAction(_))
+    );
+    std::assert_matches!(
+        state_of(TaskProgressState::Finished),
+        MaybeUndefined::Value(v2::StateUpdate::Idle(_))
+    );
+}

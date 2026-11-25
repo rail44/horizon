@@ -22,7 +22,8 @@ pub(super) type AttachRequest = oneshot::Sender<Bootstrap>;
 #[derive(Default)]
 pub(super) struct SessionStream {
     subscriber: Option<Subscriber>,
-    tasks: BTreeMap<Uuid, TaskProgress>,
+    /// Running children, in launch order.
+    tasks: Vec<TaskProgress>,
     /// Children's approvals shown through this session and not settled, by
     /// occurrence id: asked again of a new attachment, and the record an
     /// answer is checked against before it reaches the child
@@ -42,11 +43,17 @@ impl SessionStream {
     pub(super) fn publish(&mut self, event: AgentWireEvent) {
         match &event {
             AgentWireEvent::TaskProgress(progress) => {
-                let key = progress.task_session_id.as_uuid();
-                if progress.state == TaskProgressState::Running {
-                    self.tasks.insert(key, progress.clone());
-                } else {
-                    self.tasks.remove(&key);
+                let known = self
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.task_session_id == progress.task_session_id);
+                match (known, progress.state) {
+                    (Some(_), TaskProgressState::Finished) => self
+                        .tasks
+                        .retain(|task| task.task_session_id != progress.task_session_id),
+                    (Some(task), _) => *task = progress.clone(),
+                    (None, TaskProgressState::Finished) => {}
+                    (None, _) => self.tasks.push(progress.clone()),
                 }
             }
             AgentWireEvent::TaskApproval {
@@ -192,9 +199,13 @@ pub(super) fn capture(
     let (id, events, ended, end) = {
         let mut streams = lock_unpoisoned(&state.agent_subscribers);
         let stream = streams.entry(session).or_default();
-        let mut tasks: Vec<_> = stream.tasks.values().cloned().collect();
-        tasks.sort_by_key(|task| (task.started_at_epoch_ms, task.task_session_id.as_uuid()));
-        metadata.extend(tasks.into_iter().map(AgentWireEvent::TaskProgress));
+        metadata.extend(
+            stream
+                .tasks
+                .iter()
+                .cloned()
+                .map(AgentWireEvent::TaskProgress),
+        );
         metadata.extend(stream.task_approvals.values().cloned().map(
             |(task_session_id, request)| AgentWireEvent::TaskApproval {
                 task_session_id,

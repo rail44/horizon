@@ -33,7 +33,6 @@ use horizon_agent::persistence::event_log::Settled;
 pub(super) enum Outgoing {
     /// (Boxed: an update is several times the size of anything else here.)
     Update(Box<v2::SessionUpdate>),
-    TaskProgress(acp::TaskProgressNotification),
     SessionEvent(acp::SessionEventNotification),
     /// An approval the client must be asked for with
     /// `session/request_permission`.
@@ -302,7 +301,6 @@ impl Mapper {
     }
 
     pub(super) fn map(&mut self, event: &AgentWireEvent) -> Vec<Outgoing> {
-        let session_id = self.session_id;
         match event {
             AgentWireEvent::Event(event) => {
                 let outgoing = self.map_event(event);
@@ -311,7 +309,9 @@ impl Mapper {
                 outgoing
             }
             AgentWireEvent::TaskProgress(progress) => {
-                vec![Outgoing::TaskProgress(task_progress(session_id, progress))]
+                vec![Outgoing::update(v2::SessionUpdate::SubagentUpdate(
+                    subagent_update(progress),
+                ))]
             }
             AgentWireEvent::SessionModel(_)
             | AgentWireEvent::SessionSelection(_)
@@ -676,21 +676,21 @@ pub(super) fn approval_title(kind: &contract::ApprovalKind) -> &'static str {
     }
 }
 
-fn task_progress(
-    session_id: SessionId,
-    progress: &contract::TaskProgress,
-) -> acp::TaskProgressNotification {
-    acp::TaskProgressNotification {
-        session_id,
-        task_session_id: progress.task_session_id,
-        description: progress.description.clone(),
-        state: match progress.state {
-            contract::TaskProgressState::Running => acp::TaskProgressState::Running,
-            contract::TaskProgressState::Finished => acp::TaskProgressState::Finished,
-        },
-        activity: progress.activity.clone(),
-        started_at_epoch_ms: progress.started_at_epoch_ms,
-    }
+/// A `task` child as the requester's subagent: its description is its
+/// title, and its state is mirrored onto the association.
+fn subagent_update(progress: &contract::TaskProgress) -> v2::SubagentUpdate {
+    let state = match progress.state {
+        contract::TaskProgressState::Running => {
+            v2::StateUpdate::Running(v2::RunningStateUpdate::new())
+        }
+        contract::TaskProgressState::WaitingForApproval => {
+            v2::StateUpdate::RequiresAction(v2::RequiresActionStateUpdate::new())
+        }
+        contract::TaskProgressState::Finished => v2::StateUpdate::Idle(v2::IdleStateUpdate::new()),
+    };
+    v2::SubagentUpdate::new(acp_session_id(progress.task_session_id))
+        .title(progress.description.clone())
+        .state(state)
 }
 
 #[cfg(test)]

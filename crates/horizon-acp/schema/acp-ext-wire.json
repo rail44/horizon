@@ -528,51 +528,6 @@
       ],
       "type": "object"
     },
-    "TaskProgressNotification": {
-      "description": "Mirrors `contract::TaskProgress` (crates/horizon-agent/src/contract.rs).",
-      "properties": {
-        "activity": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "type": "string"
-        },
-        "session_id": {
-          "$ref": "#/$defs/SessionId",
-          "description": "The requesting session the progress row belongs to."
-        },
-        "started_at_epoch_ms": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "state": {
-          "$ref": "#/$defs/TaskProgressState"
-        },
-        "task_session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id",
-        "task_session_id",
-        "description",
-        "state",
-        "started_at_epoch_ms"
-      ],
-      "type": "object"
-    },
-    "TaskProgressState": {
-      "description": "Mirrors `contract::TaskProgressState` (crates/horizon-agent/src/contract.rs).",
-      "enum": [
-        "running",
-        "finished"
-      ],
-      "type": "string"
-    },
     "ToolCallMeta": {
       "description": "`tool_call_update`, whose `toolCallId` is the occurrence id. Mirrors\n`contract::ToolCallRequest`/`ToolCallResult` (crates/horizon-agent/src/contract.rs)\nand the result evidence fields (crates/horizon-agent/src/tools/output/evidence.rs).",
       "properties": {
@@ -767,9 +722,6 @@
   "notifications": {
     "_horizon/session_event": {
       "$ref": "#/$defs/SessionEventNotification"
-    },
-    "_horizon/task_progress": {
-      "$ref": "#/$defs/TaskProgressNotification"
     }
   },
   "stop_reasons": [
@@ -777,5 +729,5 @@
     "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 13
+  "x-session-protocol-version": 14
 }

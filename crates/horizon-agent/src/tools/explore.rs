@@ -277,7 +277,6 @@ pub(crate) fn start(
 
     let child_id = started.session_id;
     let description = input.description.trim().to_string();
-    let started_at_epoch_ms = unix_epoch_ms();
     children::register(
         session_id,
         child_id,
@@ -296,15 +295,13 @@ pub(crate) fn start(
         let emit = {
             let host = host.clone();
             let description = waiter_description.clone();
-            move |state: TaskProgressState, activity: Option<String>| {
+            move |state: TaskProgressState| {
                 host.forward_progress(
                     child_id,
                     TaskProgress {
                         task_session_id: child_id,
                         description: description.clone(),
                         state,
-                        activity,
-                        started_at_epoch_ms,
                     },
                 );
             }
@@ -316,9 +313,9 @@ pub(crate) fn start(
             let outcome = watch_until_terminal(
                 &events,
                 child_work.cancelled(),
-                &mut |activity| {
+                &mut |state| {
                     if !child_work.is_cancelled() {
-                        emit(TaskProgressState::Running, activity)
+                        emit(state)
                     }
                 },
                 &mut |approval| match approval {
@@ -334,9 +331,8 @@ pub(crate) fn start(
                 return;
             }
             // A view-side callback must not prevent the durable completion.
-            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                emit(TaskProgressState::Finished, None)
-            }));
+            let _ =
+                std::panic::catch_unwind(AssertUnwindSafe(|| emit(TaskProgressState::Finished)));
             let description =
                 children::description(child_id).unwrap_or_else(|| waiter_description.clone());
             let output = outcome.into_output(child_id, &description);
@@ -717,11 +713,11 @@ pub(super) enum ChildApproval {
 pub(super) fn watch_until_terminal(
     events: &Receiver<Event>,
     cancel: &Receiver<()>,
-    on_activity: &mut dyn FnMut(Option<String>),
+    on_state: &mut dyn FnMut(TaskProgressState),
     on_approval: &mut dyn FnMut(ChildApproval) -> bool,
 ) -> Outcome {
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        fold_until_terminal(events, cancel, on_activity, on_approval)
+        fold_until_terminal(events, cancel, on_state, on_approval)
     }))
     .unwrap_or_else(|payload| Outcome {
         terminal: Terminal::Panicked(crate::runtime_panic::panic_message(&*payload)),
@@ -732,16 +728,15 @@ pub(super) fn watch_until_terminal(
 
 /// Folds the child's event stream until it reaches a terminal state or the
 /// requesting session goes away. Pure over its receivers and the
-/// `on_activity` callback, so the whole decision table above is
+/// `on_state` callback, so the whole decision table above is
 /// unit-testable by feeding a scripted event sequence: every time what a
-/// live progress row would say changes (current tool, reasoning vs
-/// tool-running), the observation is handed to `on_activity` as the child's
-/// current activity (`None` = reasoning). Terminal emission is the caller's
-/// — the fold only reports running observations.
+/// live progress row would say changes (running, or waiting for an
+/// approval), the observation is handed to `on_state`. Terminal emission is
+/// the caller's — the fold only reports the states before it.
 fn fold_until_terminal(
     events: &Receiver<Event>,
     cancel: &Receiver<()>,
-    on_activity: &mut dyn FnMut(Option<String>),
+    on_state: &mut dyn FnMut(TaskProgressState),
     on_approval: &mut dyn FnMut(ChildApproval) -> bool,
 ) -> Outcome {
     let mut report = None;
@@ -752,8 +747,8 @@ fn fold_until_terminal(
     // Live-progress tracking: what the child was last observed doing, and
     // the last observation actually emitted (dedup — history-shaped events
     // like `MessageCommitted` must not re-emit an unchanged row).
-    let mut activity: Option<String> = None;
-    let mut emitted: Option<Option<String>> = None;
+    let mut state = TaskProgressState::Running;
+    let mut emitted: Option<TaskProgressState> = None;
 
     let terminal = loop {
         crossbeam_channel::select_biased! {
@@ -777,12 +772,13 @@ fn fold_until_terminal(
                     // requester and the child waits for the answer; only
                     // when nobody can answer does the task fail.
                     Event::ApprovalRequested(request) => {
-                        activity = Some("waiting for approval".to_string());
+                        state = TaskProgressState::WaitingForApproval;
                         if !on_approval(ChildApproval::Requested(Box::new(request))) {
                             break Terminal::Approval;
                         }
                     }
                     Event::ApprovalResolved(resolved) => {
+                        state = TaskProgressState::Running;
                         on_approval(ChildApproval::Resolved(resolved.occurrence_id));
                     }
                     Event::TurnEnded(reason) if turn_started => {
@@ -818,14 +814,9 @@ fn fold_until_terminal(
                         break Terminal::Terminated;
                     }
                     Event::Error(failure) => error = Some(failure.message),
-                    // Live progress: track what the child is doing. The tool
-                    // id of the latest requested call is the row's activity;
-                    // back in `Running` the child is reasoning between tools.
-                    Event::ToolCallRequested(request) => {
-                        activity = Some(request.tool_id);
-                    }
+                    // Back in `Running`, the child is no longer waiting.
                     Event::StateChanged(SessionState::Running) => {
-                        activity = None;
+                        state = TaskProgressState::Running;
                     }
                     Event::StateChanged(SessionState::ToolRunning) => {}
                     // Guard-fail fallbacks: `TurnEnded` and
@@ -847,6 +838,7 @@ fn fold_until_terminal(
                     // Tool lifecycle is not terminal here -- the watcher waits
                     // for the turn's final report/approval/exit, not individual
                     // tool calls.
+                    | Event::ToolCallRequested(_)
                     | Event::ToolCallStarted(_)
                     | Event::ToolCallFinished(_)
                     // Provider request lifecycle markers are timing-only and
@@ -866,9 +858,9 @@ fn fold_until_terminal(
                     | Event::ProviderRateLimited(_)
                     | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::Rewound { .. } | Event::ModelSelected { .. } | Event::ReasoningSelected { .. } | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::ConversationRecorded(_) => {}
                 }
-                if emitted.as_ref() != Some(&activity) {
-                    on_activity(activity.clone());
-                    emitted = Some(activity.clone());
+                if emitted != Some(state) {
+                    on_state(state);
+                    emitted = Some(state);
                 }
             },
         }
@@ -879,16 +871,6 @@ fn fold_until_terminal(
         report,
         error,
     }
-}
-
-/// Wall-clock now, epoch milliseconds — the launch timestamp every live
-/// progress event carries, so a client can show elapsed time that survives
-/// re-attach. `0` if the clock is before the epoch (never, in practice).
-pub(super) fn unix_epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
