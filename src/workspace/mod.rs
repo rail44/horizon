@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
-use horizon_agent::roles::RoleId;
 use horizon_config::RawConfig;
 use horizon_terminal_core::{TerminalNotification, TerminalUpdate};
 use horizon_theme_css::{Theme, themed};
@@ -273,7 +272,7 @@ pub struct Starting {
     pub session: SessionId,
     pub from: Option<SessionId>,
     pub directory: Option<PathBuf>,
-    pub role: Option<RoleId>,
+    pub role: Option<String>,
 }
 
 use horizon_theme::spec::{FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -327,6 +326,8 @@ pub struct AgentRuntime {
     pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
     /// A session of the runtime, if it has it. Called off the UI thread.
     pub find: Asks<SessionId, Option<RunningAgent>>,
+    /// The modes the runtime offers a new session.
+    pub modes: Box<dyn Fn() -> Vec<horizon_shell_runtime::agent_model::Mode>>,
 }
 
 /// What `Reload Terminal Runtime` does with the runtime: has it hand its
@@ -430,7 +431,7 @@ struct Start {
     /// The session it was made from.
     from: Option<SessionId>,
     directory: Option<PathBuf>,
-    role: Option<RoleId>,
+    role: Option<String>,
 }
 
 impl Start {
@@ -1067,7 +1068,7 @@ impl Shell {
 
     /// A new pane at `placement` over a new session of `kind`, with the
     /// focus. A split goes beside what the cursor is on.
-    fn create(&self, kind: SessionKind, role: Option<RoleId>, placement: Placement) {
+    fn create(&self, kind: SessionKind, role: Option<String>, placement: Placement) {
         let kept = self.kept();
         self.change(|model| {
             let from = model.active_session_id();
@@ -1275,6 +1276,13 @@ impl Shell {
     }
 
     /// The agent view a pane shows.
+    /// The modes the agent runtime offers a new session: none without one.
+    pub(crate) fn agent_modes(&self) -> Vec<horizon_shell_runtime::agent_model::Mode> {
+        (self.kept().agent_runtime.as_ref())
+            .map(|runtime| (runtime.modes)())
+            .unwrap_or_default()
+    }
+
     pub fn agent(&self, pane: PaneId) -> Option<Agent> {
         self.kept().panes.borrow().get(&pane)?.agent
     }

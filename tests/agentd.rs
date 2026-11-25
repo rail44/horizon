@@ -497,6 +497,17 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     });
     assert!(text().contains("Unreachable"), "{}", text());
 
+    // A role the agent does not offer as a mode is refused before anything
+    // is made.
+    let refused = shell.control(&ControlRequest::Invoke(Invoke {
+        command: "new".to_string(),
+        args: serde_json::json!({ "plugin": "agent", "named": { "role": "no-such-role" } }),
+    }));
+    let EnvelopeBody::Error(horizon_control::contract::ErrorMessage { message }) = refused else {
+        panic!("{refused:?}");
+    };
+    assert!(message.contains("unknown role: no-such-role"), "{message}");
+
     // `horizon new agent` is answered once the agent has named the new
     // session: with the name, which the workspace keeps it under and the
     // daemon runs it by.

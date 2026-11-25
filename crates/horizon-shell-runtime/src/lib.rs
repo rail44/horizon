@@ -280,18 +280,24 @@ impl AgentdHandle {
     /// Once the session enters a worktree, the daemon reports the worktree
     /// path back via `SessionInfoMeta::workspace_root` (see
     /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`).
+    /// The modes a new session can start in, as the agent said them once
+    /// connected: empty before that.
+    pub fn modes(&self) -> Vec<agent_model::Mode> {
+        self.routes.modes()
+    }
+
     /// Starts a session with `role_id`, on the agent's default model.
     pub fn start_session(
         &self,
         session_id: SessionId,
-        role_id: Option<horizon_agent::roles::RoleId>,
+        role_id: Option<String>,
         workspace_root: Option<std::path::PathBuf>,
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::NewAgent {
             route: handle.route,
             new: Box::new(agent::SessionNew {
-                role: role_id.map(|role| role.0),
+                role: role_id,
                 workspace_root,
             }),
             commands,

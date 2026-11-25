@@ -231,6 +231,24 @@ async fn serve_fake_agentd(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            // A new session starts in its default mode or as a planner.
+            async move |_request: v2::SessionOptionsRequest,
+                        responder: Responder<v2::SessionOptionsResponse>,
+                        _connection: V2ConnectionTo<Client>| {
+                let mode = v2::SessionConfigOption::select(
+                    horizon_acp::MODE_CONFIG_ID,
+                    "Mode",
+                    horizon_acp::DEFAULT_MODE,
+                    vec![
+                        v2::SessionConfigSelectOption::new(horizon_acp::DEFAULT_MODE, "Agent"),
+                        v2::SessionConfigSelectOption::new("planner", "Planner"),
+                    ],
+                );
+                responder.respond(v2::SessionOptionsResponse::new().config_options(vec![mode]))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: v2::ListSessionsRequest,
                         responder: Responder<v2::ListSessionsResponse>,
                         _connection: V2ConnectionTo<Client>| {
@@ -659,6 +677,29 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
         message.contains("rejected the handshake")
             && message.contains("horizon ext version mismatch"),
         "error was: {message}"
+    );
+}
+
+/// Once connected, the runtime knows the modes the agent offers a new
+/// session, the default left out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_modes_the_agent_offers_are_known_once_connected() {
+    let (client, server) = pair();
+    let (agentd, _news) = AgentdHandle::start_on_stream(client);
+    assert_eq!(agentd.modes(), Vec::new());
+    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while agentd.modes().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no modes");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        agentd.modes(),
+        [crate::agent_model::Mode {
+            id: "planner".to_string(),
+            title: "Planner".to_string(),
+        }]
     );
 }
 

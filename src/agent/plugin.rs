@@ -148,23 +148,11 @@ impl SessionPlugin for AgentPlugin {
     type Session = AgentSession;
     type Runtime = Agentd;
 
-    /// The role it works in (`--role`), one a person can start an agent
-    /// in, and what it is told first (`--prompt`).
+    /// The role it works in (`--role`), and what it is told first
+    /// (`--prompt`). Whether the agent offers the role is asked of the
+    /// runtime where the session is made.
     fn begin(mut given: crate::plugin::Given) -> Result<crate::plugin::Begins, String> {
-        let role = given
-            .named("role")
-            .map(|role| {
-                let known = horizon_agent::packages::Packages::default().user_launchable();
-                if !known.iter().any(|known| known.id == role) {
-                    let available: Vec<&str> = known.iter().map(|known| known.title).collect();
-                    return Err(format!(
-                        "unknown role: {role} (available: {})",
-                        available.join(", ")
-                    ));
-                }
-                Ok(horizon_agent::roles::RoleId(role))
-            })
-            .transpose()?;
+        let role = given.named("role");
         let prompt = given.named("prompt");
         given.done()?;
         Ok(crate::plugin::Begins { role, prompt })

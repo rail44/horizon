@@ -212,6 +212,16 @@ impl Shell {
         }
         if name == AgentPlugin::NAME {
             let begins = AgentPlugin::begin(given)?;
+            if let Some(role) = &begins.role {
+                let modes = self.agent_modes();
+                if !modes.iter().any(|mode| &mode.id == role) {
+                    let available: Vec<&str> = modes.iter().map(|mode| mode.id.as_str()).collect();
+                    return Err(format!(
+                        "unknown role: {role} (available: {})",
+                        available.join(", ")
+                    ));
+                }
+            }
             return self.new_session(SessionKind::Agent, begins, split, issuer, activate);
         }
         let made = match plugins::created(name, given.clone()) {

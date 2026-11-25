@@ -143,8 +143,8 @@ pub trait SessionPlugin: Plugin {
 /// How a new session begins.
 #[derive(Clone, Debug, Default)]
 pub struct Begins {
-    /// The role an agent works in.
-    pub role: Option<horizon_agent::roles::RoleId>,
+    /// The role an agent works in: a mode the agent offers.
+    pub role: Option<String>,
     /// What it is told first.
     pub prompt: Option<String>,
 }

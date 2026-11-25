@@ -11,7 +11,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use fold::{AgentEvent, AgentModel};
+pub use fold::{AgentEvent, AgentModel, mode_choices};
 pub use queries::{actionable_pending_approval_identities_in, state_indicates_turn_in_flight};
 pub use transcript::*;
 pub use types::*;

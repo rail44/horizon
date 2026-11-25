@@ -226,3 +226,10 @@ pub struct EffortSelection {
     pub current: String,
     pub choices: Vec<String>,
 }
+
+/// A mode a new session can start in: a role of the agent's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mode {
+    pub id: String,
+    pub title: String,
+}

@@ -87,6 +87,9 @@ pub(super) struct AgentRoutes {
     /// connection, and its wakeup for the connection's op loop.
     version_mismatch: Mutex<Option<String>>,
     version_mismatch_signal: tokio::sync::Notify,
+    /// The modes the agent offers a new session, as `session/options`
+    /// said them on the current connection.
+    modes: Mutex<Vec<crate::agent_model::Mode>>,
     /// Each subagent's parent session, as `subagent_update` announced it:
     /// where a subagent's permission requests are shown.
     parents: Mutex<HashMap<SessionId, SessionId>>,
@@ -155,6 +158,7 @@ impl AgentRoutes {
             names: Mutex::new(Names::default()),
             version_mismatch: Mutex::new(None),
             version_mismatch_signal: tokio::sync::Notify::new(),
+            modes: Mutex::new(Vec::new()),
             parents: Mutex::new(HashMap::new()),
         }
     }
@@ -345,6 +349,14 @@ impl AgentRoutes {
             was: local,
             is: named,
         });
+    }
+
+    pub(super) fn set_modes(&self, modes: Vec<crate::agent_model::Mode>) {
+        *self.modes.lock().unwrap() = modes;
+    }
+
+    pub(super) fn modes(&self) -> Vec<crate::agent_model::Mode> {
+        self.modes.lock().unwrap().clone()
     }
 
     /// Tells the shell the session it started as `local` did not start.

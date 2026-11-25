@@ -314,6 +314,14 @@ where
                 return Ok(error.into());
             }
             main_control.mark_established();
+            // The modes a new session can start in.
+            let request = send(&connection, v2::SessionOptionsRequest::new(resume_cwd()));
+            let asked = main_routes.clone();
+            tokio::spawn(async move {
+                if let Ok(response) = call(&asked, OP_TIMEOUT, "session options", request).await {
+                    asked.set_modes(crate::agent_model::mode_choices(&response.config_options));
+                }
+            });
             let end = loop {
                 tokio::select! {
                     _ = main_control.cancelled() => break StreamEnd::Cancelled,
