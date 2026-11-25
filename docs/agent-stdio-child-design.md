@@ -103,11 +103,12 @@ connecting to a socket or spawning a daemon. The one host tool,
 `workspace_snapshot`, stays an `_horizon/host_tool` request answered on
 the UI thread.
 
-The shell still compares `HORIZON_ACP_EXT_VERSION` in `initialize`'s
-`_meta.horizon`, since the binary can be rebuilt on its own. On a
-mismatch the agent panes say the app needs a restart; there is no drain
-and respawn loop, since the child is the shell's own. Every `_horizon/*`
-extension the shell gives up narrows what a mismatch can break.
+While `_horizon/*` extensions remain, the shell compares
+`HORIZON_ACP_EXT_VERSION` in `initialize`'s `_meta.horizon`, since the
+binary can be rebuilt on its own. On a mismatch the agent panes say the
+app needs a restart; there is no drain and respawn loop, since the child
+is the shell's own. Once the extensions are replaced by standard forms
+(below), the check goes with them and ACP's own versioning is all.
 
 ### What the child needs that agentd had
 
@@ -120,8 +121,8 @@ extension the shell gives up narrows what a mismatch can break.
   cannot be opened. The child answers `initialize` and refuses sessions
   with the error, which the panes show.
 - **A flush when stdin closes**, as agentd flushes on drain and SIGTERM.
-- **Config reload.** `Reload Config` sends the child a request to reload
-  `[providers]`, `[sandbox]`, `[grants]` and trusted projects
+- **Config reload.** The child reads the config file again when it
+  changes: `[providers]`, `[sandbox]`, `[grants]` and trusted projects
   (`AgentdState::reload_provider_config` rebuilds the providers today;
   nothing calls it). `config.example.toml` already says provider
   settings reload live, which this makes true.
@@ -213,6 +214,38 @@ The tests about the binary itself start it: it answers `initialize`
 over stdio, it flushes and ends when stdin closes, a second process is
 refused a locked session.
 
+## ACP and its extensions
+
+The binary speaks ACP v2. The shell relies on `StateUpdate` (running,
+idle, waiting for an approval), which v1 has no form of: in v1 a client
+learns a turn ended only from its own `session/prompt`'s response, and
+Horizon's sessions run turns no client started (board and wiki inputs,
+other sessions' inputs, a child's completion). A v1 entry for editors
+that speak only v1 can be added when one is wanted, with that state left
+out.
+
+The `_horizon/*` extensions are replaced by standard forms, and the UI
+follows ACP where they differ (board #114):
+
+| Extension | Standard form |
+|---|---|
+| `continue_turn` | A turn the token budget halts ends with the stop reason `MaxTurnRequests`; a new message goes on, as it already does |
+| `list_providers`, `list_provider_models` | The `Model` config option's values, before a session exists through `session/options` (unstable) |
+| `session/new`'s `_meta.horizon` | The agent names the session; the role is a `Mode` config option and the model a `Model` one, given at creation (`config_options`, unstable) |
+| A denial's reason in the permission response | A standard reject option; the reason is the next message |
+| `ensure_board_organizer` | Out of ACP: board flow writes the organizer's session id to the board, whose view resumes it |
+| `reload_provider_config` | Out of ACP: the child reads the config file again when it changes |
+| `task_progress` | Updates of the `task` tool call (title, content, status) |
+| `tool_call_progress` | `ToolCallContentChunk` |
+| `host_tool` (`workspace_snapshot`) | Out of ACP: the tool asks the control socket (`HORIZON_SOCKET`) itself |
+| `session_event` | An error is the stop reason `Error`; resumption, a closed attachment, an exit and skipped lines have no use over a child's stdio; rate limits and history clearing are not shown |
+| `drain`, `watch_board`, `rewind_session` | Gone |
+
+The `_meta.horizon` on updates goes too: a tool call's verdict is in its
+`rawOutput` and its outcome in its `status`; an approval's kind is in
+its options' wording; where an input came from is not marked; a child
+session's parent is not shown (#114).
+
 ## Stages
 
 Each stage ends with the gate clean.
@@ -224,25 +257,18 @@ Each stage ends with the gate clean.
 2. **One log file per session.** The writer, the readers, resume, the
    projection caught up on demand, and the migration.
 3. **The stdio child.** `horizon-agent-acp`; the shell starts it in
-   place of connecting to agentd. `Reload Agent Runtime` restarts the
-   child; `Reload Config` reaches it. Tests move to `Channel::duplex()`.
-   The probe becomes a client of the binary.
+   place of connecting to agentd, over the extensions it uses now, less
+   `drain`, `watch_board` and `rewind_session`. `Reload Agent Runtime`
+   restarts the child. Tests move to `Channel::duplex()`. The probe
+   becomes a client of the binary.
 4. **agentd goes.** The binary, the agent half of
    `horizon-daemon-testkit`, the socket helpers only agentd used, the
    `sandboxed` profile's agentd entries (with the stale `milestone::git`
    and `isolation_announcement` ones), AGENTS.md's agentd paragraphs,
    and the docs that describe agentd as current.
-
-## Open questions
-
-1. **The ACP version.** The shell speaks v2 to agentd; external agents
-   and clients speak v1, the stable version. The binary answers the
-   version a client asks for in `initialize`, if the parts of v2 the
-   shell uses have a v1 form; which do is not yet listed.
-2. **The `_horizon/*` extensions the shell keeps.** Each is a place the
-   shell and the binary can disagree. Listing providers and their
-   models, the board organizer and continuing a paused turn are the
-   ones in use.
+5. **Standard forms.** The extensions in the table above, one at a time,
+   each with the UI it changes; the extension version goes with the
+   last.
 
 ## What this replaces
 
