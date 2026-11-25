@@ -569,9 +569,21 @@ fn the_screen_is_painted_and_not_only_held() {
         &mut pixels,
     );
     let (rgba, _) = pixels.as_chunks::<4>();
+    // A glyph's pixels are the foreground at its core and blends toward the
+    // background at its edges, in proportions the rasterizer decides: count
+    // every pixel nearer the foreground than the background, not only the
+    // exact foreground, so the count is the text's and not the antialiasing's.
+    let nearer_foreground = |pixel: &[u8; 4]| {
+        let distance = |color: [u8; 3]| -> u32 {
+            (0..3)
+                .map(|channel| u32::from(pixel[channel].abs_diff(color[channel])).pow(2))
+                .sum()
+        };
+        distance(look.foreground) < distance(look.background)
+    };
     let text_in = |rows: std::ops::Range<usize>| {
         (rgba[rows.start * width as usize..rows.end * width as usize].iter())
-            .filter(|pixel| [pixel[0], pixel[1], pixel[2]] == look.foreground)
+            .filter(|pixel| nearer_foreground(pixel))
             .count()
     };
     assert!(text_in(0..height as usize) > 200, "the numbers");
