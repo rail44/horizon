@@ -138,41 +138,7 @@ pub struct ApprovalMeta {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ApprovalKind {
     Standard,
-    DomainDenialRetry {
-        domains: Vec<String>,
-        prior_result: ToolResult,
-    },
-    FilesystemDenialRetry {
-        denials: Vec<horizon_sandbox::FilesystemDenial>,
-        grants: Vec<horizon_sandbox::FilesystemGrant>,
-        prior_result: ToolResult,
-    },
-    DomainGrant {
-        domains: Vec<String>,
-    },
-    MachServiceGrant {
-        services: Vec<String>,
-        prior_result: ToolResult,
-    },
-    /// Appended last: the wire's `oneOf` indices stay put.
-    SandboxAreaGrant {
-        grants: Vec<horizon_sandbox::FilesystemGrant>,
-        reason: String,
-    },
-    /// Appended last: the wire's `oneOf` indices stay put.
-    PrimaryCheckoutRetry {
-        root: std::path::PathBuf,
-        prior_result: ToolResult,
-    },
-}
-
-/// Mirrors `contract::ToolCallResult` (crates/horizon-agent/src/contract/tool_result.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ToolResult {
-    pub call_id: String,
-    pub occurrence_id: String,
-    pub output: serde_json::Value,
-    pub outcome: ToolOutcome,
+    DomainGrant { domains: Vec<String> },
 }
 
 /// Mirrors `contract::ToolOutcome` (crates/horizon-agent/src/contract/tool_result.rs).
@@ -229,15 +195,6 @@ mod tests {
         assert_eq!(&decoded, value);
     }
 
-    fn prior_result() -> ToolResult {
-        ToolResult {
-            call_id: "call-1".into(),
-            occurrence_id: "occ-1".into(),
-            output: json!({"exit_code": 1}),
-            outcome: ToolOutcome::Failed,
-        }
-    }
-
     #[test]
     fn meta_payloads_round_trip() {
         round_trip(&InitializeMeta {
@@ -290,50 +247,10 @@ mod tests {
 
     #[test]
     fn every_approval_kind_round_trips() {
-        let grant = horizon_sandbox::FilesystemGrant {
-            path: PathBuf::from("/data"),
-            access: horizon_sandbox::FilesystemGrantAccess::Read,
-            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-            excluded_subpaths: Vec::new(),
-        };
         let kinds = [
             ApprovalKind::Standard,
-            ApprovalKind::DomainDenialRetry {
-                domains: vec!["example.com".into()],
-                prior_result: prior_result(),
-            },
-            ApprovalKind::FilesystemDenialRetry {
-                denials: vec![horizon_sandbox::FilesystemDenial {
-                    attempted_path: PathBuf::from("/data/a.txt"),
-                    grant: grant.clone(),
-                }],
-                grants: vec![grant],
-                prior_result: prior_result(),
-            },
             ApprovalKind::DomainGrant {
                 domains: vec!["docs.example.com".into()],
-            },
-            ApprovalKind::MachServiceGrant {
-                services: vec!["com.apple.SecurityServer".into()],
-                prior_result: ToolResult {
-                    outcome: ToolOutcome::Superseded {
-                        retry_occurrence_id: "occ-2".into(),
-                    },
-                    ..prior_result()
-                },
-            },
-            ApprovalKind::SandboxAreaGrant {
-                grants: vec![horizon_sandbox::FilesystemGrant {
-                    path: PathBuf::from("/work/main"),
-                    access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-                    scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-                    excluded_subpaths: vec![PathBuf::from(".git")],
-                }],
-                reason: "finish the integration".into(),
-            },
-            ApprovalKind::PrimaryCheckoutRetry {
-                root: PathBuf::from("/work/main"),
-                prior_result: prior_result(),
             },
         ];
         for (index, kind) in kinds.into_iter().enumerate() {

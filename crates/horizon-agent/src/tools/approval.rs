@@ -9,7 +9,7 @@ use crate::contract::{
 use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
-use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
+use crate::tools::bash::{ApprovalSource, HostExecutionApproval};
 use crate::tools::output::{Response, error as error_output};
 use crate::tools::state::{SessionRuntime, ToolSessionState, session_runtime};
 
@@ -48,21 +48,11 @@ impl From<Result<ToolUpdate, String>> for ApprovalOutcome {
 /// read routes through the approval gate (see `execution::execute_agent_tool`'s
 /// `call_escapes_root` check) -- all
 /// are "runs to completion synchronously" shape -- see
-/// [`resolve_synchronous_tool`]. `request_sandbox_area` joins because its
-/// whole effect is the grant this approval applies
-/// (`docs/sandbox-area-grants-design.md`): a provider-owned handshake would
-/// let it be approved without the grant ever reaching the session.
+/// [`resolve_synchronous_tool`].
 pub(crate) fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "fs_read"
-            | "fs_glob"
-            | "fs_grep"
-            | "fs_write"
-            | "fs_edit"
-            | "bash"
-            | "web_fetch"
-            | "request_sandbox_area"
+        "fs_read" | "fs_glob" | "fs_grep" | "fs_write" | "fs_edit" | "bash" | "web_fetch"
     )
 }
 
@@ -234,16 +224,6 @@ fn dispatch_approval(
     let request = &prepared;
     match request.tool_id.as_str() {
         "bash" => resolve_bash(session_id, runtime, request, decision, kind, source),
-        "request_sandbox_area" => match kind {
-            ApprovalKind::SandboxAreaGrant { grants, reason } => {
-                resolve_sandbox_area_grant(runtime, request, decision, grants, reason)
-            }
-            _ => declined_result(
-                runtime,
-                &request.call_id,
-                error_output("A sandbox area request carries only an area grant."),
-            ),
-        },
         "web_fetch" => resolve_web_fetch(session_id, runtime, request, decision, kind),
         _ => resolve_synchronous_tool(runtime, request, decision),
     }
@@ -349,61 +329,13 @@ fn resolve_bash(
     approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     match kind {
-        ApprovalKind::DomainDenialRetry {
-            domains,
-            prior_result,
-        } => resolve_domain_denial_retry(
+        ApprovalKind::DomainGrant { domains } => resolve_bash_domains(
             session_id,
             runtime,
             request,
             decision,
             domains,
-            prior_result,
             approval_source,
-        ),
-        ApprovalKind::FilesystemDenialRetry {
-            denials,
-            grants,
-            prior_result,
-        } => resolve_filesystem_denial_retry(
-            session_id,
-            runtime,
-            request,
-            decision,
-            denials,
-            grants,
-            prior_result,
-            approval_source,
-        ),
-        ApprovalKind::MachServiceGrant {
-            services,
-            prior_result,
-        } => resolve_mach_service_grant(
-            session_id,
-            runtime,
-            request,
-            decision,
-            services,
-            prior_result,
-            approval_source,
-        ),
-        ApprovalKind::PrimaryCheckoutRetry { prior_result, .. } => resolve_primary_checkout_retry(
-            session_id,
-            runtime,
-            request,
-            decision,
-            prior_result,
-            approval_source,
-        ),
-        ApprovalKind::DomainGrant { .. } => declined_result(
-            runtime,
-            &request.call_id,
-            error_output("A host-side domain grant cannot authorize a bash command."),
-        ),
-        ApprovalKind::SandboxAreaGrant { .. } => declined_result(
-            runtime,
-            &request.call_id,
-            error_output("A sandbox area grant cannot authorize a bash command."),
         ),
         ApprovalKind::Standard => {
             resolve_standard_bash(session_id, runtime, request, decision, approval_source)
@@ -411,51 +343,42 @@ fn resolve_bash(
     }
 }
 
-/// A session asked for a writable area before running anything
-/// (`docs/sandbox-area-grants-design.md`). An approve adds the grants to
-/// this session and settles the asking call; nothing is re-run, because
-/// there is no failed call to retry -- what changes is the authority the
-/// session's *later* calls run with. The grants were clamped when the
-/// candidate was built and are revalidated here, so a stale or over-broad
-/// area fails closed instead of being added.
-fn resolve_sandbox_area_grant(
+/// A sandboxed `bash` call that named hosts beyond the session's domains
+/// (`docs/sandbox-runtime-design.md`, "The failure path"). An approve runs
+/// it sandboxed with those hosts open for this call only: nothing is added
+/// to the session.
+fn resolve_bash_domains(
+    session_id: SessionId,
     runtime: &SessionRuntime,
     request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
-    grants: Vec<horizon_sandbox::FilesystemGrant>,
-    reason: String,
+    domains: Vec<String>,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         return declined_result(runtime, &request.call_id, denied_output(decision));
     }
-    if grants.is_empty() {
-        return unstarted_error(
-            runtime,
-            &request.call_id,
-            "Sandbox area grant named no grantable area",
-        );
+    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
+        return unstarted_error(runtime, &request.call_id, "bash requires a workspace root");
+    };
+    let outcome = begin_execution(runtime, request, None);
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
     }
-    if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
-        return unstarted_error(
-            runtime,
-            &request.call_id,
-            &format!("Sandbox area grant could not be applied: {error}"),
-        );
-    }
-    let granted = grants
-        .iter()
-        .map(|grant| grant.path.display().to_string())
-        .collect::<Vec<_>>();
-    // The asking tool has no execution of its own -- its whole effect is
-    // this grant -- so the call settles here rather than re-entering tool
-    // dispatch, which would only report that there is nothing to run.
-    let result = request
-        .identity()
-        .finish(crate::tools::output::Response::succeeded(
-            crate::tools::output::SandboxAreaGranted { granted, reason },
-        ));
-    ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
+    bash::spawn_contained(
+        session_id,
+        request,
+        &runtime.tool_state,
+        runtime.async_results.clone(),
+        workspace_root,
+        bash::ContainedOrigin::Domains {
+            source: approval_source,
+            domains,
+        },
+    );
+    outcome
 }
+
 fn resolve_standard_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
@@ -469,12 +392,6 @@ fn resolve_standard_bash(
             if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
                 return outcome;
             }
-            // Any Standard bash approval either is the host-execution
-            // fallback or the filesystem-retry retry; both mean this session
-            // may now write its primary checkout, so the sandbox stops
-            // excluding it.
-            runtime.tool_state.approve_primary_checkout();
-
             bash::spawn_approved_host(
                 bash::BashJob::new(
                     session_id,
@@ -493,107 +410,6 @@ fn resolve_standard_bash(
     }
 }
 
-/// A sandboxed `bash` call was refused paths outside its workspace
-/// (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
-/// decision). Like a domain-denial retry, the call already ran to
-/// completion, so a deny simply forwards `prior_result` -- there is nothing
-/// left to execute.
-///
-/// An approve adds `grants` (the shaped suggestion; see
-/// [`ApprovalKind::FilesystemDenialRetry`]) to this session and reruns the
-/// same call **still sandboxed**. This replaced the 2026-07-24 answer of
-/// running the call once with the host process's full authority: for the
-/// case that actually drove approvals -- a build toolchain reaching its
-/// caches -- the narrow grant converges while whole-call host execution
-/// bought strictly more authority than the grant it declined to make.
-///
-/// Fails closed both ways: an approval carrying no grants (an old
-/// host-execution-era request replayed against this build) and one whose
-/// grants no longer revalidate both forward the prior result rather than
-/// running anything.
-#[expect(clippy::too_many_arguments)]
-fn resolve_filesystem_denial_retry(
-    session_id: SessionId,
-    runtime: &SessionRuntime,
-    request: &PreparedCall<'_>,
-    decision: &ApprovalDecision,
-    denials: Vec<horizon_sandbox::FilesystemDenial>,
-    grants: Vec<horizon_sandbox::FilesystemGrant>,
-    prior_result: ToolCallResult,
-    approval_source: ApprovalSource,
-) -> ApprovalOutcome {
-    if matches!(decision, ApprovalDecision::Deny { .. }) {
-        return forward_prior_result(runtime, retry_denied(prior_result, decision));
-    }
-    if grants.is_empty() {
-        return unstarted_error(
-            runtime,
-            &request.call_id,
-            "This filesystem approval names no grant to retry with; refusing to run the call \
-             without one.",
-        );
-    }
-    // Re-resolved here, at approval application, and again by the sandbox
-    // itself immediately before the queued process spawns.
-    if let Err(error) = grants
-        .iter()
-        .try_for_each(horizon_sandbox::revalidate_grant)
-    {
-        return unstarted_error(
-            runtime,
-            &request.call_id,
-            &format!("Approved filesystem grants could not be revalidated: {error}"),
-        );
-    }
-    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
-        return forward_prior_result(runtime, prior_result);
-    };
-    // The saved start describes the intended authority. Installing it in
-    // the live session still waits for that record's acknowledgement.
-    let mut planned_grants = runtime.tool_state.filesystem_grants_snapshot();
-    for grant in &grants {
-        if !planned_grants.contains(grant) {
-            planned_grants.push(grant.clone());
-        }
-    }
-    runtime.live_state.record_filesystem_grants(&planned_grants);
-    let started = match ToolUpdate::start(&runtime.live_state, request, Some(&prior_result)) {
-        Ok(started) => started,
-        Err(message) => return ApprovalOutcome::PersistenceFailed(message),
-    };
-    if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
-        return ApprovalOutcome::from(started.complete(
-            &runtime.live_state,
-            request.identity().finish(error_output(format!(
-                "Approved filesystem grants could not be revalidated: {error}"
-            ))),
-            Vec::new(),
-        ));
-    }
-    runtime
-        .live_state
-        .record_filesystem_grants(&runtime.tool_state.filesystem_grants_snapshot());
-    bash::spawn_sandboxed_call(
-        session_id,
-        request,
-        &runtime.tool_state,
-        runtime.async_results.clone(),
-        workspace_root,
-        SandboxedApprovalOrigin::FilesystemGrant {
-            source: approval_source,
-            grants,
-            trigger_paths: denials
-                .iter()
-                .map(|denial| denial.attempted_path.clone())
-                .collect(),
-        },
-        None,
-    );
-    ApprovalOutcome::Applied(started)
-}
-
-/// Fold the start before enqueueing a job. A retry closes its abandoned
-/// attempt first, preserving the old and new occurrence identities.
 fn begin_execution(
     runtime: &SessionRuntime,
     request: &PreparedCall<'_>,
@@ -606,37 +422,7 @@ fn begin_execution(
     ))
 }
 
-/// Start a sandboxed run of an approved `bash` call: fold the start (closing
-/// `prior_result`'s attempt for a retry), then apply the approval's grant and
-/// enqueue the run. `authorize` runs only once the start is persisted -- a
-/// persistence failure installs nothing -- and returns the origin the run's
-/// result is annotated with.
-fn begin_sandboxed_run(
-    session_id: SessionId,
-    runtime: &SessionRuntime,
-    request: &PreparedCall<'_>,
-    prior_result: Option<&ToolCallResult>,
-    workspace_root: &std::path::Path,
-    authorize: impl FnOnce() -> SandboxedApprovalOrigin,
-    git_metadata_roots: Option<Vec<std::path::PathBuf>>,
-) -> ApprovalOutcome {
-    let outcome = begin_execution(runtime, request, prior_result);
-    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
-        return outcome;
-    }
-    bash::spawn_sandboxed_call(
-        session_id,
-        request,
-        &runtime.tool_state,
-        runtime.async_results.clone(),
-        workspace_root,
-        authorize(),
-        git_metadata_roots,
-    );
-    outcome
-}
-
-/// The deny half of the denial-retry pair (see
+/// Settle a retry offer that was declined (the counterpart of
 /// [`ToolCallResult::superseded_by_retry`] for the approve half): the parked first
 /// attempt's genuine outcome becomes that occurrence's terminal result and
 /// the provider's answer, since the attempt that ran is what the decision
@@ -644,158 +430,6 @@ fn begin_sandboxed_run(
 /// closed the first row.
 fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) -> ApprovalOutcome {
     ApprovalOutcome::from(ToolUpdate::decline_retry(&runtime.live_state, prior_result))
-}
-
-/// A tier-1 sandboxed `bash` call's network egress was refused for
-/// `domains` (`docs/agent-approval-design.md` leg 4b). Unlike an ordinary
-/// bash approval, the call already ran to completion -- `prior_result` is a
-/// genuine, already-computed outcome, not just a denial-shaped reason
-/// string -- so a deny simply forwards it as-is (the real attempt already
-/// happened and its own output already reflects the denial; there is
-/// nothing to execute now, unlike a fresh tool-call deny). An approve adds
-/// `domains` to this session's own network-proxy allowlist and reruns the
-/// SAME call, still sandboxed (`bash::spawn_sandboxed`, not the plain
-/// unsandboxed `bash::spawn` an ordinary/sandbox-denial-retry approve
-/// uses) -- both the network mutation and the rerun are session-scoped:
-/// only this call's own session's `SessionNetworkProxy` and workspace root
-/// are touched.
-fn resolve_domain_denial_retry(
-    session_id: SessionId,
-    runtime: &SessionRuntime,
-    request: &PreparedCall<'_>,
-    decision: &ApprovalDecision,
-    domains: Vec<String>,
-    prior_result: ToolCallResult,
-    approval_source: ApprovalSource,
-) -> ApprovalOutcome {
-    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
-    match decision {
-        ApprovalDecision::Deny { .. } => {
-            forward_prior_result(runtime, retry_denied(prior_result, decision))
-        }
-        ApprovalDecision::Approve => {
-            // Both should be impossible here -- a `DomainDenialRetry` is
-            // only ever produced by a tier-1 sandboxed call, which requires
-            // both -- but this stays defensive (forwarding the prior,
-            // already-computed result) rather than silently dropping the
-            // approval if either is somehow missing.
-            let (Some(network), Some(workspace_root)) = (
-                runtime.tool_state.network_proxy(),
-                runtime.tool_state.workspace_root(),
-            ) else {
-                return forward_prior_result(runtime, prior_result);
-            };
-            begin_sandboxed_run(
-                session_id,
-                runtime,
-                request,
-                Some(&prior_result),
-                workspace_root,
-                move || {
-                    for domain in &domains {
-                        network.allow_domain(domain.clone());
-                    }
-                    SandboxedApprovalOrigin::ManualDomainRetry {
-                        source: approval_source,
-                        domains,
-                    }
-                },
-                git_metadata_roots,
-            )
-        }
-    }
-}
-
-/// A sandboxed `bash` call was refused mach-lookup to macOS security
-/// services (`docs/macos-containment-denial-reporting-design.md`) -- the
-/// macOS counterpart of [`resolve_domain_denial_retry`]: the call already
-/// ran, a deny forwards `prior_result` unchanged, and an approve records
-/// the service set for this session (additive, session-persistent) and
-/// reruns the SAME call still sandboxed. The rerun's grant assembly picks
-/// up the enforcement mapping via
-/// [`ToolSessionState::effective_sandbox_grants`]
-/// (`horizon_sandbox::security_service_grants`).
-fn resolve_mach_service_grant(
-    session_id: SessionId,
-    runtime: &SessionRuntime,
-    request: &PreparedCall<'_>,
-    decision: &ApprovalDecision,
-    services: Vec<String>,
-    prior_result: ToolCallResult,
-    approval_source: ApprovalSource,
-) -> ApprovalOutcome {
-    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
-    match decision {
-        ApprovalDecision::Deny { .. } => {
-            forward_prior_result(runtime, retry_denied(prior_result, decision))
-        }
-        ApprovalDecision::Approve => {
-            // Both should be impossible here -- a mach service grant is
-            // only ever produced by a tier-1 sandboxed call, which requires
-            // a workspace root -- but this stays defensive (forwarding the
-            // prior, already-computed result), mirroring
-            // [`resolve_domain_denial_retry`].
-            let Some(workspace_root) = runtime.tool_state.workspace_root() else {
-                return forward_prior_result(runtime, prior_result);
-            };
-            begin_sandboxed_run(
-                session_id,
-                runtime,
-                request,
-                Some(&prior_result),
-                workspace_root,
-                || {
-                    runtime.tool_state.approve_mach_services(&services);
-                    SandboxedApprovalOrigin::MachServiceGrant {
-                        source: approval_source,
-                        services,
-                    }
-                },
-                git_metadata_roots,
-            )
-        }
-    }
-}
-
-/// A sandboxed `bash` call wrote inside the session's unapproved primary
-/// checkout (`ApprovalKind::PrimaryCheckoutRetry`). A deny forwards
-/// `prior_result` unchanged; an approve records the session's one
-/// primary-checkout approval -- the same one `fs_write`/`fs_edit` there
-/// record -- and reruns the SAME call still sandboxed, with the checkout no
-/// longer excluded from its writable root.
-fn resolve_primary_checkout_retry(
-    session_id: SessionId,
-    runtime: &SessionRuntime,
-    request: &PreparedCall<'_>,
-    decision: &ApprovalDecision,
-    prior_result: ToolCallResult,
-    approval_source: ApprovalSource,
-) -> ApprovalOutcome {
-    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
-    match decision {
-        ApprovalDecision::Deny { .. } => {
-            forward_prior_result(runtime, retry_denied(prior_result, decision))
-        }
-        ApprovalDecision::Approve => {
-            let Some(workspace_root) = runtime.tool_state.workspace_root() else {
-                return forward_prior_result(runtime, prior_result);
-            };
-            begin_sandboxed_run(
-                session_id,
-                runtime,
-                request,
-                Some(&prior_result),
-                workspace_root,
-                || {
-                    runtime.tool_state.approve_primary_checkout();
-                    SandboxedApprovalOrigin::PrimaryCheckout {
-                        source: approval_source,
-                    }
-                },
-                git_metadata_roots,
-            )
-        }
-    }
 }
 
 fn unstarted_error(
@@ -835,29 +469,6 @@ fn denied_output(decision: &ApprovalDecision) -> Response {
     }
 }
 
-/// The attempt that ran, answering a retry a person denied: its result
-/// says the retry was denied, and why when the person said, so the model
-/// does not read the attempt's failure as something to try again.
-fn retry_denied(mut prior: ToolCallResult, decision: &ApprovalDecision) -> ToolCallResult {
-    let reason = match decision {
-        ApprovalDecision::Deny {
-            reason: Some(reason),
-        } if !reason.trim().is_empty() => format!(" The user's reason: {}", reason.trim()),
-        _ => String::new(),
-    };
-    if let Some(output) = prior.output.as_object_mut() {
-        output.insert(
-            "retry_denied".into(),
-            serde_json::Value::String(format!(
-                "Retrying this call needed an approval, and the user denied it; this is the \
-                 result of the attempt that ran.{reason}"
-            )),
-        );
-    }
-    prior
-}
-
-/// Settle an offer that did not execute, including denied or invalid grants.
 fn declined_result(
     runtime: &SessionRuntime,
     call_id: &ToolCallId,
@@ -877,97 +488,4 @@ fn declined_result(
     };
     let result = ToolCallResult::denied(call_id.clone(), identity.occurrence_id, output.to_json());
     ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::contract::{ApprovalRequest, Event, OccurrenceId};
-    use crate::live::LiveState;
-    use crate::persistence::event_log::{WriterHandle, WriterInit};
-    use crate::tools::{register_session_runtime, unregister_session_runtime};
-
-    #[test]
-    fn failed_approved_starts_do_not_enlarge_session_grants() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("workspace");
-        let outside = dir.path().join("outside");
-        std::fs::create_dir_all(&workspace).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        let prior = crate::contract::ToolCallIdentity {
-            call_id: ToolCallId("call".into()),
-            occurrence_id: OccurrenceId::new(),
-        }
-        .result(serde_json::json!({"is_error":true}));
-        let grant = horizon_sandbox::FilesystemGrant {
-            path: outside.canonicalize().unwrap(),
-            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-            excluded_subpaths: Vec::new(),
-        };
-        for (tool_id, kind) in [
-            (
-                "web_fetch",
-                ApprovalKind::DomainGrant {
-                    domains: vec!["example.com".into()],
-                },
-            ),
-            (
-                "bash",
-                ApprovalKind::FilesystemDenialRetry {
-                    denials: Vec::new(),
-                    grants: vec![grant],
-                    prior_result: prior.clone(),
-                },
-            ),
-            (
-                "bash",
-                ApprovalKind::MachServiceGrant {
-                    services: vec!["com.apple.securityd".into()],
-                    prior_result: prior.clone(),
-                },
-            ),
-        ] {
-            let session = SessionId::new();
-            let state = ToolSessionState::new(workspace.clone());
-            let request = ToolCallRequest {
-                call_id: prior.call_id.clone(),
-                occurrence_id: OccurrenceId::new(),
-                tool_id: tool_id.into(),
-                input: serde_json::json!({"command":"true", "url":"https://example.com"}).into(),
-            };
-            let history = vec![
-                Event::ToolCallRequested(request.clone()),
-                Event::ApprovalRequested(ApprovalRequest {
-                    call_id: request.call_id.clone(),
-                    occurrence_id: request.occurrence_id.clone(),
-                    reason: "grant".into(),
-                    kind,
-                }),
-            ];
-            let (writer, ready) = WriterHandle::open(dir.path());
-            assert!(matches!(ready.recv().unwrap(), WriterInit::Failed(_)));
-            let live =
-                LiveState::with_event_log_and_history(session, None, None, writer, history.clone());
-            let grants = state.filesystem_grants_snapshot();
-            let services = state.mach_services();
-            let (tx, rx) = crossbeam_channel::unbounded();
-            register_session_runtime(session, state.clone(), live.clone(), tx);
-            std::assert_matches!(
-                resolve_approval(
-                    &live.frame(),
-                    session,
-                    request.identity(),
-                    ApprovalDecision::Approve
-                ),
-                ApprovalOutcome::PersistenceFailed(_)
-            );
-            assert_eq!(live.events(), history);
-            assert_eq!(state.filesystem_grants_snapshot(), grants);
-            assert_eq!(state.mach_services(), services);
-            assert!(!state.is_domain_allowed("example.com"));
-            assert!(rx.try_recv().is_err());
-            unregister_session_runtime(session);
-        }
-    }
 }

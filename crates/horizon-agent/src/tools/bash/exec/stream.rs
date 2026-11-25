@@ -1,6 +1,8 @@
-//! Shared output collection policy for Tokio pipes and blocking sandbox pipes.
+//! Shared output collection policy for the bash pipes.
 //! Process waiting, cancellation and drain deadlines remain with each caller.
-use std::io::{self, Read};
+use std::io;
+#[cfg(test)]
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -14,25 +16,6 @@ pub(super) async fn pump(mut reader: impl AsyncRead + Unpin, buffer: Buffer) {
             break;
         }
     }
-}
-
-// A std Child owns blocking pipes. The caller retains the join handle to
-// bound draining; a thread cannot be aborted like the Tokio pump's task.
-pub(super) fn spawn_blocking_pump(
-    mut reader: impl Read + Send + 'static,
-) -> (Buffer, std::thread::JoinHandle<()>) {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let output = buffer.clone();
-    let handle = std::thread::spawn(move || {
-        let mut chunk = [0; 8192];
-        loop {
-            let result = reader.read(&mut chunk);
-            if !collect_read(result, &chunk, &output) {
-                break;
-            }
-        }
-    });
-    (buffer, handle)
 }
 
 fn collect_read(result: io::Result<usize>, chunk: &[u8], buffer: &Buffer) -> bool {
@@ -97,15 +80,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn both_pumps_retry_interruptions_and_keep_bytes_until_eof_or_error() {
+    async fn the_pump_retries_interruptions_and_keeps_bytes_until_eof_or_error() {
         for terminal_error in [false, true] {
-            let (blocking, handle) = spawn_blocking_pump(reader(terminal_error));
-            let asynchronous = Arc::new(Mutex::new(Vec::new()));
-            pump(reader(terminal_error), asynchronous.clone()).await;
-            handle.join().unwrap();
-            for buffer in [blocking, asynchronous] {
-                assert_eq!(*buffer.lock().unwrap(), b"first\x00\xff");
-            }
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            pump(reader(terminal_error), buffer.clone()).await;
+            assert_eq!(*buffer.lock().unwrap(), b"first\x00\xff");
         }
     }
 }

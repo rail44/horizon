@@ -150,4 +150,15 @@ pub(crate) struct Bash {
         { crate::config::DEFAULT_BASH_TIMEOUT_MAX_SECS },
         { crate::config::DEFAULT_BASH_TIMEOUT_DEFAULT_SECS },
     >,
+    /// Run this call once outside the sandbox, with the host's ordinary
+    /// authority. Only after a sandboxed run failed because the sandbox
+    /// blocked it (a read-only file system, a refused host); it needs
+    /// approval, and later calls run sandboxed again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outside_sandbox: bool,
+    /// Hosts this call needs beyond the session's allowed domains
+    /// (`example.com`, `*.example.com`). They open for this call only, once
+    /// approved; the call stays sandboxed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domains: Vec<String>,
 }

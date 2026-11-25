@@ -1,18 +1,59 @@
-//! Resolution and revalidation for approval-derived filesystem grants,
-//! plus the generic shaping that turns one call's set of mediated attempts
-//! into the grant an approver is actually offered
-//! (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
-//! project-scoped-tree-grants decision).
-//!
-//! Everything here is generic over path shape. There is deliberately no
-//! table mapping a command or language to the directories it needs -- the
-//! only inputs are the attempted paths, the session's workspace root, and
-//! `$HOME`.
+//! Filesystem grants: a tree or file a session's contained calls may also
+//! read or write (`[[grants.project]] trees`, a session's own worktree
+//! metadata), and the checks that keep one from widening into what the
+//! sandbox exists to protect.
 
-use crate::{
-    FilesystemDenial, FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope, SandboxError,
-};
-use std::path::{Component, Path, PathBuf};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// What a grant adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum FilesystemGrantAccess {
+    Read,
+    ReadWrite,
+}
+
+/// Whether a grant names one file or a directory and everything under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum FilesystemGrantScope {
+    File,
+    DirectoryTree,
+}
+
+/// A canonical filesystem grant. `excluded_subpaths` names subpaths within
+/// a `DirectoryTree` grant that stay read-only though the tree is writable.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FilesystemGrant {
+    pub path: PathBuf,
+    pub access: FilesystemGrantAccess,
+    pub scope: FilesystemGrantScope,
+    #[serde(default)]
+    pub excluded_subpaths: Vec<PathBuf>,
+}
+
+/// Why a grant cannot be applied as it stands.
+#[derive(Debug, thiserror::Error)]
+pub enum GrantError {
+    #[error("{path} cannot be granted: {source}")]
+    InvalidRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the grant for {approved} now resolves to {resolved}")]
+    GrantChanged {
+        approved: PathBuf,
+        resolved: PathBuf,
+    },
+    #[error("{path} is no longer a {scope:?}")]
+    GrantTypeChanged {
+        path: PathBuf,
+        scope: FilesystemGrantScope,
+    },
+    #[error("{0} is not a grantable target")]
+    UnsupportedGrantTarget(PathBuf),
+}
 
 const PROTECTED_PREFIXES: [&str; 3] = ["/proc", "/sys", "/dev"];
 
@@ -105,40 +146,40 @@ pub fn home_dir() -> Option<PathBuf> {
 /// to every session grant before it is merged into a fresh sandbox policy,
 /// so a grant that stops being enforceable simply disappears instead of
 /// silently widening.
-pub fn revalidate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
+pub fn revalidate_grant(grant: &FilesystemGrant) -> Result<(), GrantError> {
     if !grant.path.is_absolute() {
-        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+        return Err(GrantError::UnsupportedGrantTarget(grant.path.clone()));
     }
     validate_grant(grant)
 }
 
 /// Shared identity, scope and breadth checks for retained and applied grants.
-pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
+fn validate_grant(grant: &FilesystemGrant) -> Result<(), GrantError> {
     if is_protected(&grant.path) {
-        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+        return Err(GrantError::UnsupportedGrantTarget(grant.path.clone()));
     }
     if is_writable_tree(grant) && is_overbroad_tree(&grant.path, home_dir().as_deref()) {
-        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+        return Err(GrantError::UnsupportedGrantTarget(grant.path.clone()));
     }
     let resolved = grant
         .path
         .canonicalize()
-        .map_err(|source| SandboxError::InvalidRoot {
+        .map_err(|source| GrantError::InvalidRoot {
             path: grant.path.clone(),
             source,
         })?;
     if resolved != grant.path {
-        return Err(SandboxError::GrantChanged {
+        return Err(GrantError::GrantChanged {
             approved: grant.path.clone(),
             resolved,
         });
     }
     if is_protected(&resolved) {
-        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+        return Err(GrantError::UnsupportedGrantTarget(grant.path.clone()));
     }
     let metadata = resolved
         .metadata()
-        .map_err(|source| SandboxError::InvalidRoot {
+        .map_err(|source| GrantError::InvalidRoot {
             path: grant.path.clone(),
             source,
         })?;
@@ -147,7 +188,7 @@ pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError
         FilesystemGrantScope::DirectoryTree => metadata.is_dir(),
     };
     if !type_matches {
-        return Err(SandboxError::GrantTypeChanged {
+        return Err(GrantError::GrantTypeChanged {
             path: grant.path.clone(),
             scope: grant.scope,
         });
@@ -155,272 +196,12 @@ pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError
     Ok(())
 }
 
-pub(crate) fn is_writable_tree(grant: &FilesystemGrant) -> bool {
+fn is_writable_tree(grant: &FilesystemGrant) -> bool {
     grant.access == FilesystemGrantAccess::ReadWrite
         && grant.scope == FilesystemGrantScope::DirectoryTree
 }
 
-/// Shapes one call's mediated attempts into the grants to offer an
-/// approver.
-///
-/// Attempts that landed *inside* the session's own workspace (by their
-/// resolved, canonical grant path, as the workspace root is canonical: an
-/// attempt through a symlink lands where the link points) keep their
-/// individually resolved grant -- the workspace is already writable, so
-/// such an attempt is an oddity rather than the toolchain-reaching-outward
-/// pattern this rule exists for. Every attempt *outside* the workspace is
-/// generalized together into a single [`FilesystemGrantScope::DirectoryTree`]
-/// at the narrowest common ancestor of their parent directories: a single
-/// attempt therefore suggests its own parent directory, and several
-/// attempts suggest the shallowest directory that contains all of them.
-///
-/// The result is clamped by [`is_overbroad_tree`]. When the common
-/// ancestor lands on `$HOME`, `/`, or a system root -- which is what
-/// happens when the attempts have nothing meaningful in common -- there is
-/// no honest tree to offer, so the per-attempt grants are returned instead.
-///
-/// This is deliberately shape-only. `~/.cargo/.package-cache-mutate` and
-/// `~/.cargo/horizon-build-dir/debug/.cargo-build-lock` generalize to
-/// `~/.cargo` because that is their common ancestor, not because anything
-/// here knows what Cargo is.
-pub fn suggest_grants(
-    denials: &[FilesystemDenial],
-    workspace_root: Option<&Path>,
-    home: Option<&Path>,
-) -> Vec<FilesystemGrant> {
-    let (outside, inside): (Vec<_>, Vec<_>) = denials
-        .iter()
-        .partition(|denial| workspace_root.is_none_or(|root| !denial.grant.path.starts_with(root)));
-
-    let mut grants = Vec::new();
-    if let Some(shared) = shared_tree_grant(&outside, home) {
-        grants.push(shared);
-    } else {
-        grants.extend(outside.iter().map(|denial| denial.grant.clone()));
-    }
-    grants.extend(inside.iter().map(|denial| denial.grant.clone()));
-    grants.dedup();
-    grants
-}
-
-/// The single tree grant covering every attempt in `denials`, or `None` if
-/// no enforceable, non-over-broad ancestor exists (in which case the caller
-/// falls back to the per-attempt grants).
-fn shared_tree_grant(
-    denials: &[&FilesystemDenial],
-    home: Option<&Path>,
-) -> Option<FilesystemGrant> {
-    if denials.is_empty() {
-        return None;
-    }
-    let parents = denials
-        .iter()
-        .map(|denial| nearest_existing_dir(denial.attempted_path.parent()?))
-        .collect::<Option<Vec<_>>>()?;
-    let ancestor = common_ancestor(&parents)?;
-    if is_overbroad_tree(&ancestor, home) || is_protected(&ancestor) {
-        return None;
-    }
-    let access = if denials
-        .iter()
-        .any(|denial| denial.grant.access == FilesystemGrantAccess::ReadWrite)
-    {
-        FilesystemGrantAccess::ReadWrite
-    } else {
-        FilesystemGrantAccess::Read
-    };
-    Some(FilesystemGrant {
-        path: ancestor,
-        access,
-        scope: FilesystemGrantScope::DirectoryTree,
-        excluded_subpaths: Vec::new(),
-    })
-}
-
-/// Walks up from `path` to the first component that exists and is a
-/// directory, canonicalized. A grant has to name something real, and an
-/// attempt's own leaf usually does not exist yet (that is why it was
-/// attempted).
-fn nearest_existing_dir(path: &Path) -> Option<PathBuf> {
-    let mut current = path.to_path_buf();
-    loop {
-        if let Ok(canonical) = current.canonicalize()
-            && canonical.is_dir()
-        {
-            return Some(canonical);
-        }
-        if !current.pop() || current.as_os_str().is_empty() {
-            return None;
-        }
-    }
-}
-
-/// The longest path prefix shared by every entry, component by component.
-/// Purely lexical -- every input is already canonical, so there are no `..`
-/// or symlink components left to reason about.
-fn common_ancestor(paths: &[PathBuf]) -> Option<PathBuf> {
-    let mut iter = paths.iter();
-    let mut shared = iter.next()?.components().collect::<Vec<_>>();
-    for path in iter {
-        let candidate = path.components().collect::<Vec<_>>();
-        let shared_len = shared
-            .iter()
-            .zip(candidate.iter())
-            .take_while(|(left, right)| left == right)
-            .count();
-        shared.truncate(shared_len);
-    }
-    if shared.is_empty() {
-        return None;
-    }
-    Some(shared.iter().collect())
-}
-
-/// Turns one mediated attempt into the narrowest grant that could satisfy
-/// it, or a typed error when no grant honestly can:
-/// [`SandboxError::UnsupportedGrantTarget`] for a target the sandbox never
-/// hands out at all, and [`SandboxError::UngrantableDenial`] when the
-/// narrowest honest form would be a writable tree
-/// [`revalidate_grant`] is bound to refuse (that error's message carries
-/// the supported alternative for the caller to pass on).
-pub(crate) fn resolve_denial(
-    attempted_path: PathBuf,
-    access: FilesystemGrantAccess,
-) -> Result<FilesystemDenial, SandboxError> {
-    if !attempted_path.is_absolute() || is_protected(&attempted_path) {
-        return Err(SandboxError::UnsupportedGrantTarget(attempted_path));
-    }
-    let (path, scope) = match std::fs::symlink_metadata(&attempted_path) {
-        Ok(_) => resolve_existing(&attempted_path)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            resolve_missing_parent(&attempted_path, access)?
-        }
-        Err(source) => {
-            return Err(SandboxError::InvalidRoot {
-                path: attempted_path,
-                source,
-            });
-        }
-    };
-    if is_protected(&path) {
-        return Err(SandboxError::UnsupportedGrantTarget(attempted_path));
-    }
-    let grant = FilesystemGrant {
-        path,
-        access,
-        scope,
-        excluded_subpaths: Vec::new(),
-    };
-    // The same clamp [`revalidate_grant`] applies after approval, applied
-    // here so the two can never disagree. Without it, an attempt whose
-    // nearest existing parent is a system root (`/tmp/<leaf>` being the
-    // live case) proposes a writable tree that revalidation is guaranteed
-    // to refuse -- the operator answers a prompt whose approval is thrown
-    // away moments later.
-    if is_writable_tree(&grant) && is_overbroad_tree(&grant.path, home_dir().as_deref()) {
-        return Err(SandboxError::UngrantableDenial {
-            attempted: attempted_path,
-            tree: grant.path,
-        });
-    }
-    Ok(FilesystemDenial {
-        attempted_path,
-        grant,
-    })
-}
-
-pub fn revalidate_denial(denial: &FilesystemDenial) -> Result<(), SandboxError> {
-    let current = resolve_denial(denial.attempted_path.clone(), denial.grant.access)?;
-    if current == *denial {
-        Ok(())
-    } else {
-        Err(SandboxError::GrantProposalChanged {
-            attempted: denial.attempted_path.clone(),
-        })
-    }
-}
-
-fn resolve_existing(path: &Path) -> Result<(PathBuf, FilesystemGrantScope), SandboxError> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|source| SandboxError::InvalidRoot {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    let metadata = canonical
-        .metadata()
-        .map_err(|source| SandboxError::InvalidRoot {
-            path: canonical.clone(),
-            source,
-        })?;
-    if metadata.is_file() {
-        Ok((canonical, FilesystemGrantScope::File))
-    } else if metadata.is_dir() {
-        Ok((canonical, FilesystemGrantScope::DirectoryTree))
-    } else {
-        Err(SandboxError::UnsupportedGrantTarget(path.to_path_buf()))
-    }
-}
-
-fn resolve_missing_parent(
-    attempted: &Path,
-    access: FilesystemGrantAccess,
-) -> Result<(PathBuf, FilesystemGrantScope), SandboxError> {
-    let mut current = attempted.to_path_buf();
-    loop {
-        let Some(name) = current.file_name() else {
-            return Err(SandboxError::UnsupportedGrantTarget(
-                attempted.to_path_buf(),
-            ));
-        };
-        if !matches!(
-            Path::new(name).components().next(),
-            Some(Component::Normal(_))
-        ) {
-            return Err(SandboxError::UnsupportedGrantTarget(
-                attempted.to_path_buf(),
-            ));
-        }
-        if !current.pop() {
-            return Err(SandboxError::UnsupportedGrantTarget(
-                attempted.to_path_buf(),
-            ));
-        }
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) => {
-                let canonical =
-                    current
-                        .canonicalize()
-                        .map_err(|source| SandboxError::InvalidRoot {
-                            path: current.clone(),
-                            source,
-                        })?;
-                let target_is_dir = if metadata.file_type().is_symlink() {
-                    canonical.is_dir()
-                } else {
-                    metadata.is_dir()
-                };
-                if !target_is_dir
-                    || (access == FilesystemGrantAccess::ReadWrite && canonical == Path::new("/"))
-                {
-                    return Err(SandboxError::UnsupportedGrantTarget(
-                        attempted.to_path_buf(),
-                    ));
-                }
-                return Ok((canonical, FilesystemGrantScope::DirectoryTree));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(source) => {
-                return Err(SandboxError::InvalidRoot {
-                    path: current,
-                    source,
-                });
-            }
-        }
-    }
-}
-
-pub(crate) fn is_protected(path: &Path) -> bool {
+fn is_protected(path: &Path) -> bool {
     PROTECTED_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
@@ -430,202 +211,6 @@ pub(crate) fn is_protected(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
-
-    #[test]
-    fn existing_regular_file_proposes_only_that_file() {
-        let root = test_dir("existing-file");
-        let target = root.join("target.txt");
-        fs::write(&target, "before").expect("create target");
-
-        let denial = resolve_denial(target.clone(), FilesystemGrantAccess::ReadWrite)
-            .expect("resolve existing file");
-
-        assert_eq!(denial.attempted_path, target);
-        assert_eq!(
-            denial.grant.path,
-            denial.attempted_path.canonicalize().unwrap()
-        );
-        assert_eq!(denial.grant.scope, FilesystemGrantScope::File);
-        assert_eq!(denial.grant.access, FilesystemGrantAccess::ReadWrite);
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
-    fn missing_leaf_proposes_nearest_existing_parent_tree() {
-        let root = test_dir("missing-leaf");
-        let existing = root.join("existing");
-        fs::create_dir(&existing).expect("create existing parent");
-        let attempted = existing.join("new").join("leaf.txt");
-
-        let denial = resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite)
-            .expect("resolve missing leaf");
-
-        assert_eq!(denial.attempted_path, attempted);
-        assert_eq!(denial.grant.path, existing.canonicalize().unwrap());
-        assert_eq!(denial.grant.scope, FilesystemGrantScope::DirectoryTree);
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
-    fn missing_path_with_parent_component_is_not_grantable() {
-        let root = test_dir("parent-component");
-        let attempted = root.join("missing").join("..").join("leaf");
-
-        std::assert_matches!(
-            resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted);
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
-    fn writable_root_directory_is_never_proposed() {
-        let attempted = PathBuf::from(format!(
-            "/horizon-missing-grant-test-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        assert!(!attempted.exists());
-        std::assert_matches!(
-            resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted);
-    }
-
-    /// The 2026-07-28 defect: a `/tmp/<leaf>` attempt proposed the writable
-    /// tree `/tmp`, an operator approved it, and revalidation then refused
-    /// the very grant they had just approved. Linux-only because `/tmp` is
-    /// a symlink to `/private/tmp` on macOS, which is not itself a listed
-    /// system root.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_tmp_attempt_proposes_no_grant_and_names_the_supported_destination() {
-        let attempted = PathBuf::from("/tmp").join(format!(
-            "horizon-grant-tmp-clamp-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        assert!(!attempted.exists());
-
-        let error = resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite)
-            .expect_err("/tmp must never be proposed as a writable tree");
-
-        std::assert_matches!(
-            &error, SandboxError::UngrantableDenial { attempted: path, tree }
-                if *path == attempted && tree == Path::new("/tmp"),
-            "unexpected error: {error:?}"
-        );
-        let message = error.to_string();
-        assert!(
-            message.contains("$TMPDIR"),
-            "the refusal must name the supported destination: {message}"
-        );
-    }
-
-    /// The invariant the defect broke: whatever `resolve_denial` offers,
-    /// `revalidate_grant` must still accept after the human answers.
-    #[test]
-    fn every_proposed_grant_survives_revalidation() {
-        let root = test_dir("resolve-revalidate-invariant");
-        let nested = root.join("nested");
-        fs::create_dir(&nested).expect("create nested directory");
-        let file = nested.join("file.txt");
-        fs::write(&file, "content").expect("create file");
-
-        let mut attempts = vec![
-            file.clone(),
-            nested.clone(),
-            nested.join("missing.txt"),
-            nested.join("missing").join("deeper.txt"),
-            PathBuf::from("/"),
-            PathBuf::from("/tmp").join("horizon-grant-invariant-leaf"),
-            PathBuf::from("/etc").join("horizon-grant-invariant-leaf"),
-        ];
-        if let Some(home) = home_dir() {
-            attempts.push(home.join(format!("horizon-grant-invariant-{}", unique_suffix())));
-        }
-
-        for access in [
-            FilesystemGrantAccess::Read,
-            FilesystemGrantAccess::ReadWrite,
-        ] {
-            for attempted in &attempts {
-                let Ok(denial) = resolve_denial(attempted.clone(), access) else {
-                    continue;
-                };
-                assert!(
-                    revalidate_grant(&denial.grant).is_ok(),
-                    "resolve_denial proposed {:?} for {attempted:?}, which revalidation refuses",
-                    denial.grant
-                );
-            }
-        }
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn protected_symlink_target_is_not_grantable() {
-        use std::os::unix::fs::symlink;
-
-        let root = test_dir("protected-symlink");
-        let attempted = root.join("dev-link");
-        // `/dev`, not `/proc`: the target must EXIST for `resolve_denial`'s
-        // canonicalization to resolve the symlink onto the protected prefix
-        // at all -- `/proc` exists only on Linux, so a dangling `/proc`
-        // symlink fails `canonicalize` on macOS and the assertion sees the
-        // wrong error kind (`InvalidRoot`). `/dev` is protected on both
-        // platforms and exists on both, so the invariant under test -- a
-        // symlink onto a protected target is refused -- holds everywhere.
-        symlink("/dev", &attempted).expect("create symlink");
-
-        std::assert_matches!(
-            resolve_denial(attempted.clone(), FilesystemGrantAccess::Read),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted);
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn approval_revalidation_detects_symlink_retargeting() {
-        use std::os::unix::fs::symlink;
-
-        let root = test_dir("retarget");
-        let first = root.join("first.txt");
-        let second = root.join("second.txt");
-        let attempted = root.join("current.txt");
-        fs::write(&first, "first").unwrap();
-        fs::write(&second, "second").unwrap();
-        symlink(&first, &attempted).unwrap();
-        let denial = resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite).unwrap();
-
-        fs::remove_file(&attempted).unwrap();
-        symlink(&second, &attempted).unwrap();
-
-        std::assert_matches!(
-            revalidate_denial(&denial),
-            Err(SandboxError::GrantProposalChanged { attempted: path }) if path == attempted);
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn approval_revalidation_detects_new_symlink_in_missing_suffix() {
-        use std::os::unix::fs::symlink;
-
-        let root = test_dir("new-symlink");
-        let outside = test_dir("new-symlink-target");
-        let link = root.join("future");
-        let attempted = link.join("leaf.txt");
-        let denial = resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite).unwrap();
-        assert_eq!(denial.grant.path, root.canonicalize().unwrap());
-
-        symlink(&outside, &link).unwrap();
-
-        std::assert_matches!(
-            revalidate_denial(&denial),
-            Err(SandboxError::GrantProposalChanged { attempted: path }) if path == attempted);
-        fs::remove_dir_all(root).expect("remove test directory");
-        fs::remove_dir_all(outside).expect("remove test directory");
-    }
 
     // --- the over-broad-tree clamp ----------------------------------------
 
@@ -725,7 +310,7 @@ mod tests {
         fs::remove_dir_all(&root).expect("remove test directory");
         std::assert_matches!(
             revalidate_grant(&grant),
-            Err(SandboxError::InvalidRoot { .. })
+            Err(GrantError::InvalidRoot { .. })
         );
     }
 
@@ -747,7 +332,7 @@ mod tests {
 
         std::assert_matches!(
             revalidate_grant(&grant),
-            Err(SandboxError::GrantTypeChanged { .. })
+            Err(GrantError::GrantTypeChanged { .. })
         );
         fs::remove_dir_all(root).expect("remove test directory");
     }
@@ -762,139 +347,7 @@ mod tests {
         };
         std::assert_matches!(
             revalidate_grant(&grant),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/usr"));
-    }
-
-    // --- the ancestor rule -------------------------------------------------
-
-    #[test]
-    fn a_single_outside_attempt_suggests_its_parent_directory() {
-        let root = test_dir("ancestor-single");
-        let cache = root.join("cache");
-        fs::create_dir(&cache).expect("create cache directory");
-        let attempted = cache.join("lock-file");
-
-        let grants = suggest_grants(
-            &[denial(&attempted)],
-            Some(Path::new("/workspace-that-does-not-contain-it")),
-            None,
-        );
-
-        assert_eq!(
-            grants,
-            vec![FilesystemGrant {
-                path: cache.canonicalize().unwrap(),
-                access: FilesystemGrantAccess::ReadWrite,
-                scope: FilesystemGrantScope::DirectoryTree,
-                excluded_subpaths: Vec::new(),
-            }]
-        );
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
-    fn several_outside_attempts_generalize_to_their_narrowest_common_ancestor() {
-        let root = test_dir("ancestor-multi");
-        let cache = root.join("cache");
-        let nested = cache.join("build").join("debug");
-        fs::create_dir_all(&nested).expect("create nested directories");
-
-        // Deliberately the issue-009 shape: one lock beside the cache root
-        // and one buried several levels down under it.
-        let grants = suggest_grants(
-            &[
-                denial(&cache.join(".package-cache-mutate")),
-                denial(&nested.join(".build-lock")),
-            ],
-            Some(Path::new("/workspace-that-does-not-contain-it")),
-            None,
-        );
-
-        assert_eq!(
-            grants,
-            vec![FilesystemGrant {
-                path: cache.canonicalize().unwrap(),
-                access: FilesystemGrantAccess::ReadWrite,
-                scope: FilesystemGrantScope::DirectoryTree,
-                excluded_subpaths: Vec::new(),
-            }],
-            "two attempts under one cache directory must collapse to that directory"
-        );
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
-    fn an_ancestor_landing_on_home_falls_back_to_per_attempt_grants() {
-        let home = test_dir("ancestor-home");
-        let first = home.join("alpha");
-        let second = home.join("beta");
-        fs::create_dir(&first).expect("create first directory");
-        fs::create_dir(&second).expect("create second directory");
-        let attempts = [first.join("leaf"), second.join("leaf")];
-        let denials = attempts.iter().map(|path| denial(path)).collect::<Vec<_>>();
-
-        let grants = suggest_grants(&denials, None, Some(&home.canonicalize().unwrap()));
-
-        assert_eq!(
-            grants,
-            denials
-                .iter()
-                .map(|denial| denial.grant.clone())
-                .collect::<Vec<_>>(),
-            "a common ancestor at $HOME is not an honest offer"
-        );
-        fs::remove_dir_all(home).expect("remove test directory");
-    }
-
-    #[test]
-    fn attempts_with_nothing_in_common_fall_back_to_per_attempt_grants() {
-        let first = test_dir("ancestor-disjoint-a");
-        let second = test_dir("ancestor-disjoint-b");
-        // The only shared ancestor of two temp-dir siblings is the temp
-        // directory's own parent chain, which bottoms out in a system root.
-        let denials = vec![denial(&first.join("leaf")), denial(&second.join("leaf"))];
-
-        let grants = suggest_grants(&denials, None, None);
-
-        assert!(
-            grants.len() >= 2,
-            "no shared tree exists, so each attempt keeps its own grant: {grants:?}"
-        );
-        assert!(
-            grants
-                .iter()
-                .all(|grant| !is_overbroad_tree(&grant.path, None))
-        );
-        fs::remove_dir_all(first).expect("remove test directory");
-        fs::remove_dir_all(second).expect("remove test directory");
-    }
-
-    #[test]
-    fn attempts_inside_the_workspace_keep_their_own_resolved_grant() {
-        let workspace = test_dir("ancestor-inside");
-        let inside = workspace.join("inside.txt");
-        fs::write(&inside, "content").expect("create in-workspace file");
-
-        let grants = suggest_grants(
-            &[denial(&inside)],
-            Some(&workspace.canonicalize().unwrap()),
-            None,
-        );
-
-        assert_eq!(grants.len(), 1);
-        assert_eq!(grants[0].scope, FilesystemGrantScope::File);
-        assert_eq!(grants[0].path, inside.canonicalize().unwrap());
-        fs::remove_dir_all(workspace).expect("remove test directory");
-    }
-
-    #[test]
-    fn no_denials_suggest_nothing() {
-        assert!(suggest_grants(&[], None, None).is_empty());
-    }
-
-    fn denial(attempted: &Path) -> FilesystemDenial {
-        resolve_denial(attempted.to_path_buf(), FilesystemGrantAccess::ReadWrite)
-            .expect("resolve test denial")
+            Err(GrantError::UnsupportedGrantTarget(path)) if path == Path::new("/usr"));
     }
 
     fn test_dir(label: &str) -> PathBuf {

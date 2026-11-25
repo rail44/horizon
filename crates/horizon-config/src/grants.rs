@@ -101,12 +101,8 @@ pub struct RawProjectGrant {
     /// the session's network-proxy allowlist. Replaces the short-lived
     /// `loopback_connect` key with no compatibility alias.
     pub network: Vec<String>,
-    /// macOS security services a sandboxed session of this project may use
-    /// (`docs/macos-containment-denial-reporting-design.md`): names from
-    /// [`horizon_sandbox::KNOWN_SECURITY_SERVICES`] are recorded into the
-    /// session's mach-service grant set at spawn; unknown names are refused
-    /// with a warning. Enforcement is nono's all-or-nothing security-service
-    /// group (see `horizon_sandbox::security_service_grants`).
+    /// macOS services a contained call of this project may look up
+    /// (Fence's `macos.mach.lookup`).
     pub mach_services: Vec<String>,
 }
 
@@ -636,7 +632,7 @@ mod tests {
             root: "relative".into(),
             trees: vec!["relative".into()],
             network: vec!["https://bad".into()],
-            mach_services: vec!["unknown.service".into()],
+            mach_services: vec!["not a service".into()],
         };
         let (resolved, warnings) = resolve(std::slice::from_ref(&invalid), None);
         assert!(resolved.is_empty());

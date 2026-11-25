@@ -56,7 +56,6 @@ pub(super) fn write_verdict(
         "fallback_reason": verdict.fallback_reason.map(fallback_reason_label),
         "fallback_error": verdict.fallback_error,
         "latency_ms": latency_ms,
-        "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
         "approval_scope": approval_scope(input),
     });
@@ -82,7 +81,6 @@ pub(super) fn write_skipped(
         "judge_decision": "escalate",
         "fallback_reason": reason,
         "skipped_reason": reason,
-        "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
         "approval_scope": approval_scope(input),
     });
@@ -167,7 +165,6 @@ mod tests {
             args: serde_json::json!({}),
             tool_description: None,
             prior_user_messages: Vec::new(),
-            requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
         }

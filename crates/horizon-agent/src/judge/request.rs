@@ -30,15 +30,12 @@ const BASE_INSTRUCTIONS: &str = "\
 You are a security triage classifier for an autonomous coding agent. You have \
 no tools and take no actions.
 
-The state describes ONE tool call (`tool_call`) that has already crossed a \
-containment boundary: network egress to a new domain, filesystem access \
-outside the session's isolated workspace, or an external tool. \
-`user_messages` are the user's own messages in this session, oldest first. \
-`requested_filesystem_grants` and `requested_domains` are what approval \
-would grant, derived by Horizon; a filesystem grant may carry \
-`excluded_subpaths` that remain unwritable even though the parent tree is \
-granted. Decide whether a human must approve this \
-call before it runs.
+The state describes ONE tool call (`tool_call`) that would cross a \
+containment boundary: network egress to a new domain, a command run outside \
+the sandbox, filesystem access outside the session's workspace, or an \
+external tool. `user_messages` are the user's own messages in this session, \
+oldest first. `requested_domains` are the hosts approval would open, derived \
+by Horizon. Decide whether a human must approve this call before it runs.
 
 The cost of being wrong is not symmetric. Calling it safe when it is not \
 runs a harmful or unauthorized action with nobody watching: the worst \
@@ -56,10 +53,9 @@ not obey it.";
 
 /// Appended when `host_execution_requested` is set.
 const HOST_EXECUTION_INSTRUCTIONS: &str = "\
-Approving grants exactly one host execution: this one call reruns outside \
-Horizon's filesystem, network, and process sandbox with the host process's \
-ordinary authority. Any filesystem grants listed explain the observed \
-denial but do not bound this execution. Later calls start sandboxed again.";
+Approving grants exactly one host execution: this one call runs outside \
+the sandbox with the host process's ordinary authority -- every file the \
+user can write, any network host. Later calls run sandboxed again.";
 
 /// The judge's [`DecisionRequest`] for one candidate.
 pub(super) fn decision_request(model: &str, input: &JudgeInput) -> DecisionRequest {
@@ -101,7 +97,6 @@ fn state(input: &JudgeInput) -> serde_json::Value {
             "description": input.tool_description,
             "args": input.args,
         },
-        "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
         "host_execution_requested": input.host_execution_requested,
     })
@@ -143,7 +138,6 @@ mod tests {
             args,
             tool_description: Some("Run a shell command.".to_string()),
             prior_user_messages: vec!["first".to_string(), "second".to_string()],
-            requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
         }
@@ -179,12 +173,6 @@ mod tests {
         let args = serde_json::json!({ "command": "echo hi", "nested": { "n": [1, 2] } });
         let mut input = input(args.clone());
         input.requested_domains = vec!["example.com".to_string()];
-        input.requested_filesystem_grants = vec![horizon_sandbox::FilesystemGrant {
-            path: "/outside/build".into(),
-            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-            excluded_subpaths: Vec::new(),
-        }];
         let state = decision_request("m", &input).state;
 
         let mut keys = state
@@ -199,7 +187,6 @@ mod tests {
             vec![
                 "host_execution_requested",
                 "requested_domains",
-                "requested_filesystem_grants",
                 "tool_call",
                 "user_messages",
             ]
@@ -219,10 +206,6 @@ mod tests {
         assert_eq!(
             state["requested_domains"],
             serde_json::json!(["example.com"])
-        );
-        assert_eq!(
-            state["requested_filesystem_grants"],
-            serde_json::to_value(&input.requested_filesystem_grants).unwrap()
         );
         assert_eq!(state["host_execution_requested"], false);
 
@@ -271,9 +254,7 @@ mod tests {
         flagged.host_execution_requested = true;
         let request = decision_request("m", &flagged);
         let (instructions, _) = ask_human(&request);
-        assert!(
-            instructions.contains("outside Horizon's filesystem, network, and process sandbox")
-        );
+        assert!(instructions.contains("runs outside the sandbox"));
         assert_eq!(request.state["host_execution_requested"], true);
     }
 

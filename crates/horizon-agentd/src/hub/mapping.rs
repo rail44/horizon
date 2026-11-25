@@ -680,56 +680,12 @@ pub(super) fn tool_outcome(outcome: &contract::ToolOutcome) -> acp::ToolOutcome 
     }
 }
 
-fn tool_result(result: &contract::ToolCallResult) -> acp::ToolResult {
-    acp::ToolResult {
-        call_id: result.call_id.0.clone(),
-        occurrence_id: result.occurrence_id.0.clone(),
-        output: result.output.0.clone(),
-        outcome: tool_outcome(&result.outcome),
-    }
-}
-
 pub(super) fn approval_kind(kind: &contract::ApprovalKind) -> acp::ApprovalKind {
     match kind {
         contract::ApprovalKind::Standard => acp::ApprovalKind::Standard,
-        contract::ApprovalKind::DomainDenialRetry {
-            domains,
-            prior_result,
-        } => acp::ApprovalKind::DomainDenialRetry {
-            domains: domains.clone(),
-            prior_result: tool_result(prior_result),
-        },
-        contract::ApprovalKind::FilesystemDenialRetry {
-            denials,
-            grants,
-            prior_result,
-        } => acp::ApprovalKind::FilesystemDenialRetry {
-            denials: denials.clone(),
-            grants: grants.clone(),
-            prior_result: tool_result(prior_result),
-        },
         contract::ApprovalKind::DomainGrant { domains } => acp::ApprovalKind::DomainGrant {
             domains: domains.clone(),
         },
-        contract::ApprovalKind::MachServiceGrant {
-            services,
-            prior_result,
-        } => acp::ApprovalKind::MachServiceGrant {
-            services: services.clone(),
-            prior_result: tool_result(prior_result),
-        },
-        contract::ApprovalKind::SandboxAreaGrant { grants, reason } => {
-            acp::ApprovalKind::SandboxAreaGrant {
-                grants: grants.clone(),
-                reason: reason.clone(),
-            }
-        }
-        contract::ApprovalKind::PrimaryCheckoutRetry { root, prior_result } => {
-            acp::ApprovalKind::PrimaryCheckoutRetry {
-                root: root.clone(),
-                prior_result: tool_result(prior_result),
-            }
-        }
     }
 }
 
@@ -737,14 +693,7 @@ pub(super) fn approval_kind(kind: &contract::ApprovalKind) -> acp::ApprovalKind 
 pub(super) fn approval_title(kind: &contract::ApprovalKind) -> &'static str {
     match kind {
         contract::ApprovalKind::Standard => "Run tool",
-        contract::ApprovalKind::DomainDenialRetry { .. } => "Allow network access and retry",
-        contract::ApprovalKind::FilesystemDenialRetry { .. } => "Allow filesystem access and retry",
         contract::ApprovalKind::DomainGrant { .. } => "Allow network access",
-        contract::ApprovalKind::MachServiceGrant { .. } => "Allow system services and retry",
-        contract::ApprovalKind::SandboxAreaGrant { .. } => "Allow write access to this area",
-        contract::ApprovalKind::PrimaryCheckoutRetry { .. } => {
-            "Allow edits in the main checkout and retry"
-        }
     }
 }
 

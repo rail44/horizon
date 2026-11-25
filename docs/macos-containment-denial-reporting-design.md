@@ -1,5 +1,7 @@
 # macOS Containment-Denial Reporting
 
+> Superseded 2026-11-25 by `docs/sandbox-runtime-design.md`: macOS calls are contained by Fence, and nothing collects their denials. Kept as the record of the earlier design.
+
 Status: direction accepted 2026-09-10 (owner). On macOS, seatbelt denies
 silently: a tier-1 sandboxed command that crosses a boundary fails with an
 ordinary error and no evidence reaches the agent, the judge, or the operator.

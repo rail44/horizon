@@ -78,7 +78,7 @@ fn builtin(definition: Definition) -> Arc<dyn Tool> {
         "fs_read" | "fs_glob" | "fs_grep" | "skill_read" | "recall_search" | "recall_read"
         | "recall_sessions" | "knowledge_read" | "knowledge_write" => run_local,
         "fs_write" | "fs_edit" => run_contained_write,
-        "bash" => run_sandboxed_bash,
+        "bash" => run_contained_bash,
         "web_search" | "web_fetch" | "mock_boundary_crossing" => run_web,
         "task" => run_task,
         "task_output" => run_task_output,
@@ -136,21 +136,22 @@ fn run_contained_write(cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch
     output.into()
 }
 
-fn run_sandboxed_bash(cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch {
+/// A `bash` call the tier policy found contained: it runs in the sandbox
+/// without asking, its hosts (if any) already allowed for the session.
+fn run_contained_bash(cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch {
     let Some(runtime) = session_runtime(cx.session_id) else {
         return no_runtime(call);
     };
     let Some(workspace_root) = cx.state.workspace_root() else {
-        return error_output("sandboxed bash requires a workspace root").into();
+        return error_output("contained bash requires a workspace root").into();
     };
-    super::bash::spawn_sandboxed_call(
+    super::bash::spawn_contained(
         cx.session_id,
         call,
         cx.state,
         runtime.async_results,
         workspace_root,
-        super::bash::SandboxedApprovalOrigin::Tier1Auto,
-        None,
+        super::bash::ContainedOrigin::Automatic,
     );
     Dispatch::Spawned
 }

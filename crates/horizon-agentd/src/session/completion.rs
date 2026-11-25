@@ -1,6 +1,6 @@
 //! Folding an asynchronous tool completion: the judge's verdict, a
-//! finished bash/web call, and the denial outcomes that reissue an approval
-//! instead of returning a result to the provider.
+//! finished bash/web call, and a web request that needs a domain approved
+//! before it makes contact.
 
 use std::sync::Arc;
 
@@ -15,10 +15,7 @@ use super::events::send_session_event;
 use super::state::AgentdState;
 
 mod retry;
-use retry::{
-    fold_domain_denied, fold_domain_grant_required, fold_filesystem_denied,
-    fold_mach_service_denied, fold_primary_checkout_denied,
-};
+use retry::fold_domain_grant_required;
 
 /// Accept the exact live attempt before dispatch. Workers do not mutate the
 /// frame; retry handlers receive the accepted request and cannot reselect an
@@ -47,45 +44,9 @@ pub(super) fn fold_tool_completion(
             session_id,
             ToolUpdate::finish(live_state, result),
         ),
-        ToolCompletion::DomainDenied { domains, result } => fold_domain_denied(
-            state,
-            live_state,
-            commands_tx,
-            session_id,
-            request,
-            domains,
-            result,
-        ),
         ToolCompletion::DomainGrantRequired { domains, .. } => {
             fold_domain_grant_required(state, live_state, commands_tx, session_id, request, domains)
         }
-        ToolCompletion::FilesystemDenied { denials, result } => fold_filesystem_denied(
-            state,
-            live_state,
-            commands_tx,
-            session_id,
-            request,
-            denials,
-            result,
-        ),
-        ToolCompletion::MachServiceDenied { services, result } => fold_mach_service_denied(
-            state,
-            live_state,
-            commands_tx,
-            session_id,
-            request,
-            services,
-            result,
-        ),
-        ToolCompletion::PrimaryCheckoutDenied { root, result } => fold_primary_checkout_denied(
-            state,
-            live_state,
-            commands_tx,
-            session_id,
-            request,
-            root,
-            result,
-        ),
     }
 }
 

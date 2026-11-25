@@ -18,7 +18,7 @@ use crate::live::LiveState;
 use crate::persistence::projection::duckdb::SharedDuckdbStore;
 use crate::skills::SkillRegistry;
 use crate::tools::ToolCompletion;
-use crate::tools::network::{SessionDomainPolicy, SessionNetworkProxy};
+use crate::tools::network::SessionDomainPolicy;
 
 /// Where this session's persisted history lives, for the recall tools
 /// (`tools::recall`) to search/read it: the session's own id (the tools'
@@ -57,11 +57,9 @@ impl Default for RecallContext {
     }
 }
 
-/// Why a session may write nothing at all. Its shell runs with no writable
-/// root, a write it attempts is refused as ungrantable rather than offered
-/// as a grant, and `fs_write`/`fs_edit`, `request_sandbox_area`, a `bash`
-/// call with no sandbox to contain it, and a write `task` child are refused
-/// before anything runs. The reason only changes what the session is told
+/// Why a session may write nothing at all. Its shell runs with nothing
+/// writable, and `fs_write`/`fs_edit`, a `bash` call outside the sandbox,
+/// and a write `task` child are refused before anything runs. The reason only changes what the session is told
 /// to do instead.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadOnly {
@@ -110,18 +108,10 @@ struct Inner {
     /// back to an over-broad root that would confine nothing.
     workspace_root: Option<PathBuf>,
     recorded_mtimes: RefCell<HashMap<PathBuf, SystemTime>>,
-    /// Additive, session-local filesystem grants this session's sandboxed
-    /// calls run with, snapshotted before each bash job is queued. Two
-    /// sources feed it, and both are enforced identically: the trees
-    /// `[grants]` names for this session's project, injected at spawn (see
-    /// [`ToolSessionBuilder::with_filesystem_grants`]), and whatever a human
-    /// or the judge approved after a containment denial (see
-    /// [`ToolSessionState::approve_filesystem_grants`]). Stored as grants
-    /// rather than as the denials that triggered them: an approved grant is
-    /// generally *not* one attempted path's own resolution -- it is the
-    /// shaped common ancestor of several
-    /// (`horizon_sandbox::suggest_grants`), and a config-injected tree
-    /// never had a denial at all.
+    /// The trees `[grants]` names for this session's project, injected at
+    /// spawn (see [`ToolSessionBuilder::with_filesystem_grants`]), or
+    /// inherited from the session that started this one: writable for its
+    /// contained calls.
     filesystem_grants: RefCell<Vec<horizon_sandbox::FilesystemGrant>>,
     /// What the session may write of its own worktree's Git metadata
     /// (`docs/agent-subagent-design.md` decision 10), resolved by the host
@@ -177,52 +167,23 @@ struct Inner {
     /// and the file-writing tools are refused before they run. Threaded in
     /// through [`ToolSessionBuilder`] alongside `unattended`.
     read_only: Option<ReadOnly>,
-    /// This session's own network-proxy pair (`docs/agent-approval-
-    /// design.md`'s "Staging" leg 4b -- `tools::network::
-    /// SessionNetworkProxy`), if one was started for it. `None` means
-    /// either this session isn't eligible for tier-1 sandboxed `bash` at
-    /// all (no engaged sandbox), the proxy failed to bind,
-    /// or this `ToolSessionState` is one of this crate's own test
-    /// constructions -- either way, `tools::execution::execute_automatic`
-    /// falls back to `NetworkPolicy::Disabled`, exactly the pre-leg-4a
-    /// behavior. `Arc` (not a bare value) so the handle is cheap to clone
-    /// across this `Rc`-based struct's threading boundary onto the bash
-    /// background thread (`tools::bash::exec::run_sandboxed` needs it to
-    /// drain denied hosts) the same way `bash_cwd` already crosses that
-    /// boundary. Installed through [`ToolSessionBuilder`]: the one production
-    /// call site (`horizon-agentd`'s `session::run_session`) is the only
-    /// place that starts one, and only when the sandbox is engaged.
-    network: Option<Arc<SessionNetworkProxy>>,
-    /// Loopback TCP endpoints this session's sandbox may connect to
-    /// directly (e.g. sccache on `127.0.0.1:4226`), from the project's
-    /// `[grants]` `loopback_connect` entries. Threaded into the
-    /// `NetworkPolicy::Proxied` the sandbox spawn builds, alongside the
-    /// session proxy address -- the seccomp-notify enforcement matches each
-    /// by full `SocketAddr` equality. Empty at every construction site except
-    /// `horizon-agentd`'s `session::run_session`, which injects it via
-    /// [`ToolSessionBuilder::with_loopback_connect`] the same way filesystem grants are
-    /// injected via [`ToolSessionBuilder::with_filesystem_grants`].
+    /// Loopback TCP endpoints this session's contained calls may connect to
+    /// (e.g. a compile cache on `127.0.0.1:4226`), from the project's
+    /// `[grants]` `network` `ip:port` entries.
     loopback_connect: Vec<SocketAddr>,
-    /// One domain-grant store shared by sandboxed proxy traffic and
-    /// host-side web tools. It exists even when this session cannot start a
-    /// sandbox proxy, so `web_fetch` never needs a separate policy model.
+    /// The hosts this session may reach: `web_fetch`'s, and those a
+    /// contained call's runtime proxy lets through.
     domains: SessionDomainPolicy,
-    /// This session's approved (or config-declared) macOS mach service
-    /// grants (`docs/macos-containment-denial-reporting-design.md`):
-    /// security services whose seatbelt deny an approval has lifted for
-    /// every later sandboxed call in this session. Cross-platform field,
-    /// populated only on macOS -- interactively via
-    /// `ApprovalKind::MachServiceGrant`, or from the project's
-    /// `[[grants.project]]` `mach_services` entries at spawn.
-    mach_services: RefCell<Vec<String>>,
+    /// macOS services this session's contained calls may look up, from the
+    /// project's `[[grants.project]]` `mach_services` entries.
+    mach_services: Vec<String>,
     /// This session's enforcing judge handle (`docs/agent-approval-
     /// design.md`'s "Judge design"), if one could be built for it. `None`
     /// means approval candidates go directly to the human (no
     /// `OPENAI_API_KEY`, no event-log writer, or -- every
     /// construction site in this crate's own tests except where a test
     /// explicitly installs one via [`ToolSessionBuilder::with_judge`]) -- see
-    /// `JudgeHandle::new`. Injected post-construction the same way
-    /// [`ToolSessionBuilder::with_network_proxy`] is: the one production call site
+    /// `JudgeHandle::new`. Injected post-construction: the one production call site
     /// (`horizon-agentd`'s `session::run_session`) is the only place that
     /// has both this session's resolved provider `base_url` and the
     /// process's event-log writer handle.
@@ -232,7 +193,7 @@ struct Inner {
     /// This session's handle onto the daemon's spawn/subscribe/terminate
     /// capability for parallel exploration sessions (`tools::explore`,
     /// `docs/agent-explore-design.md`). Injected post-construction the same
-    /// way [`Self::judge`]/[`Self::network`] are: only `horizon-agentd`'s
+    /// way [`Self::judge`] is: only `horizon-agentd`'s
     /// `session::run_session` can host a peer session, and only it knows
     /// this session's workspace root and provider -- both of which the
     /// exploration must share. `None` (every construction site in this
@@ -251,9 +212,8 @@ struct Inner {
     /// rather than a silent no-op.
     board: Option<Arc<dyn crate::tools::board::BoardHost>>,
     /// The primary checkout this session may modify only after one explicit
-    /// approval. `None` for isolated or non-primary working roots. The
-    /// sandbox reads it as a write root minus the root: read stays allowed,
-    /// writes are denied and become the ordinary containment denial.
+    /// approval. `None` for isolated or non-primary working roots. Until it
+    /// is approved, a contained call writes nothing of it.
     primary_checkout: Option<PrimaryCheckout>,
 }
 
@@ -313,73 +273,36 @@ impl ToolSessionState {
         self.inner.read_only
     }
 
-    /// This session's approved (or config-declared) macOS mach service
-    /// grants (`docs/macos-containment-denial-reporting-design.md`):
-    /// security services whose seatbelt deny an approval has lifted for
-    /// every later sandboxed call in this session.
+    /// macOS services this session's contained calls may look up.
     pub(crate) fn mach_services(&self) -> Vec<String> {
-        self.inner.mach_services.borrow().clone()
+        self.inner.mach_services.clone()
     }
 
-    /// Records approved mach service grants for this session, additively
-    /// (same posture as [`Self::approve_filesystem_grants`]). Unlike
-    /// filesystem grants these are not revalidated per spawn -- they are
-    /// service names, not paths; the enforcement mapping itself is
-    /// best-effort per spawn (`horizon_sandbox::security_service_grants`
-    /// grants only the keychain database files that currently exist).
-    pub(crate) fn approve_mach_services(&self, services: &[String]) {
-        let mut approved = self.inner.mach_services.borrow_mut();
-        for service in services {
-            if !approved.contains(service) {
-                approved.push(service.clone());
-            }
-        }
-    }
-
-    /// The grants merged into the next sandboxed spawn's policy: the
-    /// revalidated filesystem grants plus, on macOS, the enforcement grants
-    /// for this session's mach service set
-    /// (`horizon_sandbox::security_service_grants`). Every
-    /// `spawn_sandboxed` call site passes this instead of
-    /// [`Self::filesystem_grants_snapshot`] so an approved service grant
-    /// rides along on any sandboxed spawn, not just the retry that won it.
+    /// The configured and own-worktree grants a contained call's
+    /// containment is built from, each re-checked against the live
+    /// filesystem first.
     pub(crate) fn effective_sandbox_grants(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
-        let services = self.mach_services();
         let mut grants = self.filesystem_grants_snapshot();
         for grant in &self.inner.own_worktree_grants {
             if !grants.contains(grant) && horizon_sandbox::revalidate_grant(grant).is_ok() {
                 grants.push(grant.clone());
             }
         }
-        #[cfg(target_os = "macos")]
-        {
-            let mut grants = grants;
-            for grant in horizon_sandbox::security_service_grants(&services) {
-                if !grants.contains(&grant) {
-                    grants.push(grant);
-                }
-            }
-            grants
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            debug_assert!(services.is_empty());
-            grants
-        }
+        grants
     }
 
     pub(crate) fn allow_domain(&self, domain: impl Into<String>) {
         self.inner.domains.allow(domain);
     }
 
-    /// Copies every domain `previous` allows into this session's own store
-    /// (shared with its network proxy). `horizon-agentd` calls this when an
+    /// Copies every domain `previous` allows into this session's own store.
+    /// `horizon-agentd` calls this when an
     /// environment activation replaces the tool state, so a domain approved
     /// "for this session" stays approved after the session enters its
     /// worktree; the replacement otherwise starts from the project's
     /// configured domains alone.
     pub fn retain_domains_from(&self, previous: &ToolSessionState) {
-        for domain in previous.inner.domains.shared().domains() {
+        for domain in previous.inner.domains.domains() {
             self.allow_domain(domain);
         }
     }
@@ -387,30 +310,18 @@ impl ToolSessionState {
     /// Every domain this session may reach right now -- the copy a `task`
     /// child starts with (`docs/agent-subagent-design.md` decision 12).
     pub(crate) fn allowed_domains(&self) -> Vec<String> {
-        self.inner.domains.shared().domains()
+        self.inner.domains.domains()
     }
 
     pub(crate) fn is_domain_allowed(&self, domain: &str) -> bool {
         self.inner.domains.is_allowed(domain)
     }
 
-    pub(crate) fn domain_allowlist(&self) -> Arc<horizon_sandbox_proxy::Allowlist> {
+    pub(crate) fn domain_allowlist(&self) -> Arc<crate::tools::network::Allowlist> {
         self.inner.domains.shared()
     }
 
-    /// This session's own network-proxy pair, if one is running -- see
-    /// [`Inner::network`]'s doc comment. What `tools::execution::
-    /// execute_automatic` passes into `bash::spawn_sandboxed`, and what
-    /// `tools::approval`'s domain-denial-retry path mutates
-    /// (`SessionNetworkProxy::allow_domain`) on approve.
-    pub(crate) fn network_proxy(&self) -> Option<Arc<SessionNetworkProxy>> {
-        self.inner.network.clone()
-    }
-
-    /// The loopback endpoints this session's sandbox may connect to directly
-    /// -- see [`Inner::loopback_connect`]'s doc comment. What
-    /// `tools::execution::execute_automatic` passes into
-    /// `bash::spawn_sandboxed`.
+    /// The loopback endpoints this session's contained calls may connect to.
     pub(crate) fn loopback_connect(&self) -> Vec<SocketAddr> {
         self.inner.loopback_connect.clone()
     }
@@ -494,25 +405,6 @@ impl ToolSessionState {
             .filter(|grant| horizon_sandbox::revalidate_grant(grant).is_ok())
             .cloned()
             .collect()
-    }
-
-    /// Adds approved grants to this session's list, after revalidating
-    /// every one of them. Fails closed as a unit: if any grant no longer
-    /// holds up, none are stored.
-    pub(crate) fn approve_filesystem_grants(
-        &self,
-        grants: &[horizon_sandbox::FilesystemGrant],
-    ) -> Result<(), horizon_sandbox::SandboxError> {
-        for grant in grants {
-            horizon_sandbox::revalidate_grant(grant)?;
-        }
-        let mut approved = self.inner.filesystem_grants.borrow_mut();
-        for grant in grants {
-            if !approved.contains(grant) {
-                approved.push(grant.clone());
-            }
-        }
-        Ok(())
     }
 
     /// The resolved `[agent]` tool tuning for this session (bash + fs

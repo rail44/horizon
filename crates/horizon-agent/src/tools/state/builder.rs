@@ -3,7 +3,7 @@
 use super::{AgentToolsConfig, Inner, RecallContext, ToolSessionState};
 use crate::judge::JudgeHandle;
 use crate::skills::SkillRegistry;
-use crate::tools::network::{SessionDomainPolicy, SessionNetworkProxy};
+use crate::tools::network::SessionDomainPolicy;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -64,10 +64,9 @@ impl ToolSessionBuilder {
                 packages: Default::default(),
                 unattended: false,
                 read_only: None,
-                network: None,
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
-                mach_services: RefCell::new(Vec::new()),
+                mach_services: Vec::new(),
                 modules: crate::modules::Modules::tiers_only(),
                 exploration: None,
                 board: None,
@@ -132,13 +131,7 @@ impl ToolSessionBuilder {
 
     /// Seed configured macOS service grants.
     pub fn with_mach_services(mut self, services: Vec<String>) -> Self {
-        self.inner.mach_services = RefCell::new(services);
-        self
-    }
-
-    /// Install this session's proxy when sandboxed networking is available.
-    pub fn with_network_proxy(mut self, network: Option<Arc<SessionNetworkProxy>>) -> Self {
-        self.inner.network = network;
+        self.inner.mach_services = services;
         self
     }
 

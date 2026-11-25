@@ -155,6 +155,17 @@ async fn main() -> anyhow::Result<()> {
 
     // One accepted snapshot supplies conversation and auxiliary providers.
     let raw_config = horizon_config::load();
+    let fence = (raw_config.sandbox.fence_path())
+        .unwrap_or_else(horizon_agent::tools::sandbox::fence_on_path);
+    horizon_agent::tools::sandbox::configure(std::sync::Arc::new(
+        horizon_sandbox::runtime::FenceRuntime::new(fence),
+    ));
+    if let Err(unavailable) = horizon_agent::tools::sandbox::availability() {
+        eprintln!(
+            "horizon-agentd: the sandbox runtime is unavailable ({unavailable}); every bash \
+             call will ask to run outside a sandbox"
+        );
+    }
     let mut agent_config = providers::agent_config(raw_config);
     agent_config.rig.packages = compose_packages();
     // Resolved once at startup; a provider reload reads it again.

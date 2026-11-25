@@ -1,5 +1,7 @@
 # Containment Perimeter and the Worktree Tool — Design
 
+> Partly superseded 2026-11-25 by `docs/sandbox-runtime-design.md`: what a contained call may write and reach is described there; the worktree tool described here stands.
+
 Status: decided on board #65 (2026-10-18); slices 1, 2 and 3 implemented
 (see "Staging"). This document describes the current design, the target
 design, and the code the change touches. The decisions themselves and

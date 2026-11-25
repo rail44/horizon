@@ -32,12 +32,12 @@ step ./scripts/extensions.sh build --locked
 
 # Inside a Horizon sandboxed agent session the default nextest profile
 # cannot pass (AGENTS.md): the tests that probe the host boundary are
-# skipped only by the `sandboxed` profile. The sandbox redirects TMPDIR to
-# a `.horizon-sandbox-tmp` directory inside the worktree
-# (`crates/horizon-sandbox/src/tmpdir.rs`), so that suffix says this run is
-# contained.
-case "${TMPDIR:-}" in
-  *.horizon-sandbox-tmp)
+# skipped only by the `sandboxed` profile. A contained call is told the
+# runtime that contains it in `HORIZON_SANDBOX`
+# (`crates/horizon-sandbox/src/runtime.rs`), so its being set says this run
+# is contained.
+case "${HORIZON_SANDBOX:-}" in
+  ?*)
     step cargo nextest run --profile sandboxed --workspace --locked
     ;;
   *)

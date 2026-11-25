@@ -8,7 +8,7 @@ use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::{AgentFrame, AgentFrameItem};
 
-use super::{ApprovalSource, BashCompletion, SandboxedApprovalOrigin};
+use super::BashCompletion;
 
 fn cwd_handle(path: PathBuf) -> Arc<Mutex<PathBuf>> {
     Arc::new(Mutex::new(path))
@@ -18,9 +18,23 @@ fn config() -> BashToolConfig {
     BashToolConfig::default()
 }
 
-/// Unwraps a completion expected to be finished (the overwhelming majority
-/// of this module's tests, which exercise the plain unsandboxed path that
-/// never produces a structured containment prompt) -- panics with a useful
+/// `exec::run` with the host's authority, as an approved call runs.
+fn run_host(
+    registration: &super::registry::Registration,
+    input: &crate::tools::input::Bash,
+    cwd: &Arc<Mutex<PathBuf>>,
+    config: &BashToolConfig,
+) -> crate::tools::output::Response {
+    super::exec::run(
+        registration,
+        input,
+        cwd,
+        config,
+        &super::exec::Execution::Host,
+    )
+}
+
+/// Unwraps a completion expected to be finished -- panics with a useful
 /// message otherwise, rather than every call site pattern-matching by hand.
 fn expect_finished(completion: BashCompletion) -> ToolCallResult {
     match completion {
@@ -28,34 +42,6 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             panic!("expected a finished bash completion, got judge result: {judgment:?}")
         }
         BashCompletion::Finished(result) => result,
-        BashCompletion::DomainDenied {
-            result: ToolCallResult { call_id, .. },
-            domains,
-        } => panic!(
-            "expected a finished bash completion, got a domain-denied request for \
-             {call_id:?} ({domains:?})"
-        ),
-        BashCompletion::FilesystemDenied {
-            result: ToolCallResult { call_id, .. },
-            denials,
-        } => panic!(
-            "expected a finished bash completion, got a filesystem-denied request for \
-             {call_id:?} ({denials:?})"
-        ),
-        BashCompletion::MachServiceDenied {
-            result: ToolCallResult { call_id, .. },
-            services,
-        } => panic!(
-            "expected a finished bash completion, got a mach-service-denied request for \
-             {call_id:?} ({services:?})"
-        ),
-        BashCompletion::PrimaryCheckoutDenied {
-            result: ToolCallResult { call_id, .. },
-            root,
-        } => panic!(
-            "expected a finished bash completion, got a primary-checkout request for \
-             {call_id:?} ({root:?})"
-        ),
         BashCompletion::DomainGrantRequired {
             call_id, domains, ..
         } => panic!(
@@ -73,7 +59,7 @@ fn echo_round_trip_reports_output_and_exit_zero() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("echo-1".to_string());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({ "command": "echo hello" })).unwrap(),
         &cwd,
@@ -94,7 +80,7 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("exit-7".to_string());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({ "command": "exit 7" })).unwrap(),
         &cwd,
@@ -121,7 +107,7 @@ fn a_call_that_changes_directory_reports_the_new_one() {
     std::fs::create_dir_all(&sub).unwrap();
     let cwd = cwd_handle(base.clone());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-1".into())),
         &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
         &cwd,
@@ -149,7 +135,7 @@ fn a_failing_call_that_changed_directory_still_reports_it() {
     std::fs::create_dir_all(&sub).unwrap();
     let cwd = cwd_handle(base.clone());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-2".into())),
         &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
         &cwd,
@@ -174,7 +160,7 @@ fn a_call_that_stays_put_omits_the_cwd_field() {
     let base = scratch_dir("cd-report-unchanged");
     let cwd = cwd_handle(base.clone());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-3".into())),
         &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
         &cwd,
@@ -200,7 +186,7 @@ fn a_timed_out_call_reports_no_directory_when_the_kill_beat_the_report() {
     std::fs::create_dir_all(&sub).unwrap();
     let cwd = cwd_handle(base.clone());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-4".into())),
         &serde_json::from_value(json!({
             "command": "cd sub && sleep 5",
@@ -237,51 +223,44 @@ fn scratch_dir(label: &str) -> PathBuf {
     dir
 }
 
-/// The containment path assembles its command from the same `wrapped_script`
-/// and reports through the same `status_output` branch, so a sandboxed `cd`
-/// reaches the model exactly like an unsandboxed one -- including the
-/// failing case. Skips itself where the helper cannot be launched (a missing
-/// helper is an infrastructure result by design, not a cwd answer).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// A contained call runs the same wrapper on the same path, so a `cd`
+/// inside the sandbox reaches the model exactly like one outside it --
+/// including the failing case. Needs the sandbox runtime; where it is not
+/// installed there is no contained run to observe.
 #[test]
-fn a_sandboxed_call_reports_the_directory_it_moved_to() {
-    let base = scratch_dir("cd-report-sandboxed");
+fn a_contained_call_reports_the_directory_it_moved_to() {
+    if let Err(unavailable) = crate::tools::sandbox::availability() {
+        eprintln!("skipping: no sandbox runtime here ({unavailable})");
+        return;
+    }
+    let base = scratch_dir("cd-report-contained");
     let sub = base.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
     let cwd = cwd_handle(base.clone());
-    let call_id = ToolCallId("cd-sandboxed".into());
+    let call_id = ToolCallId("cd-contained".into());
     let identity = crate::test_support::tool_identity(&call_id);
 
-    let completion: crate::tools::ToolCompletion<crate::tools::output::Response> =
-        super::exec::run_sandboxed(
-            &super::registry::Registration::for_execution(SessionId::new(), identity.clone()),
-            &identity,
-            &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
-            &cwd,
-            &base,
-            None,
-            &[],
-            &[],
-            super::exec::Writable::WorkspaceButNotThePrimaryCheckout,
-            &config(),
-        );
-    let crate::tools::ToolCompletion::Finished(result) = completion else {
-        panic!("a plain command must produce a finished result, not {completion:?}");
-    };
-    let output = result.to_json();
-    if output.get("reason").is_some() {
-        // A missing or unlaunchable helper is an infrastructure result by
-        // design (the command never ran), and some hosts -- including a
-        // sandboxed development session -- cannot spawn one nested. There is
-        // no command result to assert a cwd on, so skip.
-        eprintln!("skipping: no sandbox helper on this machine ({output})");
-        return;
-    }
-    assert_eq!(output["exit_code"], 1);
+    let output = super::exec::run(
+        &super::registry::Registration::for_execution(SessionId::new(), identity),
+        &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
+        &cwd,
+        &config(),
+        &super::exec::Execution::Contained {
+            runtime: crate::tools::sandbox::current(),
+            containment: horizon_sandbox::runtime::Containment {
+                writable: vec![base.clone()],
+                ..Default::default()
+            },
+        },
+    )
+    .to_json();
+
+    assert_eq!(output["exit_code"], 1, "{output}");
+    assert_eq!(output["sandboxed"], true);
     assert_eq!(
         output["cwd"].as_str(),
         Some(sub.display().to_string().as_str()),
-        "the sandboxed path must carry the reported directory too: {output}"
+        "the contained path must carry the reported directory too: {output}"
     );
 }
 
@@ -294,7 +273,7 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
     let call_id = ToolCallId("timeout-1".to_string());
 
     let started = Instant::now();
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({ "command": "echo start; sleep 60", "timeout_secs": 1 }))
             .unwrap(),
@@ -345,7 +324,7 @@ fn timeout_kill_reaches_a_setsid_grandchild() {
     // `setsid` detaches the grandchild into its own session/process group,
     // escaping the group SIGKILL. The `sleep 10` keeps the bash parent
     // alive so the timeout fires while the grandchild is still writing.
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({
             "command": format!(
@@ -423,7 +402,7 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
 
     let before = open_fd_count();
     for _ in 0..50 {
-        let output = super::exec::run(
+        let output = run_host(
             &super::registry::Registration::new(session_id, call_id.clone()),
             &serde_json::from_value(json!({ "command": "echo hi" })).unwrap(),
             &cwd,
@@ -508,7 +487,7 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("truncate-1".to_string());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({ "command": "head -c 40000 /dev/zero | tr '\\0' 'a'" }))
             .unwrap(),
@@ -548,7 +527,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
     std::fs::create_dir_all(&sub).expect("create test dirs");
     let cwd = cwd_handle(base.clone());
 
-    let first = super::exec::run(
+    let first = run_host(
         &super::registry::Registration::new(session_id, ToolCallId("cwd-1".to_string())),
         &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
         &cwd,
@@ -563,7 +542,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
 
     let reported_cwd = first_output.trim().to_string();
 
-    let second = super::exec::run(
+    let second = run_host(
         &super::registry::Registration::new(session_id, ToolCallId("cwd-2".to_string())),
         &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
         &cwd,
@@ -592,7 +571,7 @@ fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
     let base = base.canonicalize().expect("canonicalize test dir");
     let cwd = cwd_handle(base.clone());
 
-    let _ = super::exec::run(
+    let _ = run_host(
         &super::registry::Registration::new(session_id, ToolCallId("cwd-noop".to_string())),
         &serde_json::from_value(json!({ "command": "echo hi" })).unwrap(),
         &cwd,
@@ -807,7 +786,7 @@ fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
     // `ps -o nice=` works on both Linux and macOS; the previous
     // `/proc/self/stat` read was Linux-only and could never pass on
     // macOS (no procfs).
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({ "command": "ps -o nice= -p $$" })).unwrap(),
         &cwd,
@@ -1068,7 +1047,7 @@ fn lossy_non_utf8_output_does_not_panic() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("non-utf8".to_string());
 
-    let output = super::exec::run(
+    let output = run_host(
         &super::registry::Registration::new(session_id, call_id.clone()),
         &serde_json::from_value(json!({ "command": r"printf 'a\xffb'" })).unwrap(),
         &cwd,
@@ -1123,41 +1102,4 @@ fn cancellation_prevents_a_queued_bash_call_from_starting() {
     std::fs::remove_dir_all(directory).unwrap();
     assert!(!started);
     assert!(crate::tools::session_tool_work_settled(session_id));
-}
-
-/// Every origin a call can run under, so the audit invariant below covers a
-/// new one by construction rather than by someone remembering to add it.
-fn every_origin() -> Vec<SandboxedApprovalOrigin> {
-    vec![
-        SandboxedApprovalOrigin::Tier1Auto,
-        SandboxedApprovalOrigin::ManualDomainRetry {
-            source: ApprovalSource::Human,
-            domains: vec!["example.com".into()],
-        },
-        SandboxedApprovalOrigin::FilesystemGrant {
-            source: ApprovalSource::Human,
-            grants: Vec::new(),
-            trigger_paths: Vec::new(),
-        },
-        SandboxedApprovalOrigin::MachServiceGrant {
-            source: ApprovalSource::Judge,
-            services: vec!["com.apple.example".into()],
-        },
-    ]
-}
-
-/// An approval whose result cannot say who gave it is not auditable after
-/// the fact. The question is the same for every approved origin, so it is
-/// answered in one place and asserted for all of them here; three of these
-/// four used to answer nothing.
-#[test]
-fn every_approved_origin_names_who_approved_it() {
-    for origin in every_origin() {
-        let named = origin.approval_source().is_some();
-        let is_approval = !matches!(origin, SandboxedApprovalOrigin::Tier1Auto);
-        assert_eq!(
-            named, is_approval,
-            "{origin:?} answered the wrong thing about its approval source"
-        );
-    }
 }

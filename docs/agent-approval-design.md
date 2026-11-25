@@ -1,5 +1,7 @@
 # Agent Approval Trust Model
 
+> The "Sandbox architecture" section and the denial-retry flows below are superseded 2026-11-25 by `docs/sandbox-runtime-design.md`; the three tiers and the judge stand.
+
 Decided with the owner 2026-07-19. Replaces per-action approval with
 auto-approval by construction, in three tiers: contained actions run
 without asking, boundary-crossing actions are triaged by a lightweight

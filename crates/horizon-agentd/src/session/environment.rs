@@ -88,26 +88,8 @@ impl SessionEnvironment<'_> {
         // skill exists and then have `skill_read` look for its body in the
         // daemon's checkout instead of the session's worktree (backlog 58).
         let skill_root = skill_discovery_root(workspace_root.as_deref());
-        // Leg 4b (`docs/agent-approval-design.md`): the network proxy is now
-        // `horizon-agent`'s own responsibility, started per session (never one
-        // shared daemon-wide instance -- see `tools::network::
-        // SessionNetworkProxy`'s doc comment for the per-session-attribution
-        // reasoning) and only when this session could ever actually reach tier
-        // 1 -- the same `sandbox_available` precondition `policy::classify_input`
-        // gates `bash`'s `Contained` classification on, so a session that could
-        // never engage the sandbox never pays for a proxy it will never use.
-        // A bind failure is non-fatal: this session
-        // just falls back to `NetworkPolicy::Disabled` for tier-1 sandboxed
-        // `bash`, exactly the pre-leg-4a behavior.
-        //
-        // Pre-seeded with the project's `[grants]` `network` domain entries
-        // (unifying what used to be a domain-only-at-runtime approval flow
-        // with the endpoint-only
-        // `loopback_connect` config key into one `network` key): a domain the
-        // project already trusts never needs a judge/approval round trip
-        // through the proxy below. The runtime grant flow (`tools::approval`'s
-        // domain-denial-retry path, `SessionDomainPolicy::allow`) still applies
-        // on top for anything not listed here.
+        // The session's domains: the project's `[grants]` `network` names,
+        // plus what a `web_fetch` approval adds for the session.
         // A `task` child starts with a copy of its requester's grants
         // (`docs/agent-subagent-design.md` decision 12).
         let seed = lock_unpoisoned(&state.task_seeds)
@@ -118,27 +100,6 @@ impl SessionEnvironment<'_> {
                 .into_iter()
                 .chain(seed.domains),
         );
-        if let Err(error) = horizon_sandbox::preflight() {
-            eprintln!(
-                "horizon-agentd: sandbox helper preflight failed for session {session_id:?}: \
-                 {error}; session continues with the existing host-approval fallback"
-            );
-        }
-        let network = if horizon_sandbox::is_available() {
-            match horizon_agent::tools::SessionNetworkProxy::start_with_policy(&domains) {
-                Ok(proxy) => Some(Arc::new(proxy)),
-                Err(error) => {
-                    eprintln!(
-                        "horizon-agentd: failed to start session {session_id:?}'s network-proxy \
-                     bridge ({error}); tier-1 sandboxed bash will run with network disabled"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let packages = state.packages();
 
         // `task`'s daemon capability (`docs/agent-explore-design.md`).
@@ -241,7 +202,6 @@ impl SessionEnvironment<'_> {
             .with_packages(packages.clone())
             .with_mach_services(mach_services)
             .with_domain_policy(domains)
-            .with_network_proxy(network)
             .with_modules(self.modules.clone())
             .with_exploration_host(exploration)
             .build()
@@ -250,9 +210,7 @@ impl SessionEnvironment<'_> {
             workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
             isolated_worktree: isolated,
             parent_session_id: isolated.then_some(parent_session_id).flatten(),
-            // What authority this session actually started with. A grant
-            // approved later restates this on every subsequent record (see
-            // `LiveState::record_filesystem_grants`).
+            // What authority this session started with.
             filesystem_grants,
             spawn_source_session_id: parent_session_id,
         };

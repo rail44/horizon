@@ -1,7 +1,7 @@
 # Sandbox runtime: an external runtime behind a seam
 
-Status: proposal, not implemented. Board item #109 holds the decisions
-this design follows; #103 and #107 are the failures that led to it.
+Status: implemented. Board item #109 holds the decisions this design
+follows; #103 and #107 are the failures that led to it.
 
 ## Goal
 
@@ -53,83 +53,98 @@ external runtime replace the supervisor.
 - With the gitdirs writable and `hooks`/`config` denied, `git commit` in a
   linked worktree succeeds inside the sandbox.
 - An allowed host answers through the proxy; another gets `403`, and with
-  `-m` Fence logs `[fence:http] ... ✗ CONNECT 403 example.com`.
-  `--fence-log-file <path>` writes that log on the host; the sandboxed side
-  also tries to open the path and prints a warning when it cannot — to be
-  handled (below).
+  `-m` Fence prints `[fence:http] ... ✗ CONNECT 403 example.com` (or
+  `[fence:socks] ... ✗ CONNECT example.org:443 BLOCKED`) on its stderr.
+  (`--fence-log-file` would move those lines to a file, but the sandboxed
+  side then tries to open it too and warns when it cannot.)
 - Killing Fence's process group ends the whole tree (`bwrap
   --die-with-parent`).
 - `/tmp` inside is a private tmpfs; `TMPDIR` is `/tmp` (macOS:
-  `/tmp/fence`).
+  `/tmp/fence`). On Linux this also hides whatever of the host's `/tmp` is
+  not among the writable paths: a write there lands in the private tmpfs,
+  not on the host.
 - About 136 ms of overhead per command (`true`), proxies included.
 
 ## The seam
 
-`crates/horizon-sandbox` is rewritten around one trait; nothing of its
-current contents remains.
+`crates/horizon-sandbox` holds the seam (`runtime`) and the filesystem
+grant types with their checks (`grant`); nothing else of its former
+contents remains.
 
 ```rust
 /// What one call may do, independent of how a runtime enforces it.
 pub struct Containment {
     pub writable: Vec<PathBuf>,       // trees the command may write
-    pub read_only: Vec<PathBuf>,      // paths inside them kept read-only
+    pub read_only: Vec<PathBuf>,      // existing paths inside them kept read-only
     pub domains: Vec<String>,         // hosts the proxy lets through
     pub loopback_ports: Vec<u16>,     // host 127.0.0.1 ports it may connect to
     pub mach_services: Vec<String>,   // macOS only
 }
 
-pub trait SandboxRuntime: Send + Sync {
+pub trait SandboxRuntime: Send + Sync + Debug {
+    fn name(&self) -> &'static str;
     /// Whether this runtime can contain a command on this host now.
     fn probe(&self) -> Result<(), Unavailable>;
-    /// The command that runs `script` in `cwd` under `containment`.
-    /// `scratch` is a host directory the runtime may use for its own
-    /// files (settings, logs); the contained command cannot write it.
-    fn contain(&self, script: &str, cwd: &Path, containment: &Containment,
-               scratch: &Path) -> Result<Contained, Error>;
+    /// The command that runs `script` with `bash -c` under `containment`.
+    /// `scratch` is a host directory for the runtime's own files, which the
+    /// contained command cannot write.
+    fn contain(&self, script: &str, containment: &Containment, scratch: &Path)
+        -> Result<Contained, RuntimeError>;
+    /// The hosts the runtime's proxy refused, read from the command's
+    /// stderr. Informational: the command can print anything.
+    fn refused_hosts(&self, stderr: &str) -> Vec<String>;
 }
 
 pub struct Contained {
     pub command: std::process::Command,
-    /// Read after the command ends: hosts the proxy refused.
-    pub refused_hosts: Box<dyn FnOnce() -> Vec<String> + Send>,
+    pub keep_alive: Vec<tempfile::TempPath>, // dropped after the command ends
 }
 ```
 
-`FenceRuntime { binary: PathBuf }` implements it: it writes the settings
-JSON into `scratch`, runs `fence --settings <file> -m --fence-log-file
-<scratch>/fence.log -c <script>`, and parses the `[fence:http]` /
-`[fence:socks]` lines of that log for `refused_hosts`. Fence's own command
-policy is turned off (`command.useDefaults: false`): what a command may do
-is decided by Horizon's gate, not by a second list in the runtime.
+`FenceRuntime { binary }` writes the settings JSON into `scratch` (the
+host's temp directory, `horizon-sandbox/`), runs `fence --settings <file>
+-m -c <script>` with `HORIZON_SANDBOX=fence` set, and reads the
+`[fence:http]` / `[fence:socks]` lines for `refused_hosts`. Those lines stay
+in the output the model sees, as Claude Code names a refused host in a
+command's result. Fence's own command policy is off (`command.useDefaults:
+false`): what a command may do is decided by Horizon's gate. With
+`--settings` given, Fence reads no `fence.json` of the workspace or the
+user.
 
-The `bash` tool keeps one execution path (`exec/plain.rs`'s process group,
+`horizon-agent`'s `tools::sandbox` holds the runtime in use and whether it
+can contain a call (probed once, and again at each turn's start).
+`horizon-agentd` sets it at start from `[sandbox] fence` in `config.toml`,
+else `fence` on `PATH`, and logs when it is unavailable.
+
+The `bash` tool keeps one execution path (`exec/plain.rs`: process group,
 niceness, timeout, process-tree kill, bounded drain, output spill). A
-contained call runs `Contained::command` through it; an approved
-outside-the-sandbox call runs `bash -c` directly. The Git environment scrub
-(`GIT_*` routing variables, `GIT_OPTIONAL_LOCKS=0`) and the shared-cache
-`cargo clean` guard move from the sandboxed path to that shared path, so
-they apply to both.
+contained call runs `Contained::command` on it; an approved
+outside-the-sandbox call runs `bash -c` directly. The wrapper reports the
+directory a call ended in on a marked line of its stderr, so the runtime's
+lines there are told apart from it. The Git environment scrub (`GIT_*`
+routing variables, `GIT_OPTIONAL_LOCKS=0`) and the shared-cache `cargo
+clean` guard apply to both.
 
-Configuration: a `[sandbox]` table names the runtime (`runtime =
-"fence"`, the only value) and optionally the binary (`fence = "<path>"`,
-default: `fence` on `PATH`). Fence is installed by the person (Homebrew on
-macOS, the release binary or `go install` on Linux, which also needs
-`bwrap` and `socat`); Horizon does not ship it.
+Fence is installed by the person (Homebrew on macOS, the release binary or
+`go install` on Linux, which also needs `bwrap` and `socat`); Horizon does
+not ship it.
 
 ## Per-call containment
 
 | Session | `writable` | `read_only` |
 |---|---|---|
-| In its own worktree | the worktree, and the metadata `agentd`'s `own_metadata_grants` grants today: the worktree's gitdir, the common dir's `objects`, the session branch's ref and reflog | the worktree gitdir's `config.worktree`, `commondir` and `gitdir` (the common dir's `hooks` and `config` are outside `writable`) |
-| In a primary checkout | nothing of the checkout (see Decision 3) | — |
+| In its own worktree | the worktree, and what `agentd`'s `own_metadata_grants` grants: the worktree's gitdir, the common dir's `objects`, the session branch's ref and reflog | the worktree's `.git` file; the gitdir's `config.worktree` (created empty first), `commondir` and `gitdir` (the common dir's `hooks` and `config` are outside `writable`) |
+| In a primary checkout | nothing of the checkout until the session's primary-checkout approval (the one `fs_write`/`fs_edit` ask for there) | — |
 | Read-only (exploration children, consultation stage) | nothing | — |
 | Any of the above | plus `[[grants.project]] trees` | — |
 
-`domains` is `[[grants.project]] network` names plus the hosts this call
-carries (below). `loopback_ports` comes from `network` `127.0.0.1:<port>`
-entries; `mach_services` from `mach_services`. The over-broad tree rule
-(`is_overbroad_tree`, refusing `$HOME`, `/`, system roots) moves with the
-`[grants]` validation into `horizon-config`.
+`domains` is the session's domains (`[[grants.project]] network` names,
+plus what a `web_fetch` approval added) and the hosts this call was
+approved for (below). `loopback_ports` comes from `network`
+`127.0.0.1:<port>` entries; `mach_services` from `mach_services`. The
+over-broad tree rule (`is_overbroad_tree`, refusing `$HOME`, `/`, system
+roots) checks `[grants]` in `horizon-config` and every grant again before
+a call.
 
 ## The failure path
 
@@ -144,9 +159,10 @@ the call runs:
   escalates or no judge is configured. Read-only sessions are refused
   without an offer. The model sends it after a contained call failed on
   the sandbox; it is a new call, so no retry machinery is involved.
-- `domains: [...]`: hosts this call needs beyond the allowlist. A call
-  carrying them is reviewed by the judge with the hosts, and they open for
-  that call only; nothing is added to the session.
+- `domains: [...]`: hosts this call needs beyond the session's. A call
+  carrying ones the session lacks asks (`ApprovalKind::DomainGrant`, the
+  judge first), and they open for that call only; nothing is added to the
+  session.
 
 A contained call's result says it ran contained and lists
 `refused_hosts`; the `bash` description tells the model what a block looks
@@ -160,9 +176,10 @@ uncontained and asks, as a missing sandbox does today.
 
 Removed:
 
-- `horizon-sandbox`'s current contents, `horizon-sandbox-runtime`, the
-  helper and network-probe binaries, the hudsucker proxy (and with them
-  the `nono` and `hudsucker` dependencies).
+- `horizon-sandbox`'s former contents (all but the grant types and their
+  checks), `horizon-sandbox-runtime`, the helper and network-probe
+  binaries, the hudsucker proxy (and with them the `nono` and `hudsucker`
+  dependencies).
 - Approval kinds `FilesystemDenialRetry`, `DomainDenialRetry`,
   `MachServiceGrant`, `SandboxAreaGrant`, `PrimaryCheckoutRetry`, their
   completion variants, and agentd's `session/completion/retry.rs` folds
@@ -173,31 +190,33 @@ Removed:
 
 Changed:
 
-- `exec/sandboxed/*` shrinks to building `Containment` and reading
-  `refused_hosts`.
+- `exec/sandboxed/*` is gone: `bash::job::containment` builds the
+  `Containment`, and the one execution path reads `refused_hosts`.
+- `ACP`'s `ApprovalKind` keeps `Standard` and `DomainGrant`.
+- `[[grants.project]] mach_services` takes any service name (Fence's
+  `macos.mach.lookup`) instead of nono's list.
 - The recall `denial_count` SQL counts `refused_hosts`.
 - Prompts: the `bash` description, the `$TMPDIR` line in `prompt.rs`, the
   exploration role's sandbox sentence.
 - `scripts/gate.sh` recognises a contained session by an environment
   variable Horizon sets on contained calls (`HORIZON_SANDBOX=fence`)
-  instead of the `TMPDIR` suffix, and the `sandboxed` nextest profile is
-  measured again under Fence.
+  instead of the `TMPDIR` suffix.
 
 Stays: the gate and judge path, `ApprovalKind::Standard` and
-`DomainGrant` (`web_fetch`), the retry machinery used by other tools, the
-domain `Allowlist` type (moved out of the proxy crate; `web_fetch` reads
-it), `metadata_writable_roots` (fs tools), the plain execution path.
+`DomainGrant`, the reissue machinery `web_fetch` uses, the domain
+`Allowlist` type (moved into `horizon-agent`'s `tools::network`),
+`metadata_writable_roots` (fs tools), the plain execution path.
 
 Compatibility:
 
 - Event log: `PersistedSessionContext::filesystem_grants` keeps its serde
-  shape (the type moves into `horizon-agent`), so no version bump; lines
+  shape (the type stays in `horizon-sandbox`), so no version bump; lines
   with a removed approval kind decode as `SkippedEvent`.
 - ACP: removing variants is not additive, so `HORIZON_ACP_EXT_VERSION`
   goes 10 → 11 with a regenerated artifact, and the change needs a full
   restart.
 
-Design docs this replaces, to be marked superseded when it lands:
+Design docs this replaces, each marked superseded at its top:
 `agent-approval-design.md` ("Sandbox architecture"),
 `containment-denial-narrow-grants-design.md`,
 `macos-containment-denial-reporting-design.md`,
@@ -205,39 +224,34 @@ Design docs this replaces, to be marked superseded when it lands:
 `sandbox-perimeter-design.md`; partly `agent-tools-design.md` and
 `agent-subagent-design.md` (decisions 7, 10, 12).
 
-## Decisions to confirm
+## Decisions
 
-1. **Network beyond the allowlist**: per call (`domains` on the call,
-   judged with it, Claude Code's auto-mode form) rather than per session.
-   Recommended: per call.
-2. **Git metadata**: a session's own worktree metadata writable as above,
-   so commits on its branch stay inside the sandbox, rather than all of
-   `.git` read-only and every commit going outside the sandbox (Codex).
-   Recommended: the former. A missing `config.worktree` cannot be made
-   read-only by a bind; Horizon creates it empty when the worktree is
-   created.
-3. **Primary checkout**: contained calls in a primary checkout write
-   nothing of it; a write there is an outside-the-sandbox call
-   (judge, then person). The session-wide "make the checkout writable"
-   approval goes. Recommended: as described; `fs_write`/`fs_edit` keep
-   their own primary-checkout gate.
-4. **Unix sockets** (`SSH_AUTH_SOCK`, gpg-agent): Fence allows named
-   sockets on macOS only. Recommended: drop the grants; `git push` and
-   signing need the network or the agent anyway, which is an
-   outside-the-sandbox call.
+The four points this design left open were settled as recommended (board
+#109):
+
+1. Network beyond the session's domains is per call (`domains`, judged
+   with the call), not per session.
+2. A session's own worktree metadata is writable as above, so commits on
+   its branch stay inside the sandbox.
+3. A contained call in a primary checkout writes nothing of it until the
+   session's primary-checkout approval; a host-execution approval does not
+   open it.
+4. The unix-socket grants (`SSH_AUTH_SOCK`, gpg-agent) are gone: `git push`
+   and signing are calls outside the sandbox.
 
 ## Verification
 
-- `horizon-sandbox`: `FenceRuntime` against the real binary (skipped where
-  Fence is not installed, listed in the `sandboxed` nextest profile):
-  writes inside and outside, `read_only` inside `writable`, a commit in a
-  linked worktree, an allowed and a refused host with `refused_hosts`,
-  cancellation ending the tree, and that a `fence.json` in the workspace is
-  not read when `--settings` is given.
-- `horizon-agent`: the gate for `outside_sandbox` and `domains`, read-only
-  refusal, the unavailable-runtime path.
-- The fence log warning: find whether `--fence-log-file` can be kept
-  from the sandboxed side, or read the log lines from stderr instead.
-- Dogfooding on Linux, and the same scenarios on the owner's Mac from a
-  short procedure (install Fence with Homebrew, run the agent's
-  `cargo test`, a commit, a refused host).
+- `horizon-sandbox`: `tests/fence.rs` against the real binary (writes
+  inside and outside, `read_only` inside `writable`, a refused host named,
+  a workspace `fence.json` ignored, the process group ending the command);
+  listed in the `sandboxed` nextest profile, as are the tests below that
+  start Fence.
+- `horizon-agent`: the tier policy for `bash` (contained, `outside_sandbox`,
+  `domains`), the read-only refusal, a contained call reporting its
+  directory, tier-1 dispatch running contained.
+- `horizon-agentd`: a session committing in its own worktree under Fence
+  and moving no other branch; the e2e approval of an outside-the-sandbox
+  call.
+- Dogfooding on Linux, and the same scenarios on the owner's Mac (install
+  Fence with Homebrew, set `[sandbox] fence` if the app does not see it on
+  `PATH`, run the agent's `cargo test`, a commit, a refused host).

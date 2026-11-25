@@ -151,12 +151,3 @@ pub(crate) struct WorktreeRequested {
     /// What happens next, and when.
     pub message: String,
 }
-/// `request_sandbox_area`'s receipt: what the session may now write.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SandboxAreaGranted {
-    /// The areas this session may now write, so the model need not ask
-    /// again.
-    pub granted: Vec<String>,
-    /// Why the session asked, as the approver saw it.
-    pub reason: String,
-}

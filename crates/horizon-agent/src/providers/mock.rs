@@ -372,11 +372,9 @@ fn respond_to_user_message(
     }
     if lower_text.contains("beside the workspace") {
         // Test hook for a `bash` call that needs approval in every session:
-        // a file written beside the workspace root. An engaged sandbox
-        // refuses the write, and the denial is offered as a retry with the
-        // file granted; without a sandbox the call takes the host-execution
-        // approval. Its only effect is that one file, which a test keeps
-        // inside a directory of its own.
+        // a file written beside the workspace root, asked for outside the
+        // sandbox, which takes the host-execution approval. Its only effect
+        // is that one file, which a test keeps inside a directory of its own.
         let call_id = ToolCallId("mock-bash-1".to_string());
         let occurrence_id = OccurrenceId::new();
         *pending_tool_call = Some(ToolCallIdentity {
@@ -388,7 +386,8 @@ fn respond_to_user_message(
                 call_id,
                 tool_id: "bash".to_string(),
                 input: serde_json::json!({
-                    "command": "echo probe > ../horizon-mock-probe && echo agentd-bash-ok"
+                    "command": "echo probe > ../horizon-mock-probe && echo agentd-bash-ok",
+                    "outside_sandbox": true
                 })
                 .into(),
                 occurrence_id,

@@ -1,20 +1,19 @@
 //! Snapshot thread-safe job inputs, enqueue them, and annotate their completion.
 
-use super::{
-    ApprovalSource, BashCompletion, HostExecutionApproval, SandboxedApprovalOrigin, exec, git,
-    registry,
-};
+use super::exec::{self, Execution};
+use super::{ApprovalSource, BashCompletion, HostExecutionApproval, registry};
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallIdentity};
 use crate::tools::ToolSessionState;
 use crate::tools::input::{Bash, PreparedCall};
-use crate::tools::network::SessionNetworkProxy;
-use crate::tools::output::{Response, error as error_output};
+use crate::tools::output::Response;
 use crate::tools::output::{
-    annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
-    annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
+    annotate_approval_source, annotate_auto_approval, annotate_domain_approval,
+    annotate_host_execution_approval, annotate_sandboxed,
 };
 use crossbeam_channel::Sender;
+use horizon_sandbox::runtime::Containment;
+use horizon_sandbox::{FilesystemGrantAccess, FilesystemGrantScope};
 #[cfg(test)]
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -77,136 +76,112 @@ impl BashJob {
     }
 }
 
-/// Per-run confinement captured after approval has updated session grants.
-/// Git metadata is revalidated when the FIFO actually starts this job.
-pub(crate) struct SandboxedRun {
-    workspace_root: PathBuf,
-    network: Option<Arc<SessionNetworkProxy>>,
-    loopback_connect: Vec<std::net::SocketAddr>,
-    filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
-    origin: SandboxedApprovalOrigin,
-    git_metadata_roots: Option<Vec<PathBuf>>,
-    writable: super::exec::Writable,
+/// Why a contained call runs without asking.
+#[derive(Clone, Debug)]
+pub(crate) enum ContainedOrigin {
+    /// Tier 1: inside the sandbox, nothing to ask.
+    Automatic,
+    /// The hosts it carried were approved, for this call only.
+    Domains {
+        source: ApprovalSource,
+        domains: Vec<String>,
+    },
 }
 
-impl SandboxedRun {
-    pub(crate) fn new(
-        tools: &ToolSessionState,
-        workspace_root: &Path,
-        origin: SandboxedApprovalOrigin,
-        git_metadata_roots: Option<Vec<PathBuf>>,
-    ) -> Self {
-        Self {
-            workspace_root: workspace_root.to_path_buf(),
-            network: tools.network_proxy(),
-            loopback_connect: tools.loopback_connect(),
-            filesystem_grants: tools.effective_sandbox_grants(),
-            origin,
-            git_metadata_roots,
-            writable: if let Some(reason) = tools.read_only() {
-                super::exec::Writable::Nothing(reason)
-            } else if tools.primary_checkout_writable() {
-                super::exec::Writable::Workspace
-            } else {
-                super::exec::Writable::WorkspaceButNotThePrimaryCheckout
-            },
-        }
-    }
-
-    fn validated_grants(&self) -> Result<Vec<horizon_sandbox::FilesystemGrant>, String> {
-        let mut grants = self.filesystem_grants.clone();
-        if let Some(roots) = &self.git_metadata_roots {
-            for grant in git::validated_metadata_grants(&self.workspace_root, roots)? {
-                if !grants.contains(&grant) {
-                    grants.push(grant);
-                }
+/// What one contained call of this session may do
+/// (`docs/sandbox-runtime-design.md`, "Per-call containment"): the
+/// workspace unless it is a primary checkout the session may not write or
+/// the session is read-only; the configured and own-worktree grants, with
+/// their excluded subpaths read-only; the workspace's own `.git` pointer
+/// file read-only; the session's domains plus `extra_domains`.
+pub(crate) fn containment(
+    tools: &ToolSessionState,
+    workspace_root: &Path,
+    extra_domains: &[String],
+) -> Containment {
+    let mut containment = Containment::default();
+    if tools.read_only().is_none() {
+        if tools.primary_checkout_writable() {
+            containment.writable.push(workspace_root.to_path_buf());
+            let dot_git = workspace_root.join(".git");
+            if dot_git.is_file() {
+                containment.read_only.push(dot_git);
             }
         }
-        Ok(grants)
+        for grant in tools.effective_sandbox_grants() {
+            if grant.access != FilesystemGrantAccess::ReadWrite {
+                continue;
+            }
+            for excluded in &grant.excluded_subpaths {
+                let path = grant.path.join(excluded);
+                if path.exists() {
+                    containment.read_only.push(path);
+                }
+            }
+            if grant.scope == FilesystemGrantScope::File || grant.path.exists() {
+                containment.writable.push(grant.path);
+            }
+        }
     }
+    containment.domains = tools.allowed_domains();
+    for domain in extra_domains {
+        if !containment.domains.contains(domain) {
+            containment.domains.push(domain.clone());
+        }
+    }
+    containment.loopback_ports = tools
+        .loopback_connect()
+        .iter()
+        .filter(|endpoint| endpoint.ip().is_loopback())
+        .map(std::net::SocketAddr::port)
+        .collect();
+    containment.mach_services = tools.mach_services();
+    containment
 }
 
-fn run_sandboxed_job(
-    job: &BashJob,
-    registration: &registry::Registration,
-    sandbox: SandboxedRun,
-) -> BashCompletion {
-    let mut completion = match sandbox.validated_grants() {
-        Ok(grants) => exec::run_sandboxed(
+/// Enqueue a contained run of `request`, with the session's containment
+/// as it is now plus `origin`'s approved hosts.
+pub(crate) fn spawn_contained(
+    session_id: SessionId,
+    request: &PreparedCall<'_>,
+    tools: &ToolSessionState,
+    result_tx: Sender<BashCompletion>,
+    workspace_root: &Path,
+    origin: ContainedOrigin,
+) {
+    let extra: &[String] = match &origin {
+        ContainedOrigin::Automatic => &[],
+        ContainedOrigin::Domains { domains, .. } => domains,
+    };
+    let execution = Execution::Contained {
+        runtime: crate::tools::sandbox::current(),
+        containment: containment(tools, workspace_root, extra),
+    };
+    let job = BashJob::new(session_id, request, tools, result_tx);
+    // The runtime is shared and stateless across a caught panic.
+    let execution = std::panic::AssertUnwindSafe(execution);
+    job.enqueue(move |job, registration| {
+        let execution = execution;
+        let mut output = exec::run(
             registration,
-            &job.identity,
             &job.input,
             &job.cwd,
-            &sandbox.workspace_root,
-            sandbox.network.as_deref(),
-            &sandbox.loopback_connect,
-            &grants,
-            sandbox.writable,
             &job.config,
-        ),
-        Err(error) => {
-            let mut output = error_output(format!(
-                "Git metadata grant validation failed before execution: {error}"
-            ));
-            annotate_sandboxed(&mut output, false);
-            crate::tools::ToolCompletion::Finished(output)
-        }
-    };
-    if let (Some(roots), Some(result)) = (
-        sandbox.git_metadata_roots.as_deref(),
-        completion.result_mut(),
-    ) {
-        annotate_git_operation_approval(result, roots);
-    }
-    // Denial variants already carry their evidence; origin markers apply only
-    // to Finished, matching the approval audit contract.
-    if let crate::tools::ToolCompletion::Finished(result) = &mut completion {
-        sandbox.origin.annotate(result);
-    }
-    completion.map_result(|output| job.identity.finish(output))
-}
-
-impl SandboxedApprovalOrigin {
-    fn annotate(&self, output: &mut Response) {
-        // Every approved run names who approved it, here rather than in each
-        // arm: git, domain, mach-service and filesystem approvals share the
-        // one question "who allowed this", and leaving it to each arm is
-        // how it came to be unanswered for three of the four.
-        if let Some(source) = self.approval_source() {
-            crate::tools::output::annotate_approval_source(output, source.label());
-        }
-        match self {
-            SandboxedApprovalOrigin::Tier1Auto => annotate_auto_approval(
-                output,
+            &execution.0,
+        );
+        match &origin {
+            ContainedOrigin::Automatic => annotate_auto_approval(
+                &mut output,
                 "contained",
-                "engaged sandbox confined to the workspace root",
+                "ran in the sandbox, confined to the workspace",
             ),
-            SandboxedApprovalOrigin::ManualDomainRetry { domains, .. } => {
-                annotate_domain_approval(output, domains)
-            }
-            SandboxedApprovalOrigin::FilesystemGrant {
-                source,
-                grants,
-                trigger_paths,
-            } => {
-                annotate_filesystem_grant_approval(output, source.label(), grants, trigger_paths);
-                if *source == ApprovalSource::Judge {
-                    annotate_auto_approval(
-                        output,
-                        "judge",
-                        "judge approved a scoped filesystem grant for a \
-                                     sandboxed retry",
-                    );
-                }
-            }
-            SandboxedApprovalOrigin::MachServiceGrant { services, .. } => {
-                crate::tools::output::annotate_mach_service_grant_approval(output, services);
-            }
-            SandboxedApprovalOrigin::PrimaryCheckout { .. } => {
-                crate::tools::output::annotate_primary_checkout_approval(output);
+            ContainedOrigin::Domains { source, domains } => {
+                annotate_domain_approval(&mut output, domains);
+                annotate_approval_source(&mut output, source.label());
             }
         }
-    }
+        deliver(job, output)
+    });
 }
 
 /// Test entry point for a host job without a session's approval machinery.
@@ -234,20 +209,21 @@ pub(super) fn spawn(
 }
 
 /// Runs one explicitly approved call with the host process's ordinary
-/// authority. The elevation is call-scoped: the next bash call starts from
-/// the normal sandbox policy again.
+/// authority. The elevation is call-scoped: the next bash call starts
+/// contained again.
 pub(crate) fn spawn_approved_host(job: BashJob, approval: HostExecutionApproval) {
     spawn_host(job, Some(approval));
 }
 
 fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
     job.enqueue(move |job, registration| {
-        let mut output = exec::run(registration, &job.input, &job.cwd, &job.config);
-        // Honest either way (`docs/agent-approval-design.md`'s
-        // "Audit"): this path never engages the sandbox. Host
-        // execution is not represented as sandboxed merely because
-        // it followed an approval. Explicitly mediated calls receive
-        // additional scope and source markers below.
+        let mut output = exec::run(
+            registration,
+            &job.input,
+            &job.cwd,
+            &job.config,
+            &Execution::Host,
+        );
         annotate_sandboxed(&mut output, false);
         if let Some(approval) = &approval {
             annotate_host_execution_approval(&mut output, approval.source.label());
@@ -265,39 +241,6 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
 
 fn deliver(job: &BashJob, output: Response) -> BashCompletion {
     BashCompletion::Finished(job.identity.finish(output))
-}
-
-/// Snapshot `request` and the session's current sandbox grants, then enqueue
-/// the sandboxed run. Every sandboxed call site assembles its job this way
-/// and states only its own approval origin and metadata roots.
-pub(crate) fn spawn_sandboxed_call(
-    session_id: SessionId,
-    request: &PreparedCall<'_>,
-    tools: &ToolSessionState,
-    result_tx: Sender<BashCompletion>,
-    workspace_root: &Path,
-    origin: SandboxedApprovalOrigin,
-    git_metadata_roots: Option<Vec<PathBuf>>,
-) {
-    spawn_sandboxed(
-        BashJob::new(session_id, request, tools, result_tx),
-        SandboxedRun::new(tools, workspace_root, origin, git_metadata_roots),
-    );
-}
-
-/// Enqueue a sandboxed run with its captured session grants and approval origin.
-/// The child receives the workspace root and explicitly granted paths; host
-/// output spilling does not grant the child access to the host's temp dir.
-/// `SandboxedRun::network` selects the session proxy or disabled networking.
-/// Denials retain their evidence; only Finished receives origin annotations.
-pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
-    // The proxy's accessors synchronize internally; no proxy lock is held
-    // across a caught panic. The following job can safely reuse the proxy.
-    let sandbox = std::panic::AssertUnwindSafe(sandbox);
-    job.enqueue(move |job, registration| {
-        let sandbox = sandbox;
-        run_sandboxed_job(job, registration, sandbox.0)
-    });
 }
 
 /// Runs `work` (in practice, `exec::run`/`exec::run_sandboxed`) and *always*
@@ -434,53 +377,5 @@ mod tests {
         }
         assert!(completed.try_recv().is_err());
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// The source reaches the result the model and the log see, not only the
-    /// enum that carries it: `annotate` is what a finished sandboxed call
-    /// runs, so this is the path a real approval result takes.
-    ///
-    /// Three of the four approved origins used to write nothing here, so a
-    /// result could not say who allowed it.
-    #[test]
-    fn every_approved_origin_records_who_approved_it() {
-        for (origin, label) in [
-            (
-                SandboxedApprovalOrigin::ManualDomainRetry {
-                    source: ApprovalSource::Human,
-                    domains: vec!["example.com".into()],
-                },
-                "human",
-            ),
-            (
-                SandboxedApprovalOrigin::MachServiceGrant {
-                    source: ApprovalSource::Judge,
-                    services: vec!["com.apple.example".into()],
-                },
-                "judge",
-            ),
-            (
-                SandboxedApprovalOrigin::PrimaryCheckout {
-                    source: ApprovalSource::Human,
-                },
-                "human",
-            ),
-        ] {
-            let mut output = error_output("ran");
-            origin.annotate(&mut output);
-            assert_eq!(
-                output.evidence_for_test().approval_source.as_deref(),
-                Some(label),
-                "{origin:?} must record who approved it"
-            );
-        }
-    }
-
-    /// The tier-1 path had no approval, so it claims none.
-    #[test]
-    fn a_contained_call_names_no_approver() {
-        let mut output = error_output("ran");
-        SandboxedApprovalOrigin::Tier1Auto.annotate(&mut output);
-        assert_eq!(output.evidence_for_test().approval_source, None);
     }
 }

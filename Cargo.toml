@@ -16,8 +16,6 @@ members = [
     "crates/horizon-workspace",
     "crates/horizon-markdown",
     "crates/horizon-sandbox",
-    "crates/horizon-sandbox-runtime",
-    "crates/horizon-sandbox-proxy",
     "crates/horizon-board",
     "crates/horizon-logd",
     "crates/horizon-wiki",

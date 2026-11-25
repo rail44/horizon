@@ -1,11 +1,6 @@
-//! The allowlist policy input (`docs/agent-approval-design.md`: "a plain
-//! constructor-provided allowlist
-//! is the spike surface"). Leg 4b (per-session domain approval, `horizon-
-//! agent`'s `tools::network::SessionNetworkProxy`) needs it to grow at
-//! runtime too -- a session's allowlist starts empty and gains entries as
-//! the user approves domains one at a time -- so the domain set is behind a
-//! `RwLock` rather than plain owned data; the match rule itself is
-//! unchanged.
+//! The set of hosts a session may reach: `web_fetch` consults it, and a
+//! contained `bash` call's runtime proxy is given its domains. It grows at
+//! runtime as domains are approved for the session.
 
 use std::collections::HashSet;
 use std::sync::RwLock;

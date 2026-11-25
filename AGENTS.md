@@ -171,6 +171,17 @@ run by hand, not in the gate.
 
 ## Build setup
 
+The agent's `bash` calls run contained by Fence
+(https://github.com/fencesandbox/fence, `docs/sandbox-runtime-design.md`),
+a machine-level install like the ones below: Homebrew on macOS (`brew tap
+fencesandbox/tap && brew install fencesandbox/tap/fence`), the release
+binary or `go install github.com/fencesandbox/fence/cmd/fence@latest` on
+Linux, which also needs `bwrap` and `socat`. Without it Horizon runs and
+every `bash` call asks to run outside a sandbox; the tests that start it
+(`crates/horizon-sandbox/tests/fence.rs` and a few in `horizon-agent` and
+`horizon-agentd`) fail with a message saying so. `config.toml`'s
+`[sandbox] fence` names the binary when it is not on the daemon's `PATH`.
+
 `crates/horizon-terminal-core` builds its terminal engine, libghostty-vt,
 from source with Zig 0.17 (the `libghostty-vt-sys` crate's build script
 calls `zig build`): install it once, e.g. `proto install zig 0.17.1 --pin

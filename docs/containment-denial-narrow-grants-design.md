@@ -1,5 +1,7 @@
 # Containment Denials and Narrow-Grant Retries
 
+> Superseded 2026-11-25 by `docs/sandbox-runtime-design.md`: the sandbox no longer reports denied paths, and a blocked call is rerun outside the sandbox after the judge and a person approve it. Kept as the record of the earlier design.
+
 Status: network direction accepted 2026-07-20; runtime ownership narrowed
 2026-07-21; filesystem approval semantics superseded 2026-07-24 after Agent
 #61 dogfooding. The Linux helper still supplies trustworthy filesystem-denial

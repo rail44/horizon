@@ -35,10 +35,6 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
         ("web_search", json!({"query": "hello"})),
         ("web_fetch", json!({"url": "https://example.com/docs"})),
         ("worktree_enter", json!({})),
-        (
-            "request_sandbox_area",
-            json!({"path": "/work/other", "reason": "the integration needs it"}),
-        ),
     ]
 }
 

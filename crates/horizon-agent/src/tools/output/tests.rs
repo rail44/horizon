@@ -48,7 +48,7 @@ fn annotate_sandboxed_records_the_flag() {
 }
 
 #[test]
-fn containment_evidence_overrides_success_without_interpreting_payload_flags() {
+fn refused_hosts_are_recorded_without_interpreting_payload_flags() {
     use crate::contract::{OccurrenceId, ToolCallId, ToolCallIdentity, ToolOutcome};
     let identity = ToolCallIdentity {
         call_id: ToolCallId("bash".into()),
@@ -63,20 +63,16 @@ fn containment_evidence_overrides_success_without_interpreting_payload_flags() {
         note: None,
         cwd: None,
     });
-    assert_eq!(
-        identity.finish(response.clone()).outcome,
-        ToolOutcome::Succeeded
-    );
-    annotate_denied_domains(&mut response, &["example.test".into()]);
+    annotate_refused_hosts(&mut response, vec!["example.test".into()]);
     let result = identity.finish(response);
-    assert_eq!(result.outcome, ToolOutcome::Failed);
+    // What the command itself did decides the outcome; a refused host is a
+    // fact about the run, not a failure of its own.
+    assert_eq!(result.outcome, ToolOutcome::Succeeded);
     let decoded: crate::contract::ToolCallResult =
         serde_json::from_value(serde_json::to_value(&result).unwrap()).unwrap();
     assert_eq!(decoded, result);
-    let body = decode::<BashOutput>(&decoded.output).unwrap();
-    assert_eq!(body.exit_code(), Some(0));
     assert_eq!(
-        decoded.output["denied_domains"],
+        decoded.output["refused_hosts"],
         serde_json::json!(["example.test"])
     );
 }

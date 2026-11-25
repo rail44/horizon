@@ -1,17 +1,24 @@
-//! Ordinary host execution uses async pipes and abortable output pumps.
+//! One execution path for every call: async pipes, abortable output pumps,
+//! a process group of its own. A contained call is the sandbox runtime's
+//! command around the same script.
 #[cfg(unix)]
 use super::BASH_NICE_LEVEL;
 use super::stream::pump;
-use super::{failed_output, note_undrained, status_output, take, timeout_output, wrapped_script};
+use super::{
+    Execution, failed_output, infrastructure_output, note_undrained, status_output, take,
+    timeout_output, wrapped_script,
+};
 use crate::config::BashToolConfig;
 use crate::tools::bash::registry::Registration;
 use crate::tools::output::Response;
+use crate::tools::output::{annotate_refused_hosts, annotate_sandboxed};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 
+#[expect(clippy::too_many_arguments)]
 pub(super) async fn run_async(
     registration: &Registration,
     command: &str,
@@ -20,10 +27,38 @@ pub(super) async fn run_async(
     cwd: &Path,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
+    execution: &Execution,
 ) -> Response {
-    let mut cmd = prepare_command(command, cwd);
+    let script = wrapped_script(command);
+    let (mut cmd, _keep_alive) = match execution {
+        Execution::Host => {
+            let mut cmd = TokioCommand::new("bash");
+            cmd.arg("-c").arg(&script);
+            (cmd, Vec::new())
+        }
+        Execution::Contained {
+            runtime,
+            containment,
+        } => match scratch_dir().and_then(|scratch| {
+            runtime
+                .contain(&script, containment, &scratch)
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(contained) => (TokioCommand::from(contained.command), contained.keep_alive),
+            Err(error) => {
+                return contained_failure(
+                    &format!("the sandbox could not prepare this call: {error}"),
+                    config,
+                );
+            }
+        },
+    };
+    prepare_command(&mut cmd, cwd);
     let child = match cmd.spawn() {
         Ok(child) => child,
+        Err(error) if matches!(execution, Execution::Contained { .. }) => {
+            return contained_failure(&format!("the sandbox did not start: {error}"), config);
+        }
         Err(error) => {
             return failed_output(&format!("failed to start bash: {error}"), None, config);
         }
@@ -38,6 +73,7 @@ pub(super) async fn run_async(
         Ok(captured) => captured,
         Err(message) => return failed_output(message, None, config),
     };
+    let raw_stderr_copy = raw_stderr.clone();
     let mut value = match outcome {
         Ok(Ok(status)) => status_output(status, raw_stdout, raw_stderr, cwd_handle, config),
         Ok(Err(wait_error)) => failed_output(
@@ -51,21 +87,75 @@ pub(super) async fn run_async(
     if !drained {
         note_undrained(&mut value, drain_grace);
     }
+    annotate_sandboxed(&mut value, matches!(execution, Execution::Contained { .. }));
+    if let Execution::Contained { runtime, .. } = execution {
+        annotate_refused_hosts(
+            &mut value,
+            runtime.refused_hosts(&String::from_utf8_lossy(&raw_stderr_copy)),
+        );
+    }
 
     value
 }
 
-fn prepare_command(command: &str, cwd: &Path) -> TokioCommand {
-    let script = wrapped_script(command);
-    let mut cmd = TokioCommand::new("bash");
-    cmd.arg("-c")
-        .arg(&script)
-        .current_dir(cwd)
+/// A host directory for the runtime's own files, which no contained call
+/// may write: under the host's temp directory, which a contained call does
+/// not see as writable.
+fn scratch_dir() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("horizon-sandbox");
+    std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    Ok(dir)
+}
+
+/// The sandbox could not run the call: it did not run, and the same command
+/// will not fare better. The next turn probes the runtime again.
+fn contained_failure(reason: &str, config: &BashToolConfig) -> Response {
+    crate::tools::sandbox::reprobe();
+    let mut output = infrastructure_output(
+        &format!(
+            "{reason}. The command did not run. Do not retry it unchanged; filesystem \
+             tools remain available."
+        ),
+        None,
+        config,
+    );
+    annotate_sandboxed(&mut output, true);
+    output
+}
+
+fn prepare_command(cmd: &mut TokioCommand, cwd: &Path) {
+    cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
     cmd.process_group(0);
+    // A parent Git process (a hook that runs this, for one) can export
+    // repository-routing variables; they must not send the command to
+    // another repository than the workspace's.
+    for key in [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_INTERNAL_SUPER_PREFIX",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ] {
+        cmd.env_remove(key);
+    }
+    // Read-only Git commands such as `status` would otherwise refresh the
+    // index on the side.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
 
     // Niceness must be set from *inside* the forked child, before it execs
     // bash -- not via a post-spawn `setpriority(PRIO_PGRP, pgid, ...)` from
@@ -96,8 +186,6 @@ fn prepare_command(command: &str, cwd: &Path) -> TokioCommand {
             Ok(())
         });
     }
-
-    cmd
 }
 
 struct Captured {

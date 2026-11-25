@@ -1,36 +1,12 @@
-//! Pre-execution Git metadata grants for isolated worktrees.
-//!
-//! A linked worktree keeps its index/HEAD under the main repository's
-//! `.git/worktrees/<name>` directory and its objects/refs under the shared
-//! common `.git` directory. Waiting for Git to discover those paths through
-//! containment denials is both noisy and unsafe for commands with remote side
-//! effects. This module recognizes ordinary direct Git invocations and
-//! resolves the two metadata roots before the command runs. The approval path
-//! still owns the decision; this module only supplies a validated proposal.
+//! A workspace's Git metadata directories. A linked worktree keeps its
+//! index/HEAD under the main repository's `.git/worktrees/<name>` directory
+//! and its objects/refs under the shared common `.git` directory; the fs
+//! tools read both as part of the workspace.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
-use horizon_sandbox::{FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope};
-
 const MAX_GIT_POINTER_BYTES: u64 = 16 * 1024;
-
-/// Whether a bash tool input contains a directly-recognizable Git invocation
-/// that may write repository metadata.
-pub(crate) fn approved_metadata_roots(output: &Value) -> Option<Vec<PathBuf>> {
-    let evidence: crate::tools::output::Evidence = serde_json::from_value(output.clone()).ok()?;
-    if evidence.git_operation_approved != Some(true) {
-        return None;
-    }
-    let roots: Vec<_> = evidence
-        .approved_git_metadata_roots?
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-    (!roots.is_empty()).then_some(roots)
-}
 
 /// Resolves the metadata directories a Git-writing command needs.
 ///
@@ -119,53 +95,6 @@ pub(crate) fn metadata_writable_roots(workspace_root: &Path) -> Result<Vec<PathB
     Ok(vec![git_dir, common_dir])
 }
 
-/// Subpaths within a resolved gitdir that an area grant over that tree
-/// excludes from writing, even though the parent tree is ReadWrite. These are
-/// the host-escalation vectors: `hooks/` executes arbitrary code on the next
-/// host-side git invocation, and `config` can set `core.fsmonitor`,
-///`core.pager`, credential helpers, etc. — all of which run outside the
-/// sandbox. Board #38; see
-/// `docs/agent-approval-design.md` and
-/// `docs/research/shell-approval-evidence-2026-08-17.md`.
-const GIT_METADATA_EXCLUDED_SUBPATHS: &[&str] = &["hooks", "config"];
-
-pub(crate) fn validated_metadata_grants(
-    workspace_root: &Path,
-    expected_roots: &[PathBuf],
-) -> Result<Vec<FilesystemGrant>, String> {
-    if expected_roots.is_empty() {
-        return Err("Git metadata approval did not name any writable roots".to_string());
-    }
-    let current = metadata_writable_roots(workspace_root)?;
-    if current != expected_roots {
-        return Err(
-            "Git metadata roots changed after approval; refusing the stale grant".to_string(),
-        );
-    }
-    Ok(metadata_grants(&current))
-}
-
-/// The grant an approved area over a metadata root carries: the whole tree
-/// read-write except [`GIT_METADATA_EXCLUDED_SUBPATHS`]. The approval path
-/// and the sandbox spawn are both built from this, so what the judge is
-/// asked about is exactly the grant the sandbox enforces.
-pub(crate) fn metadata_grants(roots: &[PathBuf]) -> Vec<FilesystemGrant> {
-    let excluded: Vec<PathBuf> = GIT_METADATA_EXCLUDED_SUBPATHS
-        .iter()
-        .map(PathBuf::from)
-        .collect();
-    roots
-        .iter()
-        .cloned()
-        .map(|path| FilesystemGrant {
-            path,
-            access: FilesystemGrantAccess::ReadWrite,
-            scope: FilesystemGrantScope::DirectoryTree,
-            excluded_subpaths: excluded.clone(),
-        })
-        .collect()
-}
-
 fn validate_common_git_dir(path: &Path) -> Result<(), String> {
     if path.join("HEAD").is_file() && path.join("objects").is_dir() && path.join("refs").is_dir() {
         Ok(())
@@ -199,50 +128,6 @@ fn resolve_relative(base: &Path, value: &str) -> PathBuf {
 mod tests {
     use super::*;
     use uuid::Uuid;
-
-    #[test]
-    fn validated_metadata_grants_exclude_hooks_and_config() {
-        // Board #38: the area grant over a gitdir
-        // excludes hooks/ and config from writing — the
-        // host-escalation vectors. The exclusion is based on the resolved
-        // gitdir, not a literal `.git` path name.
-        let fixture = linked_worktree_fixture("exclusion");
-        let roots = metadata_writable_roots(&fixture.workspace).unwrap();
-        let grants = validated_metadata_grants(&fixture.workspace, &roots).unwrap();
-        assert_eq!(grants.len(), 2);
-        for grant in &grants {
-            assert_eq!(grant.access, FilesystemGrantAccess::ReadWrite);
-            assert_eq!(grant.scope, FilesystemGrantScope::DirectoryTree);
-            assert_eq!(
-                grant.excluded_subpaths,
-                vec![PathBuf::from("hooks"), PathBuf::from("config")],
-                "each metadata grant must exclude hooks and config"
-            );
-        }
-        fs::remove_dir_all(fixture.root).unwrap();
-    }
-
-    #[test]
-    fn metadata_grants_map_each_root_to_a_tree_grant_excluding_hooks_and_config() {
-        let roots = vec![
-            PathBuf::from("/repo/.git/worktrees/w"),
-            PathBuf::from("/repo/.git"),
-        ];
-        let grants = metadata_grants(&roots);
-        assert_eq!(
-            grants.iter().map(|grant| &grant.path).collect::<Vec<_>>(),
-            roots.iter().collect::<Vec<_>>()
-        );
-        for grant in &grants {
-            assert_eq!(grant.access, FilesystemGrantAccess::ReadWrite);
-            assert_eq!(grant.scope, FilesystemGrantScope::DirectoryTree);
-            assert_eq!(
-                grant.excluded_subpaths,
-                vec![PathBuf::from("hooks"), PathBuf::from("config")]
-            );
-        }
-        assert!(metadata_grants(&[]).is_empty());
-    }
 
     #[test]
     fn resolves_and_validates_linked_worktree_metadata_roots() {

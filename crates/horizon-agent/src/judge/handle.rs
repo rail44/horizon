@@ -138,7 +138,6 @@ impl JudgeHandle {
             args: request.input.0.clone(),
             tool_description: super::builtin_tool_description(&request.tool_id),
             prior_user_messages,
-            requested_filesystem_grants: context.requested_filesystem_grants,
             requested_domains: context.requested_domains,
             host_execution_requested: context.host_execution_requested,
         };

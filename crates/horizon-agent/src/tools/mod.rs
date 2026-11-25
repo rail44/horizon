@@ -20,6 +20,7 @@ pub(crate) mod output;
 mod output_legend;
 mod processing;
 mod recall;
+pub mod sandbox;
 mod settlement;
 mod state;
 mod synchronous;
@@ -32,9 +33,6 @@ pub use approval::{
     ApprovalDecision, ApprovalOutcome, refuse_unattended, resolve_approval, resolve_auto_approval,
     unattended_refusal_result,
 };
-pub use bash::exclude_git_metadata;
-#[cfg(test)]
-pub(crate) use bash::metadata_grants;
 pub(crate) use bash::metadata_writable_roots;
 pub(crate) use catalog::{
     Definition, builtin_definitions, definitions, is_builtin as is_builtin_tool, is_valid_tool_id,
@@ -76,12 +74,7 @@ pub(crate) use execution::tool_result_message;
 pub use execution::{
     Execution, HostTools, cancel_tool_execution, cancelled_tool_call_result, execute_agent_tool,
 };
-// `SessionNetworkProxy` is `pub` (not `pub(crate)`) for the same reason as
-// `execute_agent_tool`/`Execution` above: the leg 4b containment tests in
-// `tests/tier1_network_containment.rs` construct one directly to wire up a
-// real per-session proxy the same way `horizon-agentd`'s
-// `session::run_session` does.
-pub use network::{SessionDomainPolicy, SessionNetworkProxy};
+pub use network::SessionDomainPolicy;
 pub use processing::process_agent_provider_event;
 pub use state::{
     ReadOnly, RecallContext, ToolSessionBuilder, ToolSessionState, register_session_runtime,

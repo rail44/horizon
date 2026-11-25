@@ -1,25 +1,24 @@
-//! Bash entry points and shared output formatting. Process ownership lives
-//! in plain/sandboxed execution, with each path retaining its own kill/drain rules.
+//! Bash entry points and shared output formatting. A call runs one way:
+//! `bash -c` in its own process group, either directly with the host
+//! process's authority or wrapped by the sandbox runtime
+//! (`docs/sandbox-runtime-design.md`).
 mod plain;
-mod sandboxed;
 mod stream;
 use plain::run_async;
-pub use sandboxed::exclude_git_metadata;
-pub(super) use sandboxed::{Writable, run_sandboxed};
 
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use horizon_sandbox::runtime::{Containment, SandboxRuntime};
+
 use crate::tools::output::{BashOutput, BashTermination, Response};
 
 use crate::config::BashToolConfig;
-use crate::contract::ToolCallIdentity;
 
 use super::output::{self, Capped};
 use super::registry::Registration;
-type BashCompletion = crate::tools::ToolCompletion<Response>;
 
 /// Niceness applied to every spawned bash child (`docs/agent-tools-design.md`,
 /// "Bash Containment"). An agent-driven command must not contend with
@@ -29,6 +28,23 @@ type BashCompletion = crate::tools::ToolCompletion<Response>;
 /// waiting on, not a fire-and-forget batch job.
 #[cfg(unix)]
 pub(super) const BASH_NICE_LEVEL: i32 = 10;
+
+/// Starts the wrapper's report of the directory a call ended in, on its own
+/// line of the wrapper's stderr; anything else there (the sandbox runtime's
+/// own lines) is shown with the output.
+const CWD_MARKER: &str = "\u{1f}horizon-cwd:";
+
+/// How one call runs.
+#[derive(Clone, Debug)]
+pub(crate) enum Execution {
+    /// With the host process's authority.
+    Host,
+    /// Wrapped by `runtime`, which enforces `containment`.
+    Contained {
+        runtime: Arc<dyn SandboxRuntime>,
+        containment: Containment,
+    },
+}
 
 /// Runs one bash call to completion (or until it times out / fails to
 /// spawn), synchronously from the caller's point of view. Called on a
@@ -42,6 +58,7 @@ pub(super) fn run(
     input: &crate::tools::input::Bash,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
+    execution: &Execution,
 ) -> Response {
     run_inner(
         registration,
@@ -49,6 +66,7 @@ pub(super) fn run(
         cwd_handle,
         Duration::from_secs(config.drain_grace_secs),
         config,
+        execution,
     )
 }
 
@@ -63,7 +81,14 @@ pub(super) fn run_with_drain_grace(
     drain_grace: Duration,
     config: &BashToolConfig,
 ) -> Response {
-    run_inner(registration, input, cwd_handle, drain_grace, config)
+    run_inner(
+        registration,
+        input,
+        cwd_handle,
+        drain_grace,
+        config,
+        &Execution::Host,
+    )
 }
 
 fn run_inner(
@@ -72,14 +97,18 @@ fn run_inner(
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
     config: &BashToolConfig,
+    execution: &Execution,
 ) -> Response {
     let command = &*input.command;
-
-    let timeout = Duration::from_secs(input.timeout_secs.get());
     let cwd = cwd_handle
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
+    if let Some(message) = super::cargo::shared_cache_clean_refusal(command, &cwd) {
+        return failed_output(message, None, config);
+    }
+
+    let timeout = Duration::from_secs(input.timeout_secs.get());
 
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -100,6 +129,7 @@ fn run_inner(
         &cwd,
         cwd_handle,
         config,
+        execution,
     ))
 }
 
@@ -119,7 +149,7 @@ fn take(buf: &Arc<StdMutex<Vec<u8>>>) -> Vec<u8> {
 ///   code.
 fn wrapped_script(command: &str) -> String {
     format!(
-        "{{ {command}\n}} 2>&1\n__horizon_bash_status=$?\nprintf '%s' \"$PWD\" 1>&2\nexit \"$__horizon_bash_status\"\n"
+        "{{ {command}\n}} 2>&1\n__horizon_bash_status=$?\nprintf '\\n{CWD_MARKER}%s\\n' \"$PWD\" 1>&2\nexit \"$__horizon_bash_status\"\n"
     )
 }
 
@@ -173,24 +203,28 @@ fn apply_cwd_report(
     shown_source: &mut String,
 ) -> Option<PathBuf> {
     let reported = String::from_utf8_lossy(raw_stderr);
-    let trimmed = reported.trim();
-    if trimmed.is_empty() {
-        return None;
+    let mut cwd = None;
+    let mut stray: Vec<&str> = Vec::new();
+    for line in reported.lines() {
+        match line.strip_prefix(CWD_MARKER) {
+            Some(path) if Path::new(path).is_absolute() => cwd = Some(PathBuf::from(path)),
+            _ if line.trim().is_empty() => {}
+            _ => stray.push(line.trim_end()),
+        }
     }
-    if Path::new(trimmed).is_absolute() {
-        let reported = PathBuf::from(trimmed);
-        let mut tracked = cwd_handle
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let moved = *tracked != reported;
-        *tracked = reported.clone();
-        return moved.then_some(reported);
+    if !stray.is_empty() {
+        if !shown_source.is_empty() && !shown_source.ends_with('\n') {
+            shown_source.push('\n');
+        }
+        shown_source.push_str(&stray.join("\n"));
     }
-    if !shown_source.is_empty() {
-        shown_source.push('\n');
-    }
-    shown_source.push_str(trimmed);
-    None
+    let reported = cwd?;
+    let mut tracked = cwd_handle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let moved = *tracked != reported;
+    *tracked = reported.clone();
+    moved.then_some(reported)
 }
 
 /// A call that timed out or was killed adopts whatever directory it reported
@@ -359,29 +393,11 @@ fn status_output(
 ) -> Response {
     match status.code() {
         Some(_) => success_output(status, raw_stdout, raw_stderr, cwd_handle, config),
-        // No exit code at all means signal-terminated -- this crate's own
-        // seccomp filter denies via `Errno`, not `Trap` (see
-        // `horizon_sandbox::linux::seccomp`'s module doc), so a genuine
-        // denial from *our* containment never lands here; treated as an
-        // ordinary harness failure, same as the unsandboxed path's
-        // `terminated_output`.
+        // No exit code at all means signal-terminated: a harness failure,
+        // not a sandbox refusal (the sandbox answers with errors, not
+        // signals).
         None => terminated_output(status, raw_stdout, &raw_stderr, cwd_handle, config),
     }
-}
-
-fn domain_denied(
-    _identity: &ToolCallIdentity,
-    domains: Vec<String>,
-    output: Response,
-) -> BashCompletion {
-    BashCompletion::DomainDenied {
-        domains,
-        result: output,
-    }
-}
-
-fn finished(_identity: &ToolCallIdentity, output: Response) -> BashCompletion {
-    BashCompletion::Finished(output)
 }
 
 fn note_undrained(value: &mut Response, drain_grace: Duration) {

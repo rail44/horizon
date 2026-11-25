@@ -350,6 +350,12 @@ lands:
   check that `docs/agent-tools-design.md`'s 2026-10-20 note left to the
   loop. Thresholds are initial values; `judge_verdict` and
   `continuation_verdict` records are the calibration material.
+  **Sandbox runtime replaced 2026-11-25 (board #109,
+  `docs/sandbox-runtime-design.md`): `bash` is contained by Fence behind
+  a runtime seam, and a blocked call is rerun outside the sandbox after the
+  judge and a person approve it; the nono backend, the seccomp supervisor,
+  the proxy and the narrow-grant retries are gone.** The entry below is the
+  backend it replaced.
   **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
   from the self-built bwrap+seccompiler+landlock stack to depend on
   nono (`nono` 0.68, Apache-2.0) -- full adoption, both OSes

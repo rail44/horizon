@@ -77,9 +77,7 @@ pub(super) fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{
-        ApprovalKind, ApprovalRequest, Event, OccurrenceId, ToolCallId, ToolCallRequest,
-    };
+    use crate::contract::{Event, OccurrenceId, ToolCallId, ToolCallRequest};
     fn request(call: &str, occurrence: &str) -> ToolCallRequest {
         ToolCallRequest {
             call_id: ToolCallId(call.into()),
@@ -126,55 +124,5 @@ mod tests {
             count,
             "settlement never writes another terminal result"
         );
-    }
-    #[test]
-    fn settlement_follows_approved_retries_and_preserves_unapproved_denial_results() {
-        for approved in [false, true] {
-            let live = LiveState::with_disabled_persistence();
-            let first = request("call", "first");
-            let retry = request("call", "retry");
-            let denied = first.identity().result(serde_json::json!({"is_error":true,"output":"partial output before network denial"}));
-            live.extend_events([
-                Event::ToolCallRequested(first.clone()),
-                Event::ToolCallRequested(retry.clone()),
-                Event::ApprovalRequested(ApprovalRequest {
-                    call_id: retry.call_id.clone(),
-                    occurrence_id: retry.occurrence_id.clone(),
-                    reason: "retry".into(),
-                    kind: ApprovalKind::DomainDenialRetry {
-                        domains: vec!["example.com".into()],
-                        prior_result: denied.clone(),
-                    },
-                }),
-            ]);
-            let expected = if approved {
-                let finished = retry
-                    .identity()
-                    .result(serde_json::json!({"output":"retry succeeded"}));
-                live.extend_events([
-                    Event::ToolCallFinished(
-                        denied.clone().superseded_by_retry(&retry.occurrence_id),
-                    ),
-                    Event::ToolCallStarted(retry.identity()),
-                    Event::ToolCallFinished(finished.clone()),
-                ]);
-                finished
-            } else {
-                denied
-            };
-            assert_eq!(
-                results(
-                    settle(
-                        &live,
-                        SessionId::new(),
-                        "stop".into(),
-                        vec![first.identity()]
-                    )
-                    .unwrap()
-                ),
-                [expected]
-            );
-            assert!(live.frame().unfinished_tool_calls().is_empty());
-        }
     }
 }

@@ -40,7 +40,7 @@ impl SessionLoopState {
     /// applied: truncation recovery ([`Self::handle_truncation_recovery`])
     /// and the turn-continuation check ([`Self::handle_continuation_check`]).
     pub(crate) async fn run_turn(&mut self, prompt: Prompt, fallback: impl FnOnce() -> Message) {
-        horizon_sandbox::reprobe_sandbox();
+        crate::tools::sandbox::reprobe();
         self.collect_inputs();
         self.activate_environment().await;
         self.collect_inputs();

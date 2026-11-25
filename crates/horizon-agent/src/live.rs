@@ -273,12 +273,6 @@ impl LiveState {
         Ok(())
     }
 
-    pub(crate) fn record_filesystem_grants(&self, grants: &[horizon_sandbox::FilesystemGrant]) {
-        if let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() {
-            appender.borrow_mut().set_filesystem_grants(grants.to_vec());
-        }
-    }
-
     /// The session's current accumulated frame. Used outside tests too:
     /// `horizon-agentd`'s `fold_bash_completion`
     /// (`crates/horizon-agentd/src/session/completion.rs`) reads this to check

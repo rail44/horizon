@@ -149,7 +149,6 @@ pub(crate) struct JudgeInput {
     /// Horizon-authored mediation output, a state field of its own beside
     /// the untrusted arguments (outside the untrusted argument region in the
     /// cascade's prompt).
-    pub(crate) requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     /// Canonical Horizon-derived hosts, a state field of its own beside the
     /// untrusted arguments (outside the untrusted argument region in the
     /// cascade's prompt). Empty for calls that do not request or use a domain grant.
@@ -160,7 +159,6 @@ pub(crate) struct JudgeInput {
 }
 
 pub(crate) struct JudgeApprovalContext {
-    requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     requested_domains: Vec<String>,
     host_execution_requested: bool,
 }
@@ -236,54 +234,11 @@ impl crate::modules::SessionModule for JudgeModule {
 
 fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApprovalContext {
     match kind {
-        // The judge is asked about what approval actually buys -- the
-        // shaped grants -- not about the raw attempts that triggered the
-        // request, and no longer about host execution: this retry stays
-        // sandboxed (`docs/containment-denial-narrow-grants-design.md`'s
-        // 2026-07-26 decision).
-        ApprovalKind::FilesystemDenialRetry { grants, .. } => JudgeApprovalContext {
-            requested_filesystem_grants: grants.clone(),
-            requested_domains: Vec::new(),
-            host_execution_requested: false,
-        },
-        ApprovalKind::DomainGrant { domains } | ApprovalKind::DomainDenialRetry { domains, .. } => {
-            JudgeApprovalContext {
-                requested_filesystem_grants: Vec::new(),
-                requested_domains: domains.clone(),
-                host_execution_requested: false,
-            }
-        }
-        ApprovalKind::MachServiceGrant { .. } => JudgeApprovalContext {
-            // The mach service grant's "what approval buys" (nono's
-            // all-or-nothing security-service group) has no field in this
-            // context; the request's reason text carries it, and the
-            // structural facts the judge needs are the all-false ones: the
-            // retry stays sandboxed, no filesystem grant, no domain grant.
-            requested_filesystem_grants: Vec::new(),
-            requested_domains: Vec::new(),
-            host_execution_requested: false,
-        },
-        // Asked about exactly the area the session would gain, which is
-        // what approval buys -- nothing is re-run.
-        ApprovalKind::SandboxAreaGrant { grants, .. } => JudgeApprovalContext {
-            requested_filesystem_grants: grants.clone(),
-            requested_domains: Vec::new(),
-            host_execution_requested: false,
-        },
-        // What approval buys is write access to the whole checkout for the
-        // rest of the session, stated as the tree it opens.
-        ApprovalKind::PrimaryCheckoutRetry { root, .. } => JudgeApprovalContext {
-            requested_filesystem_grants: vec![horizon_sandbox::FilesystemGrant {
-                path: root.clone(),
-                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-                excluded_subpaths: Vec::new(),
-            }],
-            requested_domains: Vec::new(),
+        ApprovalKind::DomainGrant { domains } => JudgeApprovalContext {
+            requested_domains: domains.clone(),
             host_execution_requested: false,
         },
         ApprovalKind::Standard => JudgeApprovalContext {
-            requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: tool_id == "bash",
         },
@@ -399,7 +354,6 @@ mod tests {
             args: serde_json::json!({ "command": "echo hi" }),
             tool_description: Some("Run a shell command.".to_string()),
             prior_user_messages: vec!["please check the logs".to_string()],
-            requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
         }
@@ -567,109 +521,28 @@ mod tests {
     }
 
     #[test]
-    fn builtin_tool_description_finds_a_cataloged_tool_and_none_for_unknown() {
-        assert!(builtin_tool_description("bash").is_some());
-        assert_eq!(builtin_tool_description("not.a.real.tool"), None);
+    fn the_judge_is_told_what_each_approval_opens() {
+        let host = trusted_approval_context(&ApprovalKind::Standard, "bash");
+        assert!(host.host_execution_requested);
+        assert!(host.requested_domains.is_empty());
+
+        let other_tool = trusted_approval_context(&ApprovalKind::Standard, "fs_write");
+        assert!(!other_tool.host_execution_requested);
+
+        let hosts = trusted_approval_context(
+            &ApprovalKind::DomainGrant {
+                domains: vec!["crates.io".into()],
+            },
+            "bash",
+        );
+        assert_eq!(hosts.requested_domains, ["crates.io"]);
+        assert!(!hosts.host_execution_requested);
     }
 
     #[test]
-    fn trusted_context_covers_area_filesystem_and_domain_candidates() {
-        let root = std::env::temp_dir().join("judge-area-root");
-        // An area grant is asked about exactly as it would be applied: the
-        // repository's directory minus the Git metadata a grant may not
-        // open (board #38).
-        let context = trusted_approval_context(
-            &ApprovalKind::SandboxAreaGrant {
-                grants: crate::tools::metadata_grants(std::slice::from_ref(&root)),
-                reason: "the integration needs it".to_string(),
-            },
-            "bash",
-        );
-        assert_eq!(context.requested_domains, Vec::<String>::new());
-        assert!(!context.host_execution_requested);
-        assert_eq!(context.requested_filesystem_grants.len(), 1);
-        assert_eq!(context.requested_filesystem_grants[0].path, root);
-        assert_eq!(
-            context.requested_filesystem_grants[0].access,
-            horizon_sandbox::FilesystemGrantAccess::ReadWrite
-        );
-        // The judge sees the grant exactly as the sandbox applies it,
-        // including the hooks/config write exclusion.
-        assert_eq!(
-            context.requested_filesystem_grants[0].excluded_subpaths,
-            vec![
-                std::path::PathBuf::from("hooks"),
-                std::path::PathBuf::from("config")
-            ]
-        );
-
-        let denial = horizon_sandbox::FilesystemDenial {
-            attempted_path: std::env::temp_dir().join("attempted"),
-            grant: horizon_sandbox::FilesystemGrant {
-                path: std::env::temp_dir().join("approved"),
-                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-                scope: horizon_sandbox::FilesystemGrantScope::File,
-                excluded_subpaths: Vec::new(),
-            },
-        };
-        // The judge is asked about the shaped grant approval would actually
-        // add -- deliberately not the per-attempt grant inside `denials`,
-        // which is evidence only -- and no longer about host execution: a
-        // filesystem retry stays sandboxed.
-        let shaped = horizon_sandbox::FilesystemGrant {
-            path: std::env::temp_dir(),
-            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-            excluded_subpaths: Vec::new(),
-        };
-        let context = trusted_approval_context(
-            &ApprovalKind::FilesystemDenialRetry {
-                denials: vec![denial.clone()],
-                grants: vec![shaped.clone()],
-                prior_result: crate::contract::ToolCallResult::new(
-                    (crate::contract::ToolCallId("call-context".to_string())).clone(),
-                    crate::contract::OccurrenceId(
-                        (crate::contract::ToolCallId("call-context".to_string()))
-                            .0
-                            .clone(),
-                    ),
-                    serde_json::json!({}),
-                ),
-            },
-            "bash",
-        );
-        assert_eq!(context.requested_filesystem_grants, vec![shaped]);
-        assert_ne!(
-            context.requested_filesystem_grants,
-            vec![denial.grant.clone()]
-        );
-        assert!(context.requested_domains.is_empty());
-        assert!(!context.host_execution_requested);
-
-        let expected_domains = vec!["example.com".to_string()];
-        let context = trusted_approval_context(
-            &ApprovalKind::DomainDenialRetry {
-                domains: expected_domains.clone(),
-                prior_result: crate::contract::ToolCallResult::new(
-                    (crate::contract::ToolCallId("call-domain".to_string())).clone(),
-                    crate::contract::OccurrenceId(
-                        (crate::contract::ToolCallId("call-domain".to_string()))
-                            .0
-                            .clone(),
-                    ),
-                    serde_json::json!({}),
-                ),
-            },
-            "bash",
-        );
-        assert!(context.requested_filesystem_grants.is_empty());
-        assert_eq!(context.requested_domains, expected_domains);
-        assert!(!context.host_execution_requested);
-
-        let context = trusted_approval_context(&ApprovalKind::Standard, "bash");
-        assert!(context.host_execution_requested);
-        let context = trusted_approval_context(&ApprovalKind::Standard, "web_fetch");
-        assert!(!context.host_execution_requested);
+    fn builtin_tool_description_finds_a_cataloged_tool_and_none_for_unknown() {
+        assert!(builtin_tool_description("bash").is_some());
+        assert_eq!(builtin_tool_description("not.a.real.tool"), None);
     }
 
     fn temp_event_log(label: &str) -> std::path::PathBuf {
@@ -844,18 +717,8 @@ mod tests {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_judge(Some(judge))
             .build();
-        let expected = candidate(ApprovalKind::FilesystemDenialRetry {
-            denials: Vec::new(),
-            grants: Vec::new(),
-            prior_result: crate::contract::ToolCallResult::new(
-                (crate::contract::ToolCallId("call-1".to_string())).clone(),
-                crate::contract::OccurrenceId(
-                    (crate::contract::ToolCallId("call-1".to_string()))
-                        .0
-                        .clone(),
-                ),
-                serde_json::json!({}),
-            ),
+        let expected = candidate(ApprovalKind::DomainGrant {
+            domains: vec!["example.com".into()],
         });
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
@@ -888,11 +751,8 @@ mod tests {
         ApprovalCandidate {
             approval: ApprovalRequest {
                 call_id: request.call_id.clone(),
-                reason: "test area approval".to_string(),
-                kind: ApprovalKind::SandboxAreaGrant {
-                    grants: crate::tools::metadata_grants(&[std::env::temp_dir()]),
-                    reason: "the integration needs it".to_string(),
-                },
+                reason: "test host execution approval".to_string(),
+                kind: ApprovalKind::Standard,
                 occurrence_id: crate::contract::OccurrenceId(request.call_id.0.clone()),
             },
             request,
@@ -900,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn area_grant_with_judge_goes_to_the_judge() {
+    fn an_outside_sandbox_call_with_judge_goes_to_the_judge() {
         let path = temp_event_log("git-plain");
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![ask(0.05)]));
@@ -908,7 +768,7 @@ mod tests {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_judge(Some(judge))
             .build();
-        let candidate = git_candidate("git commit -m test");
+        let candidate = git_candidate("git push");
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
             crate::tools::gate::review(&tool_state, SessionId::new(), candidate.clone(), tx),
@@ -925,9 +785,9 @@ mod tests {
     }
 
     #[test]
-    fn area_grant_without_judge_falls_back_to_human() {
+    fn an_outside_sandbox_call_without_judge_falls_back_to_human() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let candidate = git_candidate("git commit -m test");
+        let candidate = git_candidate("git push");
         let (tx, _rx) = crossbeam_channel::unbounded();
         assert_eq!(
             crate::tools::gate::review(&tool_state, SessionId::new(), candidate.clone(), tx),

@@ -1,13 +1,11 @@
 //! The `bash` tool starts a fresh process per call and tracks cwd across
-//! calls. [`BashJob`] captures thread-safe inputs; [`SandboxedRun`] captures
-//! the grants and approval origin for sandboxed execution. Both execution
-//! modes enqueue work through one per-session FIFO and deliver completions
-//! to the daemon session loop without blocking it.
+//! calls. [`BashJob`] captures thread-safe inputs; a call runs contained by
+//! the sandbox runtime or, once approved, with the host's authority. Both
+//! enqueue work through one per-session FIFO and deliver completions to the
+//! daemon session loop without blocking it.
 //!
 //! Job panic handling sends a failure completion, while the registry's
 //! advance-on-drop guard independently keeps later jobs from getting stuck.
-//! The daemon folds each completion into live state and resolves retries
-//! (`crates/horizon-agentd/src/session/completion.rs`).
 
 mod cargo;
 mod exec;
@@ -18,80 +16,16 @@ pub(crate) mod process;
 mod registry;
 mod shell;
 
-use std::path::PathBuf;
-
 pub(super) use super::completion::BashCompletion;
 #[cfg(test)]
 use super::completion::should_fold_completion;
-pub use exec::exclude_git_metadata;
-pub(crate) use job::{BashJob, spawn_approved_host, spawn_sandboxed_call};
+pub(crate) use job::{BashJob, ContainedOrigin, spawn_approved_host, spawn_contained};
 #[cfg(test)]
 use job::{run_job_body, spawn};
 #[cfg(test)]
 pub(crate) use registry::cancel_call;
 
-pub(crate) use git::{approved_metadata_roots, metadata_writable_roots};
-// Only the tests build grants directly now; the approval path hands the
-// judge the same shape through `sandbox_area_approval`.
-#[cfg(test)]
-pub(crate) use git::metadata_grants;
-
-/// What a [`spawn_sandboxed_call`] run's eventual `Finished` completion should be
-/// annotated with, once it lands -- distinguishes a genuine tier-1
-/// auto-approval from a human's domain-denial-retry approval (`docs/
-/// agent-approval-design.md` leg 4b), so the audit trail never claims a
-/// human decision was auto-approved. Never consulted for a
-/// `DomainDenied`/`FilesystemDenied` completion -- both are annotated by
-/// `exec::run_sandboxed` itself before this ever applies.
-#[derive(Clone, Debug)]
-pub(crate) enum SandboxedApprovalOrigin {
-    /// `tools::execution::execute_automatic`'s auto-approval path.
-    Tier1Auto,
-    /// `tools::approval`'s domain-denial-retry approve path -- a decision
-    /// about which domains this session may reach, carrying the domain(s)
-    /// just approved for it.
-    ManualDomainRetry {
-        source: ApprovalSource,
-        domains: Vec<String>,
-    },
-    /// A filesystem-denial retry (`docs/containment-denial-narrow-grants-
-    /// design.md`'s 2026-07-26 decision): `grants` is the scoped authority
-    /// this rerun actually received, and `trigger_paths` the mediated
-    /// attempts that prompted the request. Stated separately because they
-    /// are different claims -- the grants bound the execution, the trigger
-    /// paths only explain why it was offered.
-    FilesystemGrant {
-        source: ApprovalSource,
-        grants: Vec<horizon_sandbox::FilesystemGrant>,
-        trigger_paths: Vec<PathBuf>,
-    },
-    /// A judge/human-approved mach service grant: the approval recorded the
-    /// service set on this session's state, and this call is the sandboxed
-    /// retry that runs with the enforcement grants assembled from it
-    /// (`docs/macos-containment-denial-reporting-design.md`).
-    MachServiceGrant {
-        source: ApprovalSource,
-        services: Vec<String>,
-    },
-    /// The session's primary-checkout approval, given for a call the
-    /// sandbox refused a write there (`ApprovalKind::PrimaryCheckoutRetry`);
-    /// this call is its sandboxed retry, now with the checkout writable.
-    PrimaryCheckout { source: ApprovalSource },
-}
-
-impl SandboxedApprovalOrigin {
-    /// Who decided the approval behind this call, when one decided it. The
-    /// tier-1 path had no approval to decide, so it names none.
-    pub(crate) fn approval_source(&self) -> Option<ApprovalSource> {
-        match self {
-            Self::Tier1Auto => None,
-            Self::ManualDomainRetry { source, .. }
-            | Self::FilesystemGrant { source, .. }
-            | Self::MachServiceGrant { source, .. }
-            | Self::PrimaryCheckout { source } => Some(*source),
-        }
-    }
-}
+pub(crate) use git::metadata_writable_roots;
 
 /// Who decided an approval -- the enforcing judge or a human. Both produce
 /// the same trusted effect; recording which is an audit requirement, not a

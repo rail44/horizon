@@ -24,59 +24,6 @@
               },
               "type": "array"
             },
-            "prior_result": {
-              "$ref": "#/$defs/ToolResult"
-            },
-            "type": {
-              "const": "domain_denial_retry",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "domains",
-            "prior_result"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "denials": {
-              "items": {
-                "$ref": "#/$defs/FilesystemDenial"
-              },
-              "type": "array"
-            },
-            "grants": {
-              "items": {
-                "$ref": "#/$defs/FilesystemGrant"
-              },
-              "type": "array"
-            },
-            "prior_result": {
-              "$ref": "#/$defs/ToolResult"
-            },
-            "type": {
-              "const": "filesystem_denial_retry",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "denials",
-            "grants",
-            "prior_result"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "domains": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
             "type": {
               "const": "domain_grant",
               "type": "string"
@@ -85,74 +32,6 @@
           "required": [
             "type",
             "domains"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "prior_result": {
-              "$ref": "#/$defs/ToolResult"
-            },
-            "services": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "type": {
-              "const": "mach_service_grant",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "services",
-            "prior_result"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Appended last: the wire's `oneOf` indices stay put.",
-          "properties": {
-            "grants": {
-              "items": {
-                "$ref": "#/$defs/FilesystemGrant"
-              },
-              "type": "array"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "type": {
-              "const": "sandbox_area_grant",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "grants",
-            "reason"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Appended last: the wire's `oneOf` indices stay put.",
-          "properties": {
-            "prior_result": {
-              "$ref": "#/$defs/ToolResult"
-            },
-            "root": {
-              "type": "string"
-            },
-            "type": {
-              "const": "primary_checkout_retry",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "root",
-            "prior_result"
           ],
           "type": "object"
         }
@@ -237,65 +116,6 @@
         "session_id"
       ],
       "type": "object"
-    },
-    "FilesystemDenial": {
-      "description": "A mediated attempt and the smallest enforceable grant that can satisfy it.\n\nOnly kernel-originated evidence produces one: the Linux supervisor's\nseccomp notifications (`linux::SupervisorReport::containment_denials`) and the\nmacOS collector's unified-log records (`macos::denials`), both resolved\nthrough `grant::resolve_denial`. Output the sandboxed child writes is never\na source, not even for naming a grant request: the child controls it.",
-      "properties": {
-        "attempted_path": {
-          "type": "string"
-        },
-        "grant": {
-          "$ref": "#/$defs/FilesystemGrant"
-        }
-      },
-      "required": [
-        "attempted_path",
-        "grant"
-      ],
-      "type": "object"
-    },
-    "FilesystemGrant": {
-      "description": "A canonical, enforceable filesystem grant for a fresh sandbox.\n\n`excluded_subpaths` names relative subpaths within a `DirectoryTree`\ngrant that remain read-only even though the parent tree is writable. The\nseccomp supervisor (Linux) denies writes to these subpaths before checking\ncapability sufficiency, so a ReadWrite grant on `.git/` can exclude\n`.git/hooks/` and `.git/config/` — the host-escalation vectors a deceived\njudge could otherwise enable. On macOS (no seccomp supervisor) the field\nis advisory. Board #38; see\n`docs/agent-approval-design.md`.",
-      "properties": {
-        "access": {
-          "$ref": "#/$defs/FilesystemGrantAccess"
-        },
-        "excluded_subpaths": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "path": {
-          "type": "string"
-        },
-        "scope": {
-          "$ref": "#/$defs/FilesystemGrantScope"
-        }
-      },
-      "required": [
-        "path",
-        "access",
-        "scope"
-      ],
-      "type": "object"
-    },
-    "FilesystemGrantAccess": {
-      "description": "Access added by an approved, session-scoped containment grant.",
-      "enum": [
-        "Read",
-        "ReadWrite"
-      ],
-      "type": "string"
-    },
-    "FilesystemGrantScope": {
-      "description": "The actual enforcement scope shown to the approver.",
-      "enum": [
-        "File",
-        "DirectoryTree"
-      ],
-      "type": "string"
     },
     "HostToolRequest": {
       "description": "Mirrors `hosting::HostToolRequest` (crates/horizon-agent/src/hosting.rs).",
@@ -928,28 +748,6 @@
         }
       ]
     },
-    "ToolResult": {
-      "description": "Mirrors `contract::ToolCallResult` (crates/horizon-agent/src/contract/tool_result.rs).",
-      "properties": {
-        "call_id": {
-          "type": "string"
-        },
-        "occurrence_id": {
-          "type": "string"
-        },
-        "outcome": {
-          "$ref": "#/$defs/ToolOutcome"
-        },
-        "output": true
-      },
-      "required": [
-        "call_id",
-        "occurrence_id",
-        "output",
-        "outcome"
-      ],
-      "type": "object"
-    },
     "WatchBoardRequest": {
       "description": "Starts watching a workspace's board.",
       "properties": {
@@ -1074,5 +872,5 @@
     "_horizon/token_budget"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 10
+  "x-session-protocol-version": 11
 }

@@ -971,8 +971,6 @@ async fn approve_and_finish_in(
     let (request, responder) = take_permission(&mut collected);
     let approval = approval_meta(&request);
     assert_eq!(request.session_id, acp_id(session_id));
-    // (The call the approval is for: a retry's is not the first the
-    // session made, which ran contained and was refused.)
     let requested = collected
         .iter()
         .filter_map(tool_update)
@@ -1022,16 +1020,15 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
 }
 
 /// A session started in a plain checkout, the shape whose `bash` calls
-/// run sandboxed without approval, and ask once the sandbox has refused
-/// them something that can be granted.
+/// run sandboxed without approval and ask to run outside it.
 fn shared_session_in(session_id: SessionId, cwd: PathBuf) -> v2::NewSessionRequest {
     new_session_request(session_id, &mock_provider_id().0, None, cwd)
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call (a write
-/// beside the workspace, which the sandbox refuses and then asks about in
-/// every session) spawns an actual subprocess in agentd, and the result
-/// arrives back as the call's final update.
+/// beside the workspace, asked for outside the sandbox) spawns an actual
+/// subprocess in agentd, and the result arrives back as the call's final
+/// update.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     let agentd = spawn_agentd();
@@ -1566,7 +1563,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     );
 
     let _ = resume(&mut client, session_id).await.unwrap();
-    if !horizon_sandbox::is_available() {
+    if !horizon_agent::tools::sandbox::ready() {
         return;
     }
 
@@ -1894,7 +1891,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         .unwrap();
     assert_eq!(info_meta(&listed).workspace_root.as_ref(), Some(&root));
 
-    if horizon_sandbox::is_available() {
+    if horizon_agent::tools::sandbox::ready() {
         prompt(&client, session_id, "please write the marker").await;
         let collected = collect_until(&mut client, |inbound| {
             finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-bash-marker-1")

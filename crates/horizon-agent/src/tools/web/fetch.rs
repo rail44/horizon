@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::tools::network::Allowlist;
 use crate::tools::output::{Response, WebFetch};
 use dom_smoothie::{Config, Readability, TextMode};
-use horizon_sandbox_proxy::Allowlist;
 use reqwest::header::{
     ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LOCATION,
 };

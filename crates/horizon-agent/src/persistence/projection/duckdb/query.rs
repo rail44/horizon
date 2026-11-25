@@ -395,7 +395,8 @@ impl Store {
                    AND json_extract(r.output_json, '$.denied_filesystem_paths') IS NULL
                    AND json_extract(r.output_json, '$.denied_network_routes') IS NULL
                    AND json_extract(r.output_json, '$.denied_mach_services') IS NULL
-                   AND json_extract(r.output_json, '$.ungrantable_filesystem_paths') IS NULL),
+                   AND json_extract(r.output_json, '$.ungrantable_filesystem_paths') IS NULL
+                   AND json_extract(r.output_json, '$.refused_hosts') IS NULL),
                 (SELECT COUNT(*) FROM agent_tool_results r
                  WHERE r.session_id = s.session_id
                    AND json_extract_string(r.output_json, '$.exit_code') IS NOT NULL
@@ -405,7 +406,8 @@ impl Store {
                    AND (json_extract(r.output_json, '$.denied_filesystem_paths') IS NOT NULL
                      OR json_extract(r.output_json, '$.denied_network_routes') IS NOT NULL
                      OR json_extract(r.output_json, '$.denied_mach_services') IS NOT NULL
-                     OR json_extract(r.output_json, '$.ungrantable_filesystem_paths') IS NOT NULL)),
+                     OR json_extract(r.output_json, '$.ungrantable_filesystem_paths') IS NOT NULL
+                     OR json_extract(r.output_json, '$.refused_hosts') IS NOT NULL)),
                 (SELECT COUNT(*) FROM agent_approvals a WHERE a.session_id = s.session_id),
                 (SELECT MIN(m.sequence) FROM agent_messages m
                  WHERE m.session_id = s.session_id)

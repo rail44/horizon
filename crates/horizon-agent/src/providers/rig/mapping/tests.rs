@@ -78,34 +78,6 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
 }
 
 #[test]
-fn refusing_a_retry_replays_the_original_attempts_answer_once() {
-    let first = request("bash", "first");
-    let retry = request("bash", "retry");
-    let denied = result(&first, "network denied");
-    assert_eq!(
-        rig_messages_from_horizon_events(&[
-            Event::ToolCallRequested(first.clone()),
-            Event::ToolCallRequested(retry.clone()),
-            Event::ApprovalRequested(crate::contract::ApprovalRequest {
-                call_id: retry.call_id.clone(),
-                occurrence_id: retry.occurrence_id.clone(),
-                reason: "retry approval".into(),
-                kind: crate::contract::ApprovalKind::DomainDenialRetry {
-                    domains: vec!["example.test".into()],
-                    prior_result: denied.clone()
-                }
-            }),
-            Event::ToolCallFinished(denied.clone()),
-            Event::ToolCallFinished(denied.clone()),
-        ]),
-        vec![
-            Message::from(rig_tool_call_from_request(&first)),
-            rig_tool_result_message(&denied, "bash"),
-        ]
-    );
-}
-
-#[test]
 fn a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id() {
     let first = request("bash", "first");
     let second = request("bash", "second");

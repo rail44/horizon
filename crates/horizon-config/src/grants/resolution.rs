@@ -124,12 +124,11 @@ fn resolve_network(
 fn resolve_mach_services(entry: &RawProjectGrant, warnings: &mut Vec<String>) -> Vec<String> {
     let mut mach_services = Vec::new();
     for service in &entry.mach_services {
-        if !horizon_sandbox::KNOWN_SECURITY_SERVICES.contains(&service.as_str()) {
+        if service.is_empty() || service.chars().any(char::is_whitespace) {
             warnings.push(format!(
-                "[[grants.project]] root {:?}: mach_services entry {service:?} is not one \
-                 of the macOS security services the sandbox knows about ({}), ignoring it",
-                entry.root,
-                horizon_sandbox::KNOWN_SECURITY_SERVICES.join(", ")
+                "[[grants.project]] root {:?}: mach_services entry {service:?} is not a \
+                 service name, ignoring it",
+                entry.root
             ));
             continue;
         }

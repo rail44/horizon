@@ -856,115 +856,18 @@ pub struct ContinuationVerdict {
 // number), so equality on them is reflexive.
 impl Eq for ContinuationVerdict {}
 
-/// Distinguishes the shape of a pending [`ApprovalRequest`] -- what
-/// `tools::approval::resolve_bash` needs to tell an ordinary approval, a
-/// sandbox-denial retry, and a network-domain-denial retry apart, since the
-/// three resolve an Approve decision differently (`docs/agent-approval-
-/// design.md`'s "Denial UX" and leg 4b's "denial -> approval -> retry
-/// flow"). Also lets the UI render each kind with its own copy without
-/// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
-/// but this keeps that door open).
+/// What an approval decides, so `tools::approval` resolves each kind its
+/// own way without reading `ApprovalRequest::reason`'s free text.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum ApprovalKind {
-    /// An ordinary first-time approval request -- the only kind that
-    /// existed before this leg.
+    /// Run the call as asked. For `bash`, once outside the sandbox with
+    /// the host process's ordinary authority.
     #[default]
     Standard,
-    /// A tier-1 sandboxed `bash` call's network egress was refused by the
-    /// allowlist proxy for one or more domains (`bash::BashCompletion::
-    /// DomainDenied`, `docs/agent-approval-design.md` leg 4b). Approving
-    /// adds `domains` to this session's own allowlist and reruns the SAME
-    /// call, still sandboxed; denying forwards `prior_result` as-is -- the
-    /// call already ran to completion, so a deny
-    /// leaves that real, already-failed-on-its-own-terms outcome as the
-    /// final one rather than synthesizing a fresh "denied by user" marker.
-    DomainDenialRetry {
-        domains: Vec<String>,
-        prior_result: ToolCallResult,
-    },
-    /// A sandboxed `bash` call was refused access to paths outside its
-    /// workspace. Approval adds `grants` to this session and reruns the
-    /// SAME call **still sandboxed**; denying forwards `prior_result` as-is
-    /// (the call already ran, and its output already reflects the refusal).
-    ///
-    /// `denials` are the raw mediated attempts -- evidence, shown to the
-    /// approver as the trigger. `grants` is what approval actually buys:
-    /// the shaped suggestion (`horizon_sandbox::suggest_grants`, one tree
-    /// at the attempts' narrowest common ancestor, clamped), which is
-    /// generally *not* the same as the per-attempt grants inside `denials`.
-    ///
-    /// Both the variant name and `denials` predate the 2026-07-26
-    /// project-scoped-tree-grants decision
-    /// (`docs/containment-denial-narrow-grants-design.md`) and stay put so
-    /// existing event-log records keep deserializing. `grants` is
-    /// `#[serde(default)]` for the same reason: a request persisted by the
-    /// 2026-07-24 host-execution build reads back with none, and an empty
-    /// grant list fails closed at approval rather than silently reviving
-    /// unsandboxed execution.
-    FilesystemDenialRetry {
-        denials: Vec<horizon_sandbox::FilesystemDenial>,
-        #[serde(default)]
-        grants: Vec<horizon_sandbox::FilesystemGrant>,
-        prior_result: ToolCallResult,
-    },
-    /// One or more Horizon-derived public domains must be added to this
-    /// session before a host-side web request may contact them. Unlike
-    /// `DomainDenialRetry`, no denied tool result exists yet: contact has
-    /// not occurred. Approval adds only these domains and starts the same
-    /// request; denial resolves it without network access.
+    /// Hosts beyond the session's domains. For `web_fetch`, approval adds
+    /// them to the session before the request makes contact; for `bash`,
+    /// they open for that one sandboxed call and nothing is added.
     DomainGrant { domains: Vec<String> },
-    /// A sandboxed `bash` call was refused mach-lookup to one or more macOS
-    /// security services (`docs/macos-containment-denial-reporting-design.md`)
-    /// -- the macOS counterpart of [`ApprovalKind::FilesystemDenialRetry`]:
-    /// the call already ran, and the evidence is the kernel's own unified-log
-    /// denial record. A deny forwards `prior_result` as-is; an approve
-    /// records the service set for this session and reruns the SAME call
-    /// still sandboxed. The enforcement behind the grant is nono's
-    /// security-service group as a whole (all-or-nothing -- the seatbelt
-    /// profile has no per-service granularity), which the request's reason
-    /// text states to the approver. The service names here are the
-    /// primitive (`mach-lookup` targets); no resource concept is defined
-    /// over them. Appended last (2026-09-10) so the wire schema's oneOf
-    /// indices for existing variants stay put -- same append-only discipline
-    /// the other persisted enums here follow.
-    MachServiceGrant {
-        services: Vec<String>,
-        prior_result: ToolCallResult,
-    },
-    /// A session asked for a writable area it does not have, before
-    /// anything failed (`docs/sandbox-area-grants-design.md`). Approval
-    /// adds `grants` to this session and nothing is re-run: the point of
-    /// asking first is that there is no failed call to retry. The grants
-    /// are clamped and revalidated exactly as a filesystem-denial retry's
-    /// are, so an over-broad area stays ungrantable. Appended last
-    /// (2026-11-15) for the same append-only reason as
-    /// [`ApprovalKind::MachServiceGrant`].
-    /// A session asked for a writable area it does not have, before
-    /// anything failed (`docs/sandbox-area-grants-design.md`). Approval
-    /// adds `grants` to this session and nothing is re-run: the point of
-    /// asking first is that there is no failed call to retry. The grants
-    /// are clamped and revalidated exactly as a filesystem-denial retry's
-    /// are, so an over-broad area stays ungrantable. Appended last
-    /// (2026-11-15) for the same append-only reason as
-    /// [`ApprovalKind::MachServiceGrant`].
-    SandboxAreaGrant {
-        grants: Vec<horizon_sandbox::FilesystemGrant>,
-        reason: String,
-    },
-    /// A sandboxed `bash` call wrote inside the session's primary checkout
-    /// before the session was allowed to: the sandbox excludes an
-    /// unapproved primary checkout from its own writable root, and no
-    /// filesystem grant narrower than the checkout lifts that exclusion,
-    /// so a `FilesystemDenialRetry` here could never succeed. Approval is
-    /// the session's one primary-checkout approval -- the same one an
-    /// `fs_write`/`fs_edit` there asks for -- and reruns the SAME call,
-    /// still sandboxed; denying forwards `prior_result` as-is. Appended
-    /// last (2026-11-20) for the same append-only reason as
-    /// [`ApprovalKind::MachServiceGrant`].
-    PrimaryCheckoutRetry {
-        root: std::path::PathBuf,
-        prior_result: ToolCallResult,
-    },
 }
 
 impl ApprovalKind {
@@ -972,13 +875,9 @@ impl ApprovalKind {
     /// to retry one; `None` for a kind asked before anything ran.
     pub fn prior_result(&self) -> Option<&ToolCallResult> {
         match self {
-            Self::DomainDenialRetry { prior_result, .. }
-            | Self::FilesystemDenialRetry { prior_result, .. }
-            | Self::MachServiceGrant { prior_result, .. }
-            | Self::PrimaryCheckoutRetry { prior_result, .. } => Some(prior_result),
             // Named rather than `_`, so that a new kind does not compile
             // until it says whether it holds a prior result.
-            Self::Standard | Self::DomainGrant { .. } | Self::SandboxAreaGrant { .. } => None,
+            Self::Standard | Self::DomainGrant { .. } => None,
         }
     }
 }

@@ -23,9 +23,9 @@ happens, and report friction/bugs with evidence.
 session and sends the prompt. The session starts in the issuing
 terminal's directory — its shell's cwd as `horizon-terminald` last
 published it, so a `cd` inside a program running in that shell (e.g. a
-Bash tool call) does not move it — not in a worktree; tier-1 auto-approval applies there (sandboxed `bash`,
-in-root `fs_write`/`fs_edit`), with `.git/` read-only to the sandbox
-(`docs/sandbox-perimeter-design.md`). When a worktree is wanted, have
+Bash tool call) does not move it — not in a worktree; tier-1 auto-approval applies there (`bash`
+contained by Fence, in-root `fs_write`/`fs_edit`), with `.git/hooks` and
+`.git/config` read-only to the sandbox (`docs/sandbox-runtime-design.md`). When a worktree is wanted, have
 the session call the automatic `worktree_enter` tool (e.g. say so in the
 prompt): the worktree (`.horizon/worktrees/<slug>`, branch
 `horizon/<slug>`) branches from the session root's `HEAD`, and the
@@ -76,17 +76,16 @@ command unless the owner asked for exactly that test.
 inside the workspace root and in-root `bash` must produce **no**
 `approval_requested` at all, and their `tool_call_finished.output` must
 carry `auto_approved: true`, `policy_tier: "contained"` (bash also
-`sandboxed: true`). What still asks: a Git metadata write (`git
-commit`, `git add`, ... — a `GitOperation` approval naming the gitdir
-roots, run sandboxed with `hooks/` and `config` still excluded), an
-`fs_write`/`fs_edit` into `.git/`, an `fs` read outside the root, and
-network (a `web_fetch` domain, or a sandboxed bash call whose proxy
-request was denied). A sandboxed bash call refused a path outside the
-root resurfaces as an `approval_requested` for a narrow filesystem
-grant, and the approved retry stays sandboxed. (Known cosmetic
-artifact: the transcript shows two rows for that retry — backlog 55.)
-On a host without a working sandbox, every `bash` call asks and an
-approved one runs once on the host.
+`sandboxed: true`). A session's commits on its own worktree branch stay
+in the sandbox. What still asks: a `bash` call with `outside_sandbox: true`
+(one host execution, judged first), a `bash` call naming `domains` the
+session lacks (opened for that call only), an `fs_write`/`fs_edit` into
+`.git/`, an `fs` read outside the root, and a `web_fetch` domain. A
+contained call the sandbox blocked does not ask by itself: its output says
+"Read-only file system" or shows the proxy's `403` (and `refused_hosts`),
+and the model decides whether to ask again outside the sandbox. On a host
+without a working sandbox (no Fence, or Linux without `bwrap`/`socat`),
+every `bash` call asks and an approved one runs once on the host.
 
 **Inspect the work.** `horizon open-terminal-in-session-directory`
 opens a terminal in the *active* session's directory; or `cd` to the

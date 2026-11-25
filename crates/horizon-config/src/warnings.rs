@@ -37,6 +37,10 @@ const SECTIONS: &[Section] = &[
         name: "grants",
         known_keys: &["project"],
     },
+    Section {
+        name: "sandbox",
+        known_keys: &["fence"],
+    },
 ];
 
 /// Keys a single `[[grants.project]]` entry recognizes. Checked separately
@@ -57,6 +61,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "keybindings",
     "theme",
     "grants",
+    "sandbox",
     "trusted_projects",
     "extensions",
     "layouts",
@@ -253,12 +258,13 @@ mod tests {
     fn warning_allowlists_match_deserialized_fields() {
         use crate::{
             RawConfig, RawGrantsConfig, RawModelPair, RawNamedProviderConfig, RawProjectGrant,
-            RawTerminalConfig, RawUiConfig,
+            RawSandboxConfig, RawTerminalConfig, RawUiConfig,
         };
         for (section, accepted) in [
             ("terminal", accepted_fields::<RawTerminalConfig>()),
             ("ui", accepted_fields::<RawUiConfig>()),
             ("grants", accepted_fields::<RawGrantsConfig>()),
+            ("sandbox", accepted_fields::<RawSandboxConfig>()),
         ] {
             let warning = SECTIONS.iter().find(|entry| entry.name == section).unwrap();
             assert_same_keys(section, warning.known_keys, accepted);

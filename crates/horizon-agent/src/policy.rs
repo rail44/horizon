@@ -45,26 +45,16 @@ pub(crate) enum BoundaryDisposition {
     Human,
 }
 
-/// The per-call trust predicate: pure, conservative, and explicit. `tool_id`
-/// and `input` are the call being classified. Bash input is inspected only
-/// to identify direct Git commands that may write repository metadata;
-/// anything the small recognizer misses remains subject to the sandbox's
-/// normal denial path. `sandbox_available` is whether this host can
-/// actually engage `horizon-sandbox`'s containment (checked, not assumed --
-/// see `horizon_sandbox::is_available`).
+/// The per-call trust predicate: pure, conservative, and explicit, by tool
+/// id. `bash` is decided by [`bash_reach`] from its input instead.
 ///
 /// `fs_write`/`fs_edit` do not run in the OS sandbox; their confinement is
 /// the tool's own workspace-root path check, so sandbox availability does
 /// not affect them. A target inside the repository's gitdir is decided
 /// before this classification (`plan_prepared_call`).
-fn classify_input(tool_id: &str, sandbox_available: bool) -> Classification {
+fn classify_input(tool_id: &str) -> Classification {
     match tool_id {
         "fs_write" | "fs_edit" => Classification::Contained,
-        // A Git metadata write is no longer classified ahead of the run:
-        // the sandbox refuses the metadata and the ordinary denial path
-        // offers the area (`docs/sandbox-area-grants-design.md`).
-        "bash" if sandbox_available => Classification::Contained,
-        "bash" => Classification::AlwaysAsk,
         // Test-only fixture -- see `Classification::BoundaryCrossing`'s doc
         // comment. Not sensitive to `sandbox_available`: a boundary crossing
         // is defined by running outside the containment perimeter.
@@ -141,7 +131,7 @@ pub(crate) fn plan_prepared_call(
 /// What a call to a built-in tool reaches, in one table keyed by tool id.
 pub(crate) fn builtin_reach(tool_state: &ToolSessionState, request: &PreparedCall<'_>) -> Reach {
     let tool_id = request.tool_id.as_str();
-    let sandbox = horizon_sandbox::sandbox_ready();
+    let sandbox = crate::tools::sandbox::ready();
     let permission = crate::tools::permission_for_tool(tool_id);
     let primary_checkout = matches!(tool_id, "fs_write" | "fs_edit")
         .then(|| tool_state.primary_checkout_without_write_access())
@@ -170,7 +160,10 @@ pub(crate) fn builtin_reach(tool_state: &ToolSessionState, request: &PreparedCal
                 (Containment::Inside, None)
             }
         }
-        Some(ToolPermission::RequireApproval) => match classify_input(tool_id, sandbox) {
+        Some(ToolPermission::RequireApproval) if tool_id == "bash" => {
+            bash_reach(tool_state, request, sandbox)
+        }
+        Some(ToolPermission::RequireApproval) => match classify_input(tool_id) {
             Classification::Contained => (Containment::Contained, None),
             Classification::BoundaryCrossing
                 if boundary_input(tool_state, tool_id, &request.input)
@@ -205,11 +198,7 @@ pub(crate) fn builtin_reach(tool_state: &ToolSessionState, request: &PreparedCal
                 } else {
                     Containment::Uncontained
                 },
-                Some(
-                    sandbox_area_approval(tool_state, request).unwrap_or_else(|| {
-                        (standard_approval_reason(request), ApprovalKind::Standard)
-                    }),
-                ),
+                Some((standard_approval_reason(request), ApprovalKind::Standard)),
             ),
         },
         Some(ToolPermission::Deny) | None => (Containment::Uncontained, None),
@@ -222,7 +211,7 @@ pub(crate) fn builtin_reach(tool_state: &ToolSessionState, request: &PreparedCal
         permission,
         containment,
         ask,
-        uncontained_write: writes_without_containment(tool_id, sandbox),
+        uncontained_write: writes_without_containment(tool_id, &request.input, sandbox),
         primary_checkout,
         git_metadata,
     }
@@ -233,19 +222,67 @@ pub(crate) fn builtin_reach(tool_state: &ToolSessionState, request: &PreparedCal
 /// the sandbox, an area request asks for write access itself, and `bash`
 /// with no sandbox to contain it would run on the host. A sandboxed `bash`
 /// call is not among them: it runs with no writable root.
-fn writes_without_containment(tool_id: &str, sandbox_available: bool) -> bool {
-    match tool_id {
-        "fs_write" | "fs_edit" | "request_sandbox_area" => true,
-        "bash" => !sandbox_available,
+fn writes_without_containment(tool_id: &str, input: &ToolInput, sandbox_available: bool) -> bool {
+    match (tool_id, input) {
+        ("fs_write" | "fs_edit", _) => true,
+        ("bash", ToolInput::Bash(input)) => input.outside_sandbox || !sandbox_available,
+        ("bash", _) => !sandbox_available,
         _ => false,
     }
 }
 
+/// What a `bash` call reaches (`docs/sandbox-runtime-design.md`, "The
+/// failure path"): contained when the sandbox is ready and the call asks for
+/// nothing more; the host, asked for, when it asks to run outside the sandbox
+/// or there is no sandbox; contained but with hosts beyond the session's
+/// domains, asked for, when it names some.
+fn bash_reach(
+    tool_state: &ToolSessionState,
+    request: &PreparedCall<'_>,
+    sandbox_available: bool,
+) -> (Containment, Option<(String, ApprovalKind)>) {
+    let ToolInput::Bash(input) = &request.input else {
+        return (
+            Containment::Uncontained,
+            Some((standard_approval_reason(request), ApprovalKind::Standard)),
+        );
+    };
+    if input.outside_sandbox || !sandbox_available {
+        return (
+            Containment::Uncontained,
+            Some((standard_approval_reason(request), ApprovalKind::Standard)),
+        );
+    }
+    let domains: Vec<String> = input
+        .domains
+        .iter()
+        .filter(|domain| !tool_state.is_domain_allowed(domain))
+        .cloned()
+        .collect();
+    if domains.is_empty() {
+        return (Containment::Contained, None);
+    }
+    (
+        Containment::CrossesBoundary { allowed: false },
+        Some((
+            format!(
+                "`bash` asks to reach {} for this one call, from inside the sandbox. \
+                 Allow it?",
+                domains
+                    .iter()
+                    .map(|domain| format!("`{domain}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ApprovalKind::DomainGrant { domains },
+        )),
+    )
+}
+
 fn standard_approval_reason(request: &ToolCallRequest) -> String {
     if request.tool_id == "bash" {
-        "`bash` requested approval to run this call once outside Horizon's filesystem, network, \
-         and process sandbox with the host process's ordinary authority. Later calls start \
-         sandboxed again."
+        "`bash` requested approval to run this call once outside the sandbox, with the host \
+         process's ordinary authority. Later calls run sandboxed again."
             .to_string()
     } else {
         format!(
@@ -254,58 +291,6 @@ fn standard_approval_reason(request: &ToolCallRequest) -> String {
         )
     }
 }
-/// A session asking for a writable area (`request_sandbox_area`,
-/// `docs/sandbox-area-grants-design.md`). The tool grants nothing itself:
-/// its whole effect is this candidate, so the approval boundary stays where
-/// every other one is.
-///
-/// The area is clamped exactly as a filesystem-denial retry's is -- the
-/// same `revalidate_grant` that refuses `$HOME`, `/`, and the system roots
-/// -- and carries the same Git metadata exclusion, so asking for a
-/// repository's directory never opens `hooks`/`config` (board #38).
-fn sandbox_area_approval(
-    tool_state: &ToolSessionState,
-    request: &PreparedCall<'_>,
-) -> Option<(String, ApprovalKind)> {
-    let ToolInput::RequestSandboxArea(input) = &request.input else {
-        return None;
-    };
-    let path = std::path::Path::new(&input.path);
-    let mut grants = vec![horizon_sandbox::FilesystemGrant {
-        path: path.to_path_buf(),
-        access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-        scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-        excluded_subpaths: Vec::new(),
-    }];
-    crate::tools::exclude_git_metadata(&mut grants, tool_state.workspace_root());
-    Some(match horizon_sandbox::revalidate_grant(&grants[0]) {
-        Ok(()) => (
-            format!(
-                "The session asked for write access to {}: {}. Grant it for the rest of this \
-                 session?",
-                path.display(),
-                input.reason
-            ),
-            ApprovalKind::SandboxAreaGrant {
-                grants,
-                reason: input.reason.clone(),
-            },
-        ),
-        Err(error) => (
-            format!(
-                "The session asked for write access to {} ({}), which cannot be granted: \
-                 {error}. Approval will fail closed.",
-                path.display(),
-                input.reason
-            ),
-            ApprovalKind::SandboxAreaGrant {
-                grants: Vec::new(),
-                reason: input.reason.clone(),
-            },
-        ),
-    })
-}
-
 #[cfg(test)]
 pub(crate) fn plan_tool_call(state: &ToolSessionState, request: &ToolCallRequest) -> ToolPlan {
     match PreparedCall::new(request) {
@@ -315,8 +300,25 @@ pub(crate) fn plan_tool_call(state: &ToolSessionState, request: &ToolCallRequest
 }
 
 #[cfg(test)]
-fn classify_call(id: &str, _input: &Value, sandbox: bool) -> Classification {
-    classify_input(id, sandbox)
+fn classify_call(id: &str, _input: &Value, _sandbox: bool) -> Classification {
+    classify_input(id)
+}
+
+/// What a `bash` call with `input` reaches, with the sandbox ready or not.
+#[cfg(test)]
+fn bash_reach_of(
+    state: &ToolSessionState,
+    input: Value,
+    sandbox: bool,
+) -> (Containment, Option<(String, ApprovalKind)>) {
+    let request = ToolCallRequest {
+        call_id: crate::contract::ToolCallId("call-bash".into()),
+        tool_id: "bash".into(),
+        input: input.into(),
+        occurrence_id: crate::contract::OccurrenceId("call-bash".into()),
+    };
+    let prepared = PreparedCall::new(&request).expect("valid bash input");
+    bash_reach(state, &prepared, sandbox)
 }
 
 #[cfg(test)]
@@ -363,51 +365,74 @@ mod tests {
             ),
         };
         let reason = standard_approval_reason(&request);
-        assert!(reason.contains("filesystem, network, and process sandbox"));
+        assert!(reason.contains("outside the sandbox"));
         assert!(reason.contains("host process's ordinary authority"));
-        assert!(reason.contains("Later calls start sandboxed again"));
+        assert!(reason.contains("Later calls run sandboxed again"));
     }
 
     #[test]
-    fn bash_is_contained_exactly_when_the_sandbox_is_available() {
-        let input = serde_json::json!({ "command": "echo hi" });
-        assert_eq!(
-            classify_call("bash", &input, true),
-            Classification::Contained
-        );
-        assert_eq!(
-            classify_call("bash", &input, false),
-            Classification::AlwaysAsk,
-            "no engaged sandbox must never silently degrade to auto-approve"
-        );
-    }
-
-    #[test]
-    fn a_git_command_is_no_longer_classified_by_what_it_writes() {
-        // Before area grants, a command that would write Git metadata was
-        // guessed up front and asked about. It is now contained like any
-        // other: what it may not write is the sandbox's answer, and the
-        // session asks for the area it needs
-        // (`docs/sandbox-area-grants-design.md`).
-        for command in [
-            "git add src/lib.rs && git commit -m change",
-            "git status --short && git diff --stat",
-        ] {
-            assert_eq!(
-                classify_call("bash", &serde_json::json!({ "command": command }), true),
-                Classification::Contained,
-                "{command}"
-            );
+    fn bash_is_contained_exactly_when_the_sandbox_is_ready_and_nothing_more_is_asked() {
+        let state = ToolSessionState::new(std::env::temp_dir());
+        for command in ["echo hi", "git add src/lib.rs && git commit -m change"] {
+            let (containment, ask) =
+                bash_reach_of(&state, serde_json::json!({ "command": command }), true);
+            assert_eq!(containment, Containment::Contained, "{command}");
+            assert_eq!(ask, None);
         }
-        // Without an engaged sandbox there is nothing to contain it.
+        let (containment, ask) =
+            bash_reach_of(&state, serde_json::json!({ "command": "echo hi" }), false);
         assert_eq!(
-            classify_call(
-                "bash",
-                &serde_json::json!({ "command": "git commit -m change" }),
-                false,
-            ),
-            Classification::AlwaysAsk
+            containment,
+            Containment::Uncontained,
+            "no ready sandbox must never silently degrade to auto-approve"
         );
+        assert_eq!(ask.map(|(_, kind)| kind), Some(ApprovalKind::Standard));
+    }
+
+    #[test]
+    fn a_bash_call_outside_the_sandbox_asks_for_one_host_execution() {
+        let state = ToolSessionState::new(std::env::temp_dir());
+        let (containment, ask) = bash_reach_of(
+            &state,
+            serde_json::json!({ "command": "cargo publish", "outside_sandbox": true }),
+            true,
+        );
+        assert_eq!(containment, Containment::Uncontained);
+        let (reason, kind) = ask.expect("asks");
+        assert_eq!(kind, ApprovalKind::Standard);
+        assert!(reason.contains("outside the sandbox"), "{reason}");
+    }
+
+    #[test]
+    fn hosts_a_bash_call_names_are_asked_for_unless_the_session_has_them() {
+        let state = ToolSessionState::new(std::env::temp_dir());
+        state.allow_domain("crates.io");
+        let (containment, ask) = bash_reach_of(
+            &state,
+            serde_json::json!({ "command": "cargo fetch", "domains": ["crates.io"] }),
+            true,
+        );
+        assert_eq!(containment, Containment::Contained);
+        assert_eq!(ask, None);
+
+        let (containment, ask) = bash_reach_of(
+            &state,
+            serde_json::json!({
+                "command": "cargo fetch",
+                "domains": ["crates.io", "static.example.com"],
+            }),
+            true,
+        );
+        assert_eq!(containment, Containment::CrossesBoundary { allowed: false });
+        let (reason, kind) = ask.expect("asks");
+        assert_eq!(
+            kind,
+            ApprovalKind::DomainGrant {
+                domains: vec!["static.example.com".into()],
+            },
+            "only the hosts the session lacks are asked for"
+        );
+        assert!(reason.contains("for this one call"), "{reason}");
     }
 
     #[test]
@@ -591,15 +616,26 @@ mod tests {
         std::assert_matches!(read(&not_spill), ToolPlan::Approval(_));
         assert_eq!(read(&spill), ToolPlan::Automatic);
 
-        tool_state
-            .approve_filesystem_grants(&[horizon_sandbox::FilesystemGrant {
+        let tool_state = crate::tools::ToolSessionBuilder::new(root.path().canonicalize().unwrap())
+            .with_filesystem_grants(vec![horizon_sandbox::FilesystemGrant {
                 path: outside.path().to_path_buf(),
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
                 excluded_subpaths: Vec::new(),
             }])
-            .unwrap();
-        assert_eq!(read(&target), ToolPlan::Automatic);
+            .build();
+        assert_eq!(
+            plan_tool_call(
+                &tool_state,
+                &ToolCallRequest {
+                    call_id: crate::contract::ToolCallId("call-read".into()),
+                    tool_id: "fs_read".into(),
+                    input: serde_json::json!({ "path": target }).into(),
+                    occurrence_id: crate::contract::OccurrenceId("call-read".into()),
+                },
+            ),
+            ToolPlan::Automatic
+        );
         let _ = std::fs::remove_file(spill);
     }
 
@@ -660,10 +696,10 @@ mod tests {
 
     #[test]
     fn bash_without_an_engaged_sandbox_falls_to_the_host_execution_approval() {
-        if horizon_sandbox::is_available() {
+        if crate::tools::sandbox::ready() {
             // `plan_prepared_call` reads the live host's sandbox; the pure
             // half of this fallback is `bash_is_contained_exactly_when_the_
-            // sandbox_is_available`.
+            // sandbox_is_ready_and_nothing_more_is_asked`.
             return;
         }
         let tool_state = ToolSessionState::new(std::env::temp_dir());
@@ -723,8 +759,8 @@ mod tests {
                 ]}),
             ),
             (
-                "request_sandbox_area",
-                serde_json::json!({"path": root_path, "reason": "build here"}),
+                "bash",
+                serde_json::json!({"command": "cargo build", "outside_sandbox": true}),
             ),
         ] {
             let ToolPlan::Reject(output) = plan(tool_id, input) else {
@@ -744,86 +780,36 @@ mod tests {
     }
 
     /// A sandboxed `bash` call keeps running for a session that may not
-    /// write -- its sandbox has no writable root -- while one with no
-    /// sandbox to contain it would run on the host, and is refused.
+    /// write -- its sandbox has nothing writable -- while one outside the
+    /// sandbox would run on the host, and is refused.
     #[test]
-    fn bash_writes_without_containment_exactly_when_no_sandbox_contains_it() {
-        assert!(!writes_without_containment("bash", true));
-        assert!(writes_without_containment("bash", false));
-        for tool_id in ["fs_write", "fs_edit", "request_sandbox_area"] {
-            assert!(writes_without_containment(tool_id, true), "{tool_id}");
+    fn bash_writes_without_containment_exactly_when_it_runs_outside_the_sandbox() {
+        let bash = |json: Value| {
+            let request = ToolCallRequest {
+                call_id: crate::contract::ToolCallId("call-bash".into()),
+                tool_id: "bash".into(),
+                input: json.into(),
+                occurrence_id: crate::contract::OccurrenceId("call-bash".into()),
+            };
+            PreparedCall::new(&request).unwrap().input.clone()
+        };
+        let contained = bash(serde_json::json!({ "command": "ls" }));
+        let outside = bash(serde_json::json!({ "command": "ls", "outside_sandbox": true }));
+        assert!(!writes_without_containment("bash", &contained, true));
+        assert!(writes_without_containment("bash", &contained, false));
+        assert!(writes_without_containment("bash", &outside, true));
+        for tool_id in ["fs_write", "fs_edit"] {
+            assert!(
+                writes_without_containment(tool_id, &ToolInput::External, true),
+                "{tool_id}"
+            );
         }
         for tool_id in ["fs_read", "web_fetch", "board_update", "task"] {
-            assert!(!writes_without_containment(tool_id, false), "{tool_id}");
+            assert!(
+                !writes_without_containment(tool_id, &ToolInput::External, false),
+                "{tool_id}"
+            );
         }
-    }
-
-    #[test]
-    fn a_sandbox_area_request_plans_an_approval_that_grants_nothing_itself() {
-        let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let tool_state = ToolSessionState::new(root.path().to_path_buf());
-        let plan = plan_tool_call(
-            &tool_state,
-            &ToolCallRequest {
-                call_id: crate::contract::ToolCallId("call-area".into()),
-                tool_id: "request_sandbox_area".into(),
-                input: serde_json::json!({
-                    "path": outside.path().display().to_string(),
-                    "reason": "finish the integration in the shared checkout",
-                })
-                .into(),
-                occurrence_id: crate::contract::OccurrenceId("call-area".into()),
-            },
-        );
-        let ToolPlan::Approval(approval) = plan else {
-            panic!("an area request must ask, got {plan:?}");
-        };
-        let ApprovalKind::SandboxAreaGrant { grants, reason } = &approval.kind else {
-            panic!("expected an area grant, got {:?}", approval.kind);
-        };
-        assert_eq!(grants.len(), 1);
-        assert_eq!(
-            grants[0].path,
-            outside.path().canonicalize().unwrap(),
-            "the area is the one asked for, canonicalized"
-        );
-        assert_eq!(
-            grants[0].access,
-            horizon_sandbox::FilesystemGrantAccess::ReadWrite
-        );
-        assert!(reason.contains("shared checkout"), "the reason is carried");
-        assert!(
-            approval.reason.contains("for the rest of this session"),
-            "the prompt says what approval buys: {}",
-            approval.reason
-        );
-    }
-
-    #[test]
-    fn an_area_too_broad_to_grant_asks_but_fails_closed() {
-        let root = tempfile::tempdir().unwrap();
-        let tool_state = ToolSessionState::new(root.path().to_path_buf());
-        let plan = plan_tool_call(
-            &tool_state,
-            &ToolCallRequest {
-                call_id: crate::contract::ToolCallId("call-home".into()),
-                tool_id: "request_sandbox_area".into(),
-                input: serde_json::json!({"path": "/", "reason": "everything"}).into(),
-                occurrence_id: crate::contract::OccurrenceId("call-home".into()),
-            },
-        );
-        let ToolPlan::Approval(approval) = plan else {
-            panic!("an unclampable area still asks, and then fails closed");
-        };
-        let ApprovalKind::SandboxAreaGrant { grants, .. } = &approval.kind else {
-            panic!("expected an area grant, got {:?}", approval.kind);
-        };
-        assert!(
-            grants.is_empty(),
-            "an over-broad area buys nothing: {grants:?}"
-        );
-        assert!(approval.reason.contains("cannot be granted"));
     }
 
     #[test]

@@ -110,27 +110,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # `usage_error_exits_with_code_two` -- don't bind and would pass, but ride along
 # with the whole integration binary; the full gate covers them.)
 #
-# Linux helper authenticated-report transport --
-# `(binary_id(horizon-sandbox-runtime) & test(/^report::tests::/))`. Both tests
-# create the production `SOCK_SEQPACKET` Unix socketpair used between Horizon
-# and the sandbox helper. The outer sandbox refuses that `socketpair` with
-# EPERM; the integrator's full gate exercises the credential-authenticated
-# round trip outside containment.
-#
-# The sandbox runtime -- `binary_id(horizon-sandbox::fence)` starts the real
-# `fence` binary, whose bubblewrap cannot create its namespaces inside another
-# sandbox.
-#
-# The sandbox's own boundary enforcer -- `binary_id(horizon-sandbox::linux_supervised_helper)`
-# and `(binary_id(horizon-sandbox-proxy) & test(/^tests::/))`.
-# `linux_supervised_helper` spawns a real `horizon-sandbox-helper` that installs
-# a combined seccomp listener -- under the outer sandbox that fails with EBUSY
-# (a sandbox cannot nest another sandbox under itself); several cases
-# additionally bind a TCP proxy endpoint the sandbox refuses.
-# `horizon-sandbox-proxy` `tests::*` bind a real loopback TCP origin/proxy the
-# sandbox denies (Permission denied on `127.0.0.1:0`). Scoped to `tests::*`
-# because the crate's `allowlist::tests`/`handler::tests` are pure logic and
-# pass under containment.
+# The sandbox runtime -- `binary_id(horizon-sandbox::fence)`,
+# `test(/^tools::tests::bash_auto_executes_sandboxed/)` and
+# `test(/^tools::bash::tests::a_contained_call_reports_the_directory_it_moved_to$/)`
+# start the real `fence` binary, whose bubblewrap cannot create its
+# namespaces inside another sandbox.
 #
 # Exa adapter loopback mock -- `test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)`. Spawns a loopback TCP mock server (`127.0.0.1:0`) for the
 # adapter to talk to; the sandbox denies loopback binds, so it fails at
@@ -145,24 +129,6 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # session's (deep) worktree and `bind()` fails with `InvalidInput` before the
 # sandbox is even consulted. Raising SIGTERM at itself is fine under
 # containment; only the socket is.
-#
-# `suggest_grants` system-root assumption --
-# `test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants/)`. Relies on two `temp_dir` siblings sharing only a system root as their common
-# ancestor (so no honest shared tree exists and per-attempt grants are
-# returned). Under containment $TMPDIR lives under the workspace, so the
-# siblings' common ancestor is a normal directory and `suggest_grants`
-# (correctly) offers it as one shared `DirectoryTree` grant -- the
-# `grants.len() >= 2` assertion then fails. The logic is right; the test needs
-# $TMPDIR to be /tmp (system-rooted), which containment cannot provide. Same
-# family as the `outside_a_*_repository` skips (needs a dir outside the repo).
-#
-# `loopback_connect` boundary tests -- `test(/^loopback_connect_grant_/)` in
-# `binary_id(horizon-sandbox::linux_supervised_helper)`. These spawn a real
-# sandboxed helper, bind real loopback TCP listeners, and assert the
-# seccomp-notify enforcement layer connects to the granted endpoint while
-# denying non-granted ports and all binds. Under containment the sandbox
-# cannot nest another sandbox (EBUSY) and the loopback binds are refused --
-# the integrator's full gate runs them outside containment.
 #
 # macOS setuid-exec denial --
 # `test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)`.
@@ -226,18 +192,8 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # The decision client's loopback tests (`decision::client::tests::loopback_`)
 # bind a `127.0.0.1:0` System One mock to inspect the real POST; the sandbox
 # denies loopback binds.
-# `an_area_grant_over_a_plain_checkout` spawns a real sandboxed helper for
-# an approved area grant that lets a git commit write metadata, like
-# `an_area_grant_over_a_linked_worktree`; a sandbox cannot nest another one
-# under itself. (These were the `approved_git_commit_*` tests before area
-# grants replaced the GitOperation approval -- renaming them without renaming
-# these filters silently moves them back into the profile.)
-# `a_bash_write_in_an_unapproved_primary_checkout_asks_for_the_checkout_and_then_writes`
-# runs a real sandboxed bash twice -- refused in an unapproved primary
-# checkout, then retried once the checkout is approved -- and a sandbox
-# cannot nest another one under itself.
 # `worktree::tests::a_session_commits_in_its_own_worktree_and_reaches_no_other_branch`
-# runs git under the real sandbox to see a session commit in its own
+# runs git under the real sandbox runtime to see a session commit in its own
 # worktree and reach no other branch; a sandbox cannot nest another one.
 # The shell's view tests that show a terminal (`horizon::terminal`,
 # `horizon::workspace`, `horizon::preview`, `horizon::extension`,
@@ -258,24 +214,14 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.sandboxed]
 default-filter = '''
     not (
-        binary_id(horizon-agent::tier1_network_containment)
-        + binary_id(horizon-agentd::e2e)
+        binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
         + binary_id(horizon-logd::e2e)
         + binary_id(horizon::terminald)
         + binary_id(horizon::agentd)
         + binary_id(horizon::board_logd)
         + (binary_id(horizon-shell-runtime) & test(/^tests::/))
-        + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
-        + test(/^tools::tests::tier1_sandboxed_bash/)
-        + test(/^tools::tests::a_configured_grant_makes_an_out_of_workspace_write/)
-        + test(/^tools::tests::an_area_grant_over_a_linked_worktree/)
-        + test(/^tools::tests::an_area_grant_over_linked_metadata/)
-        + test(/^tools::tests::an_area_grant_over_a_plain_checkout/)
-        + test(/^tools::tests::judge_approved_filesystem_retry_reruns_sandboxed/)
-        + test(/^tools::tests::an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded/)
-        + test(/^tools::tests::a_bash_write_in_an_unapproved_primary_checkout_asks_for_the_checkout/)
         + test(/^worktree::tests::a_session_commits_in_its_own_worktree/)
         + test(/^session::setup::tests::isolation_announcement::/)
         + test(/^worktree::tests::create_isolated_worktree_branches/)
@@ -288,20 +234,16 @@ default-filter = '''
         + binary_id(horizon::extension)
         + binary_id(horizon::status_bar)
         + test(/^host::listener::tests::/)
-        + (binary_id(horizon-sandbox-runtime) & test(/^report::tests::/))
         + binary_id(horizon-sandbox::fence)
-        + binary_id(horizon-sandbox::linux_supervised_helper)
-        + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
+        + test(/^tools::bash::tests::a_contained_call_reports_the_directory_it_moved_to$/)
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
         + test(/^providers::rig::completion::tests::provider_wire_/)
         + test(/^decision::client::tests::loopback_/)
         + test(/^judge::client::tests::auxiliary_clients_keep_their_selected_endpoint_and_credentials$/)
         + test(/^providers::rig::session::turn::tests::cap_summary_request_disables_tools_without_changing_session_config$/)
         + test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing|a_listing_without_limits_defers_to_the_catalog)$/)
-        + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
         + test(/process_table_snapshot_is_available$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
-        + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
         + test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^milestone::git::tests::(actual_changed_paths_must_fit_the_declared_scope|dirty_main_and_changed_candidates_are_preserved|main_advancing_requires_new_combined_verification_and_merge_is_recoverable)$/))
         + test(/^providers::rig::session::continuation::tests::(a_confident_model_answer_continues_the_turn_once_without_ending_it|continuations_stop_at_the_per_turn_cap|client_errors_and_timeouts_hand_back_with_a_fallback_reason|a_model_answer_below_the_threshold_hands_back|a_user_answer_hands_back|a_pending_stop_or_queued_addition_is_left_to_the_turn_loop|no_request_without_a_check_or_with_an_empty_reply)$/)

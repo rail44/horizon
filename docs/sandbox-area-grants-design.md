@@ -1,5 +1,7 @@
 # Sandbox Area Grants
 
+> Superseded 2026-11-25 by `docs/sandbox-runtime-design.md`: `request_sandbox_area` and area grants are gone. Kept as the record of the earlier design.
+
 Status: proposed 2026-11-15, owner decision (a): the main checkout becomes
 writable through an approved area grant, not by a special case. Supersedes
 `ApprovalKind::GitOperation`'s up-front derivation as the *primary* way a

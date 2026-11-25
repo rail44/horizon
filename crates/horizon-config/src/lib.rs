@@ -85,6 +85,9 @@ pub struct RawConfig {
     /// this is user-owned config rather than anything the repository or
     /// the approval flow can write.
     pub grants: RawGrantsConfig,
+    /// `[sandbox]`: the runtime the agent's `bash` calls are contained by.
+    /// See [`RawSandboxConfig`].
+    pub sandbox: RawSandboxConfig,
     /// `trusted_projects`: absolute repository toplevels whose repository
     /// content (`.horizon/skills/` skills, `AGENTS.md`/`CLAUDE.md`
     /// instructions) an agent session may load into its system prompt. A
@@ -114,6 +117,32 @@ impl RawConfig {
     pub fn layout(&self, name: &str) -> Result<Layout, String> {
         let value = (self.layouts.get(name)).ok_or_else(|| format!("no layout `{name}`"))?;
         Layout::read(value).map_err(|error| format!("the layout `{name}`: {error}"))
+    }
+}
+
+/// `[sandbox]`: the runtime the agent's `bash` calls are contained by
+/// (`docs/sandbox-runtime-design.md`). Read when `horizon-agentd` starts.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RawSandboxConfig {
+    /// The `fence` binary. `None`: `fence` as found on `PATH`, which a
+    /// Horizon started from a desktop entry may not have Homebrew's
+    /// directory on. A leading `~/` is expanded against `$HOME`.
+    pub fence: Option<String>,
+}
+
+impl RawSandboxConfig {
+    /// The configured `fence` path, `~/` expanded; `None` when unset.
+    pub fn fence_path(&self) -> Option<PathBuf> {
+        let fence = self.fence.as_deref()?.trim();
+        if fence.is_empty() {
+            return None;
+        }
+        Some(match fence.strip_prefix("~/") {
+            Some(rest) => horizon_sandbox::home_dir()
+                .map_or_else(|| PathBuf::from(fence), |home| home.join(rest)),
+            None => PathBuf::from(fence),
+        })
     }
 }
 

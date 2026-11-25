@@ -1039,7 +1039,6 @@ fn system_prompt_carries_tool_policy() {
     let lower = prompt.to_ascii_lowercase();
     assert!(lower.contains("absolute path"));
     assert!(prompt.contains("$TMPDIR"));
-    assert!(prompt.contains("sandboxed calls do not rely on literal /tmp being writable"));
     assert!(
         !lower.contains("retry"),
         "the retry nudge is not part of the prompt: {prompt}"

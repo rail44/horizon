@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::tools::network::Allowlist;
 use crate::tools::output::Response;
 use crossbeam_channel::Sender;
 use futures_util::FutureExt;
-use horizon_sandbox_proxy::Allowlist;
 use reqwest::Url;
 
 use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallIdentity};

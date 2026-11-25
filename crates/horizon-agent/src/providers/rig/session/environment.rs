@@ -10,7 +10,7 @@ use crate::contract::{Command, Event};
 
 impl SessionLoopState {
     pub(super) async fn activate_environment(&mut self) {
-        horizon_sandbox::reprobe_sandbox();
+        crate::tools::sandbox::reprobe();
         while !self.has_pending_stop() {
             let Some(base) = self.activation.pop_front() else {
                 break;

@@ -327,20 +327,34 @@ magenta = "#c678dd"
 cyan = "#56b6c2"
 
 # ---------------------------------------------------------------------------
+# [sandbox] — the runtime an agent session's `bash` calls are contained by
+# (docs/sandbox-runtime-design.md). Horizon uses Fence
+# (https://github.com/fencesandbox/fence), installed by you: Homebrew on
+# macOS, the release binary or `go install` on Linux, where it also needs
+# `bwrap` and `socat`. A contained call writes only its workspace (not its
+# `.git/hooks` or `.git/config`) and a private temporary directory, and
+# reaches only the session's allowed hosts; anything more is a call outside
+# the sandbox, which the judge and then you approve.
+#
+#   fence — the `fence` binary. Unset: `fence` on PATH, which a Horizon
+#           started from a desktop entry may not have Homebrew's directory
+#           on. A leading "~/" is expanded against $HOME.
+#
+# Read when horizon-agentd starts: "Reload Agent Runtime" picks a change up.
+# Without a working runtime every `bash` call asks to run outside a sandbox.
+# [sandbox]
+# fence = "/opt/homebrew/bin/fence"
+
+# ---------------------------------------------------------------------------
 # [grants] — per-project filesystem trees and network destinations agent
 # sessions start with.
 #
-# An agent session's `bash` runs sandboxed: its own isolated worktree is
-# writable and everything else is not. That is right for the session's own
-# edits, but a build toolchain reaches well outside it on essentially every
-# invocation (package caches, lock files, shared build directories), and
-# those paths differ from run to run — so a session that has to ask for each
-# one stalls unpredictably instead of finishing.
-#
-# A [[grants.project]] entry says, once, which directories developing THIS
-# project legitimately writes to. Sessions of that project start with those
-# trees already writable, so reaching them is no longer a boundary crossing
-# and never produces an approval prompt.
+# A contained `bash` call writes only its workspace. A build toolchain
+# reaches outside it on essentially every invocation (package caches, lock
+# files, compile caches), so a [[grants.project]] entry says, once, which
+# directories developing THIS project legitimately writes to, and which
+# hosts it reaches. Sessions of that project start with them, and reaching
+# them never asks.
 #
 #   root  — the project's main-repository toplevel (the directory `git
 #           rev-parse --show-toplevel` reports). A session working in an
@@ -350,48 +364,31 @@ cyan = "#56b6c2"
 #           parent directory does NOT cover the projects beneath it.
 #   trees — directories granted read-write, recursively. A leading "~/" is
 #           expanded against $HOME.
-#   network — network destinations a sandboxed session of this project may
-#           reach beyond the empty runtime-approval default, dispatched by
-#           shape (owner decision 2026-08-02, replacing the short-lived
-#           loopback_connect key with no compatibility alias):
-#             - An entry that parses as "ip:port" (e.g. "127.0.0.1:4226") is
-#               a direct-connect endpoint, alongside the session's own
-#               domain proxy. Matched by full ip:port equality (never a
-#               looser is_loopback rule), so a same-port decoy on another
-#               loopback address stays denied. Only IPv4 loopback
-#               (127.0.0.0/8) with a non-zero port is accepted; IPv6 and
-#               non-loopback ip:port entries are refused. The connect is
-#               performed by the unsandboxed supervisor on a duplicated
-#               child socket (TOCTOU-safe): granting an endpoint means the
-#               session talks to that host-local service outside its own
-#               containment -- an explicit decision, not an accident.
-#               (A compile-cache daemon on 127.0.0.1:4226 was the original
-#               motivating use; the mechanism is service-agnostic.)
-#             - Anything else is a domain name, pre-seeded into the
-#               session's network-proxy allowlist so a sandboxed `bash` call
-#               reaching it is never a boundary crossing either -- no
-#               judge/approval round trip needed. The runtime
-#               approve-on-denial flow still applies for any domain not
-#               listed here.
+#   network — what a contained call of this project may reach, by shape:
+#             - "ip:port" with an IPv4 loopback address and a non-zero port
+#               (e.g. "127.0.0.1:4226"): a service on this machine, by port.
+#             - Anything else is a domain name ("crates.io",
+#               "*.example.com") its proxy lets through. A host not listed
+#               is refused; a call names one it needs in its `domains`,
+#               approved for that call only.
+#   mach_services — macOS only: services a contained call may look up
+#           (Fence's `macos.mach.lookup`).
 #
 # Refused with a warning on stderr (and ignored): a tree that is $HOME
 # itself, "/", or a system directory such as /usr, /etc, /var, /tmp; a
 # network entry shaped like "ip:port" that is not an IPv4 loopback address
 # with a non-zero port; or a network entry that looks like a URL, contains
-# "/", or contains whitespace. Those would put the sandbox's whole purpose
-# inside the grant, or silently fail to mean the domain name it looks like.
+# "/", or contains whitespace.
 #
-# This lives here, in YOUR config file, and deliberately not in the
-# repository: a tracked project file would let a repository you cloned widen
-# its own authority the moment you opened an agent session in it. Nothing in
-# Horizon writes this section for you — the approval flow can add a grant to
-# a running session, but only you can make one persistent. Keep the list
-# short and deliberate; a tree grant includes any tool configuration living
-# inside it, which can influence later runs of that tool.
+# This lives here, in YOUR config file, and not in the repository: a tracked
+# project file would let a repository you cloned widen its own authority the
+# moment you opened an agent session in it. Nothing in Horizon writes this
+# section for you. Keep the list short and deliberate; a tree grant includes
+# any tool configuration living inside it, which can influence later runs of
+# that tool.
 #
 # Applied at session spawn only. Existing sessions keep the grants they
-# started with; "Reload Agent Runtime" picks changes up for new ones —
-# same lifecycle as [provider].
+# started with; "Reload Agent Runtime" picks changes up for new ones.
 #
 # Commented out: there is no built-in default, and an active entry here
 # would grant real access to anyone who copied this file verbatim.

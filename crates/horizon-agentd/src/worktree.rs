@@ -144,15 +144,8 @@ fn repo_root_from_common_dir(common_dir: &Path) -> Result<PathBuf, String> {
 /// `/.horizon` `.gitignore` entry -- but via `.git/info/exclude` rather than
 /// editing the target repo's tracked `.gitignore`, since agentd has no
 /// business committing a change to a file the repo's own history owns.
-/// Also excludes `horizon_sandbox::SCRATCH_DIR_NAME` (the TMPDIR-parity
-/// scratch directory a sandboxed bash tool provisions under its first
-/// writable root -- for an isolated agent session that root is this very
-/// worktree, so any leftover scratch file would otherwise show up as
-/// untracked clutter too, and worse, make `remove_worktree_if_clean` refuse
-/// to remove an otherwise-clean worktree). Never fails the worktree creation
-/// itself: an ignore-file write is a nicety, not a correctness requirement
-/// -- `remove_worktree_if_clean` pre-deletes the scratch dir itself before
-/// removal, so a failed write here doesn't block cleanup.
+/// Never fails the worktree creation itself: an ignore-file write is a
+/// nicety, not a correctness requirement.
 fn ensure_horizon_ignored(common_dir: &Path) {
     let Ok(repo_root) = repo_root_from_common_dir(common_dir) else {
         return;
@@ -168,16 +161,6 @@ fn ensure_horizon_ignored(common_dir: &Path) {
             content.push('\n');
         }
         content.push_str("/.horizon\n");
-        changed = true;
-    }
-
-    let scratch_pattern = format!("/{}/", horizon_sandbox::SCRATCH_DIR_NAME);
-    if !content.lines().any(|line| line.trim() == scratch_pattern) {
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str(&scratch_pattern);
-        content.push('\n');
         changed = true;
     }
 
@@ -291,8 +274,10 @@ fn session_branch(slug: &str) -> String {
 /// store. The gitdir's `config.worktree`, `commondir` and `gitdir` stay
 /// unwritable -- the first can set `core.hooksPath`, the other two point
 /// Git elsewhere -- as do the repository's `hooks` and `config`, which no
-/// grant here covers. Empty for a worktree made before its branch had a
-/// directory of its own, or one whose layout does not check out.
+/// grant here covers. A sandbox keeps a path read-only by mounting over it,
+/// so an absent `config.worktree` is created empty first: an empty one sets
+/// nothing. Empty for a worktree made before its branch had a directory of
+/// its own, or one whose layout does not check out.
 pub(crate) fn own_metadata_grants(
     worktree: &Path,
     session_id: Uuid,
@@ -323,6 +308,10 @@ fn own_metadata_grants_checked(
     }
     let reflog = common.join("logs/refs/heads/horizon").join(&slug);
     std::fs::create_dir_all(&reflog).ok()?;
+    let config_worktree = gitdir.join("config.worktree");
+    if !config_worktree.exists() {
+        std::fs::write(&config_worktree, "").ok()?;
+    }
     let tree = |path: PathBuf, excluded: &[&str]| {
         Some(FilesystemGrant {
             path: std::fs::canonicalize(path).ok()?,
@@ -421,26 +410,10 @@ pub(crate) fn adopt_isolated_worktree(
 /// own (without `--force`), which is exactly "no uncommitted changes", so
 /// this doesn't duplicate that check with a hand-rolled `git status` parse.
 /// The branch itself is never deleted either way.
-///
-/// Before asking git, best-effort deletes `horizon_sandbox::SCRATCH_DIR_NAME`
-/// under `info.path`: a sandboxed bash tool provisions that directory as its
-/// TMPDIR-parity scratch space (see `horizon-sandbox::linux::spawn`), and for
-/// an isolated agent session the worktree itself is the first writable root,
-/// so any leftover scratch file makes `git worktree remove` measurably
-/// refuse ("contains modified or untracked files") on an otherwise-clean
-/// worktree. `ensure_horizon_ignored`'s exclude entry for this same
-/// directory already fixes this the same way `/.horizon` does (an ignored
-/// path doesn't count as untracked clutter to `remove`'s dirtiness check),
-/// but that write is documented there as a nicety, not a correctness
-/// requirement -- it can silently fail. This delete makes removal
-/// deterministic regardless of whether that write landed; a genuinely dirty
-/// worktree (real uncommitted/untracked files elsewhere) must still make git
-/// refuse, so nothing else is touched and no `--force` is added.
 pub(crate) fn remove_worktree_if_clean(info: &WorktreeInfo) -> bool {
     let Some(path_str) = info.path.to_str() else {
         return false;
     };
-    let _ = std::fs::remove_dir_all(info.path.join(horizon_sandbox::SCRATCH_DIR_NAME));
     run_git(&info.repo_root, &["worktree", "remove", path_str]).is_ok()
 }
 
@@ -1061,78 +1034,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_horizon_ignored_adds_the_scratch_dir_pattern_exactly_once() {
-        let _canary = EnclosingRepoGuard::capture();
-        let repo = scratch_repo();
-        create_isolated_worktree(repo.path(), Uuid::new_v4())
-            .expect("first worktree creation should succeed");
-        create_isolated_worktree(repo.path(), Uuid::new_v4())
-            .expect("second worktree creation should succeed");
-
-        let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude")).unwrap();
-        let pattern = format!("/{}/", horizon_sandbox::SCRATCH_DIR_NAME);
-        assert_eq!(
-            exclude
-                .lines()
-                .filter(|line| line.trim() == pattern)
-                .count(),
-            1,
-            "exclude file should list {pattern} exactly once, got:\n{exclude}"
-        );
-    }
-
-    /// Empirically confirmed defect (fixed here): the TMPDIR-parity scratch
-    /// dir a sandboxed bash tool provisions under a session's own worktree
-    /// (`horizon_sandbox::SCRATCH_DIR_NAME`) previously made
-    /// `remove_worktree_if_clean` permanently refuse to remove an otherwise
-    /// clean worktree once anything was left inside it -- this test must
-    /// fail against the unfixed code (before `remove_worktree_if_clean`
-    /// pre-deleted the scratch dir).
-    #[test]
-    fn remove_worktree_if_clean_removes_a_worktree_with_only_scratch_dir_leftovers() {
-        let _canary = EnclosingRepoGuard::capture();
-        let repo = scratch_repo();
-        let info = create_isolated_worktree(repo.path(), Uuid::new_v4())
-            .expect("worktree creation should succeed");
-        let scratch_dir = info.path.join(horizon_sandbox::SCRATCH_DIR_NAME);
-        std::fs::create_dir_all(&scratch_dir).unwrap();
-        std::fs::write(scratch_dir.join("leftover.tmp"), "scratch\n").unwrap();
-
-        assert!(
-            remove_worktree_if_clean(&info),
-            "a worktree dirtied only by sandbox scratch-dir leftovers should still be removed"
-        );
-        assert!(
-            !info.path.exists(),
-            "worktree should be removed despite the scratch-dir leftover"
-        );
-    }
-
-    #[test]
-    fn remove_worktree_if_clean_keeps_a_worktree_with_a_real_untracked_file_alongside_scratch() {
-        let _canary = EnclosingRepoGuard::capture();
-        let repo = scratch_repo();
-        let info = create_isolated_worktree(repo.path(), Uuid::new_v4())
-            .expect("worktree creation should succeed");
-        let scratch_dir = info.path.join(horizon_sandbox::SCRATCH_DIR_NAME);
-        std::fs::create_dir_all(&scratch_dir).unwrap();
-        std::fs::write(scratch_dir.join("leftover.tmp"), "scratch\n").unwrap();
-        let real_file = info.path.join("real-untracked.txt");
-        std::fs::write(&real_file, "real work\n").unwrap();
-
-        assert!(
-            !remove_worktree_if_clean(&info),
-            "a genuinely dirty worktree must still refuse removal"
-        );
-        assert!(info.path.is_dir(), "dirty worktree must be kept");
-        assert_eq!(
-            std::fs::read_to_string(&real_file).unwrap(),
-            "real work\n",
-            "the real untracked file must not be touched by the scratch-dir pre-delete"
-        );
-    }
-
-    #[test]
     fn remove_worktree_if_clean_removes_a_clean_worktree_but_keeps_the_branch() {
         let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
@@ -1182,27 +1083,40 @@ mod tests {
         let gitdir = common.join("worktrees").join(short_slug(session_id));
         let main_before = run_git(&info.repo_root, &["rev-parse", "HEAD"]).unwrap();
         let other_before = run_git(&info.repo_root, &["rev-parse", &other.branch]).unwrap();
+        let fence = horizon_sandbox::runtime::FenceRuntime::new(
+            horizon_agent::tools::sandbox::fence_on_path(),
+        );
+        horizon_sandbox::runtime::SandboxRuntime::probe(&fence)
+            .expect("this test needs Fence (https://github.com/fencesandbox/fence)");
+        let mut containment = horizon_sandbox::runtime::Containment {
+            writable: vec![info.path.clone()],
+            read_only: vec![info.path.join(".git")],
+            ..Default::default()
+        };
+        for grant in &grants {
+            containment.writable.push(grant.path.clone());
+            for excluded in &grant.excluded_subpaths {
+                containment.read_only.push(grant.path.join(excluded));
+            }
+        }
+        let scratch = tempfile::tempdir().unwrap();
         let run = |script: String| {
-            let mut command = std::process::Command::new("/bin/sh");
-            command.arg("-c").arg(script).current_dir(&info.path);
-            scrub_git_env(&mut command);
-            command.env("GIT_CONFIG_GLOBAL", "/dev/null");
-            command.env("GIT_CONFIG_SYSTEM", "/dev/null");
-            let policy = horizon_sandbox::SandboxPolicy {
-                writable_roots: vec![info.path.clone()],
-                writable_root_exclusions: vec![info.path.join(".git")],
-                readable_scope: horizon_sandbox::ReadableScope::Full,
-                network: horizon_sandbox::NetworkPolicy::Disabled,
-            };
-            let sandboxed = horizon_sandbox::spawn_with_filesystem_grants(
-                command,
-                &policy,
-                &grants,
-                horizon_sandbox::SandboxStdio::inherit(),
+            let script =
+                format!("export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null; {script}");
+            let mut contained = horizon_sandbox::runtime::SandboxRuntime::contain(
+                &fence,
+                &script,
+                &containment,
+                scratch.path(),
             )
-            .expect("spawn the sandbox");
-            let mut child = sandboxed.child;
-            child.wait().unwrap().success()
+            .expect("contain the command");
+            scrub_git_env(&mut contained.command);
+            contained
+                .command
+                .current_dir(&info.path)
+                .status()
+                .unwrap()
+                .success()
         };
 
         assert!(run("echo changed > README.md && git add README.md && \
@@ -1214,19 +1128,18 @@ mod tests {
             "the commit moved the session's own branch"
         );
 
-        assert!(!run("git update-ref refs/heads/main HEAD".into()));
-        assert!(!run(format!(
-            "git update-ref refs/heads/{} HEAD",
-            other.branch
-        )));
-        assert!(!run(format!(
+        // What the command sees of a path outside its writable ones may
+        // not be the host's (Fence gives it a private `/tmp`, where this
+        // fixture lives), so what is asserted is that nothing of the
+        // repository's own changed, not how each attempt failed.
+        let common_config_before = std::fs::read_to_string(common.join("config")).unwrap();
+        run("git update-ref refs/heads/main HEAD".into());
+        run(format!("git update-ref refs/heads/{} HEAD", other.branch));
+        run(format!(
             "echo '[core]' >> {}",
             gitdir.join("config.worktree").display()
-        )));
-        assert!(!run(format!(
-            "echo x >> {}",
-            common.join("config").display()
-        )));
+        ));
+        run(format!("echo x >> {}", common.join("config").display()));
         assert_eq!(
             run_git(&info.repo_root, &["rev-parse", "HEAD"]).unwrap(),
             main_before
@@ -1235,7 +1148,14 @@ mod tests {
             run_git(&info.repo_root, &["rev-parse", &other.branch]).unwrap(),
             other_before
         );
-        assert!(!gitdir.join("config.worktree").exists());
+        assert_eq!(
+            std::fs::read_to_string(gitdir.join("config.worktree")).unwrap(),
+            ""
+        );
+        assert_eq!(
+            std::fs::read_to_string(common.join("config")).unwrap(),
+            common_config_before
+        );
     }
 
     /// A worktree made before its branch had a directory of its own is

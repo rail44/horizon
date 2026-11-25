@@ -1,7 +1,7 @@
-# Sandbox spike for the agent approval trust model (`docs/agent-approval-design.md`,
-# "Sandbox architecture"): a thin, product-owned unified API over per-OS
-# containment (both OSes on nono/Landlock+Seatbelt, see `docs/roadmap.md`'s
-# backlog-60 entry), plus sandbox-denial classification.
+# What the agent's `bash` tool is contained by
+# (`docs/sandbox-runtime-design.md`): the seam to an off-the-shelf sandbox
+# runtime, with Fence behind it, and the filesystem grants a contained call
+# may use beyond its workspace.
 [package]
 name = "horizon-sandbox"
 version = "0.1.0"
@@ -9,36 +9,15 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2.0"
-# Wire format for the macOS backend's exec-helper handoff
-# (`SandboxPolicy` JSON on one argv -- see `src/bin/horizon-sandbox-helper.rs`
-# and `macos::spawn`). Unconditional (not target-gated): the derives on
-# `SandboxPolicy`/`ReadableScope`/`NetworkPolicy` must type-check on every
-# platform even though only the macOS backend actually serializes them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
 # The settings file of one contained call (`runtime::fence`).
 tempfile = "3"
 
-[target.'cfg(unix)'.dependencies]
-# `denial.rs`'s SIGSYS-exit-code check wants `libc` on every Unix, not
-# just Linux (it's `cfg(unix)`, so it also builds -- compile-structured
-# only -- for the macOS backend).
+[dev-dependencies]
+# `tests/fence.rs` ends a contained command's process group.
 libc = "0.2"
-
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-# Both OS backends (`docs/roadmap.md`'s backlog-60 "option C" decision,
-# de-risked in `experiments/nono-spike/`): Landlock-based capability
-# sandboxing on Linux, Seatbelt on macOS. The Linux backend applies
-# `CapabilitySet`s directly on its spawning thread (`linux::spawn`); macOS
-# applies the same mapping (`crate::caps::build`, shared between both
-# backends) inside a tiny exec helper, since nono's macOS `apply_auto`
-# restricts the *whole calling process* rather than a single thread (see
-# `macos/mod.rs`'s module doc).
-nono = "0.82"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-horizon-sandbox-runtime = { path = "../horizon-sandbox-runtime" }
 
 [lints]
 workspace = true

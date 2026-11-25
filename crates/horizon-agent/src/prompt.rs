@@ -113,7 +113,7 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          Tool policy:\n\
          - Tools require absolute paths; relative paths are rejected.\n\
          - Prefer targeted reads and searches (grep, glob, line-windowed reads) over dumping whole files.\n\
-         - Use $TMPDIR for temporary files so sandboxed calls do not rely on literal /tmp being writable.\n\
+         - Use $TMPDIR for temporary files.\n\
          \n\
          Treat these as destructive — confirm they match what the user asked before doing them:\n\
          - Overwriting or deleting files or data.\n\
