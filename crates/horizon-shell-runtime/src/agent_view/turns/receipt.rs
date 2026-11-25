@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use horizon_acp::ToolOutcome;
+use crate::agent_model::ToolOutcome;
 
 use super::{ToolCallView, aggregate_receipt, pluralize};
 

@@ -130,7 +130,7 @@ written (`docs/preview-pane-design.md`), `new <extension's name> [<argument>...]
 the palette lists it under),
 `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
-`approve`/`deny <session-id> <call-id> <occurrence-id>`, `cancel-turn <session-id>`,
+`approve`/`deny <session-id> <occurrence-id>`, `cancel-turn <session-id>`,
 `reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See

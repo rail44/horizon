@@ -82,8 +82,8 @@ impl AgentFrame {
                         .find_map(|key| call.input.get(key)?.as_str())
                         .and_then(line);
                     Some(match on {
-                        Some(on) => format!("{}: {on}", call.meta.tool_id),
-                        None => call.meta.tool_id.clone(),
+                        Some(on) => format!("{}: {on}", call.tool_id),
+                        None => call.tool_id.clone(),
                     })
                 }
                 _ => None,

@@ -7,7 +7,6 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use horizon_acp::ToolOutcome;
 use horizon_agent::transcript::{FileEffect, ToolCallClassification, affected_files, classify};
 use serde_json::Value;
 
@@ -124,7 +123,6 @@ pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
 /// receipt's chips.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallView {
-    pub call_id: String,
     pub occurrence_id: String,
     /// Position of the call's item in the slice passed to
     /// [`build_tool_call_views`].
@@ -141,7 +139,6 @@ pub struct ToolCallView {
 impl ToolCallView {
     pub fn identity(&self) -> ToolCallIdentity {
         ToolCallIdentity {
-            call_id: self.call_id.clone(),
             occurrence_id: self.occurrence_id.clone(),
         }
     }
@@ -153,14 +150,21 @@ impl ToolCallView {
     pub fn is_success(&self) -> bool {
         self.outcome == Some(ToolOutcome::Succeeded)
     }
-
-    pub fn superseded(&self) -> bool {
-        matches!(self.outcome, Some(ToolOutcome::Superseded { .. }))
-    }
 }
 
 /// Builds one view per tool call in `items`, in first-seen order.
 pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
+    // The calls whose approval the human denied.
+    let denied: HashSet<&str> = (items.iter())
+        .filter_map(|item| match item {
+            AgentFrameItem::Permission(permission)
+                if permission.decision == Some(PermissionDecision::Denied) =>
+            {
+                Some(permission.identity.occurrence_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
     items
         .iter()
         .enumerate()
@@ -169,23 +173,26 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
             _ => None,
         })
         .map(|(index, call)| {
-            let identity = call.identity();
-            let outcome = call.outcome();
+            let outcome = match call.outcome() {
+                Some(ToolOutcome::Failed) if denied.contains(call.occurrence_id.as_str()) => {
+                    Some(ToolOutcome::Denied)
+                }
+                outcome => outcome,
+            };
             let output = call.output.as_ref().filter(|_| outcome.is_some());
             let ToolCallClassification { verb, target, .. } =
-                classify(&call.meta.tool_id, &call.input, output);
+                classify(&call.tool_id, &call.input, output);
             let affected_files = match &outcome {
                 Some(ToolOutcome::Succeeded | ToolOutcome::Failed) => {
-                    affected_files(&call.meta.tool_id, &call.input, output)
+                    affected_files(&call.tool_id, &call.input, output)
                 }
                 _ => Vec::new(),
             };
             ToolCallView {
-                call_id: identity.call_id,
-                occurrence_id: identity.occurrence_id,
+                occurrence_id: call.occurrence_id.clone(),
                 request_index: index,
                 result_index: outcome.is_some().then_some(index),
-                tool_id: call.meta.tool_id.clone(),
+                tool_id: call.tool_id.clone(),
                 verb,
                 target,
                 affected_files,
@@ -211,7 +218,7 @@ fn classify_call(tool_id: &str) -> CallClass {
 }
 
 /// The collapsed receipt line's counts. Failed or unfinished calls stay
-/// individual; superseded attempts are left out.
+/// individual.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReceiptAggregate {
     pub query_count: usize,
@@ -227,9 +234,6 @@ pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
     let mut edited_paths: HashSet<String> = HashSet::new();
 
     for call in tool_calls {
-        if call.superseded() {
-            continue;
-        }
         if !call.is_success() {
             aggregate.individual_calls.push(call.clone());
             continue;
@@ -268,5 +272,5 @@ pub fn tool_call_source<'a>(
         return None;
     }
     let output = call.result_index.and(item.output.as_ref());
-    Some((&item.meta.tool_id, &item.input, output))
+    Some((&item.tool_id, &item.input, output))
 }

@@ -92,55 +92,6 @@ pub struct SessionInfoMeta {
     pub provider_id: String,
 }
 
-/// `tool_call_update`, whose `toolCallId` is the occurrence id. Mirrors
-/// `contract::ToolCallRequest`/`ToolCallResult` (crates/horizon-agent/src/contract.rs)
-/// and the result evidence fields (crates/horizon-agent/src/tools/output/evidence.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ToolCallMeta {
-    pub call_id: String,
-    pub tool_id: String,
-    /// Present once the call has a result.
-    #[serde(default)]
-    pub outcome: Option<ToolOutcome>,
-    #[serde(default)]
-    pub auto_approved: Option<bool>,
-    #[serde(default)]
-    pub policy_tier: Option<String>,
-}
-
-/// Mirrors `contract::ApprovalRequest` minus `reason`, keyed by its
-/// `ToolCallIdentity` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ApprovalMeta {
-    pub call_id: String,
-    pub occurrence_id: String,
-    pub kind: ApprovalKind,
-    /// The `task` child this approval is for, when it is not the session's
-    /// own: shown through the session, answered to the child
-    /// (`docs/agent-subagent-design.md` decision 4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_session_id: Option<String>,
-}
-
-/// Mirrors `contract::ApprovalKind` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ApprovalKind {
-    Standard,
-    DomainGrant { domains: Vec<String> },
-}
-
-/// Mirrors `contract::ToolOutcome` (crates/horizon-agent/src/contract/tool_result.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolOutcome {
-    Succeeded,
-    Failed,
-    Denied,
-    Cancelled,
-    Superseded { retry_occurrence_id: String },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,45 +132,6 @@ mod tests {
             role_id: None,
             provider_id: "default".into(),
         });
-        round_trip(&ToolCallMeta {
-            call_id: "call-1".into(),
-            tool_id: "bash".into(),
-            outcome: None,
-            auto_approved: None,
-            policy_tier: None,
-        });
-        round_trip(&ToolCallMeta {
-            call_id: "call-1".into(),
-            tool_id: "bash".into(),
-            outcome: Some(ToolOutcome::Denied),
-            auto_approved: Some(true),
-            policy_tier: Some("contained".into()),
-        });
-        round_trip(&ToolCallMeta {
-            call_id: "call-2".into(),
-            tool_id: "fs_edit".into(),
-            outcome: Some(ToolOutcome::Succeeded),
-            auto_approved: None,
-            policy_tier: None,
-        });
-    }
-
-    #[test]
-    fn every_approval_kind_round_trips() {
-        let kinds = [
-            ApprovalKind::Standard,
-            ApprovalKind::DomainGrant {
-                domains: vec!["docs.example.com".into()],
-            },
-        ];
-        for (index, kind) in kinds.into_iter().enumerate() {
-            round_trip(&ApprovalMeta {
-                call_id: "call-1".into(),
-                occurrence_id: "occ-1".into(),
-                kind,
-                task_session_id: (index % 2 == 1).then(|| "task-1".into()),
-            });
-        }
     }
 
     /// A payload for the helpers' own tests.

@@ -5,8 +5,7 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, SessionEventNotification, ToolCallMeta,
-    decode_model_option_id, read_horizon_meta,
+    EFFORT_CONFIG_ID, MODEL_CONFIG_ID, SessionEventNotification, decode_model_option_id,
 };
 
 use super::types::*;
@@ -313,10 +312,9 @@ impl AgentModel {
 
     fn apply_tool_call(&mut self, update: v2::ToolCallUpdate) {
         let occurrence_id = update.tool_call_id.to_string();
-        let meta = match &update.meta {
-            MaybeUndefined::Value(meta) => {
-                read_horizon_meta::<ToolCallMeta>(Some(meta)).and_then(Result::ok)
-            }
+        let named = match (&update.name, &update.title) {
+            (MaybeUndefined::Value(name), _) => Some(name.clone()),
+            (_, MaybeUndefined::Value(title)) => Some(title.clone()),
             _ => None,
         };
         let index = self.frame.items.iter().position(
@@ -328,22 +326,11 @@ impl AgentModel {
                 index
             }
             None => {
-                let tool_id = match (&update.name, &update.title) {
-                    (MaybeUndefined::Value(name), _) => name.clone(),
-                    (_, MaybeUndefined::Value(title)) => title.clone(),
-                    _ => String::new(),
-                };
                 self.frame
                     .items
                     .push(AgentFrameItem::ToolCall(Box::new(ToolCall {
                         occurrence_id: occurrence_id.clone(),
-                        meta: ToolCallMeta {
-                            call_id: occurrence_id.clone(),
-                            tool_id,
-                            outcome: None,
-                            auto_approved: None,
-                            policy_tier: None,
-                        },
+                        tool_id: String::new(),
                         status: ToolCallStatus::Pending,
                         input: serde_json::Value::Null,
                         output: None,
@@ -354,8 +341,8 @@ impl AgentModel {
         let AgentFrameItem::ToolCall(call) = &mut self.frame.items[index] else {
             unreachable!("index points at a tool call");
         };
-        if let Some(meta) = meta {
-            call.meta = meta;
+        if let Some(named) = named {
+            call.tool_id = named;
         }
         if let MaybeUndefined::Value(status) = &update.status {
             call.status = match status {
@@ -596,10 +583,17 @@ fn epoch_ms() -> u64 {
 }
 
 impl Permission {
-    /// Reads a `session/request_permission` into a held permission. `None`
-    /// when the request carries no readable `ApprovalMeta`.
-    pub fn from_request(request: &v2::RequestPermissionRequest) -> Option<Self> {
-        let meta = read_horizon_meta::<horizon_acp::ApprovalMeta>(request.meta.as_ref())?.ok()?;
+    /// Reads a `session/request_permission` the attachment of `session`
+    /// received into a held permission: one for another session is a
+    /// subagent's, shown through this one. `None` when it names no tool call.
+    pub fn from_request(
+        request: &v2::RequestPermissionRequest,
+        session: &v2::SessionId,
+    ) -> Option<Self> {
+        let Some(v2::RequestPermissionSubject::ToolCall(subject)) = &request.subject else {
+            return None;
+        };
+        let occurrence_id = subject.tool_call.tool_call_id.to_string();
         let reason = match &request.description {
             Some(description) if !description.is_empty() => {
                 format!("{} — {description}", request.title)
@@ -607,13 +601,11 @@ impl Permission {
             _ => request.title.clone(),
         };
         Some(Self {
-            identity: ToolCallIdentity {
-                call_id: meta.call_id,
-                occurrence_id: meta.occurrence_id,
-            },
+            identity: ToolCallIdentity { occurrence_id },
             reason,
             decision: None,
-            task_session_id: meta.task_session_id,
+            task_session_id: (request.session_id != *session)
+                .then(|| request.session_id.to_string()),
         })
     }
 }

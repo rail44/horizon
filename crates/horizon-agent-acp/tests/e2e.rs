@@ -344,19 +344,28 @@ fn tool_update(inbound: &Inbound) -> Option<&v2::ToolCallUpdate> {
     }
 }
 
-fn tool_meta(call: &v2::ToolCallUpdate) -> Option<acp::ToolCallMeta> {
-    acp::read_horizon_meta(call.meta.as_opt_ref().flatten())?.ok()
-}
-
 fn has_status(call: &v2::ToolCallUpdate, status: v2::ToolCallStatus) -> bool {
     call.status == MaybeUndefined::Value(status)
 }
 
-/// A tool call's final update: the one that carries its outcome.
-fn finished_tool(inbound: &Inbound) -> Option<(&v2::ToolCallUpdate, acp::ToolCallMeta)> {
+/// A tool call's final update: the one whose status ends it.
+fn finished_tool(inbound: &Inbound) -> Option<&v2::ToolCallUpdate> {
     let call = tool_update(inbound)?;
-    let meta = tool_meta(call)?;
-    meta.outcome.is_some().then_some((call, meta))
+    [
+        v2::ToolCallStatus::Completed,
+        v2::ToolCallStatus::Failed,
+        v2::ToolCallStatus::Cancelled,
+    ]
+    .into_iter()
+    .any(|status| has_status(call, status))
+    .then_some(call)
+}
+
+/// The name the tool call `id` was requested under.
+fn tool_name(collected: &[Inbound], id: &v2::ToolCallId) -> Option<String> {
+    (collected.iter().filter_map(tool_update))
+        .filter(|call| call.tool_call_id == *id)
+        .find_map(|call| call.name.as_opt_ref().flatten().cloned())
 }
 
 fn idle_stop_reason(inbound: &Inbound) -> Option<Option<v2::StopReason>> {
@@ -391,11 +400,18 @@ fn session_error(inbound: &Inbound) -> Option<&str> {
     }
 }
 
-/// The permission request's approval payload.
-fn approval_meta(request: &v2::RequestPermissionRequest) -> acp::ApprovalMeta {
-    acp::read_horizon_meta(request.meta.as_ref())
-        .expect("permission requests carry _meta.horizon")
-        .unwrap()
+/// What a permission request asks about: the tool call it names.
+struct Approval {
+    occurrence_id: String,
+}
+
+fn approval_meta(request: &v2::RequestPermissionRequest) -> Approval {
+    let Some(v2::RequestPermissionSubject::ToolCall(subject)) = &request.subject else {
+        panic!("the permission names its tool call: {request:?}");
+    };
+    Approval {
+        occurrence_id: subject.tool_call.tool_call_id.0.to_string(),
+    }
 }
 
 fn take_permission(
@@ -834,7 +850,7 @@ async fn workspace_snapshot_asks_the_shells_control_plane() {
     prompt(&client, session_id, "please take a snapshot").await;
 
     let collected = collect_until(&mut client, |inbound| {
-        finished_tool(inbound).is_some_and(|(call, _)| {
+        finished_tool(inbound).is_some_and(|call| {
             call.raw_output
                 .as_opt_ref()
                 .flatten()
@@ -858,7 +874,7 @@ async fn workspace_snapshot_asks_the_shells_control_plane() {
 async fn approve_and_finish(
     client: &mut AcpClient,
     text: &str,
-) -> (SessionId, acp::ApprovalMeta, Vec<Inbound>) {
+) -> (SessionId, Approval, Vec<Inbound>) {
     let session_id = SessionId::new();
     approve_and_finish_in(client, session_id, session_new(session_id), text).await
 }
@@ -869,7 +885,7 @@ async fn approve_and_finish_in(
     session_id: SessionId,
     request: v2::NewSessionRequest,
     text: &str,
-) -> (SessionId, acp::ApprovalMeta, Vec<Inbound>) {
+) -> (SessionId, Approval, Vec<Inbound>) {
     open_session(client, request).await;
     prompt(client, session_id, text).await;
 
@@ -886,16 +902,12 @@ async fn approve_and_finish_in(
                 && *call.tool_call_id.0 == *approval.occurrence_id
         })
         .expect("tool request before approval");
-    assert_eq!(tool_meta(requested).unwrap().call_id, approval.call_id);
-    let Some(v2::RequestPermissionSubject::ToolCall(subject)) = &request.subject else {
-        panic!("the permission names its tool call: {request:?}");
-    };
-    assert_eq!(&*subject.tool_call.tool_call_id.0, approval.occurrence_id);
+    let _ = requested;
 
     responder.respond(approve()).unwrap();
     let occurrence = approval.occurrence_id.clone();
     let collected = collect_until(client, |inbound| {
-        finished_tool(inbound).is_some_and(|(call, _)| *call.tool_call_id.0 == *occurrence)
+        finished_tool(inbound).is_some_and(|call| *call.tool_call_id.0 == *occurrence)
     })
     .await;
     assert!(
@@ -913,17 +925,17 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     let mut client = connect(&mut agentd).await;
     let (session_id, approval, collected) =
         approve_and_finish(&mut client, "please run a tool").await;
-    let (_, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
-    assert_eq!(meta.call_id, approval.call_id);
+    let finished = collected.iter().rev().find_map(finished_tool).unwrap();
+    assert_eq!(*finished.tool_call_id.0, *approval.occurrence_id);
 
     // The finished call survives a reattachment.
     let replay = resume(&mut client, session_id).await.unwrap();
-    let (_, replayed) = replay
+    let replayed = replay
         .iter()
         .rev()
         .find_map(finished_tool)
         .expect("the finished call is replayed");
-    assert_eq!(replayed.call_id, approval.call_id);
+    assert_eq!(*replayed.tool_call_id.0, *approval.occurrence_id);
 }
 
 /// A session started in a plain checkout, the shape whose `bash` calls
@@ -949,9 +961,8 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
         "please write beside the workspace",
     )
     .await;
-    let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
-    assert_eq!(meta.call_id, approval.call_id);
-    assert_eq!(meta.tool_id, "bash");
+    let call = collected.iter().rev().find_map(finished_tool).unwrap();
+    assert_eq!(*call.tool_call_id.0, *approval.occurrence_id);
     let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(output["exit_code"], 0);
     assert_eq!(output["output"], "agentd-bash-ok\n");
@@ -1008,7 +1019,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
         if replay
             .iter()
             .filter_map(finished_tool)
-            .any(|(call, _)| *call.tool_call_id.0 == *occurrence)
+            .any(|call| *call.tool_call_id.0 == *occurrence)
         {
             break;
         }
@@ -1028,7 +1039,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let finished = replay
         .iter()
         .filter_map(finished_tool)
-        .filter(|(call, _)| *call.tool_call_id.0 == *occurrence)
+        .filter(|call| *call.tool_call_id.0 == *occurrence)
         .count();
     assert_eq!(
         finished, 1,
@@ -1184,7 +1195,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
             replayed
                 .iter()
                 .filter_map(finished_tool)
-                .any(|(call, _)| call.tool_call_id == requested.tool_call_id),
+                .any(|call| call.tool_call_id == requested.tool_call_id),
             "resume must close the exact original execution"
         );
     }
@@ -1388,26 +1399,21 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     }
 
     prompt(&client, session_id, "please run bash").await;
-    let collected = collect_until(&mut client, |inbound| {
-        finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-bash-1")
-    })
-    .await;
+    let collected = collect_until(&mut client, |inbound| finished_tool(inbound).is_some()).await;
     assert!(
         !collected
             .iter()
             .any(|inbound| matches!(inbound, Inbound::Permission(..))),
         "a resumed isolated session should retain tier-1 auto execution: {collected:?}"
     );
-    let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
+    let call = collected.iter().rev().find_map(finished_tool).unwrap();
     let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(
-        meta.auto_approved,
-        Some(true),
+        output["auto_approved"], true,
         "resumed call should retain the contained classification: {output:?}"
     );
     assert_eq!(
-        meta.policy_tier.as_deref(),
-        Some("contained"),
+        output["policy_tier"], "contained",
         "resumed call should retain tier-1 eligibility: {output:?}"
     );
 }
@@ -1673,11 +1679,14 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         resolved_root(inbound, session_id).is_some_and(|root| root != repo.path())
     })
     .await;
-    let (call, meta) = collected
+    let call = collected
         .iter()
         .find_map(finished_tool)
         .expect("the worktree_enter call finishes before the switch");
-    assert_eq!(meta.tool_id, "worktree_enter");
+    assert_eq!(
+        tool_name(&collected, &call.tool_call_id).as_deref(),
+        Some("worktree_enter")
+    );
     let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(output["requested"], true, "{output}");
     assert_eq!(output["base"], head.as_str(), "{output}");
@@ -1711,19 +1720,17 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
 
     if horizon_agent::tools::sandbox::ready() {
         prompt(&client, session_id, "please write the marker").await;
-        let collected = collect_until(&mut client, |inbound| {
-            finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-bash-marker-1")
-        })
-        .await;
+        let collected =
+            collect_until(&mut client, |inbound| finished_tool(inbound).is_some()).await;
         assert!(
             !collected
                 .iter()
                 .any(|inbound| matches!(inbound, Inbound::Permission(..))),
             "bash in the entered worktree runs sandboxed without approval: {collected:?}"
         );
-        let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
+        let call = collected.iter().rev().find_map(finished_tool).unwrap();
         let output = call.raw_output.as_opt_ref().flatten().unwrap();
-        assert_eq!(meta.policy_tier.as_deref(), Some("contained"), "{output}");
+        assert_eq!(output["policy_tier"], "contained", "{output}");
         assert_eq!(output["exit_code"], 0, "{output}");
         assert_eq!(
             output["output"].as_str().unwrap().trim(),
@@ -1741,10 +1748,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         &format!("write file {}", inside.display()),
     )
     .await;
-    let collected = collect_until(&mut client, |inbound| {
-        finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-write-1")
-    })
-    .await;
+    let collected = collect_until(&mut client, |inbound| finished_tool(inbound).is_some()).await;
     assert!(
         !collected
             .iter()
@@ -1783,11 +1787,8 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         &format!("write file {}", outside.display()),
     )
     .await;
-    let collected = collect_until(&mut client, |inbound| {
-        finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-write-1")
-    })
-    .await;
-    let (call, _) = collected.iter().rev().find_map(finished_tool).unwrap();
+    let collected = collect_until(&mut client, |inbound| finished_tool(inbound).is_some()).await;
+    let call = collected.iter().rev().find_map(finished_tool).unwrap();
     let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(output["is_error"], true, "{output}");
     assert!(!outside.exists());

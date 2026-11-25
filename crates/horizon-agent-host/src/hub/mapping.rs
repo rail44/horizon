@@ -502,14 +502,7 @@ impl Mapper {
                     .name(request.tool_id.clone())
                     .kind(tool_kind(&request.tool_id))
                     .status(v2::ToolCallStatus::Pending)
-                    .raw_input(request.input.0.clone())
-                    .meta(horizon_meta(&acp::ToolCallMeta {
-                        call_id: request.call_id.0.clone(),
-                        tool_id: request.tool_id.clone(),
-                        outcome: None,
-                        auto_approved: None,
-                        policy_tier: None,
-                    }));
+                    .raw_input(request.input.0.clone());
                 vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(update))]
             }
             Event::ToolCallStarted(identity) => {
@@ -529,21 +522,10 @@ impl Mapper {
                         v2::ToolCallStatus::Cancelled
                     }
                 };
-                let output = &result.output.0;
-                let meta = acp::ToolCallMeta {
-                    call_id: result.call_id.0.clone(),
-                    tool_id: self.tool_ids.get(&occurrence).cloned().unwrap_or_default(),
-                    outcome: Some(tool_outcome(&result.outcome)),
-                    auto_approved: output.get("auto_approved").and_then(|v| v.as_bool()),
-                    policy_tier: output
-                        .get("policy_tier")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                };
+                // Its verdict (`auto_approved`, `policy_tier`) is in its output.
                 let update = v2::ToolCallUpdate::new(occurrence.clone())
                     .status(status)
-                    .raw_output(output.clone())
-                    .meta(horizon_meta(&meta));
+                    .raw_output(result.output.0.clone());
                 let mut out = vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(update))];
                 out.extend(self.settle_approval(&occurrence));
                 out
@@ -748,29 +730,6 @@ fn stop_reason(reason: TurnEndReason) -> v2::StopReason {
         TurnEndReason::Cancelled => v2::StopReason::Cancelled,
         TurnEndReason::Failed => failed(&[]),
         TurnEndReason::HaltedByTokenBudget => v2::StopReason::MaxTurnRequests,
-    }
-}
-
-pub(super) fn tool_outcome(outcome: &contract::ToolOutcome) -> acp::ToolOutcome {
-    match outcome {
-        contract::ToolOutcome::Succeeded => acp::ToolOutcome::Succeeded,
-        contract::ToolOutcome::Failed => acp::ToolOutcome::Failed,
-        contract::ToolOutcome::Denied => acp::ToolOutcome::Denied,
-        contract::ToolOutcome::Cancelled => acp::ToolOutcome::Cancelled,
-        contract::ToolOutcome::Superseded {
-            retry_occurrence_id,
-        } => acp::ToolOutcome::Superseded {
-            retry_occurrence_id: retry_occurrence_id.0.clone(),
-        },
-    }
-}
-
-pub(super) fn approval_kind(kind: &contract::ApprovalKind) -> acp::ApprovalKind {
-    match kind {
-        contract::ApprovalKind::Standard => acp::ApprovalKind::Standard,
-        contract::ApprovalKind::DomainGrant { domains } => acp::ApprovalKind::DomainGrant {
-            domains: domains.clone(),
-        },
     }
 }
 

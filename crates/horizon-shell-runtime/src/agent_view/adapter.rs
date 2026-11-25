@@ -15,8 +15,6 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use horizon_acp::ToolOutcome;
-
 use super::turns::{
     DiffLineKind, ToolCallBody, ToolCallView, build_tool_call_views, group_into_turns,
     humanize_duration, receipt_summary, segment_bursts, str_field, tool_call_body,
@@ -27,7 +25,7 @@ use crate::agent_display::{
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 use crate::agent_model::{
-    AgentFrameItem, AgentModel, MessageRole, SessionState, Subagent, ToolCallIdentity,
+    AgentFrameItem, AgentModel, MessageRole, SessionState, Subagent, ToolCallIdentity, ToolOutcome,
     TurnEndReason, TurnSpan, actionable_pending_approval_identities_in,
     state_indicates_turn_in_flight,
 };
@@ -386,10 +384,7 @@ fn receipt(
     turn_ended: bool,
     pending: &[ToolCallIdentity],
 ) -> Option<(Receipt, Vec<ToolCallView>)> {
-    let views: Vec<ToolCallView> = build_tool_call_views(items)
-        .into_iter()
-        .filter(|view| !view.superseded())
-        .collect();
+    let views: Vec<ToolCallView> = build_tool_call_views(items);
     if views.is_empty() {
         return None;
     }
@@ -429,7 +424,7 @@ fn call(
         Some(ToolOutcome::Succeeded) => CallStatus::Done,
         Some(ToolOutcome::Failed) => CallStatus::Failed,
         Some(ToolOutcome::Denied) => CallStatus::Denied,
-        Some(ToolOutcome::Cancelled | ToolOutcome::Superseded { .. }) => CallStatus::Cancelled,
+        Some(ToolOutcome::Cancelled) => CallStatus::Cancelled,
     };
     let identity = view.identity();
     let approval = pending.contains(&identity).then(|| Approval {
@@ -854,7 +849,6 @@ mod tests {
             }
         );
         let identity = &adapted.approvals[&approval.id];
-        assert_eq!(identity.call_id, "w1");
         assert_eq!(identity.occurrence_id, "w1");
         assert_eq!(turn.parts.last(), Some(&TurnPart::Thinking));
     }

@@ -116,19 +116,15 @@ fn permission_request(
             v2::PermissionOptionKind::RejectOnce,
         ),
     ];
-    v2::RequestPermissionRequest::new(acp_id, mapping::approval_title(&request.kind), options)
+    // A subagent's approval is asked as its own session's.
+    let session = task.map(mapping::acp_session_id).unwrap_or(acp_id);
+    v2::RequestPermissionRequest::new(session, mapping::approval_title(&request.kind), options)
         .description(request.reason.clone())
         .subject(v2::RequestPermissionSubject::ToolCall(Box::new(
             v2::ToolCallPermissionSubject::new(v2::ToolCallUpdate::new(
                 request.occurrence_id.0.clone(),
             )),
         )))
-        .meta(horizon_meta(&acp::ApprovalMeta {
-            call_id: request.call_id.0.clone(),
-            occurrence_id: request.occurrence_id.0.clone(),
-            kind: mapping::approval_kind(&request.kind),
-            task_session_id: task.map(|task| task.as_uuid().to_string()),
-        }))
 }
 
 /// Asks the client and turns its choice into the command a client would

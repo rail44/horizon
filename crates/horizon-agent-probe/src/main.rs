@@ -267,7 +267,7 @@ fn answer(
 ) -> Result<(), String> {
     print(json!({
         "approval": permission.reason,
-        "call": permission.identity.call_id,
+        "call": permission.identity.occurrence_id,
         "answer": match answer {
             Answer::Approve => "approve".to_string(),
             Answer::Deny(reason) => format!("deny: {reason}"),
@@ -309,12 +309,12 @@ fn describe(item: &AgentFrameItem) -> Option<Value> {
 
 fn tool_call(call: &ToolCall) -> Value {
     json!({
-        "tool": call.meta.tool_id,
-        "call": call.meta.call_id,
+        "tool": call.tool_id,
+        "call": call.occurrence_id,
         "input": call.input,
         "status": format!("{:?}", call.status),
-        "auto_approved": call.meta.auto_approved,
-        "policy_tier": call.meta.policy_tier,
+        "auto_approved": call.output.as_ref().and_then(|output| output.get("auto_approved")),
+        "policy_tier": call.output.as_ref().and_then(|output| output.get("policy_tier")),
         "output": call.output.as_ref().map(shorten),
     })
 }

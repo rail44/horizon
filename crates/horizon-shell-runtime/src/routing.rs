@@ -78,6 +78,9 @@ pub(super) struct AgentRoutes {
     /// connection, and its wakeup for the connection's op loop.
     version_mismatch: Mutex<Option<String>>,
     version_mismatch_signal: tokio::sync::Notify,
+    /// Each subagent's parent session, as `subagent_update` announced it:
+    /// where a subagent's permission requests are shown.
+    parents: Mutex<HashMap<SessionId, SessionId>>,
 }
 
 /// The message prefix of the daemon's rejection when the extension
@@ -135,6 +138,7 @@ impl AgentRoutes {
             workspace_roots,
             version_mismatch: Mutex::new(None),
             version_mismatch_signal: tokio::sync::Notify::new(),
+            parents: Mutex::new(HashMap::new()),
         }
     }
 
@@ -285,6 +289,11 @@ impl AgentRoutes {
         let Some(session_id) = parse_session_id(&notification.session_id) else {
             return;
         };
+        if let v2::SessionUpdate::SubagentUpdate(subagent) = &notification.update
+            && let Some(child) = parse_session_id(&subagent.session_id)
+        {
+            self.parents.lock().unwrap().insert(child, session_id);
+        }
         if let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update
             && let agent_client_protocol::schema::MaybeUndefined::Value(meta) = &info.meta
             && let Some(Ok(meta)) = read_horizon_meta::<SessionInfoMeta>(Some(meta))
@@ -336,6 +345,12 @@ impl AgentRoutes {
         let Some(session_id) = parse_session_id(&request.session_id) else {
             return responder.respond(cancelled_permission());
         };
+        // A subagent's request is shown where its parent is.
+        let routed = self.state.lock().unwrap().agent.contains_key(&session_id);
+        let parent = (!routed)
+            .then(|| self.parents.lock().unwrap().get(&session_id).copied())
+            .flatten();
+        let session_id = parent.unwrap_or(session_id);
         match self.deliver(
             session_id,
             Inbound::Permission(Box::new(request), responder),

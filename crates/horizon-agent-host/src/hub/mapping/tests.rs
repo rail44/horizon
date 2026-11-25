@@ -286,19 +286,15 @@ fn a_tool_call_is_one_update_series_keyed_by_its_occurrence() {
         calls[2].status,
         MaybeUndefined::Value(v2::ToolCallStatus::Completed)
     );
-    let meta: acp::ToolCallMeta = acp::read_horizon_meta(calls[2].meta.as_opt_ref().flatten())
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        meta,
-        acp::ToolCallMeta {
-            call_id: "call-1".into(),
-            tool_id: "bash".into(),
-            outcome: Some(acp::ToolOutcome::Succeeded),
-            auto_approved: Some(true),
-            policy_tier: Some("contained".into()),
-        }
-    );
+    // No _meta: the verdict is in the raw output.
+    assert_eq!(calls[2].meta, MaybeUndefined::Undefined);
+    let output = calls[2]
+        .raw_output
+        .as_opt_ref()
+        .flatten()
+        .expect("an output");
+    assert_eq!(output["auto_approved"], true);
+    assert_eq!(output["policy_tier"], "contained");
 }
 
 fn approval(occurrence: &str) -> Event {

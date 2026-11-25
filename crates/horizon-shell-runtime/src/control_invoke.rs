@@ -190,15 +190,11 @@ fn optional_string_arg(args: &serde_json::Value, key: &str) -> Result<Option<Str
 }
 
 fn approval_identity_arg(args: &serde_json::Value) -> Result<ToolCallIdentity, String> {
-    let call_id = required_string_arg(args, "call_id")?;
     let occurrence_id = required_string_arg(args, "occurrence_id")?;
-    if call_id.is_empty() || occurrence_id.is_empty() {
-        return Err("approval requires non-empty call_id and occurrence_id".into());
+    if occurrence_id.is_empty() {
+        return Err("approval requires a non-empty occurrence_id".into());
     }
-    Ok(ToolCallIdentity {
-        call_id,
-        occurrence_id,
-    })
+    Ok(ToolCallIdentity { occurrence_id })
 }
 
 /// Parses a required plain-string argument -- the `send` command's `text`
@@ -465,21 +461,19 @@ mod tests {
     }
 
     #[test]
-    fn approval_identity_requires_both_ids_and_preserves_the_supplied_occurrence() {
+    fn approval_identity_requires_the_occurrence_and_preserves_it() {
         use super::approval_identity_arg;
         use crate::agent_model::ToolCallIdentity;
         for args in [
-            serde_json::json!({"call_id":"same"}),
-            serde_json::json!({"call_id":"same", "occurrence_id":""}),
-            serde_json::json!({"call_id":"same", "occurrence_id":42}),
+            serde_json::json!({}),
+            serde_json::json!({"occurrence_id":""}),
+            serde_json::json!({"occurrence_id":42}),
         ] {
             assert!(approval_identity_arg(&args).is_err());
         }
         assert_eq!(
-            approval_identity_arg(&serde_json::json!({"call_id":"same", "occurrence_id":"old"}))
-                .unwrap(),
+            approval_identity_arg(&serde_json::json!({"occurrence_id":"old"})).unwrap(),
             ToolCallIdentity {
-                call_id: "same".into(),
                 occurrence_id: "old".into()
             }
         );

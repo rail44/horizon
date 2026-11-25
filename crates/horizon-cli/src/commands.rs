@@ -120,15 +120,13 @@ pub fn to_request(
         Subcommand::TerminateAllDetached => invoke(command_name, serde_json::json!({})),
         Subcommand::Approve {
             session_id,
-            call_id,
             occurrence_id,
         } => invoke(
             command_name,
-            serde_json::json!({ "session_id": session_id, "call_id": call_id, "occurrence_id": occurrence_id }),
+            serde_json::json!({ "session_id": session_id, "occurrence_id": occurrence_id }),
         ),
         Subcommand::Deny {
             session_id,
-            call_id,
             occurrence_id,
             reason,
         } => match reason {
@@ -138,11 +136,11 @@ pub fn to_request(
             // omission).
             Some(reason) => invoke(
                 command_name,
-                serde_json::json!({ "session_id": session_id, "call_id": call_id, "occurrence_id": occurrence_id, "reason": reason }),
+                serde_json::json!({ "session_id": session_id, "occurrence_id": occurrence_id, "reason": reason }),
             ),
             None => invoke(
                 command_name,
-                serde_json::json!({ "session_id": session_id, "call_id": call_id, "occurrence_id": occurrence_id }),
+                serde_json::json!({ "session_id": session_id, "occurrence_id": occurrence_id }),
             ),
         },
         Subcommand::CancelTurn { session_id } => invoke(
@@ -462,11 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn approve_and_deny_carry_both_ids() {
+    fn approve_and_deny_carry_the_occurrence() {
         let Request::Invoke(approve) = to_request(
             &Subcommand::Approve {
                 session_id: "s-1".to_string(),
-                call_id: "c-1".to_string(),
                 occurrence_id: "occ".into(),
             },
             None,
@@ -477,13 +474,12 @@ mod tests {
         assert_eq!(approve.command, "approve");
         assert_eq!(
             approve.args,
-            serde_json::json!({ "session_id": "s-1", "call_id": "c-1", "occurrence_id": "occ" })
+            serde_json::json!({ "session_id": "s-1", "occurrence_id": "occ" })
         );
 
         let Request::Invoke(deny) = to_request(
             &Subcommand::Deny {
                 session_id: "s-1".to_string(),
-                call_id: "c-1".to_string(),
                 occurrence_id: "occ".into(),
                 reason: None,
             },
@@ -495,7 +491,7 @@ mod tests {
         assert_eq!(deny.command, "deny");
         assert_eq!(
             deny.args,
-            serde_json::json!({ "session_id": "s-1", "call_id": "c-1", "occurrence_id": "occ" })
+            serde_json::json!({ "session_id": "s-1", "occurrence_id": "occ" })
         );
 
         // `--reason` rides as a `reason` string on the invoke args; omitted
@@ -503,7 +499,6 @@ mod tests {
         let Request::Invoke(deny_reason) = to_request(
             &Subcommand::Deny {
                 session_id: "s-1".to_string(),
-                call_id: "c-1".to_string(),
                 occurrence_id: "occ".into(),
                 reason: Some("too risky".to_string()),
             },
@@ -514,7 +509,7 @@ mod tests {
         };
         assert_eq!(
             deny_reason.args,
-            serde_json::json!({ "session_id": "s-1", "call_id": "c-1", "occurrence_id": "occ", "reason": "too risky" })
+            serde_json::json!({ "session_id": "s-1", "occurrence_id": "occ", "reason": "too risky" })
         );
     }
 

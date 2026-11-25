@@ -1,69 +1,6 @@
 {
   "$comment": "Generated from the live horizon-acp extension types (the _horizon/* methods and the _meta.horizon payloads). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh.",
   "$defs": {
-    "ApprovalKind": {
-      "description": "Mirrors `contract::ApprovalKind` (crates/horizon-agent/src/contract.rs).",
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "const": "standard",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "domains": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "type": {
-              "const": "domain_grant",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "domains"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "ApprovalMeta": {
-      "description": "Mirrors `contract::ApprovalRequest` minus `reason`, keyed by its\n`ToolCallIdentity` (crates/horizon-agent/src/contract.rs).",
-      "properties": {
-        "call_id": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ApprovalKind"
-        },
-        "occurrence_id": {
-          "type": "string"
-        },
-        "task_session_id": {
-          "description": "The `task` child this approval is for, when it is not the session's\nown: shown through the session, answered to the child\n(`docs/agent-subagent-design.md` decision 4).",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "call_id",
-        "occurrence_id",
-        "kind"
-      ],
-      "type": "object"
-    },
     "AttachmentEnd": {
       "description": "Mirrors `hosting::AttachmentEnd` (crates/horizon-agent/src/hosting.rs).",
       "enum": [
@@ -222,117 +159,6 @@
         "session_id"
       ],
       "type": "object"
-    },
-    "ToolCallMeta": {
-      "description": "`tool_call_update`, whose `toolCallId` is the occurrence id. Mirrors\n`contract::ToolCallRequest`/`ToolCallResult` (crates/horizon-agent/src/contract.rs)\nand the result evidence fields (crates/horizon-agent/src/tools/output/evidence.rs).",
-      "properties": {
-        "auto_approved": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "call_id": {
-          "type": "string"
-        },
-        "outcome": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolOutcome"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Present once the call has a result."
-        },
-        "policy_tier": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tool_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "call_id",
-        "tool_id"
-      ],
-      "type": "object"
-    },
-    "ToolOutcome": {
-      "description": "Mirrors `contract::ToolOutcome` (crates/horizon-agent/src/contract/tool_result.rs).",
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "const": "succeeded",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "failed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "denied",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "cancelled",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "retry_occurrence_id": {
-              "type": "string"
-            },
-            "type": {
-              "const": "superseded",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "retry_occurrence_id"
-          ],
-          "type": "object"
-        }
-      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -350,17 +176,11 @@
     "initialize": {
       "$ref": "#/$defs/InitializeMeta"
     },
-    "request_permission": {
-      "$ref": "#/$defs/ApprovalMeta"
-    },
     "session_info": {
       "$ref": "#/$defs/SessionInfoMeta"
     },
     "session_new": {
       "$ref": "#/$defs/SessionNewMeta"
-    },
-    "tool_call": {
-      "$ref": "#/$defs/ToolCallMeta"
     }
   },
   "notifications": {
@@ -369,5 +189,5 @@
     }
   },
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 22
+  "x-session-protocol-version": 23
 }

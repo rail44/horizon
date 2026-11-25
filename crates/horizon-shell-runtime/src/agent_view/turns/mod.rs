@@ -32,7 +32,6 @@ pub fn pluralize(count: usize, singular: &str, plural: &str) -> String {
 
 #[cfg(test)]
 pub mod test_support {
-    use horizon_acp::{ToolCallMeta, ToolOutcome};
     use serde_json::Value;
 
     use super::{DiffLine, DiffLineKind};
@@ -67,13 +66,7 @@ pub mod test_support {
     fn call(call_id: &str, tool_id: &str, input: Value) -> ToolCall {
         ToolCall {
             occurrence_id: call_id.to_string(),
-            meta: ToolCallMeta {
-                call_id: call_id.to_string(),
-                tool_id: tool_id.to_string(),
-                outcome: None,
-                auto_approved: None,
-                policy_tier: None,
-            },
+            tool_id: tool_id.to_string(),
             status: ToolCallStatus::Pending,
             input,
             output: None,
@@ -99,11 +92,6 @@ pub mod test_support {
         } else {
             ToolCallStatus::Completed
         };
-        call.meta.outcome = Some(if failed {
-            ToolOutcome::Failed
-        } else {
-            ToolOutcome::Succeeded
-        });
         call.output = Some(output);
         AgentFrameItem::ToolCall(Box::new(call))
     }
@@ -131,7 +119,6 @@ pub mod test_support {
     pub fn approval_requested(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::Permission(Permission {
             identity: ToolCallIdentity {
-                call_id: call_id.to_string(),
                 occurrence_id: call_id.to_string(),
             },
             reason: "writes a file".to_string(),
@@ -144,7 +131,6 @@ pub mod test_support {
     pub fn task_approval_requested(task_session_id: &str, occurrence: &str) -> AgentFrameItem {
         AgentFrameItem::Permission(Permission {
             identity: ToolCallIdentity {
-                call_id: occurrence.to_string(),
                 occurrence_id: occurrence.to_string(),
             },
             reason: "reads outside the workspace".to_string(),

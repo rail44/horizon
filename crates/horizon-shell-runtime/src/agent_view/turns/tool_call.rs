@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn a_superseded_attempt_and_its_retry_keep_their_own_bodies() {
+    fn a_cancelled_attempt_and_its_retry_keep_their_own_bodies() {
         let mut first = with_occurrence(
             tool_finished(
                 "dup",
@@ -344,9 +344,7 @@ mod tests {
             "first",
         );
         if let AgentFrameItem::ToolCall(call) = &mut first {
-            call.meta.outcome = Some(horizon_acp::ToolOutcome::Superseded {
-                retry_occurrence_id: "retry".into(),
-            });
+            call.status = crate::agent_model::ToolCallStatus::Cancelled;
         }
         let items = vec![
             first,
@@ -361,7 +359,10 @@ mod tests {
             ),
         ];
         let views = build_tool_call_views(&items);
-        assert!(views[0].superseded());
+        assert_eq!(
+            views[0].outcome,
+            Some(crate::agent_model::ToolOutcome::Cancelled)
+        );
         std::assert_matches!(
             tool_call_body(&items, &views[0]), Some(ToolCallBody::Raw { ref lines, .. }) if lines.iter().any(|line| line.contains("replaces it"))
         );

@@ -190,7 +190,8 @@ pub(super) async fn run(
                     }
                 }
                 Some(Inbound::Permission(request, responder)) => {
-                    let Some(permission) = Permission::from_request(&request) else {
+                    let own = acp_session_id(route.session_id());
+                    let Some(permission) = Permission::from_request(&request, &own) else {
                         let _ = responder.respond(cancelled_permission());
                         continue;
                     };

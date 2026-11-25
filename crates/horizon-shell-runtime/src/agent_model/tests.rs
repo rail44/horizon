@@ -1,9 +1,6 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{
-    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, SessionEventNotification, SessionId, ToolCallMeta,
-    ToolOutcome, write_horizon_meta,
-};
+use horizon_acp::{MODEL_CONFIG_ID, SessionEventNotification, SessionId};
 use serde_json::json;
 
 use super::*;
@@ -39,43 +36,20 @@ fn idle(reason: Option<v2::StopReason>) -> v2::SessionUpdate {
 fn tool_update(
     occurrence: &str,
     status: Option<v2::ToolCallStatus>,
-    meta: Option<ToolCallMeta>,
+    name: Option<&str>,
 ) -> v2::ToolCallUpdate {
     let mut update = v2::ToolCallUpdate::new(occurrence);
     if let Some(status) = status {
         update.status = MaybeUndefined::Value(status);
     }
-    if let Some(meta) = meta {
-        let mut encoded = None;
-        write_horizon_meta(&mut encoded, &meta).unwrap();
-        update.meta = MaybeUndefined::Value(encoded.unwrap());
+    if let Some(name) = name {
+        update.name = MaybeUndefined::Value(name.to_string());
     }
     update
 }
 
-fn meta(call_id: &str, tool_id: &str, outcome: Option<ToolOutcome>) -> ToolCallMeta {
-    ToolCallMeta {
-        call_id: call_id.into(),
-        tool_id: tool_id.into(),
-        outcome,
-        auto_approved: None,
-        policy_tier: None,
-    }
-}
-
-fn permission(call_id: &str, occurrence: &str) -> Permission {
-    let mut request_meta = None;
-    write_horizon_meta(
-        &mut request_meta,
-        &ApprovalMeta {
-            call_id: call_id.into(),
-            occurrence_id: occurrence.into(),
-            kind: ApprovalKind::Standard,
-            task_session_id: None,
-        },
-    )
-    .unwrap();
-    let mut request = v2::RequestPermissionRequest::new(
+fn permission(occurrence: &str) -> Permission {
+    let request = v2::RequestPermissionRequest::new(
         "session",
         "Run bash",
         vec![
@@ -90,14 +64,16 @@ fn permission(call_id: &str, occurrence: &str) -> Permission {
                 v2::PermissionOptionKind::RejectOnce,
             ),
         ],
-    );
-    request.meta = request_meta;
-    Permission::from_request(&request).expect("the request carries ApprovalMeta")
+    )
+    .subject(v2::RequestPermissionSubject::ToolCall(Box::new(
+        v2::ToolCallPermissionSubject::new(v2::ToolCallUpdate::new(occurrence)),
+    )));
+    Permission::from_request(&request, &v2::SessionId::new("session"))
+        .expect("the request names its tool call")
 }
 
-fn identity(call_id: &str, occurrence: &str) -> ToolCallIdentity {
+fn identity(occurrence: &str) -> ToolCallIdentity {
     ToolCallIdentity {
-        call_id: call_id.into(),
         occurrence_id: occurrence.into(),
     }
 }
@@ -181,16 +157,12 @@ fn thoughts_fold_by_message_id() {
 #[test]
 fn a_tool_call_upserts_by_occurrence_id_through_its_lifecycle() {
     let mut model = AgentModel::default();
-    let mut request = tool_update(
-        "occ-1",
-        Some(v2::ToolCallStatus::Pending),
-        Some(meta("call-1", "bash", None)),
-    );
+    let mut request = tool_update("occ-1", Some(v2::ToolCallStatus::Pending), Some("bash"));
     request.raw_input = MaybeUndefined::Value(json!({"command": "echo hi"}));
     apply(&mut model, v2::SessionUpdate::ToolCallUpdate(request));
     let views = build_tool_call_views(&model.frame.items);
     assert_eq!(views.len(), 1);
-    assert_eq!(views[0].identity(), identity("call-1", "occ-1"));
+    assert_eq!(views[0].identity(), identity("occ-1"));
     assert_eq!(views[0].tool_id, "bash");
     assert!(!views[0].finished());
 
@@ -205,11 +177,7 @@ fn a_tool_call_upserts_by_occurrence_id_through_its_lifecycle() {
     apply(&mut model, running());
     assert_eq!(model.frame.state(), Some(SessionState::ToolRunning));
 
-    let mut finished = tool_update(
-        "occ-1",
-        Some(v2::ToolCallStatus::Completed),
-        Some(meta("call-1", "bash", Some(ToolOutcome::Succeeded))),
-    );
+    let mut finished = tool_update("occ-1", Some(v2::ToolCallStatus::Completed), Some("bash"));
     finished.raw_output = MaybeUndefined::Value(json!({
         "exit_code": 0, "output": "hi", "termination": "exited",
         "output_file": null, "truncated": false
@@ -221,30 +189,29 @@ fn a_tool_call_upserts_by_occurrence_id_through_its_lifecycle() {
     assert_eq!(views[0].result_index, Some(0));
     assert_eq!(model.frame.state(), Some(SessionState::Running));
 
-    // A retry under the same call id is its own occurrence; the old one
-    // closes as superseded.
+    // A retry is its own occurrence.
     apply(
         &mut model,
         v2::SessionUpdate::ToolCallUpdate(tool_update(
             "occ-2",
             Some(v2::ToolCallStatus::Pending),
-            Some(meta("call-1", "bash", None)),
+            Some("bash"),
         )),
     );
     let views = build_tool_call_views(&model.frame.items);
     assert_eq!(views.len(), 2);
-    assert_eq!(views[1].identity(), identity("call-1", "occ-2"));
+    assert_eq!(views[1].identity(), identity("occ-2"));
 }
 
 #[test]
-fn status_alone_settles_the_outcome_when_meta_carries_none() {
+fn the_status_settles_the_outcome() {
     let mut model = AgentModel::default();
     apply(
         &mut model,
         v2::SessionUpdate::ToolCallUpdate(tool_update(
             "occ-1",
             Some(v2::ToolCallStatus::Cancelled),
-            Some(meta("call-1", "fs_read", None)),
+            Some("fs_read"),
         )),
     );
     let views = build_tool_call_views(&model.frame.items);
@@ -259,38 +226,32 @@ fn pending_approvals_are_the_unanswered_permission_requests_of_the_open_turn() {
         v2::SessionUpdate::ToolCallUpdate(tool_update(
             "occ-1",
             Some(v2::ToolCallStatus::Pending),
-            Some(meta("call-1", "bash", None)),
+            Some("bash"),
         )),
     );
-    model.apply(AgentEvent::PermissionRequested(permission(
-        "call-1", "occ-1",
-    )));
-    model.apply(AgentEvent::PermissionRequested(permission(
-        "call-2", "occ-2",
-    )));
+    model.apply(AgentEvent::PermissionRequested(permission("occ-1")));
+    model.apply(AgentEvent::PermissionRequested(permission("occ-2")));
     apply(&mut model, requires_action());
     assert_eq!(model.frame.state(), Some(SessionState::WaitingForApproval));
     assert_eq!(
         actionable_pending_approval_identities_in(&model.frame.items),
-        [identity("call-1", "occ-1"), identity("call-2", "occ-2")]
+        [identity("occ-1"), identity("occ-2")]
     );
 
     // A re-sent request for the same occurrence does not duplicate it.
-    model.apply(AgentEvent::PermissionRequested(permission(
-        "call-1", "occ-1",
-    )));
+    model.apply(AgentEvent::PermissionRequested(permission("occ-1")));
     assert_eq!(
         actionable_pending_approval_identities_in(&model.frame.items).len(),
         2
     );
 
     model.apply(AgentEvent::PermissionResolved {
-        identity: identity("call-1", "occ-1"),
+        identity: identity("occ-1"),
         decision: PermissionDecision::Approved,
     });
     assert_eq!(
         actionable_pending_approval_identities_in(&model.frame.items),
-        [identity("call-2", "occ-2")]
+        [identity("occ-2")]
     );
 
     // A turn that ended leaves nothing actionable behind it.
@@ -350,7 +311,7 @@ fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
         v2::SessionUpdate::ToolCallUpdate(tool_update(
             "occ-1",
             Some(v2::ToolCallStatus::Completed),
-            Some(meta("call-1", "bash", Some(ToolOutcome::Succeeded))),
+            Some("bash"),
         )),
     );
     apply(&mut model, idle(Some(v2::StopReason::EndTurn)));
@@ -361,11 +322,9 @@ fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
     apply(&mut model, running());
     apply(&mut model, agent_chunk("a2", "sec"));
     apply(&mut model, agent_chunk("a2", "ond"));
-    model.apply(AgentEvent::PermissionRequested(permission(
-        "call-2", "occ-2",
-    )));
+    model.apply(AgentEvent::PermissionRequested(permission("occ-2")));
     model.apply(AgentEvent::PermissionResolved {
-        identity: identity("call-2", "occ-2"),
+        identity: identity("occ-2"),
         decision: PermissionDecision::Approved,
     });
     assert_eq!(model.frame.settled_revision, settled);
@@ -521,26 +480,20 @@ fn a_frame_says_in_a_line_what_its_session_does_or_asks() {
     assert_eq!(model.frame.words(), None);
 
     // A tool that runs: the tool, and what it is run on.
-    let mut update = tool_update(
-        "occ-1",
-        Some(v2::ToolCallStatus::InProgress),
-        Some(meta("call-1", "bash", None)),
-    );
+    let mut update = tool_update("occ-1", Some(v2::ToolCallStatus::InProgress), Some("bash"));
     update.raw_input = MaybeUndefined::Value(json!({"command": "cargo build\n--workspace"}));
     apply(&mut model, v2::SessionUpdate::ToolCallUpdate(update));
     assert_eq!(model.frame.status(), Some(SessionStatus::ToolRunning));
     assert_eq!(model.frame.words().as_deref(), Some("bash: cargo build"));
 
     // A permission it waits for: what the request says.
-    model.apply(AgentEvent::PermissionRequested(permission(
-        "call-1", "occ-1",
-    )));
+    model.apply(AgentEvent::PermissionRequested(permission("occ-1")));
     apply(&mut model, requires_action());
     assert_eq!(model.frame.words().as_deref(), Some("Run bash"));
 
     // A turn that ended: how the answer begins.
     model.apply(AgentEvent::PermissionResolved {
-        identity: identity("call-1", "occ-1"),
+        identity: identity("occ-1"),
         decision: PermissionDecision::Approved,
     });
     apply(
@@ -600,4 +553,33 @@ fn notices_compactions_and_a_failed_turns_error_are_lines() {
             ..
         }
     );
+}
+
+/// A call that failed after its approval was denied reads as denied.
+#[test]
+fn a_failed_call_whose_approval_was_denied_reads_as_denied() {
+    let mut model = AgentModel::default();
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-1",
+            Some(v2::ToolCallStatus::Pending),
+            Some("bash"),
+        )),
+    );
+    model.apply(AgentEvent::PermissionRequested(permission("occ-1")));
+    model.apply(AgentEvent::PermissionResolved {
+        identity: identity("occ-1"),
+        decision: PermissionDecision::Denied,
+    });
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-1",
+            Some(v2::ToolCallStatus::Failed),
+            None,
+        )),
+    );
+    let views = build_tool_call_views(&model.frame.items);
+    assert_eq!(views[0].outcome, Some(ToolOutcome::Denied));
 }

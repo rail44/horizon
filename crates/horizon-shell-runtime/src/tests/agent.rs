@@ -362,16 +362,11 @@ impl FakeAgentd {
                 ),
             ],
         );
-        write_horizon_meta(
-            &mut request.meta,
-            &horizon_acp::ApprovalMeta {
-                call_id: identity.call_id.clone(),
-                occurrence_id: identity.occurrence_id.clone(),
-                kind: horizon_acp::ApprovalKind::Standard,
-                task_session_id: None,
-            },
-        )
-        .unwrap();
+        request.subject = Some(v2::RequestPermissionSubject::ToolCall(Box::new(
+            v2::ToolCallPermissionSubject::new(v2::ToolCallUpdate::new(
+                identity.occurrence_id.clone(),
+            )),
+        )));
         self.connection.send_request(request)
     }
 }
@@ -842,7 +837,6 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
     wait_until_ready(&mut handle).await;
 
     let identity = |occurrence: &str| ToolCallIdentity {
-        call_id: "call-1".into(),
         occurrence_id: occurrence.into(),
     };
     let requested = |event: AgentEvent| match event {
@@ -941,4 +935,45 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     assert_eq!(text, "hello");
     handle.sender().send(AgentCommand::Close).unwrap();
     std::assert_matches!(fake.next_call().await, AgentCall::Close);
+}
+
+/// A subagent's permission request comes with its own session id: it is
+/// shown in its parent's pane, as the subagent's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_subagents_permission_request_is_shown_where_its_parent_is() {
+    let (client, server) = pair();
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let parent = SessionId::new();
+    let mut handle = start_mock_session(&agentd, parent);
+    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
+    wait_until_ready(&mut handle).await;
+
+    let child = SessionId::new();
+    fake.update(
+        parent,
+        v2::SessionUpdate::SubagentUpdate(
+            v2::SubagentUpdate::new(acp_session_id(child))
+                .state(v2::StateUpdate::Running(v2::RunningStateUpdate::new())),
+        ),
+    );
+    std::assert_matches!(
+        next_agent_event(&mut handle).await,
+        AgentEvent::Update(update) if matches!(*update, v2::SessionUpdate::SubagentUpdate(_))
+    );
+    let _answer = fake.permission(
+        child,
+        &ToolCallIdentity {
+            occurrence_id: "child-occ".into(),
+        },
+    );
+    let AgentEvent::PermissionRequested(permission) = next_agent_event(&mut handle).await else {
+        panic!("the child's request reaches the parent's pane");
+    };
+    assert_eq!(permission.identity.occurrence_id, "child-occ");
+    assert_eq!(
+        permission.task_session_id,
+        Some(child.as_uuid().to_string())
+    );
 }

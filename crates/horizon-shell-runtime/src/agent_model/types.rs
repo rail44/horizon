@@ -1,18 +1,23 @@
 //! The folded frame's data types, defined on ACP-native data: messages are
-//! keyed by their ACP `messageId`, tool calls by their occurrence id (the
-//! ACP `toolCallId`) with the daemon's [`ToolCallMeta`], and approvals by
-//! the pending `session/request_permission` they came from.
+//! keyed by their ACP `messageId`, tool calls by their ACP `toolCallId`, and
+//! approvals by the pending `session/request_permission` they came from.
 
 use std::time::Duration;
 
-use horizon_acp::{ToolCallMeta, ToolOutcome};
-
-/// One execution attempt of a tool call: the provider's call id plus the
-/// daemon's occurrence id (the ACP `toolCallId`).
+/// One tool call: its ACP `toolCallId`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ToolCallIdentity {
-    pub call_id: String,
     pub occurrence_id: String,
+}
+
+/// How a tool call ended: its ACP status, and whether the human denied it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolOutcome {
+    Succeeded,
+    Failed,
+    /// It failed after the human denied its approval.
+    Denied,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +54,8 @@ pub enum ToolCallStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolCall {
     pub occurrence_id: String,
-    pub meta: ToolCallMeta,
+    /// The tool's name (`name`, or the `title` when there is no name).
+    pub tool_id: String,
     pub status: ToolCallStatus,
     pub input: serde_json::Value,
     pub output: Option<serde_json::Value>,
@@ -58,17 +64,13 @@ pub struct ToolCall {
 impl ToolCall {
     pub fn identity(&self) -> ToolCallIdentity {
         ToolCallIdentity {
-            call_id: self.meta.call_id.clone(),
             occurrence_id: self.occurrence_id.clone(),
         }
     }
 
-    /// The terminal outcome: the daemon's `ToolCallMeta::outcome` when
-    /// present, otherwise read from the ACP status.
+    /// The terminal outcome its ACP status says; a denial is the frame's to
+    /// tell (`transcript::build_tool_call_views`).
     pub fn outcome(&self) -> Option<ToolOutcome> {
-        if let Some(outcome) = &self.meta.outcome {
-            return Some(outcome.clone());
-        }
         match self.status {
             ToolCallStatus::Pending | ToolCallStatus::InProgress => None,
             ToolCallStatus::Completed => Some(ToolOutcome::Succeeded),
