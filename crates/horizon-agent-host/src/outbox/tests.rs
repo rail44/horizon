@@ -1,0 +1,279 @@
+use super::log::{Index, Pending, Tail};
+use horizon_agent::contract::{Event, InputResult, SessionId, SessionInput, SessionInputOutcome};
+use std::io::Write;
+
+use crate::session::test_support::record;
+#[test]
+fn only_explicit_terminal_outcomes_enter_the_delivery_queue() {
+    let session = SessionId::new();
+    let mut index = Index::default();
+    index.fold(record(
+        session,
+        Event::MessageCommitted(horizon_agent::contract::Message {
+            role: horizon_agent::contract::MessageRole::Assistant,
+            text: "partial working text".into(),
+        }),
+    ));
+    assert!(index.pending.is_empty());
+    let outcome = SessionInputOutcome {
+        input_ids: vec!["request".into()],
+        delivery_id: "result".into(),
+        reply_to: None,
+        outcome: InputResult::Success {
+            text: "final answer".into(),
+        },
+    };
+    index.fold(record(session, Event::InputOutcome(outcome.clone())));
+    assert!(
+        matches!(index.pending.get(&(session,"result".into())), Some(Pending::Answer{outcome:value,..}) if value==&outcome)
+    );
+    index.fold(record(
+        session,
+        Event::DeliveryAcknowledged("result".into()),
+    ));
+    index.fold(record(session, Event::InputOutcome(outcome)));
+    assert!(index.pending.is_empty());
+}
+#[test]
+fn receipts_are_scoped_to_recipient_and_stable_source() {
+    let source = SessionId::new();
+    let target = SessionId::new();
+    let input = SessionInput {
+        id: "send".into(),
+        origin: "requester".into(),
+        text: "Review this".into(),
+        reply_to: None,
+        resume_work: false,
+    };
+    let mut index = Index::default();
+    index.fold(record(
+        source,
+        Event::SessionInputSent {
+            session_id: target,
+            input: input.clone(),
+        },
+    ));
+    assert!(index.pending.contains_key(&(source, "send".into())));
+    assert!(!index.accepted.contains(&(target, "send".into())));
+    index.fold(record(target, Event::InputAccepted(input)));
+    assert!(index.accepted.contains(&(target, "send".into())));
+    assert!(!index.accepted.contains(&(source, "send".into())));
+}
+#[test]
+fn tail_retries_a_partial_last_record_without_replaying_prior_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let mut file = std::fs::File::create(&path).unwrap();
+    let session = SessionId::new();
+    let text =
+        serde_json::to_string(&record(session, Event::DeliveryAcknowledged("one".into()))).unwrap();
+    writeln!(file, "{text}").unwrap();
+    let split = text.len() / 2;
+    write!(file, "{}", &text[..split]).unwrap();
+    file.flush().unwrap();
+    let mut tail = Tail::new(path);
+    assert_eq!(tail.read().unwrap().len(), 1);
+    assert!(tail.read().unwrap().is_empty());
+    writeln!(file, "{}", &text[split..]).unwrap();
+    file.flush().unwrap();
+    assert_eq!(tail.read().unwrap().len(), 1);
+    assert!(tail.read().unwrap().is_empty());
+}
+
+#[test]
+fn queueing_an_input_is_not_a_durable_receipt() {
+    let state = crate::session::test_support::state_with_rig_config(false, "test");
+    let target = SessionId::new();
+    let receiver = state.install_test_session(target);
+    let input = SessionInput {
+        id: "request".into(),
+        origin: "owner".into(),
+        text: "Explain the approach".into(),
+        reply_to: None,
+        resume_work: false,
+    };
+    let mut index = Index::default();
+    assert!(!super::receipt(&state, &index, target, input.clone()));
+    std::assert_matches!(
+        receiver.try_recv().unwrap(),horizon_agent::contract::Command::SessionInput(value) if value==input
+    );
+    index.fold(record(target, Event::InputAccepted(input.clone())));
+    assert!(super::receipt(&state, &index, target, input));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn pending_deliveries_keep_log_order_across_replay_and_duplicate_records() {
+    let first = SessionId::new();
+    let second = SessionId::new();
+    let target = SessionId::new();
+    let mut events = Vec::new();
+    for (source, sequence, id) in [
+        (first, 10, "request"),
+        (second, 11, "result"),
+        (first, 12, "correction"),
+    ] {
+        let event = if id == "result" {
+            Event::InputOutcome(SessionInputOutcome {
+                input_ids: vec!["input".into()],
+                delivery_id: id.into(),
+                reply_to: Some(format!(
+                    r#"{{"kind":"session","id":"{}"}}"#,
+                    target.as_uuid()
+                )),
+                outcome: InputResult::Success {
+                    text: "result".into(),
+                },
+            })
+        } else {
+            Event::SessionInputSent {
+                session_id: target,
+                input: SessionInput {
+                    id: id.into(),
+                    origin: "source".into(),
+                    text: id.into(),
+                    reply_to: None,
+                    resume_work: false,
+                },
+            }
+        };
+        let mut value = record(source, event);
+        value.sequence = sequence;
+        events.push(value);
+    }
+    let expected = vec!["request", "result", "correction"];
+    for order in [[0, 1, 2], [2, 0, 1]] {
+        let mut index = Index::default();
+        for offset in order {
+            index.fold(events[offset].clone());
+        }
+        let mut duplicate = events[0].clone();
+        duplicate.sequence = 99;
+        index.fold(duplicate);
+        assert_eq!(
+            index
+                .ordered_pending()
+                .iter()
+                .map(|((_, id), _)| id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        index.fold(record(first, Event::DeliveryAcknowledged("request".into())));
+        assert_eq!(
+            index
+                .ordered_pending()
+                .iter()
+                .map(|((_, id), _)| id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["result", "correction"]
+        );
+    }
+}
+
+#[test]
+fn tail_read_failure_does_not_discard_earlier_records_in_the_same_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let text = serde_json::to_string(&record(
+        SessionId::new(),
+        Event::DeliveryAcknowledged("retained".into()),
+    ))
+    .unwrap()
+        + "\n";
+    let mut broken = text.as_bytes().to_vec();
+    broken.extend_from_slice(&[0xff, b'\n']);
+    std::fs::write(&path, broken).unwrap();
+    let mut tail = Tail::new(path.clone());
+    assert!(tail.read().is_err());
+    std::fs::write(&path, text).unwrap();
+    let records = tail.read().unwrap();
+    assert_eq!(records.len(), 1);
+    std::assert_matches!(&records[0].event,Event::DeliveryAcknowledged(id) if id=="retained");
+    assert!(tail.read().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn pending_receipt_orders_one_recipient_without_blocking_another() {
+    use horizon_agent::contract::Command;
+    let state = crate::session::test_support::state_with_rig_config(false, "test");
+    let source = SessionId::new();
+    let target = SessionId::new();
+    let other = SessionId::new();
+    let receiver = state.install_test_session(target);
+    let other_receiver = state.install_test_session(other);
+    let dir = tempfile::tempdir().unwrap();
+    let mut outbox = super::Outbox::new(
+        state,
+        dir.path().join("agent.jsonl"),
+        Vec::new(),
+        Vec::new(),
+    );
+    for (id, sequence, recipient) in [
+        ("request", 1, target),
+        ("correction", 2, target),
+        ("unrelated", 3, other),
+    ] {
+        outbox.index.pending.insert(
+            (source, id.into()),
+            Pending::Send {
+                sequence,
+                target: recipient,
+                input: SessionInput {
+                    id: id.into(),
+                    origin: "source".into(),
+                    text: id.into(),
+                    reply_to: None,
+                    resume_work: false,
+                },
+            },
+        );
+    }
+    outbox.deliver_outputs().await.unwrap();
+    std::assert_matches!(
+        receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "request"
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "Correction waits for request receipt"
+    );
+    std::assert_matches!(
+        other_receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "unrelated"
+    );
+    outbox.index.accepted.insert((target, "request".into()));
+    // A missing source writer prevents acknowledgement in this isolated
+    // test, but an accepted first request must still release its successor.
+    assert!(outbox.deliver_outputs().await.is_err());
+    std::assert_matches!(
+        receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "correction"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_for_an_unregistered_kind_is_an_error_not_a_delivery() {
+    let state = crate::session::test_support::state_with_rig_config(false, "test");
+    let source = SessionId::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut outbox = super::Outbox::new(
+        state,
+        dir.path().join("agent.jsonl"),
+        Vec::new(),
+        Vec::new(),
+    );
+    outbox.index.pending.insert(
+        (source, "answer".into()),
+        Pending::Answer {
+            sequence: 1,
+            at: 1,
+            outcome: SessionInputOutcome {
+                input_ids: vec!["question".into()],
+                delivery_id: "answer".into(),
+                reply_to: Some(r#"{"kind":"elsewhere"}"#.into()),
+                outcome: InputResult::Success {
+                    text: "done".into(),
+                },
+            },
+        },
+    );
+    let error = outbox.deliver_outputs().await.unwrap_err();
+    assert!(error.contains("no sink for `elsewhere`"), "{error}");
+}

@@ -1,0 +1,23 @@
+[package]
+name = "horizon-board-flow"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+horizon-acp = { path = "../horizon-acp" }
+horizon-agent = { path = "../horizon-agent" }
+horizon-agent-host = { path = "../horizon-agent-host" }
+horizon-board = { path = "../horizon-board" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = "1.18"
+tokio = { version = "1.52", features = ["rt", "time"] }
+
+[dev-dependencies]
+agent-client-protocol = { workspace = true }
+horizon-agent-host = { path = "../horizon-agent-host", features = ["test-support"] }
+tempfile = "3"
+tokio = { version = "1.52", features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true

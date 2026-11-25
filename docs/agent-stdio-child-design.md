@@ -1,7 +1,8 @@
 # The agent as a stdio ACP child of the shell
 
-Status: proposed, not started. Board item #114 holds the decisions this
-design follows.
+Status: stage 1 implemented (the library and the two flow crates);
+stages 2-4 not started. Board item #114 holds the decisions this design
+follows.
 
 ## Goal
 

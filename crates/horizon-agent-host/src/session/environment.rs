@@ -1,0 +1,343 @@
+//! Build a session's tool environment and activate a replacement durably.
+
+use super::events::send_session_event;
+use super::exploration::AgentdExplorationHost;
+use super::setup::{
+    configured_domains, configured_filesystem_grants, configured_loopback_connect,
+    configured_mach_services, project_is_trusted, skill_discovery_root, tool_session_builder_for,
+};
+use super::state::{AgentdState, lock_unpoisoned};
+use crate::worktree;
+use crossbeam_channel::Sender;
+use horizon_agent::config::AgentConfig;
+use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
+use horizon_agent::hosting::{AgentWireEvent, WorkspaceRootResolved};
+use horizon_agent::live::LiveState;
+use horizon_agent::persistence::event_log::PersistedSessionContext;
+use horizon_agent::roles::{RoleId, RoleWrites};
+use horizon_agent::skills::SkillRegistry;
+use horizon_agent::tools::{
+    ReadOnly, RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState,
+    register_session_runtime,
+};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Stable session identity and spawn-time configuration, shared by initial
+/// construction and later activation. Config reloads affect future sessions.
+pub(super) struct SessionEnvironment<'a> {
+    pub(super) state: &'a Arc<AgentdState>,
+    pub(super) session_id: SessionId,
+    pub(super) provider_id: &'a ProviderId,
+    pub(super) role_id: Option<&'a RoleId>,
+    pub(super) agent_config: &'a AgentConfig,
+    /// The session's modules (`Modules::compose`), composed once when it
+    /// starts: every tool state prepared for it decides calls with them.
+    pub(super) modules: &'a horizon_agent::modules::Modules,
+}
+
+/// The resolved location and trust of one environment, after worktree selection.
+pub(super) struct EnvironmentLocation {
+    pub(super) workspace_root: Option<PathBuf>,
+    /// The session's spawn source; persisted as
+    /// `session_context.spawn_source_session_id`, and as
+    /// `session_context.parent_session_id` once `isolated`.
+    pub(super) parent_session_id: Option<SessionId>,
+    /// Whether `workspace_root` is a worktree the session owns (activated or
+    /// restored); persisted as `session_context.isolated_worktree`.
+    pub(super) isolated: bool,
+    pub(super) trusted: bool,
+}
+
+/// Runtime capabilities and the matching context to persist before publication.
+pub(super) struct PreparedEnvironment {
+    pub(super) tool_state: ToolSessionState,
+    pub(super) context: PersistedSessionContext,
+}
+
+impl SessionEnvironment<'_> {
+    pub(super) fn prepare(
+        &self,
+        location: EnvironmentLocation,
+        retained_grants: &[horizon_sandbox::FilesystemGrant],
+    ) -> PreparedEnvironment {
+        let Self {
+            state,
+            session_id,
+            provider_id,
+            role_id,
+            agent_config,
+            modules: _,
+        } = *self;
+        let EnvironmentLocation {
+            workspace_root,
+            parent_session_id,
+            isolated,
+            trusted,
+        } = location;
+        // The shared projection slot itself, not its current value: recall
+        // reads it per query, so a session started while the projection is
+        // still being rebuilt can recall as soon as the rebuild lands.
+        let recall = RecallContext {
+            session_id: Some(session_id),
+            store: state.duckdb_cell(),
+        };
+        // Use the same resolved root as the provider's prompt-side skill
+        // listing. Otherwise an isolated session can be told that a repository
+        // skill exists and then have `skill_read` look for its body in the
+        // daemon's checkout instead of the session's worktree (backlog 58).
+        let skill_root = skill_discovery_root(workspace_root.as_deref());
+        // The session's domains: the project's `[grants]` `network` names,
+        // plus what a `web_fetch` approval adds for the session.
+        // A `task` child starts with a copy of its requester's grants
+        // (`docs/agent-subagent-design.md` decision 12).
+        let seed = lock_unpoisoned(&state.task_seeds)
+            .remove(&session_id)
+            .unwrap_or_default();
+        let domains = SessionDomainPolicy::with_allowed(
+            configured_domains(state, workspace_root.as_deref())
+                .into_iter()
+                .chain(seed.domains),
+        );
+        let packages = state.packages();
+
+        // `task`'s daemon capability (`docs/agent-explore-design.md`).
+        // Withheld from an exploration session itself: its role allowlist
+        // already omits `task` (decision 4), and withholding the host
+        // too means a recursion is impossible rather than merely unadvertised.
+        let exploration: Option<Arc<dyn horizon_agent::tools::ExplorationHost>> =
+            if role_id.is_some_and(horizon_agent::roles::is_exploration) {
+                None
+            } else {
+                Some(Arc::new(AgentdExplorationHost {
+                    state: state.clone(),
+                    requester_id: session_id,
+                    provider_id: provider_id.clone(),
+                    workspace_root: workspace_root.clone(),
+                    // A child's approval is shown through its requester, so
+                    // a requester nobody watches has nobody to show it to.
+                    requester_unattended: role_id
+                        .and_then(|role| packages.resolve_role(role))
+                        .is_some_and(|role| role.unattended),
+                    forwarded: Default::default(),
+                }))
+            };
+
+        // `[grants]`, resolved once per session at spawn
+        // (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
+        // decision). Injected into the sandbox policy from the start, so a
+        // write inside one of this project's granted trees is simply not a
+        // boundary crossing and never reaches the judge or a human. Live
+        // sessions are unaffected by later config edits; `Reload Session
+        // Runtime` picks changes up for new ones, same lifecycle as
+        // `[[providers]]`.
+        let primary_checkout = if isolated {
+            None
+        } else {
+            match workspace_root.as_deref().and_then(worktree::project_root) {
+                Some(project)
+                    if workspace_root
+                        .as_deref()
+                        .and_then(|path| path.canonicalize().ok())
+                        .as_ref()
+                        == Some(&project) =>
+                {
+                    Some(project)
+                }
+                _ => None,
+            }
+        };
+        let mut filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
+        for grant in seed.filesystem_grants.iter().chain(retained_grants) {
+            if !filesystem_grants.contains(grant) {
+                filesystem_grants.push(grant.clone());
+            }
+        }
+        let loopback_connect = configured_loopback_connect(state, workspace_root.as_deref());
+        let mach_services = configured_mach_services(state, workspace_root.as_deref());
+        // Constructed before `workspace_root` is moved into
+        // `tool_session_builder_for` below.
+        let board = workspace_root
+            .as_deref()
+            .and_then(|root| state.extensions().board_host(state, root));
+        // A session in a worktree made for it commits there without asking
+        // (`docs/agent-subagent-design.md` decision 10).
+        let own_worktree_grants = workspace_root
+            .as_deref()
+            .filter(|_| isolated)
+            .map(|root| worktree::own_metadata_grants(root, session_id.as_uuid()))
+            .unwrap_or_default();
+        let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
+            .with_primary_checkout(primary_checkout)
+            // An unattended role's session (a wiki thread, a board session)
+            // has nobody to answer an approval prompt raised for it.
+            .with_unattended(
+                role_id
+                    .and_then(|role| packages.resolve_role(role))
+                    .is_some_and(|role| role.unattended),
+            )
+            // A role that may not write here gets a shell that writes
+            // nowhere (`docs/agent-subagent-design.md` decision 7); one that
+            // writes only in its own worktree gets a writable one when the
+            // activation that makes the worktree prepares this again.
+            .with_read_only(
+                match role_id
+                    .and_then(|role| packages.resolve_role(role))
+                    .map(|role| role.writes)
+                {
+                    Some(RoleWrites::Nowhere) => Some(ReadOnly::Delegated),
+                    Some(RoleWrites::InOwnWorktree) if !isolated => {
+                        Some(ReadOnly::UntilOwnWorktree)
+                    }
+                    _ => None,
+                },
+            )
+            .with_filesystem_grants(filesystem_grants.clone())
+            .with_own_worktree_grants(own_worktree_grants)
+            .with_loopback_connect(loopback_connect)
+            .with_skills(if trusted {
+                SkillRegistry::discover(&skill_root, &packages)
+            } else {
+                SkillRegistry::embedded(&packages)
+            })
+            .with_packages(packages.clone())
+            .with_mach_services(mach_services)
+            .with_domain_policy(domains)
+            .with_modules(self.modules.clone())
+            .with_exploration_host(exploration)
+            .build()
+            .with_board_host(board);
+        let persisted_context = PersistedSessionContext {
+            workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
+            isolated_worktree: isolated,
+            parent_session_id: isolated.then_some(parent_session_id).flatten(),
+            // What authority this session started with.
+            filesystem_grants,
+            spawn_source_session_id: parent_session_id,
+        };
+        PreparedEnvironment {
+            tool_state,
+            context: persisted_context,
+        }
+    }
+
+    /// Keep the lifecycle gate through persistence, publication, and rollback;
+    /// acknowledge the provider only after the replacement is ready.
+    pub(super) fn activate(
+        &self,
+        base: &str,
+        live_state: &LiveState,
+        tool_state: &mut ToolSessionState,
+        results: &Sender<ToolCompletion>,
+        commands: &Sender<Command>,
+    ) {
+        let state = self.state;
+        let session_id = self.session_id;
+        let prepared = (|| {
+            let _lifecycle = lock_unpoisoned(&state.lifecycle);
+            let writer = state
+                .writer()
+                .ok_or("Environment activation requires persistence")?;
+            writer.flush().map_err(|error| error.to_string())?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !horizon_agent::tools::session_tool_work_settled(session_id) {
+                if std::time::Instant::now() >= deadline {
+                    return Err(
+                        "Previous tool work is still settling; retry activation after it finishes"
+                            .into(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let root = tool_state
+                .workspace_root()
+                .ok_or("Session has no repository root")?;
+            if lock_unpoisoned(&state.sessions)
+                .get(&session_id)
+                .is_some_and(|entry| entry.worktree.is_some())
+            {
+                return Err("Session already owns a worktree".to_string());
+            }
+            let retained_grants = tool_state.retained_filesystem_grants();
+            for grant in &retained_grants {
+                horizon_sandbox::revalidate_grant(grant).map_err(|error| error.to_string())?;
+            }
+            let spawn_source_session_id = lock_unpoisoned(&state.sessions)
+                .get(&session_id)
+                .and_then(|entry| entry.spawn_source_session_id);
+            let worktree =
+                crate::worktree::create_isolated_worktree_at(root, session_id.as_uuid(), base)?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let trusted = project_is_trusted(state, Some(&worktree.path));
+                let PreparedEnvironment {
+                    tool_state: replacement,
+                    context,
+                } = self.prepare(
+                    EnvironmentLocation {
+                        workspace_root: Some(worktree.path.clone()),
+                        parent_session_id: spawn_source_session_id,
+                        isolated: true,
+                        trusted,
+                    },
+                    &retained_grants,
+                );
+                // Domains approved for this session so far; the replacement
+                // was seeded from the project's configured domains alone.
+                replacement.retain_domains_from(tool_state);
+                let identity = worktree.identity();
+                live_state
+                    .activate_context(context, Event::EnvironmentActivated(identity.clone()))?;
+                register_session_runtime(
+                    session_id,
+                    replacement.clone(),
+                    live_state.clone(),
+                    results.clone(),
+                );
+                *tool_state = replacement;
+                // The derivation edge is recorded when the worktree is
+                // created: the spawn source becomes the parent.
+                let parent_session_id = lock_unpoisoned(&state.sessions)
+                    .get_mut(&session_id)
+                    .and_then(|entry| {
+                        entry.workspace_root = Some(worktree.path.clone());
+                        entry.worktree = Some(worktree.clone());
+                        entry.parent_session_id = spawn_source_session_id;
+                        entry.parent_session_id
+                    });
+                send_session_event(
+                    state,
+                    session_id,
+                    AgentWireEvent::Event(Event::EnvironmentActivated(identity)),
+                );
+                // The same metadata event setup and attachment replay send, so
+                // a live client follows the new root without reattaching.
+                send_session_event(
+                    state,
+                    session_id,
+                    AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
+                        workspace_root: worktree.path.clone(),
+                        parent_session_id,
+                    }),
+                );
+                Ok((worktree.path.clone(), worktree.branch.clone(), trusted))
+            }))
+            .unwrap_or_else(|_| Err("Failed to prepare the session environment".into()));
+            if outcome.is_err() {
+                crate::worktree::remove_worktree_if_clean(&worktree);
+            }
+            outcome
+        })();
+        let command = match prepared {
+            Ok((workspace_root, branch, trusted_project)) => Command::EnvironmentPrepared {
+                workspace_root,
+                branch,
+                trusted_project,
+            },
+            Err(message) => Command::EnvironmentActivationFailed { message },
+        };
+        let _ = commands.send(command);
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -2771,6 +2771,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-agent-host"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "crossbeam-channel",
+ "horizon-acp",
+ "horizon-agent",
+ "horizon-config",
+ "horizon-sandbox",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-agent-probe"
 version = "0.1.0"
 dependencies = [
@@ -2789,22 +2808,20 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
- "crossbeam-channel",
  "duckdb",
  "horizon-acp",
  "horizon-agent",
- "horizon-board",
+ "horizon-agent-host",
+ "horizon-board-flow",
  "horizon-config",
  "horizon-daemon-testkit",
  "horizon-sandbox",
- "horizon-wiki",
+ "horizon-wiki-flow",
  "horizon-wire",
  "libc",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "tokio-util",
  "uuid",
 ]
 
@@ -2820,6 +2837,22 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "horizon-board-flow"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "horizon-acp",
+ "horizon-agent",
+ "horizon-agent-host",
+ "horizon-board",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3090,6 +3123,21 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-wiki-flow"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "horizon-agent",
+ "horizon-agent-host",
+ "horizon-wiki",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "uuid",
 ]
 

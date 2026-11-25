@@ -31,7 +31,9 @@ only rebuilds the root `horizon` binary, and Horizon's sessions run inside
 If either binary was never built (or is stale after a change on its side),
 `cargo run` still starts Horizon but that domain's panes fail to spawn a
 runtime — run `cargo build --workspace` first (and again after touching
-`crates/horizon-agent`/`crates/horizon-agentd`, or
+`crates/horizon-agent`, `crates/horizon-agent-host`, the flows composed
+into it (`crates/horizon-board-flow`, `crates/horizon-wiki-flow`) or
+`crates/horizon-agentd`, or
 `crates/horizon-terminal-core`/`crates/horizon-terminald`), then use the
 matching reload command from the command palette to retry:
 `Reload Agent Runtime` restarts the agent daemon and leaves terminals
@@ -422,8 +424,11 @@ their wiring:
 - `agent/` — the agent view and its live session. The fold from ACP
   session updates to what the pane shows is `horizon-shell-runtime`'s
   `agent_model`, `agent_view` and `agent_display`. Contract/providers/tools/persistence
-  live in `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
-  `docs/acp-agentd-design.md`.
+  live in `crates/horizon-agent`; the sessions are hosted by
+  `crates/horizon-agent-host` (with the board and the wiki composed in as
+  extensions, `crates/horizon-board-flow` and `crates/horizon-wiki-flow`),
+  served over `crates/horizon-agentd`'s socket — see
+  `docs/acp-agentd-design.md` and `docs/agent-stdio-child-design.md`.
 - `board/` — the task board as two session-less views, the list and the
   thread, over `crates/horizon-board`; what they decide from, with no
   UI in it, is beside them (`model.rs`, `activity.rs`, `chrome.rs`,

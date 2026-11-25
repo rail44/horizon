@@ -1,13 +1,9 @@
-//! `horizon-agentd`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
-//! agent-runtime split. Owns the Unix socket, the `initialize` handshake, and (as
-//! of step 3) real agent sessions: `session/new` spawns the
-//! provider/tool/persistence machinery this binary hosts (see
-//! `session::run_session`), commands and events route by session id, and
-//! this process owns the event log + DuckDB projection -- Horizon never
-//! opens either itself. As of step 4, every session found in the log at
-//! startup is resumed live (see `session::resume_persisted_sessions`) and
-//! `session/resume` re-emits a session's committed events to a (re)connecting
-//! client.
+//! `horizon-agentd`: the agent host (`horizon-agent-host`) behind a Unix
+//! socket, composed with the board and the wiki (`docs/agent-runtime-split-design.md`;
+//! `docs/agent-stdio-child-design.md` replaces it). It owns the socket, the
+//! accept loop, what a drain and SIGTERM do to the process, and the test
+//! gates a spawning test reaches through the environment; the sessions, the
+//! event log and the ACP agent side are the host's.
 //!
 //! **Bind first (startup ordering).** [`main`] binds/listens on the socket
 //! as its first action after arg/config parsing -- before it ever reads the
@@ -27,72 +23,36 @@
 //! it ever opens its own log.
 //!
 //! The event-log read and session resume move to a background task
-//! ([`spawn_resume_task`]) that races the accept loop. `initialize` -- the one
+//! (`horizon_agent_host::startup::spawn_resume_task`) that races the accept loop. `initialize` -- the one
 //! method that never touches session state -- is answered
 //! immediately regardless of whether that background work has finished;
 //! `session/list`/`session/resume`/`session/new` would return an incomplete (or,
 //! right after bind, empty) view of history if answered too early, so they
-//! block on [`session::AgentdState::wait_until_resume_ready`] first -- a
+//! block on the host's resume readiness first -- a
 //! readiness gate, not a protocol change.
 //!
-//! **The DuckDB projection and readiness.** The event log's own background
-//! writer thread (`horizon_agent::persistence::event_log::writer`) owns
-//! the projection: [`open_persistence`] passes
-//! `agent_config.persistence.duckdb_path` into
-//! [`WriterHandle::open_silently`], and the writer keeps the opened `Store`
-//! for the rest of the process's life, projecting every append live
-//! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
-//! Startup takes one of two modes (that doc's "Incremental startup"
-//! addendum):
-//!
-//! - **Incremental.** The projection's format stamp is current and the
-//!   log line at its cursor still matches. Opening the store, reading the
-//!   log after the cursor, and catching that tail up into the projection
-//!   all happen *before* `WriterInit::Ready`, so they are on the readiness
-//!   path -- deliberately, because they are small and resume then reads
-//!   the projection instead of the log
-//!   ([`session::resume_persisted_sessions_from_projection`]).
-//! - **Full.** Anything else (first start, a stale stamp, a cursor that no
-//!   longer matches the log). The whole log is read, `WriterInit::Ready`
-//!   carries every record, and the full rebuild of the projection runs on
-//!   its own thread after `Ready` -- off the readiness path, and off the
-//!   writer too: appends and flushes (resume's fixup commits included) go
-//!   through meanwhile, and the writer catches the rebuilt store up with
-//!   them before sharing it. Readiness never waits on a full rebuild of a
-//!   derived, non-authoritative read model, since this mode resumes
-//!   sessions from the JSONL records directly. A drain during a rebuild
-//!   abandons it; the next start rebuilds again.
-
-mod board_flow;
-mod checkpoint;
-mod hub;
-mod outbox;
-mod providers;
-mod session;
-mod wiki_flow;
-mod worktree;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use horizon_agent::config::AgentConfig;
-use horizon_agent::persistence::event_log::{LogCursor, Record, WriterHandle, WriterInit};
-use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
+use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
+use horizon_agent_host::DAEMON_NAME;
+use horizon_agent_host::extension::Extensions;
+use horizon_agent_host::hub::{self, flush_event_log_before_exit};
+use horizon_agent_host::session::AgentdState;
+use horizon_agent_host::startup::{StartupHooks, spawn_resume_task};
+use horizon_agent_host::{outbox, providers};
+use horizon_board_flow::BoardFlow;
+use horizon_wiki_flow::WikiFlow;
 use horizon_wire::daemon;
 use horizon_wire::socket::default_agentd_socket_path;
-use hub::flush_event_log_before_exit;
-use session::AgentdState;
 use tokio::net::{UnixListener, UnixStream};
-
-/// This daemon's name in every log line and diagnostic, including the ones
-/// `horizon-wire`'s shared daemon plumbing emits on its behalf.
-const DAEMON_NAME: &str = "horizon-agentd";
 /// Reported in this binary's `initialize` reply, as `_meta.horizon.binary_id`.
 const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
 
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
-/// file's path, [`spawn_resume_task`] waits until that file is there before
+/// file's path, the host's startup waits until that file is there before
 /// opening the event log, so a test can prove the bind-first ordering
 /// (`initialize` answers while the resume is held; `session/list`/
 /// `session/resume` don't) instead of relying on incidental timing. Never
@@ -101,7 +61,7 @@ const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_GATE";
 
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
 /// file's path, the full DuckDB rebuild waits until that file is there
-/// (the writer's `before_rebuild`, see [`open_persistence`]), so a test can
+/// (the writer's `before_rebuild`), so a test can
 /// prove the rebuild never sits on the readiness path `session/list` and
 /// `session/new` block on. Never set in production.
 const TEST_DUCKDB_REBUILD_GATE_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_GATE";
@@ -138,14 +98,25 @@ fn wait_for_gate(gate: &Path) {
     }
 }
 
-/// What the board and the wiki add to the agent: their roles, skills and
-/// tools, composed once here and carried on the agent configuration
+/// The board and the wiki, rooted at `start_dir`. What they add to the
+/// agent (roles, skills and tools) is carried on the agent configuration
 /// (`RigAgentConfig::packages`) to the providers and every session.
-pub(crate) fn compose_packages() -> horizon_agent::packages::Packages {
-    wiki_flow::add(board_flow::roles::add(
-        horizon_agent::packages::Packages::builder(),
-    ))
-    .build()
+fn extensions(start_dir: Option<PathBuf>) -> Extensions {
+    Extensions::new(vec![
+        Arc::new(BoardFlow::new(start_dir.clone())),
+        Arc::new(WikiFlow::new(start_dir)),
+    ])
+}
+
+/// What a drain does once the log is flushed.
+fn exit_now() {
+    // `_exit`, not `exit`: `exit` runs the process's exit handlers and
+    // static destructors while the sessions' threads are still running,
+    // and the daemon then ends in a segmentation fault some of the time.
+    // Nothing they would do is wanted: the log is flushed, and standard
+    // error is not buffered.
+    // SAFETY: `_exit` only ends the process.
+    unsafe { libc::_exit(0) }
 }
 
 #[tokio::main]
@@ -166,8 +137,9 @@ async fn main() -> anyhow::Result<()> {
              call will ask to run outside a sandbox"
         );
     }
+    let extensions = extensions(std::env::current_dir().ok());
     let mut agent_config = providers::agent_config(raw_config);
-    agent_config.rig.packages = compose_packages();
+    agent_config.rig.packages = extensions.packages();
     // Resolved once at startup; a provider reload reads it again.
     let config_path = horizon_config::resolved_path();
     eprintln!(
@@ -202,257 +174,32 @@ async fn main() -> anyhow::Result<()> {
             horizon_config::project_grants(raw_config),
             horizon_config::trusted_projects(raw_config),
         )
-        .with_checkpoints(checkpoints),
+        .with_checkpoints(checkpoints)
+        .with_extensions(extensions.clone()),
     );
 
-    spawn_resume_task(state.clone(), agent_config, duckdb_cell);
-    let start_dir = std::env::current_dir().ok();
-    let mut sources = vec![board_flow::source(&state, start_dir.clone())];
-    sources.extend(wiki_flow::source(start_dir));
+    spawn_resume_task(
+        state.clone(),
+        agent_config,
+        duckdb_cell,
+        StartupHooks {
+            before_resume: test_gate(TEST_RESUME_GATE_VAR)
+                .map(|gate| Box::new(move || wait_for_gate(&gate)) as Box<dyn FnOnce() + Send>),
+            before_rebuild: test_gate(TEST_DUCKDB_REBUILD_GATE_VAR)
+                .map(|gate| Arc::new(move || wait_for_gate(&gate)) as Arc<dyn Fn() + Send + Sync>),
+            refused: Box::new(|error| {
+                eprintln!("horizon-agentd: startup refused: {error:#}");
+                std::process::exit(1);
+            }),
+        },
+    );
     outbox::spawn(
         state.clone(),
-        sources,
-        vec![board_flow::sink(), wiki_flow::sink()],
+        extensions.trigger_sources(),
+        extensions.reply_sinks(),
     );
 
     run(listener, &socket_path, state).await
-}
-
-struct PersistenceStartup {
-    writer: Option<WriterHandle>,
-    /// Every record in the full mode; only the records after `read_after`
-    /// in the incremental mode.
-    records: Vec<Record>,
-    /// `Some` in the incremental mode: the projection cursor the startup
-    /// read began after.
-    read_after: Option<LogCursor>,
-    max_known_sequence: Option<u64>,
-    skipped_lines_summary: Option<String>,
-    duckdb_ready_rx: crossbeam_channel::Receiver<Option<DuckdbStoreHandle>>,
-}
-
-/// Opens this process's own event log writer, resumes every session found
-/// in it, and marks `state` ready -- all on a background task that races
-/// the accept loop `main` starts right after this returns, per the
-/// module's bind-first fix. Decision 3 in the design doc ("the child owns
-/// the event log and DuckDB projection") still holds: this uses this
-/// binary's own config load, never Horizon's.
-///
-/// What readiness waits on depends on the writer's startup mode (see the
-/// module doc). In the incremental mode the writer has already delivered
-/// the caught-up store, so this task takes it, publishes it to
-/// `duckdb_cell`, and resumes from it; if that fails before anything was
-/// written it falls back to reading the whole log. In the full mode
-/// `duckdb_cell` is populated by a *separate*, fire-and-forget
-/// `spawn_blocking` task spawned after `mark_resume_ready` -- deliberately
-/// not awaited by (or ordered against) `resume_persisted_sessions`/
-/// `mark_resume_ready`, so the full rebuild never lands on the readiness
-/// path.
-fn spawn_resume_task(
-    state: Arc<AgentdState>,
-    agent_config: AgentConfig,
-    duckdb_cell: SharedDuckdbStore,
-) {
-    tokio::task::spawn_blocking(move || {
-        if let Some(gate) = test_gate(TEST_RESUME_GATE_VAR) {
-            wait_for_gate(&gate);
-        }
-        let PersistenceStartup {
-            writer,
-            records,
-            read_after,
-            max_known_sequence,
-            skipped_lines_summary,
-            duckdb_ready_rx,
-        } = match open_persistence(&agent_config) {
-            Ok(persistence) => persistence,
-            Err(error) => {
-                // No sessions have passed the readiness gate yet. Refuse
-                // a missing or incompatible log rather than run without history.
-                eprintln!("horizon-agentd: startup refused: {error}");
-                std::process::exit(1);
-            }
-        };
-        state.set_writer(writer);
-        state.set_skipped_lines_summary(skipped_lines_summary);
-
-        let Some(cursor) = read_after else {
-            // Step 4: "agentd restart = read own log, rebuild rig_history,
-            // mark turns that died mid-flight as cancelled ... sessions are
-            // live again".
-            session::resume_persisted_sessions(&state, records);
-            state.mark_resume_ready();
-
-            // Propagates the writer thread's own rebuild-or-open decision
-            // into the shared cell whenever it lands --
-            // `duckdb_ready_rx.recv()` blocks this dedicated propagator task,
-            // never the resume/readiness path above (already completed by
-            // the time this line runs). A disconnected channel (the writer's
-            // startup itself failed, so it never reached the DuckDB step at
-            // all) is treated the same as an explicit "no store".
-            tokio::task::spawn_blocking(move || {
-                let store = duckdb_ready_rx.recv().ok().flatten();
-                duckdb_cell.set(store);
-            });
-            return;
-        };
-
-        // The incremental mode sends the store before `Ready`, so this
-        // never waits.
-        let store = duckdb_ready_rx.recv().ok().flatten();
-        duckdb_cell.set(store.clone());
-        let through_sequence =
-            max_known_sequence.map_or(cursor.sequence, |sequence| sequence.max(cursor.sequence));
-        let resumed = match &store {
-            Some(store) => session::resume_persisted_sessions_from_projection(
-                &state,
-                store,
-                &records,
-                through_sequence,
-            ),
-            None => Err(anyhow::anyhow!("the projection is unavailable")),
-        };
-        if let Err(error) = resumed {
-            eprintln!(
-                "horizon-agentd: resuming from the DuckDB projection failed ({error:#}); \
-                 reading the whole event log"
-            );
-            match read_whole_log(&state, &agent_config) {
-                Ok(records) => session::resume_persisted_sessions(&state, records),
-                Err(error) => {
-                    eprintln!("horizon-agentd: startup refused: {error:#}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        state.mark_resume_ready();
-    });
-}
-
-/// The incremental mode's fallback: everything the writer has made durable,
-/// read the same way the full mode's startup read does.
-fn read_whole_log(state: &AgentdState, agent_config: &AgentConfig) -> anyhow::Result<Vec<Record>> {
-    if let Some(writer) = state.writer() {
-        writer.flush()?;
-    }
-    Ok(
-        horizon_agent::persistence::event_log::read(&agent_config.persistence.event_log_path)?
-            .records,
-    )
-}
-
-/// Opens this process's own event log writer, using this binary's own
-/// config load (never Horizon's). Blocks the calling (background, per
-/// [`spawn_resume_task`]) task on the writer's startup read -- simpler than
-/// threading the `WriterInit` channel further, and no longer something the
-/// accept loop waits on (see the module doc). Also hands back the startup
-/// read's records (empty if persistence is disabled or there's nothing yet;
-/// only the tail after the projection cursor in the incremental mode, with
-/// that cursor in `read_after`) so the caller can resume every session
-/// ([`session::resume_persisted_sessions`] or
-/// [`session::resume_persisted_sessions_from_projection`]), and the
-/// human-readable
-/// skipped-lines summary (if any corrupt/torn lines were found) so
-/// [`spawn_resume_task`] can stash it on [`AgentdState`] for the hub's
-/// `initialize` to forward to a connecting client as `_horizon/session_event`
-/// -- restoring the step-3 trim recorded in
-/// `docs/agent-runtime-split-design.md`
-/// ("Skipped-lines status reporting is omitted").
-///
-/// Opens via [`WriterHandle::open_silently`] rather than [`WriterHandle::
-/// open`]: this function already prints its own `horizon-agentd`-prefixed
-/// skipped-lines summary just below, so the shared writer module's own
-/// generic summary line would otherwise double up in agentd's stderr.
-/// `open_silently`'s `duckdb_path` argument is this binary's only real
-/// production use of the live DuckDB projection (see the module doc): the
-/// event log's own writer thread either catches the projection up from its
-/// cursor before `Ready` or rebuilds it after `Ready`, and then keeps that
-/// `Store` open for the rest of this process's life.
-///
-/// The fourth return value is `open_silently`'s own second receiver: the
-/// writer thread's DuckDB decision, delivered exactly once: before `Ready`
-/// in the incremental mode, once the rebuilt store has caught up in the
-/// full mode (see [`spawn_resume_task`], its only consumer). A disconnected
-/// channel
-/// (writer startup itself failed)
-/// is indistinguishable from -- and handled the same as -- an explicit
-/// `None`.
-fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
-    match open_persistence_once(agent_config) {
-        Err(error)
-            if error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>() =>
-        {
-            eprintln!("horizon-agentd: {error}");
-            move_old_history_aside(agent_config)?;
-            open_persistence_once(agent_config)
-        }
-        opened => opened,
-    }
-}
-
-/// Moves a log this build cannot read, and the DuckDB projection built from
-/// it (with its WAL), aside under a `.pre-<time>` name, so the daemon starts
-/// with a fresh history. The old sessions are not resumed.
-fn move_old_history_aside(agent_config: &AgentConfig) -> anyhow::Result<()> {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
-        .unwrap_or_default();
-    let log = &agent_config.persistence.event_log_path;
-    let mut paths = vec![log.clone()];
-    if let Some(duckdb) = &agent_config.persistence.duckdb_path {
-        paths.push(duckdb.clone());
-        let mut wal = duckdb.clone().into_os_string();
-        wal.push(".wal");
-        paths.push(PathBuf::from(wal));
-    }
-    for path in paths.into_iter().filter(|path| path.exists()) {
-        let mut aside = path.clone().into_os_string();
-        aside.push(format!(".pre-{stamp}"));
-        let aside = PathBuf::from(aside);
-        std::fs::rename(&path, &aside)?;
-        eprintln!(
-            "horizon-agentd: moved {} aside to {}",
-            path.display(),
-            aside.display()
-        );
-    }
-    Ok(())
-}
-
-fn open_persistence_once(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
-    let before_rebuild = test_gate(TEST_DUCKDB_REBUILD_GATE_VAR).map(|gate| {
-        Box::new(move || wait_for_gate(&gate))
-            as horizon_agent::persistence::event_log::BeforeRebuild
-    });
-    let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(
-        &agent_config.persistence.event_log_path,
-        agent_config.persistence.duckdb_path.clone(),
-        before_rebuild,
-    );
-    match init_rx.recv() {
-        Ok(WriterInit::Ready(report)) => {
-            let skipped_summary = report.skipped_summary();
-            if let Some(summary) = &skipped_summary {
-                eprintln!(
-                    "horizon-agentd: {summary} while opening {}",
-                    agent_config.persistence.event_log_path.display()
-                );
-            }
-            Ok(PersistenceStartup {
-                writer: Some(writer),
-                records: report.records,
-                read_after: report.read_after,
-                max_known_sequence: report.max_known_sequence,
-                skipped_lines_summary: skipped_summary,
-                duckdb_ready_rx: duckdb_rx,
-            })
-        }
-        Ok(WriterInit::Failed(error)) => Err(error),
-        Err(error) => Err(anyhow::anyhow!(
-            "Event log writer exited before startup: {error}"
-        )),
-    }
 }
 
 /// The accept loop, over `horizon-wire`'s shared daemon lifecycle
@@ -486,7 +233,7 @@ async fn run(
 /// bridges to this connection die.
 async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyhow::Result<()> {
     let (read, write) = stream.into_split();
-    hub::serve(read, write, state, BINARY_ID)
+    hub::serve(read, write, state, BINARY_ID, Arc::new(exit_now))
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
@@ -494,6 +241,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
     use std::time::Duration;
 
     /// How long the writer thread's startup read is held open below. The
@@ -509,38 +257,7 @@ mod tests {
     /// one that does not, which would stop every session at startup.
     #[test]
     fn every_skill_the_packages_add_parses() {
-        let _ = horizon_agent::skills::SkillRegistry::embedded(&compose_packages());
-    }
-
-    #[test]
-    fn an_older_log_is_moved_aside_and_a_fresh_one_starts() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.jsonl");
-        let mut record = state_record(horizon_agent::contract::SessionId::new(), 7);
-        record.version = 1;
-        let original = format!("{}\n", serde_json::to_string(&record).unwrap());
-        std::fs::write(&path, &original).unwrap();
-        let mut config = session::test_support::test_config();
-        config.persistence.event_log_path = path.clone();
-        let Ok(startup) = open_persistence(&config) else {
-            panic!("an older log is moved aside rather than refusing startup");
-        };
-        assert!(startup.records.is_empty(), "the fresh log holds nothing");
-        let aside: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.to_string_lossy().contains("events.jsonl.pre-"))
-            .collect();
-        assert_eq!(aside.len(), 1, "{aside:?}");
-        assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), original);
-    }
-
-    #[test]
-    fn failed_log_open_refuses_startup_instead_of_running_without_persistence() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = session::test_support::test_config();
-        config.persistence.event_log_path = dir.path().to_path_buf();
-        assert!(open_persistence(&config).is_err());
+        let _ = horizon_agent::skills::SkillRegistry::embedded(&extensions(None).packages());
     }
 
     fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {
@@ -592,7 +309,7 @@ mod tests {
                 .expect("append enqueues while the startup read is still gated");
         }
 
-        let agent_config = crate::session::test_support::test_config();
+        let agent_config = horizon_agent_host::session::test_support::test_config();
         let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
