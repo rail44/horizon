@@ -81,8 +81,8 @@ dependencies = [
 
 [[package]]
 name = "accesskit_xplat"
-version = "0.2.1"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+version = "0.2.2"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 dependencies = [
  "accesskit",
  "accesskit_ios",
@@ -871,8 +871,8 @@ dependencies = [
 
 [[package]]
 name = "blitz-dom"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+version = "0.3.0-beta.5"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 dependencies = [
  "accesskit",
  "anyrender",
@@ -883,7 +883,7 @@ dependencies = [
  "color",
  "cssparser 0.38.0",
  "cursor-icon",
- "debug_timer 0.1.3 (git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968)",
+ "debug_timer 0.1.3 (git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938)",
  "euclid",
  "html-escape",
  "icu_casemap",
@@ -922,8 +922,8 @@ dependencies = [
 
 [[package]]
 name = "blitz-paint"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+version = "0.3.0-beta.5"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 dependencies = [
  "anyrender",
  "anyrender_svg",
@@ -942,8 +942,8 @@ dependencies = [
 
 [[package]]
 name = "blitz-shell"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+version = "0.3.0-beta.5"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 dependencies = [
  "accesskit",
  "accesskit_xplat",
@@ -965,8 +965,8 @@ dependencies = [
 
 [[package]]
 name = "blitz-traits"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+version = "0.3.0-beta.5"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 dependencies = [
  "atomic_refcell",
  "bitflags 2.13.2",
@@ -1868,7 +1868,7 @@ checksum = "da220af51a1a335e9a930beaaef53d261e41ea9eecfb3d973a3ddae1a7284b9c"
 [[package]]
 name = "debug_timer"
 version = "0.1.3"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 
 [[package]]
 name = "deltae"
@@ -8054,8 +8054,8 @@ dependencies = [
 
 [[package]]
 name = "stylo_taffy"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/DioxusLabs/blitz?rev=29a439e0563cbed6252c8f1d8ab4ed68afe03968#29a439e0563cbed6252c8f1d8ab4ed68afe03968"
+version = "0.3.0-beta.5"
+source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
 dependencies = [
  "bitflags 2.13.2",
  "stylo",

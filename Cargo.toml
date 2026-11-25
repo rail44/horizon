@@ -68,10 +68,10 @@ agent-client-protocol = { version = "=5.4.0", features = ["unstable_protocol_v2"
 agent-client-protocol-schema = { version = "=1.19.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors"] }
 # The UI stack (`docs/ui-foundation-migration-design.md`): Blitz is a beta,
 # pinned to one release and patched below past it.
-blitz-dom = "=0.3.0-beta.4"
-blitz-traits = "=0.3.0-beta.4"
-blitz-paint = { version = "=0.3.0-beta.4", features = ["custom-widget"] }
-blitz-shell = "=0.3.0-beta.4"
+blitz-dom = "=0.3.0-beta.5"
+blitz-traits = "=0.3.0-beta.5"
+blitz-paint = { version = "=0.3.0-beta.5", features = ["custom-widget"] }
+blitz-shell = "=0.3.0-beta.5"
 # The layout engine blitz-dom lays out with, at the version the Blitz
 # revision below takes: `horizon-ui` rounds its layout again with it
 # (`crates/horizon-ui/src/display_scale.rs`), so moving Blitz moves this too.
@@ -79,9 +79,12 @@ taffy = { version = "0.16.0", default-features = false, features = ["std", "cont
 reactive_graph = { version = "0.2", features = ["effects"] }
 any_spawner = { version = "0.3", features = ["futures-executor"] }
 
-# Blitz at upstream's main (2026-11-23), past its handling of a cancelled
+# Blitz at upstream's main (2026-11-24), past its handling of a cancelled
 # `pointerdown` (DioxusLabs/blitz#1641): a press whose default a handler
-# prevents is still recorded, so the click that follows is dispatched.
+# prevents is still recorded, so the click that follows is dispatched. It
+# is also past 0.3.0-beta.5 with upstream's fix for a resize of the window
+# between an element's creation and its first style (DioxusLabs/blitz#1751),
+# which panicked over an element sized by the viewport (the image viewer's).
 # Upstream's fix for hit testing through a clip (DioxusLabs/blitz#1324)
 # is not in main: until it is, rows scrolled out of a list take the clicks
 # meant for what is drawn over them.
@@ -93,10 +96,10 @@ any_spawner = { version = "0.3", features = ["futures-executor"] }
 # pixels is in (DioxusLabs/blitz#902), `crates/horizon-ui/src/display_scale.rs`
 # rounds no more.
 [patch.crates-io]
-blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
-blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
-blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
-blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "29a439e0563cbed6252c8f1d8ab4ed68afe03968" }
+blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
 # winit at upstream's fix for Wayland clipboard text (rust-windowing/winit
 # db09864, "winit-wayland: fix some text not being copied due to missing
 # mime types"), not in a release yet. 0.31.0-beta.4 offers copied text as
