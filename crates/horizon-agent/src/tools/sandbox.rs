@@ -75,3 +75,46 @@ pub fn reprobe() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
+
+/// A session's temporary directory: its contained calls' `TMPDIR`, kept
+/// across them for as long as the session lasts. `None` when it cannot be
+/// made; the call then gets the runtime's own.
+pub(crate) fn session_temp_dir(session_id: crate::contract::SessionId) -> Option<PathBuf> {
+    let dir = sessions_temp_root().join(session_id.as_uuid().to_string());
+    std::fs::create_dir_all(&dir).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Some(dir)
+}
+
+/// Removes a session's temporary directory, as the session ends.
+pub(crate) fn remove_session_temp_dir(session_id: crate::contract::SessionId) {
+    let _ = std::fs::remove_dir_all(sessions_temp_root().join(session_id.as_uuid().to_string()));
+}
+
+fn sessions_temp_root() -> PathBuf {
+    std::env::temp_dir()
+        .join("horizon-sandbox")
+        .join("sessions")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_keeps_one_temp_dir_until_it_ends() {
+        let session = crate::contract::SessionId::new();
+        let dir = session_temp_dir(session).unwrap();
+        std::fs::write(dir.join("note"), "kept").unwrap();
+        assert_eq!(session_temp_dir(session), Some(dir.clone()));
+        assert!(dir.join("note").exists());
+
+        remove_session_temp_dir(session);
+
+        assert!(!dir.exists());
+    }
+}

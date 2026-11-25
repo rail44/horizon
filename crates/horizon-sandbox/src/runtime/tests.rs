@@ -10,6 +10,7 @@ fn containment_becomes_fence_settings() {
         domains: vec!["crates.io".into(), "*.crates.io".into()],
         loopback_ports: vec![4226],
         mach_services: vec!["com.apple.SecurityServer".into()],
+        temp_dir: Some("/run/tmp/session".into()),
     };
 
     assert_eq!(
@@ -22,7 +23,7 @@ fn containment_becomes_fence_settings() {
                 "allowLocalOutboundPorts": [4226],
             },
             "filesystem": {
-                "allowWrite": ["/work/tree", "/home/u/.cargo"],
+                "allowWrite": ["/work/tree", "/home/u/.cargo", "/run/tmp/session"],
                 "denyWrite": ["/work/tree/.git"],
             },
             "command": { "useDefaults": false },

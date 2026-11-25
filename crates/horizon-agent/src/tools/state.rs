@@ -534,6 +534,7 @@ pub fn unregister_session_runtime(session_id: SessionId) {
     super::background::close_session(session_id);
     super::web::clear_session_approvals(session_id);
     crate::tools::explore::cancel_session(session_id);
+    crate::tools::sandbox::remove_session_temp_dir(session_id);
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().remove(&session_id);
     });

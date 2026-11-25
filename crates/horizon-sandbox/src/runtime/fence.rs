@@ -75,6 +75,11 @@ impl SandboxRuntime for FenceRuntime {
         file.write_all(settings(containment).to_string().as_bytes())?;
         file.flush()?;
         let settings = file.into_temp_path();
+        // Fence sets its own `TMPDIR` inside; the script sets it back.
+        let script = match &containment.temp_dir {
+            Some(dir) => format!("export TMPDIR={}\n{script}", shell_quote(dir)),
+            None => script.to_string(),
+        };
         let mut command = Command::new(&self.binary);
         command
             .arg("--settings")
@@ -117,10 +122,12 @@ pub(super) fn settings(containment: &Containment) -> Value {
         network["allowLocalOutbound"] = json!(true);
         network["allowLocalOutboundPorts"] = json!(containment.loopback_ports);
     }
+    let mut writable = paths(&containment.writable);
+    writable.extend(paths(containment.temp_dir.as_slice()));
     let mut settings = json!({
         "network": network,
         "filesystem": {
-            "allowWrite": paths(&containment.writable),
+            "allowWrite": writable,
             "denyWrite": paths(&containment.read_only),
         },
         "command": { "useDefaults": false },
@@ -146,6 +153,11 @@ pub(super) fn refused_host(line: &str) -> Option<String> {
         host = tokens.next()?; // the HTTP status came first
     }
     Some(strip_port(host).to_string())
+}
+
+/// `path` as one word of a POSIX shell command.
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 fn strip_port(host: &str) -> &str {

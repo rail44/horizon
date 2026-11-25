@@ -196,3 +196,28 @@ fn ending_the_process_group_ends_the_contained_command() {
 
     assert!(!marker.exists(), "the contained command outlived its group");
 }
+
+#[test]
+fn a_temp_dir_is_the_calls_tmpdir_and_keeps_its_files_across_calls() {
+    let (_workspace, root) = workspace();
+    let (_temp, temp) = workspace();
+    let containment = Containment {
+        temp_dir: Some(temp.clone()),
+        ..Containment::default()
+    };
+
+    let first = run(
+        &containment,
+        &root,
+        "echo kept > \"$TMPDIR/note\" && echo \"$TMPDIR\"",
+    );
+    let second = run(&containment, &root, "cat \"$TMPDIR/note\"");
+
+    assert_eq!(
+        first.stdout.trim(),
+        temp.display().to_string(),
+        "{}",
+        first.stderr
+    );
+    assert_eq!(second.stdout.trim(), "kept", "{}", second.stderr);
+}

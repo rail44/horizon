@@ -79,6 +79,7 @@ pub struct Containment {
     pub domains: Vec<String>,         // hosts the proxy lets through
     pub loopback_ports: Vec<u16>,     // host 127.0.0.1 ports it may connect to
     pub mach_services: Vec<String>,   // macOS only
+    pub temp_dir: Option<PathBuf>,    // writable, and the call's TMPDIR
 }
 
 pub trait SandboxRuntime: Send + Sync + Debug {
@@ -110,6 +111,14 @@ command's result. Fence's own command policy is off (`command.useDefaults:
 false`): what a command may do is decided by Horizon's gate. With
 `--settings` given, Fence reads no `fence.json` of the workspace or the
 user.
+
+Fence gives each call a private `/tmp` of its own, which ends with the
+call. Each session therefore has a temporary directory of its own on the
+host (`horizon-sandbox/sessions/<session>` under the host's temp
+directory), passed as `temp_dir`: Fence adds it to `allowWrite`, and the
+script sets `TMPDIR` to it first, since Fence sets its own. A file a call
+leaves there is there for the session's next call; the directory is removed
+when the session ends.
 
 `horizon-agent`'s `tools::sandbox` holds the runtime in use and whether it
 can contain a call (probed once, and again at each turn's start).

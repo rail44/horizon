@@ -156,7 +156,7 @@ fn build_definitions() -> Vec<Definition> {
                 shell. The working directory carries forward between calls, but only when the \
                 wrapper's report reached the result: a `cwd` field means that call moved there. \
                 Runs in a sandbox: it writes only the workspace (not its `.git/hooks` or \
-                `.git/config`) and a private temporary directory, and reaches only the \
+                `.git/config`) and its $TMPDIR, kept for the session, and reaches only the \
                 session's allowed hosts. A blocked write fails with \"Read-only file system\"; \
                 a blocked host fails through the proxy (403) and is listed in `refused_hosts`. \
                 For a host the call needs, pass it in `domains` (approved for that call only). \

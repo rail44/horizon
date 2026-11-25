@@ -34,6 +34,10 @@ pub struct Containment {
     pub loopback_ports: Vec<u16>,
     /// macOS services the command may look up.
     pub mach_services: Vec<String>,
+    /// The command's temporary directory: writable, and its `TMPDIR`. A
+    /// directory the caller keeps across calls keeps their files; `None`
+    /// leaves the runtime's own, which may not outlive the call.
+    pub temp_dir: Option<PathBuf>,
 }
 
 /// Why a runtime cannot contain a command on this host.

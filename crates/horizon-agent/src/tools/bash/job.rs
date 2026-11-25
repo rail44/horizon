@@ -153,9 +153,11 @@ pub(crate) fn spawn_contained(
         ContainedOrigin::Automatic => &[],
         ContainedOrigin::Domains { domains, .. } => domains,
     };
+    let mut containment = containment(tools, workspace_root, extra);
+    containment.temp_dir = crate::tools::sandbox::session_temp_dir(session_id);
     let execution = Execution::Contained {
         runtime: crate::tools::sandbox::current(),
-        containment: containment(tools, workspace_root, extra),
+        containment,
     };
     let job = BashJob::new(session_id, request, tools, result_tx);
     // The runtime is shared and stateless across a caught panic.
