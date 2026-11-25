@@ -106,10 +106,6 @@ fn in_memory_and_file_sources_answer_the_same_queries_alike() {
         memory.read_positions("viewer").unwrap(),
         file.read_positions("viewer").unwrap()
     );
-    assert_eq!(
-        memory.cursor("viewer").unwrap(),
-        file.cursor("viewer").unwrap()
-    );
 
     // The queries themselves answered something, so "alike" is not two
     // empty results agreeing.
@@ -153,7 +149,6 @@ fn writes_on_an_in_memory_store_are_refused_without_reaching_a_daemon() {
             store.edit(1, Some("renamed".into()), None).await,
             store.bind_session(1, "session").await.map(|_| ()),
             store.mark_read(1, "viewer", "m1").await,
-            store.advance_cursor("viewer", 9).await,
         ] {
             std::assert_matches!(
                 result,

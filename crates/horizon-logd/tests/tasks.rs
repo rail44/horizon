@@ -511,17 +511,6 @@ fn import_high_water_survives_without_creating_runnable_events() {
     assert_eq!(b.add(None), 1000);
     let report = Store::at(b.0.clone()).events().unwrap();
     assert_eq!(report.sequences, vec![1, 2]);
-    b.write(Request::AdvanceCursor {
-        consumer: "organizer".into(),
-        position: 2,
-    })
-    .unwrap();
-    b.write(Request::AdvanceCursor {
-        consumer: "organizer".into(),
-        position: 1,
-    })
-    .unwrap();
-    assert_eq!(Store::at(b.0.clone()).cursor("organizer").unwrap(), 2);
 }
 
 #[test]

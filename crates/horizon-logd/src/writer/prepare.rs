@@ -70,9 +70,6 @@ pub(super) fn prepare(
             };
             Ok(PreparedWrite::store(item.clone(), IngestReply::Item(item)))
         }
-        IngestRequest::AdvanceCursor { consumer, position } => {
-            advance_cursor(report, consumer, position)
-        }
         IngestRequest::Comment { id, author, text } => {
             take_item(&mut items, id)?;
             Ok(PreparedWrite::event(BoardEvent::MessageAdded {
@@ -153,35 +150,6 @@ pub(super) fn prepare(
             review,
         } => bind_session(take_item(&mut items, id)?, session_id, review),
     }
-}
-
-fn advance_cursor(
-    report: &ReadReport,
-    consumer: String,
-    position: u64,
-) -> Result<PreparedWrite, LogError> {
-    if position > report.line_count {
-        return Err(invalid("Cursor exceeds durable log"));
-    }
-    let old = report
-        .envelopes
-        .iter()
-        .filter_map(|e| match &e.event {
-            BoardEvent::CursorAdvanced {
-                consumer: c,
-                position,
-            } if c == &consumer => Some(*position),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0);
-    if position <= old {
-        return Ok(PreparedWrite::unchanged(IngestReply::Done));
-    }
-    Ok(PreparedWrite::event(BoardEvent::CursorAdvanced {
-        consumer,
-        position,
-    }))
 }
 
 fn bind_session(

@@ -58,21 +58,6 @@ pub(crate) fn show(envelopes: &[Envelope], id: u64) -> Option<Item> {
     fold(envelopes).get(&id).cloned()
 }
 
-/// The furthest position `consumer` has been advanced to.
-pub(crate) fn cursor(envelopes: &[Envelope], consumer: &str) -> u64 {
-    envelopes
-        .iter()
-        .filter_map(|e| match &e.event {
-            BoardEvent::CursorAdvanced {
-                consumer: c,
-                position,
-            } if c == consumer => Some(*position),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0)
-}
-
 /// Furthest read message per task, ordered by the task's comment sequence.
 /// Existing individual read events collapse into one inclusive read prefix.
 pub(crate) fn read_positions(envelopes: &[Envelope], reader: &str) -> HashMap<u64, String> {

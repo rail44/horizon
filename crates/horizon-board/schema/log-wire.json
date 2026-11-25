@@ -340,32 +340,6 @@
         },
         {
           "additionalProperties": false,
-          "properties": {
-            "AdvanceCursor": {
-              "properties": {
-                "consumer": {
-                  "type": "string"
-                },
-                "position": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "consumer",
-                "position"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "AdvanceCursor"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "`Store::add`: create a new item, optionally with a parent.",
           "properties": {
             "Add": {
@@ -826,5 +800,5 @@
     }
   },
   "title": "horizon-log-wire",
-  "x-session-protocol-version": 6
+  "x-session-protocol-version": 7
 }

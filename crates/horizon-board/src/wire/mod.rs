@@ -39,12 +39,12 @@ pub use hub::*;
 /// policy (`MIN_SUPPORTED_LOG_PROTOCOL_VERSION == LOG_PROTOCOL_VERSION`),
 /// same-machine self-spawned daemons need no cross-version interop, only
 /// honest restart.
-pub const LOG_PROTOCOL_VERSION: u32 = 6;
+pub const LOG_PROTOCOL_VERSION: u32 = 7;
 
 /// The oldest log-wire version this build is still willing to negotiate down
 /// to in `LogHub::hello`. Equal to [`LOG_PROTOCOL_VERSION`] under the
 /// lockstep, no-per-feature-gates policy.
-pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 6;
+pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 7;
 
 /// `horizon-logd`'s `hello` reply. Channel-free, like terminald's: logd has
 /// no connection-global channels in stage A.
@@ -92,10 +92,6 @@ pub enum IngestRequest {
         id: u64,
         reader: String,
         message_id: String,
-    },
-    AdvanceCursor {
-        consumer: String,
-        position: u64,
     },
     /// `Store::add`: create a new item, optionally with a parent.
     Add {
@@ -181,7 +177,7 @@ mod tests {
 
     #[test]
     fn the_lockstep_pair_is_equal() {
-        assert_eq!(LOG_PROTOCOL_VERSION, 6);
-        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 6);
+        assert_eq!(LOG_PROTOCOL_VERSION, 7);
+        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 7);
     }
 }

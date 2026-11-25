@@ -66,11 +66,6 @@ impl Store {
         Ok(query::show(&self.events()?.envelopes, id))
     }
 
-    /// The furthest position `consumer` has been advanced to.
-    pub fn cursor(&self, consumer: &str) -> Result<u64, StoreError> {
-        Ok(query::cursor(&self.events()?.envelopes, consumer))
-    }
-
     /// Furthest read message per task, ordered by the task's comment sequence.
     /// Existing individual read events collapse into one inclusive read prefix.
     pub fn read_positions(
@@ -214,14 +209,6 @@ impl Store {
             id,
             reader: reader.into(),
             message_id: message_id.into(),
-        })
-        .await
-    }
-
-    pub async fn advance_cursor(&self, consumer: &str, position: u64) -> Result<(), StoreError> {
-        self.done(IngestRequest::AdvanceCursor {
-            consumer: consumer.into(),
-            position,
         })
         .await
     }

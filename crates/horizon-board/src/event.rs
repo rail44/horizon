@@ -19,7 +19,7 @@ pub struct Envelope {
     pub event: BoardEvent,
 }
 
-/// Ordinary task transactions, messages, read positions, and delivery cursors.
+/// Ordinary task transactions, messages, and read positions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum BoardEvent {
@@ -36,6 +36,8 @@ pub enum BoardEvent {
         reader: String,
         message_id: String,
     },
+    /// How far a reader of the log had delivered it. Nothing writes it any
+    /// more; the lines an existing log has are read and passed over.
     #[serde(rename = "cursor-advanced")]
     CursorAdvanced { consumer: String, position: u64 },
     #[serde(rename = "import-high-water")]
