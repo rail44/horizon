@@ -152,12 +152,33 @@ binary runs when it finds `agent-events.jsonl` and no `sessions/`.
 
 ### The DuckDB projection
 
-The projection is one database across every session. It serves two
-readers: resume in its incremental mode, which per-session files make
-unnecessary, and `recall_search`/`recall_read` with `scope: "all"`,
-which search every session's history. DuckDB lets one process at a
-time write a database file, so a shared projection needs one writer.
-Which form recall takes is open (below).
+The projection (`agent-state.duckdb` in the data home) is one database
+across every session. Today agentd's writer thread holds it open for
+writing for the life of the process and projects every append. Its
+readers are resume in its incremental mode and reading one session's
+records, which per-session files make a read of that file, and the
+recall tools, which search and list every session's history.
+
+DuckDB lets a process that holds a database open for writing exclude
+every other, readers too (measured 2026-11-25: a read-only open of the
+live file failed with "Conflicting lock is held in horizon-agentd").
+With no writer, several processes open it read-only at once.
+
+So no process holds it open. It is caught up when recall needs it:
+
+1. The process running recall opens it for writing. If another process
+   holds it, it waits until that one closes it.
+2. It reads each session file from where the projection last stopped
+   (a cursor per file, kept in the database) and appends what is new,
+   then closes it.
+3. It opens it again read-only, waiting the same way if a writer holds
+   it, runs the query and closes it.
+
+Recall is rare (15 of 20,047 tool calls from 2026-08-03 to 2026-11-25,
+3 across every session). Measured on a copy of four months' projection
+(1 GB, 2026-08-03 to 2026-11-24): opening and closing it read-only
+takes about 53 ms, a search across every session 170-370 ms, listing
+sessions 15-20 ms.
 
 ## Tests
 
@@ -182,9 +203,8 @@ Each stage ends with the gate clean.
    side; board flow and wiki flow move into crates of their own.
    agentd becomes its socket over the library. No behaviour changes;
    agentd's unit tests move with their modules.
-2. **One log file per session.** The writer, the readers, resume and
-   the migration; the projection's place settled with the recall
-   question.
+2. **One log file per session.** The writer, the readers, resume, the
+   projection caught up on demand, and the migration.
 3. **The stdio child.** `horizon-agent-acp`; the shell starts it in
    place of connecting to agentd. `Reload Agent Runtime` restarts the
    child; `Reload Config` reaches it. Tests move to `Channel::duplex()`.
@@ -197,17 +217,11 @@ Each stage ends with the gate clean.
 
 ## Open questions
 
-1. **Recall across sessions.** Either DuckDB reads the session files
-   directly at query time (`read_json` over `sessions/*.jsonl`), with no
-   database kept; or a database kept as an index, opened for writing
-   only briefly by whichever process appends. Which one depends on the
-   queries recall runs and how long they take over the whole history,
-   which have not been measured.
-2. **The ACP version.** The shell speaks v2 to agentd; external agents
+1. **The ACP version.** The shell speaks v2 to agentd; external agents
    and clients speak v1, the stable version. The binary answers the
    version a client asks for in `initialize`, if the parts of v2 the
    shell uses have a v1 form; which do is not yet listed.
-3. **The `_horizon/*` extensions the shell keeps.** Each is a place the
+2. **The `_horizon/*` extensions the shell keeps.** Each is a place the
    shell and the binary can disagree. Listing providers and their
    models, the board organizer and continuing a paused turn are the
    ones in use.
