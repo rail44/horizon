@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,7 +16,7 @@ use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::persistence::projection::duckdb::Projection;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::worktree::WorktreeInfo;
 
@@ -33,6 +34,13 @@ pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, 
 pub(crate) struct TaskSeed {
     pub(crate) filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     pub(crate) domains: Vec<String>,
+}
+
+/// One provider's models in the `model` option.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelGroup {
+    pub provider: String,
+    pub models: Vec<String>,
 }
 
 pub struct AgentdState {
@@ -71,6 +79,11 @@ pub struct AgentdState {
     /// The control plane of the shell that started this process, which
     /// `workspace_snapshot` asks (`HORIZON_SOCKET`).
     control_socket: Option<std::path::PathBuf>,
+    /// The models each provider with a key lists, as the `model` option
+    /// offers them; attachments follow it.
+    model_catalog: watch::Sender<Arc<Vec<ModelGroup>>>,
+    /// Told when the configuration was read again, so the catalog is too.
+    config_changed: Notify,
     /// Flips once (see [`Self::mark_resume_ready`]) after
     /// [`super::resume::resume_persisted_sessions`] finishes populating `sessions` from the
     /// log. `session/list` and `session/resume` must not answer while
@@ -145,6 +158,8 @@ impl AgentdState {
             task_seeds: Mutex::new(HashMap::new()),
             session_subscriptions: Mutex::new(HashMap::new()),
             control_socket: None,
+            model_catalog: watch::Sender::new(Arc::default()),
+            config_changed: Notify::new(),
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
             host_lock: Mutex::new(None),
@@ -266,6 +281,49 @@ impl AgentdState {
         self.config_path.as_deref()
     }
 
+    /// The model catalog as it is now, and as it changes.
+    pub(crate) fn model_catalog(&self) -> watch::Receiver<Arc<Vec<ModelGroup>>> {
+        self.model_catalog.subscribe()
+    }
+
+    /// Asks each provider with a key for its models, and puts what they
+    /// list in the catalog. A provider that lists nothing is left out.
+    pub(crate) async fn refresh_model_catalog(&self) {
+        let entries: Vec<_> = {
+            let config = lock_unpoisoned(&self.agent_config);
+            (config.providers.entries.iter())
+                .filter(|entry| entry.api_key_present)
+                .cloned()
+                .collect()
+        };
+        let mut groups = Vec::new();
+        for entry in entries {
+            let models = entry.list_model_ids().await;
+            if !models.is_empty() {
+                groups.push(ModelGroup {
+                    provider: entry.name.clone(),
+                    models,
+                });
+            }
+        }
+        self.model_catalog.send_if_modified(|catalog| {
+            let changed = **catalog != groups;
+            if changed {
+                *catalog = Arc::new(groups);
+            }
+            changed
+        });
+    }
+
+    /// Keeps the model catalog: filled now, and again whenever the
+    /// configuration is read again.
+    pub async fn keep_model_catalog(self: Arc<Self>) {
+        loop {
+            self.refresh_model_catalog().await;
+            self.config_changed.notified().await;
+        }
+    }
+
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
         let mut new_agent_config = crate::providers::agent_config(&raw);
@@ -273,6 +331,7 @@ impl AgentdState {
         let new_providers = ProviderRegistry::builtin_with_config(new_agent_config.clone());
         *lock_unpoisoned(&self.agent_config) = new_agent_config;
         *lock_unpoisoned(&self.providers) = new_providers;
+        self.config_changed.notify_one();
         Ok(())
     }
 

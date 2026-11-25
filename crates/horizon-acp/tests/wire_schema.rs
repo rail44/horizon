@@ -32,14 +32,6 @@ fn generate_wire_schema() -> Value {
     }
 
     let client_to_agent = json!({
-        "_horizon/list_providers": {
-            "request": schema_of(sub::<ListProvidersRequest>),
-            "reply": schema_of(sub::<ListProvidersResponse>),
-        },
-        "_horizon/list_provider_models": {
-            "request": schema_of(sub::<ListProviderModelsRequest>),
-            "reply": schema_of(sub::<ListProviderModelsResponse>),
-        },
         "_horizon/ensure_board_organizer": {
             "request": schema_of(sub::<EnsureBoardOrganizerRequest>),
             "reply": schema_of(sub::<EnsureBoardOrganizerResponse>),

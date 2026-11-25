@@ -299,12 +299,9 @@ pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 /// Starts an agent session.
 pub type SpawnAgent = Box<dyn Fn(Starting) -> AgentSession>;
 
-/// The providers and models an agent session can be switched to, as the
-/// agent runtime has them. Each call waits for the runtime's answer, and
-/// is made off the UI thread.
+/// Switches an agent session's model and effort through the agent runtime.
+/// Each call waits for the runtime's answer, and is made off the UI thread.
 pub trait Models: Send + Sync {
-    fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String>;
-    fn models(&self, provider: &str) -> Result<Vec<String>, String>;
     fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String>;
     /// Switches the session's reasoning effort to the level `level` names.
     fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String>;

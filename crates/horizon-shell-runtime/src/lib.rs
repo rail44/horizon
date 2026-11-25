@@ -49,7 +49,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use horizon_acp::{ProviderSummary, SessionId, SessionNewMeta};
+use horizon_acp::{SessionId, SessionNewMeta};
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
@@ -357,36 +357,6 @@ impl AgentdHandle {
                 "session runtime stopped before the agent list was sent",
                 "the agent list did not complete in time",
                 "session runtime stopped before the agent list completed",
-            )
-        })?
-    }
-
-    /// Call from a background task: the model picker fetches it on open
-    /// (parent task #1's Phase 2). Same shape as [`Self::session_list`].
-    pub fn list_providers(&self) -> Result<Vec<ProviderSummary>, String> {
-        request(&self.ops, |reply| agent::Op::ListProviders { reply }).map_err(|error| {
-            error.describe(
-                "session runtime stopped before the provider list was sent",
-                "the provider list did not complete in time",
-                "session runtime stopped before the provider list completed",
-            )
-        })?
-    }
-
-    /// Call from a background task: the model picker fetches a provider's
-    /// live model listing this way when a provider is chosen (v22). Same
-    /// shape as [`Self::list_providers`]; an empty list (unavailable entry,
-    /// no listing, transport failure) is a normal answer, not an error.
-    pub fn list_provider_models(&self, provider: String) -> Result<Vec<String>, String> {
-        request(&self.ops, |reply| agent::Op::ListProviderModels {
-            provider,
-            reply,
-        })
-        .map_err(|error| {
-            error.describe(
-                "session runtime stopped before the model list was sent",
-                "the model list did not complete in time",
-                "session runtime stopped before the model list completed",
             )
         })?
     }

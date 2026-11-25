@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::mapping::{self, Ask, Mapper, Outgoing, horizon_meta};
 use super::{Shared, call_error};
-use crate::session::{AttachmentLease, Bootstrap};
+use crate::session::{AttachmentLease, Bootstrap, ModelGroup};
 
 /// The request that opened the attachment; answered by the pump.
 pub(super) enum Opening {
@@ -238,6 +238,8 @@ async fn run(
         generation,
     };
     let mut mapper = Mapper::new(session_id, shared.session_facts(session_id));
+    let mut catalog = shared.model_catalog();
+    mapper.set_catalog(catalog.borrow_and_update().clone());
     let mut asks = Asks::default();
     let (head, tail): (Vec<_>, Vec<_>) = metadata.into_iter().partition(|event| {
         matches!(
@@ -302,7 +304,7 @@ async fn run(
     let reason = tokio::select! {
         biased;
         reason = ended.wait_for(|end| end.is_some()) => reason.ok().and_then(|end| *end),
-        reason = live(&mut events, &mut commands, &lease, &mut mapper, &sink, &mut asks) => reason,
+        reason = live(&mut events, &mut commands, &mut catalog, &lease, &mut mapper, &sink, &mut asks) => reason,
     };
     // Revoke before the final diagnostic.
     drop(lease);
@@ -321,6 +323,7 @@ async fn run(
 async fn live(
     events: &mut mpsc::Receiver<AgentWireEvent>,
     commands: &mut mpsc::UnboundedReceiver<Command>,
+    catalog: &mut tokio::sync::watch::Receiver<Arc<Vec<ModelGroup>>>,
     lease: &AttachmentLease,
     mapper: &mut Mapper,
     sink: &Sink,
@@ -338,6 +341,16 @@ async fn live(
                 }
                 None => return Some(AttachmentEnd::SessionEnded),
             },
+            // A new catalog changes what the model option offers.
+            Ok(()) = catalog.changed() => {
+                let offered = catalog.borrow_and_update().clone();
+                if mapper.set_catalog(offered)
+                    && let Some(outgoing) = mapper.config_option_update()
+                    && !sink.emit(outgoing, asks)
+                {
+                    return None;
+                }
+            }
             command = commands.recv() => match command {
                 Some(command) => {
                     if !lease.command(command) {

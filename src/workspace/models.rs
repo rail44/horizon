@@ -1,22 +1,15 @@
-//! The model picker: an agent session's provider, then one of the models
-//! that provider lists. Both are asked of the agent runtime when the list
-//! needs them, off the UI thread. Above the providers, the session's
-//! reasoning effort, when its model takes one: a step of its own listing
-//! the levels the model takes.
+//! The model picker: an agent session's provider, then one of its models,
+//! as the session's `model` option offers them. Above the providers, the
+//! session's reasoning effort, when its model takes one: a step of its own
+//! listing the levels the model takes.
 
-use std::collections::HashMap;
-
-use horizon_acp::ProviderSummary;
 use horizon_ui::El;
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
 use horizon_workspace::{SessionId, Workspace};
 
 use super::picker::{self, Row};
 use super::{Models, Shell, styles};
-
-/// A provider's models: `None` while they are being asked for.
-type Listed = HashMap<usize, Option<Vec<String>>>;
 
 /// Which list the picker shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,14 +37,6 @@ fn holds(text: &str, query: &str) -> bool {
     query.is_empty() || text.to_ascii_lowercase().contains(&query)
 }
 
-/// Why a provider cannot be chosen.
-fn unavailable_reason(provider: &ProviderSummary) -> String {
-    match provider.api_key_env.is_empty() {
-        true => "not configured".to_string(),
-        false => format!("environment variable `{}` is not set", provider.api_key_env),
-    }
-}
-
 /// The picker for `session`, opened at its effort step when `at_effort`.
 pub(super) fn view(
     shell: Shell,
@@ -59,10 +44,12 @@ pub(super) fn view(
     models: std::sync::Arc<dyn Models>,
     at_effort: bool,
 ) -> El {
-    // `None` while the providers are being asked for.
-    let providers = RwSignal::new(None::<Vec<ProviderSummary>>);
-    // The session's effort as the picker opened on it.
-    let effort = (shell.kept().agents.borrow().get(&session)).and_then(|agent| agent.effort());
+    // The session's models and effort as the picker opened on them.
+    let agent = shell.kept().agents.borrow().get(&session).cloned();
+    let choices = (agent.as_ref())
+        .map(|agent| agent.models())
+        .unwrap_or_default();
+    let effort = agent.and_then(|agent| agent.effort());
     let stage = RwSignal::new(match (at_effort, &effort) {
         (true, Some(_)) => Stage::Effort,
         _ => Stage::Providers,
@@ -78,34 +65,25 @@ pub(super) fn view(
             .filter(|level| holds(level, query))
             .collect()
     };
-    let listed = RwSignal::new(Listed::new());
-    let source = models.clone();
-    shell.in_background(
-        move || source.providers(),
-        move |_, answer| match answer {
-            Ok(answer) => providers.set(Some(answer)),
-            Err(error) => {
-                eprintln!("model picker: {error}");
-                providers.set(Some(Vec::new()));
-            }
-        },
-    );
-
     // The providers that match, by their places among all of them.
-    let matching_providers = move |query: &str| -> Vec<(usize, ProviderSummary)> {
-        (providers.get_untracked().unwrap_or_default().into_iter())
-            .enumerate()
-            .filter(|(_, provider)| holds(&provider.name, query))
+    let providers = choices.providers.clone();
+    let matching_providers = move |query: &str| -> Vec<(usize, String)> {
+        (providers.iter().enumerate())
+            .filter(|(_, (name, _))| holds(name, query))
+            .map(|(place, (name, _))| (place, name.clone()))
             .collect()
     };
-    // Untracked, as `matching_providers` is: `rows` has already read
-    // `listed` for the provider when it gets here.
+    let providers = choices.providers.clone();
     let matching_models = move |provider: usize, query: &str| -> Vec<String> {
-        let all = listed.with_untracked(|listed| listed.get(&provider).cloned().flatten());
-        (all.unwrap_or_default().into_iter())
+        (providers.get(provider).into_iter())
+            .flat_map(|(_, models)| models.iter())
             .filter(|model| holds(model, query))
+            .cloned()
             .collect()
     };
+    let current = choices.current.clone();
+    // The rows and the pick each read them.
+    let (pick_providers, pick_models) = (matching_providers.clone(), matching_models.clone());
     let effort_row = {
         let effort = effort.clone();
         move || Row {
@@ -145,43 +123,28 @@ pub(super) fn view(
         }
         Stage::Providers => {
             let above: Vec<Row> = effort_shown(query).then(&effort_row).into_iter().collect();
-            if providers.with(Option::is_none) {
-                return above
-                    .into_iter()
-                    .chain(saying("Loading providers…"))
-                    .collect();
-            }
             let rows: Vec<Row> = (matching_providers(query).into_iter())
                 .map(|(_, provider)| {
-                    let about = match (provider.available, &provider.default_model) {
-                        (false, _) => unavailable_reason(&provider),
-                        (true, Some(model)) => model.clone(),
-                        (true, None) => String::new(),
-                    };
+                    // The current model is said beside its provider.
+                    let about = (current.as_ref())
+                        .filter(|(at, _)| *at == provider)
+                        .map(|(_, model)| model.clone())
+                        .unwrap_or_default();
                     Row {
-                        key: format!("{} {about}", provider.name),
-                        class: (
-                            styles::COMMAND,
-                            (!provider.available).then_some(styles::DISABLED),
-                        ),
-                        parts: vec![(styles::NAME, provider.name), (styles::ABOUT, about)],
+                        key: format!("{provider} {about}"),
+                        class: (styles::COMMAND, None),
+                        parts: vec![(styles::NAME, provider), (styles::ABOUT, about)],
                         indent: 0.,
                     }
                 })
                 .collect();
             let rows = match rows.is_empty() {
-                true => saying("No providers configured"),
+                true => saying("No models to switch to"),
                 false => rows,
             };
             above.into_iter().chain(rows).collect()
         }
         Stage::Models(provider) => {
-            let state = listed.with(|listed| listed.get(&provider).cloned());
-            match state {
-                None | Some(None) => return saying("Loading models…"),
-                Some(Some(all)) if all.is_empty() => return saying("No models listed"),
-                Some(Some(_)) => {}
-            }
             let rows: Vec<Row> = (matching_models(provider, query).into_iter())
                 .map(|model| Row {
                     key: model.clone(),
@@ -224,45 +187,19 @@ pub(super) fn view(
                     shell.search.chosen.set(0);
                     return;
                 }
-                let Some((provider, summary)) =
-                    matching_providers(&query).into_iter().nth(index - above)
+                let Some((provider, _)) = pick_providers(&query).into_iter().nth(index - above)
                 else {
                     return;
                 };
-                if !summary.available {
-                    return;
-                }
-                // Its models are asked for once.
-                let asked = listed.with_untracked(|listed| listed.contains_key(&provider));
-                if !asked {
-                    listed.update(|listed| {
-                        listed.insert(provider, None);
-                    });
-                    let source = models.clone();
-                    shell.in_background(
-                        move || source.models(&summary.name),
-                        move |_, answer| {
-                            let models = answer.unwrap_or_else(|error| {
-                                eprintln!("model picker: {error}");
-                                Vec::new()
-                            });
-                            listed.update(|listed| {
-                                listed.insert(provider, Some(models));
-                            });
-                        },
-                    );
-                }
                 stage.set(Stage::Models(provider));
                 shell.search.query.set(String::new());
                 shell.search.chosen.set(0);
             }
             Stage::Models(provider) => {
-                let Some(model) = matching_models(provider, &query).into_iter().nth(index) else {
+                let Some(model) = pick_models(provider, &query).into_iter().nth(index) else {
                     return;
                 };
-                let name = (providers.get_untracked().unwrap_or_default().get(provider))
-                    .map(|provider| provider.name.clone());
-                let Some(name) = name else {
+                let Some((name, _)) = choices.providers.get(provider).cloned() else {
                     return;
                 };
                 shell.modal.set(None);

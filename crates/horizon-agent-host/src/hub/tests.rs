@@ -105,7 +105,7 @@ async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
             .block_task()
             .await
             .map(drop),
-        cx.send_request(acp::ListProvidersRequest {})
+        cx.send_request(v2::ResumeSessionRequest::new("s", "/"))
             .block_task()
             .await
             .map(drop),

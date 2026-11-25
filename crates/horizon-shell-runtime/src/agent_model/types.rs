@@ -212,6 +212,14 @@ pub struct ModelSelection {
     pub model: String,
 }
 
+/// What the `model` config option offers: each provider's models, in the
+/// option's order, and which one is current.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelChoices {
+    pub current: Option<(String, String)>,
+    pub providers: Vec<(String, Vec<String>)>,
+}
+
 /// The session's reasoning effort, read from the `effort` config option:
 /// the level its requests send, and the levels its model takes, lowest
 /// first, as their words (`"none"`, `"minimal"`, ... `"max"`).

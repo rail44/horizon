@@ -20,9 +20,8 @@ use agent_client_protocol::{
 };
 use horizon_acp::{
     EFFORT_CONFIG_ID, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, InitializeMeta,
-    ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID, ProviderSummary,
-    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
-    write_horizon_meta,
+    MODEL_CONFIG_ID, SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta,
+    read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -84,13 +83,6 @@ pub(super) enum Op {
     },
     SessionList {
         reply: crossbeam_channel::Sender<Result<Vec<SessionSummary>, String>>,
-    },
-    ListProviders {
-        reply: crossbeam_channel::Sender<Result<Vec<ProviderSummary>, String>>,
-    },
-    ListProviderModels {
-        provider: String,
-        reply: crossbeam_channel::Sender<Result<Vec<String>, String>>,
     },
     SetSessionModel {
         session_id: SessionId,
@@ -542,22 +534,6 @@ fn handle_op(
             let routes = routes.clone();
             tokio::spawn(async move {
                 let _ = reply.send(list_sessions(&routes, &connection).await);
-            });
-        }
-        Op::ListProviders { reply } => {
-            let request = send(connection, ListProvidersRequest {});
-            let routes = routes.clone();
-            tokio::spawn(async move {
-                let result = call(&routes, OP_TIMEOUT, "provider list", request).await;
-                let _ = reply.send(result.map(|response| response.providers));
-            });
-        }
-        Op::ListProviderModels { provider, reply } => {
-            let request = send(connection, ListProviderModelsRequest { provider });
-            let routes = routes.clone();
-            tokio::spawn(async move {
-                let result = call(&routes, OP_TIMEOUT, "provider model list", request).await;
-                let _ = reply.send(result.map(|response| response.models));
             });
         }
         Op::SetSessionModel {

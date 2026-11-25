@@ -304,8 +304,8 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         .collect();
     assert_eq!(told, [("completed", None, true)]);
 
-    // The model picker: the daemon's providers, then the chosen one's
-    // models, and the choice goes to the daemon.
+    // The model picker: the providers and models the session's `model`
+    // option offers, and the choice goes to the agent.
     let commit = |text: &str| {
         app.dispatch(UiEvent::Ime(BlitzImeEvent::Commit(text.to_string())));
         app.resolve();

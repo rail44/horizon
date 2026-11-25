@@ -1208,12 +1208,6 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
     #[derive(Default)]
     struct Switched(Mutex<Vec<(SessionId, String, String)>>);
     impl Models for Switched {
-        fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String> {
-            Ok(Vec::new())
-        }
-        fn models(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(Vec::new())
-        }
         fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
             if model == "gone" {
                 return Err("no such model".to_string());

@@ -115,50 +115,6 @@
       ],
       "type": "object"
     },
-    "ListProviderModelsRequest": {
-      "description": "Lists a provider's own model ids (its `GET /models`).",
-      "properties": {
-        "provider": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "provider"
-      ],
-      "type": "object"
-    },
-    "ListProviderModelsResponse": {
-      "properties": {
-        "models": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "models"
-      ],
-      "type": "object"
-    },
-    "ListProvidersRequest": {
-      "description": "Lists the configured providers.",
-      "type": "object"
-    },
-    "ListProvidersResponse": {
-      "properties": {
-        "providers": {
-          "items": {
-            "$ref": "#/$defs/ProviderSummary"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "providers"
-      ],
-      "type": "object"
-    },
     "MessageMeta": {
       "description": "Mirrors the non-human `contract::MessageRole` variants (crates/horizon-agent/src/contract.rs).",
       "properties": {
@@ -191,43 +147,6 @@
       "required": [
         "provider",
         "model"
-      ],
-      "type": "object"
-    },
-    "ProviderSummary": {
-      "description": "Mirrors `hosting::ProviderSummary` (crates/horizon-agent/src/hosting.rs).",
-      "properties": {
-        "api_key_env": {
-          "description": "The environment variable name the entry's API key is read from.",
-          "type": "string"
-        },
-        "available": {
-          "type": "boolean"
-        },
-        "base_url": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "default": {
-          "type": "boolean"
-        },
-        "default_model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "api_key_env",
-        "available",
-        "default"
       ],
       "type": "object"
     },
@@ -470,22 +389,6 @@
       "request": {
         "$ref": "#/$defs/EnsureBoardOrganizerRequest"
       }
-    },
-    "_horizon/list_provider_models": {
-      "reply": {
-        "$ref": "#/$defs/ListProviderModelsResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/ListProviderModelsRequest"
-      }
-    },
-    "_horizon/list_providers": {
-      "reply": {
-        "$ref": "#/$defs/ListProvidersResponse"
-      },
-      "request": {
-        "$ref": "#/$defs/ListProvidersRequest"
-      }
     }
   },
   "meta": {
@@ -517,5 +420,5 @@
     }
   },
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 19
+  "x-session-protocol-version": 20
 }

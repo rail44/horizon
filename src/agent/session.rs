@@ -199,6 +199,11 @@ impl AgentSession {
         self.folded.lock().unwrap().model.effort.clone()
     }
 
+    /// What the session can be switched to, as its `model` option offers it.
+    pub fn models(&self) -> horizon_shell_runtime::agent_model::ModelChoices {
+        self.folded.lock().unwrap().model.models.clone()
+    }
+
     pub fn standing(&self) -> Standing {
         let folded = self.folded.lock().unwrap();
         let frame = &folded.model.frame;

@@ -406,7 +406,7 @@ fn model_announcements_become_one_select_option() {
     };
     assert_eq!(
         update.config_options,
-        vec![model_option("openai", "gpt-4o")]
+        vec![model_option(&[], "openai", "gpt-4o")]
     );
     let option = &update.config_options[0];
     assert_eq!(&*option.config_id.0, acp::MODEL_CONFIG_ID);
@@ -689,4 +689,55 @@ fn rate_limits_are_live_notices_and_clearing_is_a_compaction() {
         replayed[0],
         v2::SessionUpdate::CompactionUpdate(_)
     ));
+}
+
+/// The model option groups the catalog's models by provider, with the
+/// current model among them even when its provider did not list it.
+#[test]
+fn the_model_option_groups_the_catalog_with_the_current_model() {
+    let catalog = [
+        ModelGroup {
+            provider: "openai".into(),
+            models: vec!["gpt-4o".into(), "o3".into()],
+        },
+        ModelGroup {
+            provider: "local".into(),
+            models: vec!["llama".into()],
+        },
+    ];
+    let groups = |option: &v2::SessionConfigOption| -> Vec<(String, Vec<String>)> {
+        let v2::SessionConfigKind::Select(select) = &option.kind else {
+            panic!("a select");
+        };
+        let v2::SessionConfigSelectOptions::Grouped(groups) = &select.options else {
+            panic!("grouped, got {:?}", select.options);
+        };
+        (groups.iter())
+            .map(|group| {
+                let values = (group.options.iter())
+                    .map(|o| o.value.0.to_string())
+                    .collect();
+                (group.name.clone(), values)
+            })
+            .collect()
+    };
+    let id = acp::encode_model_option_id;
+    assert_eq!(
+        groups(&model_option(&catalog, "openai", "gpt-5")),
+        [
+            (
+                "openai".to_string(),
+                vec![
+                    id("openai", "gpt-4o"),
+                    id("openai", "o3"),
+                    id("openai", "gpt-5")
+                ]
+            ),
+            ("local".to_string(), vec![id("local", "llama")]),
+        ]
+    );
+    assert_eq!(
+        groups(&model_option(&catalog, "other", "m")).last(),
+        Some(&("other".to_string(), vec![id("other", "m")]))
+    );
 }

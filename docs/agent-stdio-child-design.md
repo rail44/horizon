@@ -232,7 +232,7 @@ follows ACP where they differ (board #114):
 | Extension | Standard form |
 |---|---|
 | `continue_turn` | A turn the token budget halts ends with the stop reason `MaxTurnRequests`; a new message goes on, as it already does |
-| `list_providers`, `list_provider_models` | The `Model` config option's values, before a session exists through `session/options` (unstable) |
+| `list_providers`, `list_provider_models` | The `Model` config option's values, a group for each provider with a key: the agent lists their models when it starts and when the config file changes, and every attachment gets the new set as a `config_option_update` |
 | `session/new`'s `_meta.horizon` | The agent names the session; the role is a `Mode` config option and the model a `Model` one, given at creation (`config_options`, unstable) |
 | A denial's reason in the permission response | A standard reject option; the reason is the next message |
 | `ensure_board_organizer` | Out of ACP: board flow writes the organizer's session id to the board, whose view resumes it |

@@ -17,45 +17,6 @@ pub struct EmptyResponse {}
 
 // -- client → agent requests --
 
-/// Lists the configured providers.
-#[derive(
-    Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
-)]
-#[request(method = "_horizon/list_providers", response = ListProvidersResponse)]
-pub struct ListProvidersRequest {}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
-pub struct ListProvidersResponse {
-    pub providers: Vec<ProviderSummary>,
-}
-
-/// Mirrors `hosting::ProviderSummary` (crates/horizon-agent/src/hosting.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderSummary {
-    pub name: String,
-    pub base_url: Option<String>,
-    /// The environment variable name the entry's API key is read from.
-    pub api_key_env: String,
-    pub default_model: Option<String>,
-    pub available: bool,
-    pub default: bool,
-}
-
-/// Lists a provider's own model ids (its `GET /models`).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
-#[request(
-    method = "_horizon/list_provider_models",
-    response = ListProviderModelsResponse
-)]
-pub struct ListProviderModelsRequest {
-    pub provider: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
-pub struct ListProviderModelsResponse {
-    pub models: Vec<String>,
-}
-
 /// Starts, or finds, a workspace's board organizer session.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(
@@ -123,23 +84,8 @@ mod tests {
         assert_eq!(&decoded, value);
     }
 
-    fn provider_summary() -> ProviderSummary {
-        ProviderSummary {
-            name: "default".into(),
-            base_url: Some("https://api.example.com/v1".into()),
-            api_key_env: "OPENAI_API_KEY".into(),
-            default_model: None,
-            available: true,
-            default: true,
-        }
-    }
-
     #[test]
     fn requests_round_trip() {
-        message_round_trip(&ListProvidersRequest {});
-        message_round_trip(&ListProviderModelsRequest {
-            provider: "default".into(),
-        });
         message_round_trip(&EnsureBoardOrganizerRequest {
             workspace_root: PathBuf::from("/work/project"),
         });
@@ -148,12 +94,6 @@ mod tests {
     #[test]
     fn responses_round_trip() {
         round_trip(&EmptyResponse {});
-        round_trip(&ListProvidersResponse {
-            providers: vec![provider_summary()],
-        });
-        round_trip(&ListProviderModelsResponse {
-            models: vec!["gpt-4o".into(), "o3".into()],
-        });
         round_trip(&EnsureBoardOrganizerResponse {
             session_id: SessionId::new(),
         });
@@ -184,12 +124,6 @@ mod tests {
     fn horizon_method_names_are_pinned() {
         let session_id = SessionId::new();
         let methods = [
-            ListProvidersRequest {}.method().to_owned(),
-            ListProviderModelsRequest {
-                provider: String::new(),
-            }
-            .method()
-            .to_owned(),
             EnsureBoardOrganizerRequest {
                 workspace_root: PathBuf::new(),
             }
@@ -204,12 +138,7 @@ mod tests {
         ];
         assert_eq!(
             methods,
-            [
-                "_horizon/list_providers",
-                "_horizon/list_provider_models",
-                "_horizon/ensure_board_organizer",
-                "_horizon/session_event",
-            ]
+            ["_horizon/ensure_board_organizer", "_horizon/session_event",]
         );
     }
 }

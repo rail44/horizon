@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp as acp;
@@ -27,6 +28,8 @@ use horizon_agent::contract::{
 };
 use horizon_agent::hosting::{AgentWireEvent, ModelSelection, ReasoningSelection};
 use horizon_agent::persistence::event_log::Settled;
+
+use crate::session::ModelGroup;
 
 /// Everything one mapped event can put on the connection.
 #[derive(Debug)]
@@ -77,6 +80,8 @@ pub(super) struct Mapper {
     model: Option<String>,
     selection: Option<ModelSelection>,
     reasoning: Option<ReasoningSelection>,
+    /// What the `model` option offers besides the current model.
+    catalog: Arc<Vec<ModelGroup>>,
     message_seq: u64,
     /// The id of the assistant text stream not yet committed.
     open_stream: Option<v2::MessageId>,
@@ -171,9 +176,8 @@ pub(super) fn parse_session_id(id: &v2::SessionId) -> Option<SessionId> {
     uuid::Uuid::parse_str(&id.0).ok().map(SessionId::from_uuid)
 }
 
-/// The single `model` config option for a `(provider, model)` pair.
-pub(super) fn model_option(provider: &str, model: &str) -> v2::SessionConfigOption {
-    let value = acp::encode_model_option_id(provider, model);
+/// One model of a provider, as an entry of the `model` option.
+fn model_entry(provider: &str, model: &str, name: String) -> v2::SessionConfigSelectOption {
     let mut meta = None;
     acp::write_horizon_meta(
         &mut meta,
@@ -183,10 +187,48 @@ pub(super) fn model_option(provider: &str, model: &str) -> v2::SessionConfigOpti
         },
     )
     .expect("model option meta serializes");
-    let option = v2::SessionConfigSelectOption::new(value.clone(), format!("{provider} · {model}"))
-        .meta(meta);
-    v2::SessionConfigOption::select(acp::MODEL_CONFIG_ID, "Model", value, vec![option])
-        .category(v2::SessionConfigOptionCategory::Model)
+    v2::SessionConfigSelectOption::new(acp::encode_model_option_id(provider, model), name)
+        .meta(meta)
+}
+
+/// The `model` config option at `(provider, model)`: the catalog's models,
+/// a group for each provider, with the current one always among them. With
+/// no catalog, the current model alone.
+pub(super) fn model_option(
+    catalog: &[ModelGroup],
+    provider: &str,
+    model: &str,
+) -> v2::SessionConfigOption {
+    let value = acp::encode_model_option_id(provider, model);
+    let option = if catalog.is_empty() {
+        let entry = model_entry(provider, model, format!("{provider} · {model}"));
+        v2::SessionConfigOption::select(acp::MODEL_CONFIG_ID, "Model", value, vec![entry])
+    } else {
+        let mut groups: Vec<v2::SessionConfigSelectGroup> = (catalog.iter())
+            .map(|group| {
+                let mut entries: Vec<_> = (group.models.iter())
+                    .map(|listed| model_entry(&group.provider, listed, listed.clone()))
+                    .collect();
+                if group.provider == provider && !group.models.iter().any(|m| m == model) {
+                    entries.push(model_entry(provider, model, model.to_string()));
+                }
+                v2::SessionConfigSelectGroup::new(
+                    group.provider.as_str(),
+                    group.provider.as_str(),
+                    entries,
+                )
+            })
+            .collect();
+        if !catalog.iter().any(|group| group.provider == provider) {
+            groups.push(v2::SessionConfigSelectGroup::new(
+                provider,
+                provider,
+                vec![model_entry(provider, model, model.to_string())],
+            ));
+        }
+        v2::SessionConfigOption::select(acp::MODEL_CONFIG_ID, "Model", value, groups)
+    };
+    option.category(v2::SessionConfigOptionCategory::Model)
 }
 
 /// The `effort` config option for a session's reasoning: its current level
@@ -207,14 +249,15 @@ pub(super) fn effort_option(reasoning: &ReasoningSelection) -> Option<v2::Sessio
 /// resolved model otherwise, nothing before a model is known; then the
 /// effort, when the session's model takes one.
 pub(super) fn model_options(
+    catalog: &[ModelGroup],
     provider_id: &str,
     model: Option<&str>,
     selection: Option<&ModelSelection>,
     reasoning: Option<&ReasoningSelection>,
 ) -> Vec<v2::SessionConfigOption> {
     let mut options = match (selection, model) {
-        (Some(selection), _) => vec![model_option(&selection.provider, &selection.model)],
-        (None, Some(model)) => vec![model_option(provider_id, model)],
+        (Some(selection), _) => vec![model_option(catalog, &selection.provider, &selection.model)],
+        (None, Some(model)) => vec![model_option(catalog, provider_id, model)],
         (None, None) => Vec::new(),
     };
     options.extend(reasoning.and_then(effort_option));
@@ -235,6 +278,7 @@ impl Mapper {
             model: None,
             selection: None,
             reasoning: None,
+            catalog: Arc::default(),
             message_seq: 0,
             open_stream: None,
             tool_ids: HashMap::new(),
@@ -260,11 +304,19 @@ impl Mapper {
 
     pub(super) fn config_options(&self) -> Vec<v2::SessionConfigOption> {
         model_options(
+            &self.catalog,
             &self.facts.provider_id,
             self.model.as_deref(),
             self.selection.as_ref(),
             self.reasoning.as_ref(),
         )
+    }
+
+    /// Takes a new model catalog in. Whether the options it offers changed.
+    pub(super) fn set_catalog(&mut self, catalog: Arc<Vec<ModelGroup>>) -> bool {
+        let changed = self.catalog != catalog;
+        self.catalog = catalog;
+        changed
     }
 
     pub(super) fn config_option_update(&self) -> Option<Outgoing> {

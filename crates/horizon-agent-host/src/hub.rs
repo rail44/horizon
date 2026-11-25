@@ -197,10 +197,17 @@ impl Shared {
         }
     }
 
+    /// The model catalog as it is now, and as it changes.
+    fn model_catalog(&self) -> tokio::sync::watch::Receiver<Arc<Vec<crate::session::ModelGroup>>> {
+        self.connection.model_catalog()
+    }
+
     fn session_model_options(&self, session_id: SessionId) -> Vec<v2::SessionConfigOption> {
         let provider_id = self.session_facts(session_id).provider_id;
         let (model, selection, reasoning) = self.connection.session_model_state(session_id);
+        let catalog = self.connection.model_catalog().borrow().clone();
         mapping::model_options(
+            &catalog,
             &provider_id,
             model.as_deref(),
             selection.as_ref(),
@@ -543,48 +550,6 @@ impl Shared {
         answer(responder, result)
     }
 
-    fn list_providers(
-        self: &Arc<Self>,
-        _request: acp::ListProvidersRequest,
-        responder: Responder<acp::ListProvidersResponse>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        let result = self.gate().map(|()| acp::ListProvidersResponse {
-            providers: self
-                .connection
-                .list_providers()
-                .into_iter()
-                .map(|summary| acp::ProviderSummary {
-                    name: summary.name,
-                    base_url: summary.base_url,
-                    api_key_env: summary.api_key_env,
-                    default_model: summary.default_model,
-                    available: summary.available,
-                    default: summary.default,
-                })
-                .collect(),
-        });
-        answer(responder, result)
-    }
-
-    /// Never an error: discovery that answers nothing is an empty list.
-    fn list_provider_models(
-        self: &Arc<Self>,
-        request: acp::ListProviderModelsRequest,
-        responder: Responder<acp::ListProviderModelsResponse>,
-        _cx: V2ConnectionTo<Client>,
-    ) -> Result<(), Error> {
-        if let Err(error) = self.gate() {
-            return responder.respond_with_error(error);
-        }
-        let connection = self.connection.clone();
-        tokio::spawn(async move {
-            let models = connection.list_provider_models(&request.provider).await;
-            let _ = responder.respond(acp::ListProviderModelsResponse { models });
-        });
-        Ok(())
-    }
-
     /// A request no core handler claims: an extension's
     /// (`crate::extension::Extension::serves`), answered once the sessions
     /// are resumed, or refused as unknown.
@@ -638,6 +603,7 @@ where
     R: AsyncRead + Send + 'static,
     W: AsyncWrite + Send + 'static,
 {
+    let catalog = tokio::spawn(state.clone().keep_model_catalog());
     let connection = Connection::new(state);
     let shared = Arc::new(Shared::new(connection.clone(), binary_id));
     let transport = ByteStreams::new(write.compat_write(), read.compat());
@@ -671,12 +637,6 @@ where
         v2::SetSessionConfigOptionRequest,
         set_config_option
     );
-    let builder = on_request!(builder, acp::ListProvidersRequest, list_providers);
-    let builder = on_request!(
-        builder,
-        acp::ListProviderModelsRequest,
-        list_provider_models
-    );
     let builder = on_request!(
         builder,
         agent_client_protocol::UntypedMessage,
@@ -697,6 +657,7 @@ where
     );
 
     let served = builder.connect_to(transport).await;
+    catalog.abort();
     shared.close();
     served
 }

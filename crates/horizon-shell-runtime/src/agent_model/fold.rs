@@ -39,6 +39,8 @@ pub struct AgentModel {
     pub selection: Option<ModelSelection>,
     /// The session's reasoning effort, when its model takes one.
     pub effort: Option<EffortSelection>,
+    /// The models the session can be switched to.
+    pub models: ModelChoices,
     /// The session's subagents with work under way, in the order they were
     /// first announced.
     pub subagents: Vec<Subagent>,
@@ -152,6 +154,9 @@ impl AgentModel {
             v2::SessionUpdate::ConfigOptionUpdate(update) => {
                 if let Some(selection) = model_selection(&update.config_options) {
                     self.selection = Some(selection);
+                }
+                if let Some(models) = model_choices(&update.config_options) {
+                    self.models = models;
                 }
                 // Every update carries the whole set: a model that takes
                 // no effort comes without the option.
@@ -501,6 +506,39 @@ pub fn effort_selection(options: &[v2::SessionConfigOption]) -> Option<EffortSel
             .map(|entry| entry.value.0.to_string())
             .collect(),
     })
+}
+
+/// What the `model` config option offers, if the set carries one: its
+/// entries' provider and model, read from their value ids, grouped by
+/// provider in the option's order.
+pub fn model_choices(options: &[v2::SessionConfigOption]) -> Option<ModelChoices> {
+    let option = options
+        .iter()
+        .find(|option| option.config_id.0.as_ref() == MODEL_CONFIG_ID)?;
+    let v2::SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let entries: Vec<&v2::SessionConfigSelectOption> = match &select.options {
+        v2::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+        v2::SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut providers: Vec<(String, Vec<String>)> = Vec::new();
+    for entry in entries {
+        let Some((provider, model)) = decode_model_option_id(&entry.value.0) else {
+            continue;
+        };
+        match providers.iter_mut().find(|(name, _)| name == provider) {
+            Some((_, models)) => models.push(model.to_string()),
+            None => providers.push((provider.to_string(), vec![model.to_string()])),
+        }
+    }
+    let current = decode_model_option_id(&select.current_value.0)
+        .map(|(provider, model)| (provider.to_string(), model.to_string()));
+    Some(ModelChoices { current, providers })
 }
 
 /// The provider and model of the `model` config option, if the set carries

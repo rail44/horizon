@@ -186,18 +186,10 @@ impl Agentd {
     }
 }
 
-/// The model picker's source: the daemon's own listings and switch.
+/// The model picker's switch, through the runtime.
 pub struct RuntimeModels(pub Agentd);
 
 impl Models for RuntimeModels {
-    fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String> {
-        self.0.handle().list_providers()
-    }
-
-    fn models(&self, provider: &str) -> Result<Vec<String>, String> {
-        (self.0.handle()).list_provider_models(provider.to_string())
-    }
-
     fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
         (self.0.handle()).set_session_model(session, provider.to_string(), model.to_string())
     }

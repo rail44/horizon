@@ -66,4 +66,4 @@ pub(crate) use self::connection::ForkError;
 pub(crate) use self::resume::resume_persisted_sessions;
 pub use self::resume::resume_session;
 pub use self::spawn::spawn_session_thread;
-pub use self::state::AgentdState;
+pub use self::state::{AgentdState, ModelGroup};

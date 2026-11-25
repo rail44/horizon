@@ -7,9 +7,7 @@ use std::time::Duration;
 use horizon_agent::config::ReasoningLevel;
 use horizon_agent::contract::Event;
 use horizon_agent::contract::{Command, SessionId};
-use horizon_agent::hosting::{
-    ModelSelection, ProviderSummary, ReasoningSelection, SessionNew, SessionSummary,
-};
+use horizon_agent::hosting::{ModelSelection, ReasoningSelection, SessionNew, SessionSummary};
 use horizon_agent::persistence::event_log::{Appender, PersistedSessionContext};
 
 use super::spawn::spawn_session_thread;
@@ -56,54 +54,11 @@ impl Connection {
         }
     }
 
-    /// Every configured provider with its default model and availability —
-    /// the model picker's data. Reads the agent config (the same table the
-    /// registry was built from), so it reflects the loaded `[[providers]]`
-    /// surface, or the built-in default when the file has none;
-    /// entries run in the config file's order. `available` is the
-    /// build-time-resolved key presence — the same rule the registry itself
-    /// follows; a mid-session environment change is honored by a *switch*,
-    /// not by this listing. Candidate models come from the provider's own
-    /// `/models` listing ([`Self::list_provider_models`]), not from here.
-    pub(crate) fn list_providers(&self) -> Vec<ProviderSummary> {
-        let config = lock_unpoisoned(&self.state.agent_config);
-        let table = &config.providers;
-        let default = table.default_model.as_ref();
-        table
-            .entries
-            .iter()
-            .map(|entry| {
-                // Only the entry the top-level `default_model` pair names
-                // carries a default model.
-                let default_model = default
-                    .filter(|pair| pair.provider == entry.name)
-                    .map(|pair| pair.model.clone());
-                ProviderSummary {
-                    name: entry.name.clone(),
-                    base_url: entry.base_url.clone(),
-                    api_key_env: entry.api_key_env.clone(),
-                    default: default_model.is_some(),
-                    default_model,
-                    available: entry.api_key_present,
-                }
-            })
-            .collect()
-    }
-
-    /// A provider's own live model-id listing for the picker's discovery
-    /// (`_horizon/list_provider_models`), fetched by the entry's own
-    /// resolved base URL and key. An unknown provider, an unavailable entry,
-    /// or an endpoint that answers nothing yields an empty list — discovery
-    /// augments the picker, it never blocks a pick.
-    pub(crate) async fn list_provider_models(&self, provider: &str) -> Vec<String> {
-        let entry = {
-            let config = lock_unpoisoned(&self.state.agent_config);
-            config.providers.entry(provider).cloned()
-        };
-        match entry {
-            Some(entry) => entry.list_model_ids().await,
-            None => Vec::new(),
-        }
+    /// The model catalog as it is now, and as it changes.
+    pub(crate) fn model_catalog(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Arc<Vec<super::state::ModelGroup>>> {
+        self.state.model_catalog()
     }
 
     /// Validate using current config and enqueue the resolved snapshot. Model
@@ -727,28 +682,6 @@ mod tests {
         (state, entries)
     }
 
-    /// `list_providers` reports every configured provider — both of them,
-    /// with the key-less one registered but unavailable (`available:
-    /// false`, never dropped) — in file order, with the default flagged.
-    #[test]
-    fn list_providers_reports_both_entries_and_marks_the_unavailable_one() {
-        let (state, _entries) = two_provider_state();
-        let connection = Connection { state };
-        let summaries = connection.list_providers();
-        assert_eq!(summaries.len(), 2);
-        assert_eq!(summaries[0].name, "openai");
-        assert!(summaries[0].available);
-        assert!(summaries[0].default);
-        assert_eq!(summaries[0].default_model.as_deref(), Some("m-fast"));
-        assert_eq!(summaries[1].name, "claude");
-        assert!(!summaries[1].available);
-        assert!(!summaries[1].default);
-        assert_eq!(summaries[1].default_model, None);
-        // The key variable's NAME is reported (never a value), so a picker
-        // can explain unavailability.
-        assert_eq!(summaries[1].api_key_env, "ANTHROPIC_API_KEY");
-    }
-
     /// Acceptance queues a validated snapshot without changing applied state.
     #[test]
     fn set_session_model_queues_a_snapshot_without_announcing_application() {
@@ -828,11 +761,19 @@ mod tests {
     /// Discovery never blocks a pick: an unavailable entry (no key) answers
     /// an empty list without ever making a request, and an unknown provider
     /// is empty too (not an error).
+    /// A provider without its key is not asked for models, and is not in
+    /// the catalog.
     #[tokio::test]
-    async fn list_provider_models_is_empty_for_an_unavailable_or_unknown_provider() {
+    async fn the_model_catalog_leaves_out_a_provider_without_its_key() {
         let (state, _entries) = two_provider_state();
-        let connection = Connection { state };
-        assert!(connection.list_provider_models("claude").await.is_empty());
-        assert!(connection.list_provider_models("typo").await.is_empty());
+        state
+            .agent_config
+            .lock()
+            .unwrap()
+            .providers
+            .entries
+            .retain(|entry| !entry.api_key_present);
+        state.refresh_model_catalog().await;
+        assert!(state.model_catalog().borrow().is_empty());
     }
 }
