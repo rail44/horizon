@@ -337,8 +337,11 @@ async fn live(
             },
             // A new catalog changes what the model option offers.
             Ok(()) = catalog.changed() => {
+                let before = mapper.config_options();
                 let offered = catalog.borrow_and_update().clone();
+                // Only a change of what the options offer is sent.
                 if mapper.set_catalog(offered)
+                    && mapper.config_options() != before
                     && let Some(outgoing) = mapper.config_option_update()
                     && !sink.emit(outgoing, asks)
                 {
