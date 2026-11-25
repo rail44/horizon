@@ -17,6 +17,8 @@ thiserror = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
+# The settings file of one contained call (`runtime::fence`).
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 # `denial.rs`'s SIGSYS-exit-code check wants `libc` on every Unix, not

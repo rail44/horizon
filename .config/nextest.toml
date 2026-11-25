@@ -117,6 +117,10 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # EPERM; the integrator's full gate exercises the credential-authenticated
 # round trip outside containment.
 #
+# The sandbox runtime -- `binary_id(horizon-sandbox::fence)` starts the real
+# `fence` binary, whose bubblewrap cannot create its namespaces inside another
+# sandbox.
+#
 # The sandbox's own boundary enforcer -- `binary_id(horizon-sandbox::linux_supervised_helper)`
 # and `(binary_id(horizon-sandbox-proxy) & test(/^tests::/))`.
 # `linux_supervised_helper` spawns a real `horizon-sandbox-helper` that installs
@@ -285,6 +289,7 @@ default-filter = '''
         + binary_id(horizon::status_bar)
         + test(/^host::listener::tests::/)
         + (binary_id(horizon-sandbox-runtime) & test(/^report::tests::/))
+        + binary_id(horizon-sandbox::fence)
         + binary_id(horizon-sandbox::linux_supervised_helper)
         + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
