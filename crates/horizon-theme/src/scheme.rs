@@ -59,22 +59,8 @@ pub const SURFACE_LIFT_RATIO: f32 = 0.035;
 /// for removals) -- low, so it stays a tint rather than a solid fill.
 const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 
-/// How far the command-palette/session-manager/view-chooser `List`'s
-/// selected-row highlight (`surface_selected`'s default, on both the
-/// zero-config and seeded derivation paths -- see `scheme_from`) sits
-/// from its background anchor toward `accent`. Originally chosen to match
-/// gpui-component's own `list_active` fallback formula (`self.background
-/// .blend(self.primary.opacity(0.1))` in the vendored `ui::theme::schema`,
-/// where `primary` is itself `scheme.accent`) so an unset `surface_selected`
-/// reproduced that look bit-for-bit; kept as the single intensity target
-/// for `surface_selected` itself -- the *role* value represents the
-/// intended, on-screen selected-row color, full stop.
-/// [`gpui_component_theme_config`] no longer projects it to
-/// `list.active.background` verbatim, though: gpui-component's own
-/// `apply_config` unconditionally clamps that field's alpha
-/// ([`LIST_ACTIVE_ALPHA_CLAMP`]), which would otherwise wash this blend
-/// out to a barely-visible highlight on screen -- see that constant's
-/// doc and [`invert_list_active_clamp`] for the compensation.
+/// Background-to-accent blend for the selected-row color in both
+/// zero-config and seeded schemes.
 pub const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 
 // --- Seed derivation (`docs/theme-design.md`) ---------------------------
@@ -129,21 +115,9 @@ const TEXT_MUTED_CONTRAST_FRACTION: f64 = 0.1012;
 /// `BORDER_STEP`) so it never coincides with a surface color exactly.
 const TEXT_SUBTLE_LADDER_FRACTION: f64 = 0.4;
 
-/// Neutral-ladder step fractions (OKLab-lightness distance from
-/// `background` toward `foreground`, `0.0..=1.0`) -- the seed-derivation
-/// replacement for the old per-role `blend()`-in-sRGB-space ratios
-/// (`SURFACE_LIFT_RATIO`, `LIST_ACTIVE_BLEND_RATIO`, `BORDER_BLEND_RATIO`
-/// above, all still used for their *legacy* defaults) now that both
-/// ladder endpoints are resolved through the same seed. Ordered
-/// `SURFACE_CHROME_STEP < SURFACE_PANEL_STEP < SURFACE_RAISED_STEP <
-/// BORDER_STEP`, loosely shaped after the owner's own light scheme
-/// (`docs/theme-design.md`'s Evidence table: panel closest to background,
-/// selected/border a shared further step) -- explicitly NOT tuned to
-/// reproduce their exact values (per the owner: "the steps were set by
-/// feel; don't trust them"), only their relative ordering and separation
-/// from both ends. `surface_selected` briefly joined this ladder too
-/// (`SURFACE_SELECTED_STEP == BORDER_STEP`) but moved back to being
-/// accent-anchored on both derivation paths -- see `LIST_ACTIVE_BLEND_RATIO`.
+/// Seeded neutral surfaces step from `background` toward `foreground`
+/// in OKLab lightness, ordered chrome, panel, raised, then border.
+/// The selected-row color instead blends toward the accent.
 pub const SURFACE_CHROME_STEP: f64 = 0.12;
 const SURFACE_PANEL_STEP: f64 = 0.28;
 const SURFACE_RAISED_STEP: f64 = 0.34;
@@ -153,15 +127,8 @@ pub const BORDER_STEP: f64 = 0.5;
 /// (dark background: lighter; light background: darker -- "emphasis
 /// toward the foreground direction" in `docs/theme-design.md`), to a
 /// resolved normal ANSI hue when deriving its unset `bright_*` sibling.
-/// Chroma and hue are held fixed -- only lightness moves. The single most
-/// feel-sensitive constant in this module (per the design doc, which
-/// leaves the exact formula "TBD, tune through dogfooding"); tinted8
-/// prior art uses a comparable ΔL ≈ 0.12 in HSL. Also reused for
-/// `bright_white` (pushing `foreground` itself further in the same
-/// direction, see `scheme_from`) -- `bright_black` does NOT use this
-/// constant, it derives from `text_subtle` instead (both reference
-/// fixtures -- built-in and the owner's -- agree `bright_black` IS
-/// `text_subtle`, not a further push off `black`).
+/// Chroma and hue are held fixed. `bright_white` applies the same delta
+/// to `foreground`; `bright_black` uses `text_subtle` instead.
 pub const BRIGHT_HUE_EMPHASIS_DELTA: f64 = 0.1;
 
 pub const ANSI16_DEFAULT: [u32; 16] = [
@@ -209,9 +176,6 @@ pub struct Scheme {
     /// on the zero-config path; the segmented track's existing
     /// contrast-blend toward `surface_panel`
     /// (`SEGMENTED_TRACK_BLEND_RATIO`) is computed from *this* role.
-    /// Purely derived since the 2026-07-16 "config narrowed to the seed"
-    /// decision (`docs/theme-design.md`) -- no longer independently
-    /// overridable via a `surface_chrome` key.
     pub surface_chrome: u32,
     /// The *intended, on-screen* selected-row highlight for
     /// gpui-component's `List` (the command palette / session manager /
@@ -298,10 +262,7 @@ fn resolve_accent(colors_accent: Option<&String>, hues: &SeedHues, default: u32)
 /// through the untouched legacy path -- see this module's
 /// `derivation_reproduces_the_builtin_scheme_within_tolerance` test for the
 /// former and `default_scheme_matches_agent_views_pre_existing_hex_values`
-/// for the latter. `terminal_background` no longer feeds this check (or
-/// anything else) since the 2026-07-16 config-narrowing decision retired
-/// it as a key -- `surface_base` is the seed anchor for both the UI and
-/// the terminal now.
+/// for the latter. `surface_base` anchors both the UI and the terminal.
 fn seed_is_configured(theme: &Written) -> bool {
     theme.surface_base.is_some()
         || theme.ansi.red.is_some()
@@ -336,11 +297,7 @@ pub fn scheme_from(raw: &Written) -> Scheme {
     // The seed: the six hue slots (doubling as `[theme.ansi]`'s normal
     // colors), the `surface_base` anchor, `text_contrast`, and whether
     // any of that was actually configured. Resolved ahead of everything
-    // else -- every derived default below reads from these. These, plus
-    // `accent` below, are the ENTIRE recognized `[theme]`/`[theme.ansi]`
-    // surface since the 2026-07-16 "config narrowed to the seed" decision
-    // (`docs/theme-design.md`) -- every role past this point is derived
-    // only, never independently overridable.
+    // else: every derived role below reads from these and `accent`.
     let hues = SeedHues {
         red: ansi_slot(&ansi_raw.red, ANSI16_DEFAULT[1]),
         green: ansi_slot(&ansi_raw.green, ANSI16_DEFAULT[2]),
@@ -412,23 +369,8 @@ pub fn scheme_from(raw: &Written) -> Scheme {
         blend(background, text_subtle, BORDER_BLEND_RATIO)
     };
 
-    // `black`/`white`: role-based, tied to `background`/`foreground`
-    // directly -- NOT picked by lightness. This is base16's own ANSI-0
-    // convention too (ANSI 0 = base00 = the default background,
-    // regardless of polarity) and matches both reference fixtures: the
-    // built-in dark scheme's `black`/`white` sit in the `background`/
-    // `foreground` *family* respectively (`0x23262e`≈`background`
-    // `0x16181d`; `0xdee2ea`≈`foreground` `0xe9ecf2`), and the owner's
-    // light scheme sets `black` to their light background color and
-    // `white` to their dark foreground color -- the opposite pairing a
-    // lightness-based pick would produce. "Light polarity inverts
-    // black/white" (`docs/theme-design.md`) describes what happens to
-    // these two *values* once background/foreground themselves flip
-    // polarity (black becomes a light color on a light scheme), not a
-    // swap of which role gets which endpoint. Neither slot (nor any other
-    // slot below) reads a `[theme.ansi]` override any more -- `black`/
-    // `white`/`bright_*` are derived-only since 2026-07-16; only the six
-    // hue slots above stay configurable.
+    // ANSI `black` and `white` follow the background and foreground roles,
+    // respectively, even on a light background (the Base16 ANSI-0 convention).
     let ansi_black = if seed_configured {
         background
     } else {
@@ -439,13 +381,8 @@ pub fn scheme_from(raw: &Written) -> Scheme {
     } else {
         ANSI16_DEFAULT[7]
     };
-    // `bright_black`: the terminal's de-emphasis gray (dimmed `ls`
-    // entries, shell autosuggestions) -- both reference fixtures agree
-    // this is `text_subtle` exactly (built-in `0x5f6370` ==
-    // `TEXT_SUBTLE_DEFAULT`; the owner's own `bright_black` equals their
-    // `text_subtle`), not a further push off `black`/`background` (which
-    // would risk landing back on `black` itself, making dimmed text
-    // invisible).
+    // `bright_black` is the terminal's dim text color (e.g. shell
+    // autosuggestions); `text_subtle` keeps it distinct from `background`.
     let ansi_bright_black = if seed_configured {
         text_subtle
     } else {
@@ -458,10 +395,7 @@ pub fn scheme_from(raw: &Written) -> Scheme {
     // built-in scheme's `bright_white` (`0xffffff`, `foreground`'s
     // `0xe9ecf2` clamped to the `l=1.0` bound -- not bit-exact, since
     // `foreground`'s own small residual chroma keeps the clamped
-    // projection from landing precisely on `(1,1,1)`); the owner's own
-    // `bright_white` pushes further still, in the same direction, off
-    // their (much darker) foreground -- plausibility only, this derivation
-    // doesn't chase their exact magnitude.
+    // projection from landing precisely on `(1,1,1)`).
     let ansi_bright_white = if seed_configured {
         super::oklab::emphasize_lightness(foreground, BRIGHT_HUE_EMPHASIS_DELTA, dark)
     } else {

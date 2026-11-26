@@ -49,24 +49,9 @@ pub fn is_light(value: u32) -> bool {
     luminance(value) >= 0.5
 }
 
-/// The UI-snap seam's own contrast-snapping primitive (slice B2,
-/// `docs/theme-design.md`'s "terminal-faithful / UI-snap seam"):
-/// a continuous OKLCH solve against an arbitrary surface, replacing the
-/// older `contrast_safe_default` (background-only, BT.601-luma polarity
-/// check, HSL-lightness invert) everywhere in this module, including the
-/// semantic-color defaults (`danger`/`warning`/`success`/`info` in
-/// [`scheme_from`]) since the 2026-07-15 contrast audit -- see this
-/// module's own doc comment for why the coarser polarity check wasn't
-/// enough. Hue and chroma
-/// are held fixed; only OKLCH lightness moves, via
-/// [`oklab::solve_lightness_for_ratio`], toward whichever side of
-/// `surface` clears [`TEXT_CONTRAST_FLOOR`]. A no-op whenever `candidate`
-/// already clears the floor against `surface` -- most call sites on the
-/// built-in scheme never actually move (asserted, not assumed, in this
-/// module's tests). Callers decide whether to apply it to a role's
-/// derived default (as [`scheme_from`]'s `diff_added_text`/
-/// `diff_removed_text` do) or to an already-resolved value at a render
-/// call site (as [`readable_on`] does).
+/// Returns `candidate` unchanged if it clears [`TEXT_CONTRAST_FLOOR`]
+/// against `surface`. Otherwise, solves for OKLCH lightness at fixed hue
+/// and chroma before converting the result back to packed sRGB.
 pub fn contrast_snap(candidate: u32, surface: u32) -> u32 {
     let ratio = super::oklab::contrast_ratio(
         super::oklab::relative_luminance(candidate),

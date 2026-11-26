@@ -1,12 +1,8 @@
 //! Hand-rolled sRGB <-> OKLab <-> OKLCH conversions (Björn Ottosson's
 //! reference formulas, <https://bottosson.github.io/posts/oklab/>) plus WCAG
 //! relative-luminance/contrast-ratio helpers, for `scheme.rs`'s seed
-//! derivation (`docs/theme-design.md`). Kept dependency-free -- the design
-//! doc explicitly rules out adding a color crate for this (gpui-component's
-//! `Colorize::mix_oklab` does the OKLab conversion but not the L-targeting
-//! this module exists for). Every color in and out is Horizon's existing
-//! packed `0xRRGGBB` `u32` representation; callers outside this module never
-//! need to touch [`Oklab`]/[`Oklch`] directly.
+//! derivation (`docs/theme-design.md`). The packed-color helpers use
+//! `0xRRGGBB` `u32` inputs and outputs.
 
 /// A color in the OKLab space: `l` perceptual lightness (`0.0` black ..
 /// `1.0` white for in-gamut sRGB colors, though the value is not clamped
@@ -137,12 +133,8 @@ pub fn packed_from_oklch(lch: Oklch) -> u32 {
     srgb_to_packed(linear.map(linear_to_srgb))
 }
 
-/// A packed color's own OKLab lightness -- the perceptually-uniform
-/// polarity/ordering signal used throughout `scheme.rs`'s seed derivation
-/// (background-vs-foreground polarity, neutral-ladder ordering) in place
-/// of the older BT.601-luma [`super::luminance`]/`is_light` pair, which
-/// stays in place unchanged for the pre-existing `contrast_safe_default`
-/// call sites this module's callers don't touch.
+/// OKLab lightness of a packed color, used for scheme polarity and
+/// neutral-surface ordering.
 pub fn lightness(value: u32) -> f64 {
     oklch_from_packed(value).l
 }
