@@ -188,7 +188,7 @@ impl AgentSessionHandle {
 
 impl Drop for AgentSessionHandle {
     fn drop(&mut self) {
-        self.routes.unregister_agent(self.route);
+        self.routes.detach_agent(self.route);
     }
 }
 

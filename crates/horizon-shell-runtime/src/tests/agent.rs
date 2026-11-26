@@ -695,6 +695,47 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
     );
 }
 
+/// A pane let go of while its session is still being restored keeps the
+/// commands it sent: the attachment sends them, in order, once the session
+/// is open, and only then ends (board #108).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn commands_a_pane_sent_before_it_went_are_still_sent() {
+    let (client, server) = pair();
+    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let id = SessionId::new();
+    let handle = agentd.attach_session(id);
+    let mut fake = serve_fake_agentd(
+        server,
+        FakeAgentBehavior {
+            manual_bootstrap: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    let AgentCall::Resume { responder, .. } = fake.next_call().await else {
+        panic!("resume");
+    };
+    let commands = handle.sender();
+    commands
+        .send(AgentCommand::Prompt {
+            text: "last words".into(),
+        })
+        .unwrap();
+    commands.send(AgentCommand::Close).unwrap();
+    drop(commands);
+    drop(handle);
+    responder
+        .unwrap()
+        .respond(v2::ResumeSessionResponse::new())
+        .unwrap();
+    let AgentCall::Prompt(text) = fake.next_call().await else {
+        panic!("the prompt sent before the pane went");
+    };
+    assert_eq!(text, "last words");
+    std::assert_matches!(fake.next_call().await, AgentCall::Close);
+}
+
 /// After an error notice the session is looked for in `session/list`: one
 /// the agent no longer lists has ended, and its pane is told.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -79,6 +79,9 @@ struct AgentRoute {
     /// The connection the attachment was on is gone: it is opened again on
     /// the next.
     reopen: bool,
+    /// The pane let go of the session: nothing is shown any more, and the
+    /// attachment ends once it has sent the commands the pane left.
+    detached: bool,
 }
 
 impl Drop for AgentRoute {
@@ -204,9 +207,49 @@ impl AgentRoutes {
                 ready: false,
                 commands: None,
                 reopen: false,
+                detached: false,
             },
         );
         key
+    }
+
+    /// The pane let go of the session. An attachment running for it goes on
+    /// until it has sent the commands the pane left, then ends
+    /// ([`Self::attachment_ended`]); with none running, the route goes now.
+    pub(super) fn detach_agent(&self, key: RouteKey<SessionId>) {
+        let running = {
+            let mut state = self.state.lock().unwrap();
+            match state
+                .agent
+                .get_mut(&key.session_id)
+                .filter(|route| route.key == key)
+            {
+                Some(route) if route.inbound.is_some() || route.reopen => {
+                    route.detached = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !running {
+            self.unregister_agent(key);
+        }
+    }
+
+    /// `key`'s attachment task ended: a route its pane let go of goes with
+    /// it.
+    pub(super) fn attachment_ended(&self, key: RouteKey<SessionId>) {
+        let detached = (self.state.lock().unwrap().agent.get(&key.session_id))
+            .is_some_and(|route| route.key == key && route.detached);
+        if detached {
+            self.unregister_agent(key);
+        }
+    }
+
+    /// Whether the pane let go of `key`'s session.
+    pub(super) fn is_detached(&self, key: RouteKey<SessionId>) -> bool {
+        (self.state.lock().unwrap().agent.get(&key.session_id))
+            .is_some_and(|route| route.key == key && route.detached)
     }
 
     pub(super) fn unregister_agent(&self, key: RouteKey<SessionId>) {
@@ -288,6 +331,11 @@ impl AgentRoutes {
     }
 
     pub(super) async fn send_agent(&self, key: RouteKey<SessionId>, event: AgentUpdate) -> bool {
+        // Nobody shows a session its pane let go of: what it sends is
+        // passed over while the attachment sends what the pane left.
+        if self.is_detached(key) {
+            return true;
+        }
         let registration = self
             .state
             .lock()

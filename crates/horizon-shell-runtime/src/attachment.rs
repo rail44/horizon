@@ -261,7 +261,24 @@ pub(super) async fn run(
             .await;
     }
     phase.stream_ended();
-    routes.send_agent(route, AgentUpdate::State(phase)).await;
+    routes
+        .send_agent(route, AgentUpdate::State(phase.clone()))
+        .await;
+    if routes.is_detached(route) {
+        // What the pane left and could not be sent is said here, the one
+        // place left to say it.
+        let mut lost = 0;
+        while commands.try_recv().is_ok() {
+            lost += 1;
+        }
+        if lost > 0 {
+            eprintln!(
+                "horizon: {lost} command(s) for agent session {} were not sent: {phase:?}",
+                route.session_id().as_uuid()
+            );
+        }
+    }
+    routes.attachment_ended(route);
 }
 
 struct Session {
