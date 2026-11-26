@@ -111,7 +111,8 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          - Git repository: {git_repo}\n\
          \n\
          Tool policy:\n\
-         - Tools require absolute paths; relative paths are rejected.\n\
+         - File tools take a path that is absolute or relative to the workspace root, where \
+         bash commands start too.\n\
          - Prefer targeted reads and searches (grep, glob, line-windowed reads) over dumping whole files.\n\
          - Use $TMPDIR for temporary files: it is kept from one call to the next for the session.\n\
          \n\

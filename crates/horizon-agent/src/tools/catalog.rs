@@ -88,7 +88,8 @@ fn build_definitions() -> Vec<Definition> {
             legend_after(
                 &format!(
                     "Read a known text file or a relevant line window, with line numbers. \
-                Requires an absolute path. Use fs_grep to locate specific content before \
+                The path is absolute or relative to the workspace root. Use fs_grep to locate \
+                specific content before \
                 reading a large file, and fs_glob when the file path is unknown. Pass \
                 offset/limit to continue through a file; the result stops at {} content \
                 characters and returns next_offset. Each line is truncated at {} \

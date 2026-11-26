@@ -5,11 +5,11 @@ use crate::tools::output::Response;
 use super::error_output;
 use crate::tools::state::ToolSessionState;
 
-/// Resolves `requested` to an absolute, canonicalized path.
+/// Resolves `requested` to an absolute, canonicalized path: a relative one
+/// against `workspace_root`, where `bash` starts too.
 ///
-/// Relative paths are rejected outright (models measurably mishandle them —
-/// see `docs/agent-tools-design.md`), and so are paths containing `..`:
-/// the confinement check in [`resolve_path`] is lexical, so a `..`
+/// Paths containing `..` are rejected: the confinement check in
+/// [`resolve_path`] is lexical, so a `..`
 /// surviving into a not-yet-existing tail (e.g. `{root}/new/../../etc/x`)
 /// would pass it lexically and then escape when the OS resolves the path.
 /// `.` components are harmless and are normalized away.
@@ -22,19 +22,23 @@ use crate::tools::state::ToolSessionState;
 /// Returns `Err` with an error value for any input validation or
 /// canonicalization failure. The caller decides whether the error is
 /// returned to the model or routed to the approval gate.
-fn canonicalize(requested: &str) -> Result<PathBuf, Response> {
-    let requested_path = Path::new(requested);
-    if !requested_path.is_absolute() {
-        return Err(error_output(format!(
-            "path `{requested}` must be absolute — relative paths are rejected"
-        )));
-    }
+fn canonicalize(requested: &str, workspace_root: Option<&Path>) -> Result<PathBuf, Response> {
+    let requested_path = match workspace_root {
+        _ if Path::new(requested).is_absolute() => PathBuf::from(requested),
+        Some(root) => root.join(requested),
+        None => {
+            return Err(error_output(format!(
+                "path `{requested}` is relative, and this session has no workspace root to \
+                 resolve it against — pass an absolute path"
+            )));
+        }
+    };
     if requested_path
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
         return Err(error_output(format!(
-            "path `{requested}` contains `..` — pass a fully resolved absolute path"
+            "path `{requested}` contains `..` — pass a path without it"
         )));
     }
     // `Path::components()` normalizes non-leading `.`` away; rebuilding from
@@ -199,7 +203,7 @@ fn resolve(
         ));
     };
 
-    let resolved = canonicalize(requested)?;
+    let resolved = canonicalize(requested, tool_state.workspace_root())?;
 
     if !allow_out_of_root && !within(tool_state, &resolved, confinement) {
         return Err(error_output(format!(
@@ -220,12 +224,12 @@ fn resolve(
 /// Uses the same canonicalization as [`resolve_path`] to catch symlink
 /// escapes — a path that lexically starts with the workspace root but
 /// resolves outside via a symlink is still detected. Returns `false`
-/// for any other error (relative path, `..`, canonicalization failure,
-/// no workspace root) — those are input validation errors, not boundary
+/// for any other error (`..`, canonicalization failure, no workspace
+/// root) — those are input validation errors, not boundary
 /// crossings, and should be returned to the model as errors rather than
 /// routed to the approval gate.
 pub(super) fn escapes_root(tool_state: &ToolSessionState, requested: &str) -> bool {
-    let Ok(resolved) = canonicalize(requested) else {
+    let Ok(resolved) = canonicalize(requested, tool_state.workspace_root()) else {
         return false;
     };
     if tool_state.workspace_root().is_none() {
@@ -247,7 +251,7 @@ pub(super) fn is_in_git_metadata(tool_state: &ToolSessionState, requested: &str)
     if std::fs::symlink_metadata(&dot_git).is_err() {
         return false;
     }
-    let Ok(resolved) = canonicalize(requested) else {
+    let Ok(resolved) = canonicalize(requested, tool_state.workspace_root()) else {
         return false;
     };
     let dot_git = dot_git.canonicalize().unwrap_or(dot_git);
@@ -263,7 +267,7 @@ pub(super) fn in_workspace_equivalent(
     requested: &str,
 ) -> Option<PathBuf> {
     let workspace_root = tool_state.workspace_root()?;
-    let resolved = canonicalize(requested).ok()?;
+    let resolved = canonicalize(requested, tool_state.workspace_root()).ok()?;
     for checkout in other_working_trees(tool_state) {
         let Ok(relative) = resolved.strip_prefix(&checkout) else {
             continue;

@@ -946,7 +946,7 @@ fn system_prompt_carries_tool_policy() {
     );
 
     let lower = prompt.to_ascii_lowercase();
-    assert!(lower.contains("absolute path"));
+    assert!(lower.contains("relative to the workspace root"));
     assert!(prompt.contains("$TMPDIR"));
     assert!(
         !lower.contains("retry"),

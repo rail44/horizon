@@ -185,15 +185,41 @@ fn processing_preserves_provider_payload_on_original_event_only() {
 
 // --- fs_read -----------------------------------------------------------
 
+/// A relative path is read from the workspace root, where bash starts.
 #[test]
-fn fs_read_rejects_relative_path() {
+fn fs_read_takes_a_path_relative_to_the_workspace_root() {
+    let root = temp_workspace("relative-read");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/notes.txt"), "from the root\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    let output =
+        sync_tools::execute_auto(&tool_state, "fs_read", &json!({ "path": "sub/notes.txt" }))
+            .expect("fs_read is auto-executed");
+
+    assert!(!is_error(&output), "{output}");
+    assert!(
+        output["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("from the root")
+            || output.to_string().contains("from the root"),
+        "{output}"
+    );
+}
+
+/// A relative path may not climb out of the root with `..`.
+#[test]
+fn fs_read_rejects_a_relative_path_that_climbs_out() {
     let tool_state = dummy_tool_state();
     let output =
-        sync_tools::execute_auto(&tool_state, "fs_read", &json!({ "path": "relative.txt" }))
+        sync_tools::execute_auto(&tool_state, "fs_read", &json!({ "path": "../outside.txt" }))
             .expect("fs_read is auto-executed");
 
     assert!(is_error(&output));
-    assert!(output["message"].as_str().unwrap().contains("absolute"));
+    assert!(
+        output["message"].as_str().unwrap().contains(".."),
+        "{output}"
+    );
 }
 
 #[test]

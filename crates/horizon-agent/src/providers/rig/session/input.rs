@@ -167,9 +167,9 @@ impl Inputs {
         base: &str,
     ) {
         self.additions.push(format!(
-            "Environment activated: this session now works in {} on branch {branch}, \
-             created from commit {base}. Edits and shell commands now apply to this worktree; \
-             use absolute paths under it.",
+            "Environment activated: the workspace root is now {} (branch {branch}, \
+             created from commit {base}). bash starts there and relative paths resolve there; \
+             what you learned of the previous directory may not hold here.",
             workspace_root.display()
         ));
     }

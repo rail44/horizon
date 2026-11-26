@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReadFile {
-    /// Absolute path of the file to read.
+    /// Path of the file to read: absolute, or relative to the workspace root.
     pub path: String,
     /// One-based first line.
     #[serde(default)]
@@ -21,7 +21,7 @@ pub(crate) struct ReadFile {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Glob {
-    /// Absolute directory to search under.
+    /// Directory to search under: absolute, or relative to the workspace root.
     // `path` is what `fs_read` calls its own; models reach for it here too.
     #[serde(alias = "path")]
     pub base_path: String,
@@ -34,7 +34,8 @@ pub(crate) struct Glob {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Grep {
-    /// Absolute file or directory to search under.
+    /// File or directory to search under: absolute, or relative to the
+    /// workspace root.
     // `path` is what `fs_read` calls its own; models reach for it here too.
     #[serde(alias = "path")]
     pub base_path: String,
@@ -50,6 +51,7 @@ pub(crate) struct Grep {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WriteFile {
+    /// Path of the file to write: absolute, or relative to the workspace root.
     pub path: String,
     /// Full new file content.
     pub content: String,
@@ -88,7 +90,8 @@ impl JsonSchema for EditFiles {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditFilesArgs {
-    /// Absolute path of the file for every edit that names none of its own.
+    /// Path of the file for every edit that names none of its own: absolute,
+    /// or relative to the workspace root.
     #[serde(default)]
     pub path: Option<String>,
     /// Ordered edits. Read each existing target before editing it.
@@ -98,7 +101,8 @@ pub(crate) struct EditFilesArgs {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditArgs {
-    /// Absolute path of the file; may be left out when the top-level
+    /// Path of the file, absolute or relative to the workspace root; may be
+    /// left out when the top-level
     /// `path` names it.
     #[serde(default)]
     pub path: Option<String>,

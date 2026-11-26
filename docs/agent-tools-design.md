@@ -38,17 +38,19 @@ to on 2026-11-14), so the ids were renamed from dotted to underscored that
 day, sessions recorded before it are not rewritten, and
 `register_external_tools` refuses an id outside the pattern.
 
-All tools require **absolute paths**; relative paths are rejected with an
-actionable error (models measurably mishandle relative paths — SWE-bench-era
-finding restated in Anthropic's agent guidance).
+The file tools take a path that is absolute or relative to the session's
+workspace root, where `bash` starts too; a path with `..` is rejected, so a
+relative one cannot climb out of the root. The frameworks compared in
+`docs/research/agent-frameworks-core-and-extension-2026-11-23.md` all take
+relative paths this way (board #114).
 
 `worktree_enter` (`tools/worktree.rs`) takes no arguments. Through the
-`HostTools::enter_worktree` boundary, `horizon-agentd` resolves the session
+`HostTools::enter_worktree` boundary, the host resolves the session
 root's `HEAD` to a commit, refuses a session that already owns a worktree,
 and queues `Command::ActivateWorktree` at that commit for the calling
 session: the activation `board_session implement` also requests. The
-result is `{requested, base, message}`; the root moves at the provider's
-next turn boundary, and the model's next turn receives a note naming the
+result is `{requested, base, message}`; the root moves before the
+provider's next model request, and that request carries a note naming the
 new root, branch, and base (or the activation failure). See
 `docs/sandbox-perimeter-design.md`.
 
