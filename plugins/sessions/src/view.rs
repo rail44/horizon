@@ -20,7 +20,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_components::{AlertDialog, Icon, MenuButton, MenuItem, MenuLabel};
+use horizon_components::{
+    AlertDialog, Icon, MenuButton, MenuItem, MenuLabel, ROW_SELECTED, list_row,
+};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
@@ -56,17 +58,13 @@ mod styles {
                 line-height: var(--meta-line); color: var(--text-muted); }
         .row { display: flex; align-items: flex-start; box-sizing: border-box;
                padding: var(--u4) var(--u8) var(--u4) 0;
-               border: var(--line) solid transparent; border-radius: var(--radius);
                cursor: pointer; }
-        .row:hover { background: var(--band); }
         /* The menu, and since when under it. */
         .side { flex: none; align-self: stretch; display: flex; flex-direction: column;
                 align-items: flex-end; justify-content: space-between;
                 margin-left: var(--u8); }
         .actions { opacity: 0; }
-        .row:hover .actions, .row.selected .actions { opacity: 1; }
-        /* The cursor: a line, in the accent. */
-        .row.selected { border-color: var(--accent); }
+        .row:hover .actions, .row.show-actions .actions { opacity: 1; }
         .lead { flex: none; display: flex; width: var(--u16); color: var(--text-muted); }
         .lead.warning { color: var(--chip-warning-text); }
         .lead.accent { color: var(--chip-accent-text); }
@@ -400,9 +398,15 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, run: Run, w
         .class(styles::LINE)
         .child(el("span").class(styles::LEAD))
         .child(el("span").class(styles::UNDER).text_dyn(said_under));
-    let element = el("div")
+    let element = list_row()
         .class(styles::ROW)
-        .class_dyn(move || is_chosen().then_some(styles::SELECTED))
+        .class_dyn(move || {
+            let chosen = is_chosen();
+            (
+                chosen.then_some(ROW_SELECTED),
+                chosen.then_some(styles::SHOW_ACTIONS),
+            )
+        })
         .child(
             el("div")
                 .class(styles::LABEL)

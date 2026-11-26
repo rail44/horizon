@@ -7,7 +7,7 @@ use horizon_ui::{Callback, Component, El, el};
 
 use super::{
     AlertDialog, Button, ButtonKind, ButtonSize, Chip, Field, Icon, MenuButton, MenuItem,
-    MenuLabel, Notice, Prompt, Tone, link,
+    MenuLabel, Notice, Prompt, ROW_SELECTED, Tone, link, list_row,
 };
 
 mod styles {
@@ -22,6 +22,7 @@ mod styles {
         .line { display: flex; align-items: flex-start; gap: var(--u8); }
         .said { font-size: var(--meta-size); line-height: var(--meta-line);
                 color: var(--text-muted); }
+        .sample-row { padding: var(--u4) var(--u8); cursor: pointer; }
         .holds-open { width: calc(var(--u32) * 7); height: calc(var(--u32) * 4);
                       display: flex; justify-content: flex-end; }
     "}
@@ -329,6 +330,22 @@ pub fn gallery() -> El {
             "link",
             vec![("underlined on hover", vec![link(|| {}).text("Read more")])],
         ));
-    gallery.child(markdown());
+    gallery
+        .child(entry(
+            "list row",
+            vec![(
+                "plain and selected; hover either row",
+                vec![
+                    el("div")
+                        .child(list_row().class(styles::SAMPLE_ROW).text("README.md"))
+                        .child(
+                            list_row()
+                                .class((styles::SAMPLE_ROW, ROW_SELECTED))
+                                .text("Cargo.toml"),
+                        ),
+                ],
+            )],
+        ))
+        .child(markdown());
     gallery
 }

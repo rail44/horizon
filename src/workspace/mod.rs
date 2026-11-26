@@ -242,7 +242,8 @@ pub(crate) mod styles {
                   border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
         .items { flex: 1; min-height: 0; overflow-y: auto; padding: var(--u4); }
-        .item { display: flex; padding: var(--u4) var(--u8); border-radius: var(--radius);
+        /* Keep the content inset the same after adding the row border. */
+        .item { display: flex; padding: calc(var(--u4) - var(--line)) calc(var(--u8) - var(--line));
                 cursor: pointer; }
         .item.command { flex-direction: column; }
         .item .name { line-height: calc(var(--u4) * 5); }
@@ -251,7 +252,6 @@ pub(crate) mod styles {
         .item.destructive .name { color: var(--danger); }
         .item.disabled { cursor: default; }
         .item.disabled .name { color: var(--text-muted); }
-        .item.chosen { background: var(--surface-selected); }
     }
 "}
 }

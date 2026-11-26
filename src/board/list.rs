@@ -29,7 +29,7 @@ use keyboard_types::{Key, NamedKey};
 use super::follow;
 use super::{Activity, Job, Sessions, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
-use horizon_components::{Chip, Field, Notice, Prompt, Tone};
+use horizon_components::{Chip, Field, Notice, Prompt, ROW_SELECTED, Tone, list_row};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).
@@ -47,12 +47,9 @@ mod styles {
         .rows { flex: 1; min-height: 0; overflow-y: scroll; }
         .row { position: relative; display: flex; align-items: center; flex: none;
                box-sizing: border-box; height: calc(var(--u24) * 2); cursor: pointer;
-               border: var(--line) solid transparent; }
-        .row:hover, .band:hover { background: var(--band); }
-        .row.selected { background: var(--selection); }
+               padding-left: var(--line-strong); }
+        .band:hover { background: var(--band); }
         .row.carried { opacity: 0.5; }
-        .bar { flex: none; align-self: stretch; width: var(--line-strong); }
-        .row.selected .bar { background: var(--accent); }
         .gutter { flex: none; width: var(--u8); display: flex; align-items: center;
                   justify-content: center; }
         .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
@@ -84,7 +81,6 @@ mod styles {
         .ghost { position: absolute; z-index: 10; padding: var(--u4) var(--u8);
                  background: var(--surface-selected); pointer-events: none; }
     }
-    .board-list:focus .row.selected { border-color: var(--accent); }
 "}
 }
 
@@ -447,15 +443,14 @@ fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
     if row.subtree_unread > 0 {
         gutter.child(el("div").class(styles::UNREAD_DOT));
     }
-    el("div")
+    list_row()
         .class((styles::ROW, read))
         .class_dyn(move || {
             (
-                (marked.selected.is(&Some(id))).then_some(styles::SELECTED),
+                (marked.selected.is(&Some(id))).then_some(ROW_SELECTED),
                 (marked.carried.is(&Some(id))).then_some(styles::CARRIED),
             )
         })
-        .child(el("div").class(styles::BAR))
         .child(gutter)
         .child(el("div").attr(
             "style",

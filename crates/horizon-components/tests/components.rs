@@ -6,7 +6,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use horizon_components::{
-    AlertDialog, ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, Range, Select, Slider,
+    AlertDialog, ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, ROW_SELECTED, Range, Select,
+    Slider, list_row,
 };
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::NodeId;
@@ -111,6 +112,37 @@ fn painted(app: &App) -> impl Fn(f32, f32) -> [u8; 3] {
     move |x: f32, y: f32| {
         let at = (y as usize * 400 + x as usize) * 4;
         [pixels[at], pixels[at + 1], pixels[at + 2]]
+    }
+}
+
+#[test]
+fn list_rows_draw_an_accent_border_for_selection_and_a_band_on_hover() {
+    let app = open(|_| {
+        let row = || list_row().attr("style", "width: 100px; height: 28px;");
+        el("div")
+            .attr("style", "--accent: #ff0000; --band: #00ff00;")
+            .child(row())
+            .child(row().class(ROW_SELECTED))
+    });
+    let rows = all(&app, "list-row");
+    let [accent, band] = [[255, 0, 0], [0, 255, 0]];
+    let ground = Theme::built_in().terminal().background;
+    let color = painted(&app);
+    let top = |row| point(&app, row, 0.5, 0.0);
+    let middle = |row| point(&app, row, 0.5, 0.5);
+    let at = |paint: &dyn Fn(f32, f32) -> [u8; 3], (x, y)| paint(x, y);
+    assert_eq!(at(&color, top(rows[0])), ground);
+    assert_eq!(at(&color, top(rows[1])), accent);
+    assert_eq!(at(&color, point(&app, rows[1], 0.0, 0.0)), ground);
+    assert_eq!(at(&color, middle(rows[1])), ground);
+
+    for row in rows.iter().copied() {
+        let (x, y) = middle(row);
+        pointer(&app, x, y, Pointer::Move);
+        app.resolve();
+        let color = painted(&app);
+        assert_eq!(color(x, y), band);
+        assert_eq!(at(&color, top(rows[1])), accent);
     }
 }
 

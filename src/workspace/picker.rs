@@ -14,7 +14,7 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Class, El, el};
 
 use super::styles;
-use horizon_components::{Field, Prompt};
+use horizon_components::{Field, Prompt, ROW_SELECTED, list_row};
 
 /// What a list is searched by and where its choice is: a list's own, so
 /// that one list does not follow what is typed into another (the sheet's
@@ -108,10 +108,13 @@ fn list(
         |(index, row)| (*index, row.key.clone()),
         move |(index, row)| {
             let (index, class, clicked) = (*index, row.class, clicked.clone());
-            let item = el("div")
+            let item = list_row()
                 .class((styles::ITEM, class))
-                .class_dyn(move || (search.chosen.get() == index).then_some(styles::CHOSEN))
-                .attr("style", &format!("padding-left: {}px", 12. + row.indent))
+                .class_dyn(move || (search.chosen.get() == index).then_some(ROW_SELECTED))
+                .attr(
+                    "style",
+                    &format!("padding-left: calc({}px - var(--line))", 12. + row.indent),
+                )
                 .on("click", move |_| clicked(index));
             item.children(
                 (row.parts.iter()).map(|(class, text)| el("div").class(*class).text(text)),

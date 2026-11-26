@@ -15,7 +15,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntra
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callable, Callback, Component, El, dispatched, each_layout, el, relayout};
 
-use horizon_components::{Field, Prompt};
+use horizon_components::{Field, Prompt, ROW_SELECTED, list_row};
 
 mod listing;
 mod source;
@@ -33,10 +33,11 @@ mod styles {
         .count { flex: none; font-size: var(--meta-size); line-height: var(--meta-line);
                  color: var(--text-muted); }
         .items { flex: 1; min-height: 0; overflow-y: auto; }
+        /* Keep the content inset the same after adding the row border. */
         .item { display: flex; align-items: baseline; height: 34px; box-sizing: border-box;
-                padding: 7px var(--u12); cursor: pointer; white-space: nowrap;
+                padding: calc(7px - var(--line)) calc(var(--u12) - var(--line));
+                cursor: pointer; white-space: nowrap;
                 overflow: hidden; line-height: calc(var(--u4) * 5); }
-        .item.chosen { background: var(--surface-selected); }
         .name { flex: none; }
         .hit { color: var(--accent); font-weight: 600; }
         .cut { display: none; flex: none; margin-right: var(--u2); color: var(--text-muted); }
@@ -101,7 +102,7 @@ fn row(found: &Found) -> El {
             relayout();
         }
     });
-    el("div")
+    list_row()
         .class(styles::ITEM)
         .child(
             el("div")
@@ -167,7 +168,7 @@ impl Component for Finder {
             move |(index, found)| {
                 let index = *index;
                 row(found)
-                    .class_dyn(move || (chosen.get() == index).then_some(styles::CHOSEN))
+                    .class_dyn(move || (chosen.get() == index).then_some(ROW_SELECTED))
                     .on("click", move |_| take(index))
             },
         );
