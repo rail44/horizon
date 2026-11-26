@@ -30,7 +30,7 @@ mod styles {
             td, th { padding: var(--u2) var(--u8); border: var(--line) solid var(--border); }
         }
         .body.plain-headings h1 { font-size: var(--body-size); line-height: var(--body-line); }
-        .language { margin: -11px 0 2px 0; text-align: right; font-size: var(--meta-size);
+        .language { margin: -11px 0 var(--u2) 0; text-align: right; font-size: var(--meta-size);
                     color: var(--text-muted); }
         .link { color: var(--accent); cursor: pointer; }
         .link:hover { text-decoration: underline; }

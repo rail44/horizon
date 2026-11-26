@@ -89,7 +89,7 @@ horizon_ui::css_module! {"
                 border: var(--line) solid var(--border); border-radius: var(--radius);
                 font-size: var(--meta-size); line-height: var(--meta-line);
                 color: var(--text-muted); }
-    .replying .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+    .replying .bar { position: absolute; left: 0; top: 0; bottom: 0; width: var(--line-strong);
                      background: var(--accent); }
     .composer { display: flex; flex-direction: column; gap: var(--u2); padding-top: var(--u4); }
     .composer .field { padding: var(--u2) var(--u16); border: var(--line) solid var(--border);

@@ -53,7 +53,7 @@ pub(crate) mod styles {
         .turn { position: relative; display: flex; flex-direction: column;
                 gap: var(--u4); padding: var(--u8) var(--u16);
                 border: var(--line) solid var(--border); border-radius: var(--radius); }
-        .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+        .bar { position: absolute; left: 0; top: 0; bottom: 0; width: var(--line-strong);
                background: var(--accent); }
         .notice, .task { padding: 0 var(--u16); font-size: var(--meta-size);
                          line-height: var(--meta-line); color: var(--text-muted); }

@@ -27,7 +27,7 @@ mod styles {
         .finder { width: 560px; max-height: 400px; display: flex; flex-direction: column;
                   overflow: hidden; background: var(--background); }
         .search { flex: none; display: flex; align-items: center; gap: var(--u8);
-                  height: 32px; padding: 0 var(--u12);
+                  height: var(--u32); padding: 0 var(--u12);
                   border-bottom: var(--line) solid var(--border); }
         .query { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
         .count { flex: none; font-size: var(--meta-size); line-height: var(--meta-line);

@@ -45,7 +45,7 @@ mod styles {
         .group { display: flex; flex-direction: column; gap: var(--u4); }
         .chips { display: flex; flex-wrap: wrap; gap: var(--u8); }
         .chip { display: flex; flex-direction: column; align-items: center; gap: var(--u4); }
-        .chip .color-of { width: 28px; height: 20px; box-sizing: border-box;
+        .chip .color-of { width: var(--u28); height: 20px; box-sizing: border-box;
                           border-radius: 3px; border: var(--line) solid var(--border); }
     }
 "}

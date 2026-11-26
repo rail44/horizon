@@ -17,11 +17,11 @@ mod styles {
                  background: var(--surface-chrome); }
         .range { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px;
                  background: var(--accent); }
-        .thumb { position: absolute; top: -5px; width: 16px; height: 16px;
-                 margin-left: -8px; box-sizing: border-box; border-radius: 50%;
+        .thumb { position: absolute; top: -5px; width: var(--u16); height: var(--u16);
+                 margin-left: calc(-1 * var(--u8)); box-sizing: border-box; border-radius: 50%;
                  background: var(--background); border: var(--line) solid var(--accent); }
     }
-    .slider:focus .thumb { border-width: 2px; }
+    .slider:focus .thumb { border-width: var(--line-strong); }
 "}
 }
 

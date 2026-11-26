@@ -44,7 +44,7 @@ mod styles {
                 min-width: 0; outline: none; background: var(--background); color: var(--text);
                 font-family: var(--font-family); font-size: var(--body-size);
                 line-height: var(--body-line);
-        .search { flex: none; height: 32px; display: flex; align-items: center;
+        .search { flex: none; height: var(--u32); display: flex; align-items: center;
                   padding: 0 var(--u8); border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; min-width: 0; border: none; outline: none; padding: 0;
                       background: none; color: var(--text); font-family: var(--font-family);

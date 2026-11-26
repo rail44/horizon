@@ -30,7 +30,7 @@ mod styles {
         .answers { display: flex; justify-content: flex-end; gap: var(--u8);
                    margin-top: var(--u8); }
         .answer { display: flex; border-radius: var(--radius); }
-        .answer.at { outline: var(--line-strong) solid var(--focus); outline-offset: 1px; }
+        .answer.at { outline: var(--line-strong) solid var(--focus); outline-offset: var(--line); }
     }
 "}
 }

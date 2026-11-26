@@ -26,7 +26,7 @@ mod styles {
     // The picker draws colors themselves: the spectrum, white and black.
     horizon_ui::css_module! { allow written_colors; "
     .color { position: relative; outline: none;
-        .swatch { width: 28px; height: 28px; box-sizing: border-box; border-radius: var(--radius);
+        .swatch { width: var(--u28); height: var(--u28); box-sizing: border-box; border-radius: var(--radius);
                   border: var(--line) solid var(--border); cursor: pointer; }
         .panel { position: absolute; z-index: 60; left: 0; top: 100%; margin-top: var(--u4);
                  display: flex; flex-direction: column; gap: var(--u8); padding: var(--u8); width: 200px;
@@ -37,12 +37,12 @@ mod styles {
                                      border-radius: var(--radius-large); }
         .area .white { background: linear-gradient(to right, white, rgba(255, 255, 255, 0)); }
         .area .black { background: linear-gradient(to top, black, rgba(0, 0, 0, 0)); }
-        .hue { position: relative; height: 16px; border-radius: var(--radius); cursor: pointer;
+        .hue { position: relative; height: var(--u16); border-radius: var(--radius); cursor: pointer;
                background: linear-gradient(to right, rgb(255, 0, 0), rgb(255, 255, 0),
                    rgb(0, 255, 0), rgb(0, 255, 255), rgb(0, 0, 255), rgb(255, 0, 255),
                    rgb(255, 0, 0)); }
-        .knob { position: absolute; width: 12px; height: 12px; margin: -7px 0 0 -7px;
-                border-radius: 50%; border: var(--line-strong) solid white; box-shadow: 0 0 0 1px black;
+        .knob { position: absolute; width: var(--u12); height: var(--u12); margin: -7px 0 0 -7px;
+                border-radius: 50%; border: var(--line-strong) solid white; box-shadow: 0 0 0 var(--line) black;
                 pointer-events: none; }
         .hue .knob { top: 50%; }
         .written { display: flex; align-items: center; gap: var(--u8); }
@@ -55,8 +55,8 @@ mod styles {
     }
     .color:focus > .swatch { border-color: var(--accent); }
     .color .area, .color .hue { outline: none; }
-    .color .area:focus, .color .hue:focus { outline: 2px solid var(--accent);
-                                            outline-offset: 1px; }
+    .color .area:focus, .color .hue:focus { outline: var(--line-strong) solid var(--accent);
+                                            outline-offset: var(--line); }
 "}
 }
 

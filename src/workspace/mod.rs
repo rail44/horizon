@@ -106,7 +106,7 @@ pub(crate) mod styles {
         .tab-label.active.focused { border-color: var(--accent); }
         .tab-label .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
                             text-overflow: ellipsis; }
-        .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: var(--radius);
+        .tab-label .close { flex: none; width: var(--u16); text-align: center; border-radius: var(--radius);
                             opacity: 0; }
         .tab-label:hover .close { opacity: 1; }
         .tab-label .close:hover { background: var(--surface-selected); }

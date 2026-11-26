@@ -20,7 +20,7 @@ mod styles {
                   cursor: pointer; outline: none; }
         .button:hover { background: var(--hover); }
         .button:focus-visible { outline: var(--line-strong) solid var(--focus);
-                                outline-offset: 1px; }
+                                outline-offset: var(--line); }
         .button.small { padding: 0 var(--u8); line-height: calc(var(--u4) * 5); }
         .button.primary { background: var(--accent); color: var(--on-accent); }
         .button.primary:hover { background: var(--accent); opacity: 0.9; }

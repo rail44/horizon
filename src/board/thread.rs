@@ -83,7 +83,7 @@ mod styles {
                 border: var(--line) solid var(--border); border-radius: var(--radius); }
         .post.owner { margin-left: var(--u24); border-color: transparent;
                       background: var(--band); }
-        .post .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; }
+        .post .bar { position: absolute; left: 0; top: 0; bottom: 0; width: var(--line-strong); }
         .post.current .bar { background: var(--accent); }
         .post .head { display: flex; align-items: baseline; gap: var(--u4); }
         .author { font-weight: 600; }

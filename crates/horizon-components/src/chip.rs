@@ -5,7 +5,7 @@ use horizon_ui::{Component, El, el};
 mod styles {
     horizon_ui::css_module! {"
         :where(.chip) { flex: none; }
-        .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
+        .chip { padding: 0 var(--u4); border-radius: var(--radius-small); font-size: var(--micro-size);
                 line-height: var(--micro-line); }
         .chip.muted { background: var(--chip-muted-surface); color: var(--chip-muted-text); }
         .chip.accent { background: var(--chip-accent-surface); color: var(--chip-accent-text); }
