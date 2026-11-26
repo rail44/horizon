@@ -288,9 +288,10 @@ fn a_running_turn_carries_the_state_and_stop_and_an_approval_is_answered_by_key_
     // `Stop` did not open or close anything on its way.
     assert!(opened.agent.expanded.get_untracked().is_empty());
 
+    // The receipt's line names the call in flight by its title.
     session.call("Run", "cargo nextest run", None);
     opened.show(&session);
-    assert!(opened.text().contains("Running cargo nextest run"));
+    assert!(opened.text().contains("Run cargo nextest run"));
     session.finish_call();
     session.call(
         "Write",

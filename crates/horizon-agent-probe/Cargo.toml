@@ -9,7 +9,6 @@ edition = "2024"
 
 [dependencies]
 horizon-wire = { path = "../horizon-wire" }
-horizon-agent = { path = "../horizon-agent" }
 horizon-shell-runtime = { path = "../horizon-shell-runtime" }
 serde_json = "1.0"
 # The session's command and update channels, as `horizon-shell-runtime` hands them out.

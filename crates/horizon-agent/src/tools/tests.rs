@@ -1204,6 +1204,43 @@ fn fs_edit_replace_all_replaces_every_occurrence_and_reports_count() {
     );
 }
 
+/// An edit's result carries what it changed as a patch against the file
+/// as it was, kept out of the output the model reads.
+#[test]
+fn fs_edit_gives_its_change_as_a_patch_beside_its_output() {
+    let root = temp_workspace("edit-patch");
+    let target = root.join("file.txt");
+    fs::write(&target, "a\nb\nc\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    sync_tools::execute_auto(
+        &tool_state,
+        "fs_read",
+        &json!({ "path": target.display().to_string() }),
+    );
+    let input = super::input::ToolInput::parse(
+        "fs_edit",
+        &json!({"edits": [{
+            "path": target.display().to_string(),
+            "old_string": "b",
+            "new_string": "B",
+        }]}),
+    )
+    .unwrap();
+    let call_id = crate::contract::ToolCallId("edit-1".into());
+    let result = super::execute_approved(&tool_state, &input)
+        .into_result(&crate::test_support::tool_identity(&call_id));
+    let path = target.display();
+    assert_eq!(
+        result.patch.as_deref(),
+        Some(format!("diff --git {path} {path}\n--- {path}\n+++ {path}\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n").as_str())
+    );
+    assert!(
+        result.output.0.get("patch").is_none(),
+        "{:?}",
+        result.output
+    );
+}
+
 #[test]
 fn fs_edit_zero_matches_is_error_even_with_replace_all() {
     let root = temp_workspace("edit-replace-all-zero");

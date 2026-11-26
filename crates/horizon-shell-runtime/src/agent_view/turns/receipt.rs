@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use crate::agent_model::ToolOutcome;
+use crate::agent_model::{ToolKind, ToolOutcome};
 
 use super::{ToolCallView, aggregate_receipt, pluralize};
 
@@ -35,10 +35,10 @@ pub fn receipt_summary(calls: &[ToolCallView]) -> String {
         if !matches!(call.outcome, None | Some(ToolOutcome::Failed)) {
             continue;
         }
-        match call.tool_id.as_str() {
-            "fs_read" => reads += 1,
-            "fs_edit" | "fs_write" => edits += call.affected_files.len().max(1),
-            "bash" => runs += 1,
+        match call.kind {
+            ToolKind::Read => reads += 1,
+            ToolKind::Edit | ToolKind::Delete | ToolKind::Move => edits += call.files.len().max(1),
+            ToolKind::Execute => runs += 1,
             _ => searches += 1,
         }
     }

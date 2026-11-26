@@ -28,21 +28,6 @@ pub fn failed_calls(count: usize) -> String {
     format!("{count} failed")
 }
 
-/// A running receipt's line, naming the call in flight: `Running cargo
-/// test`, `Reading src/a.rs`.
-pub fn in_flight(verb: &str, target: &str) -> String {
-    let doing = match verb {
-        "Read" => "Reading",
-        "Edit" => "Editing",
-        "Write" => "Writing",
-        "Run" => "Running",
-        "Search" => "Searching",
-        "Call" => "Calling",
-        _ => return format!("{RUNNING} {verb} {target}"),
-    };
-    format!("{doing} {target}")
-}
-
 /// The line under an output whose tail was cut.
 pub fn more_lines(count: usize) -> String {
     format!("… {count} more lines")

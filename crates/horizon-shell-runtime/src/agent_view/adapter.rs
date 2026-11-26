@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::turns::{
     DiffLineKind, ToolCallBody, ToolCallView, build_tool_call_views, group_into_turns,
-    humanize_duration, receipt_summary, segment_bursts, str_field, tool_call_body,
+    humanize_duration, receipt_summary, segment_bursts, tool_call_body,
 };
 use crate::agent_display::chrome;
 use crate::agent_display::{
@@ -417,7 +417,6 @@ fn call(
     turn_ended: bool,
     pending: &[ToolCallIdentity],
 ) -> Call {
-    let (verb, target) = verb_and_target(items, view);
     let status = match &view.outcome {
         None if turn_ended => CallStatus::Cancelled,
         None => CallStatus::Running,
@@ -432,47 +431,10 @@ fn call(
         reason: permission_reason(items, &identity).unwrap_or_default(),
     });
     Call {
-        verb: verb.to_string(),
-        target,
+        title: view.title.clone(),
         status,
         body: body(items, view),
         approval,
-    }
-}
-
-fn verb_and_target(items: &[AgentFrameItem], view: &ToolCallView) -> (&'static str, String) {
-    let target = || view.target.clone().unwrap_or_default();
-    match view.tool_id.as_str() {
-        "fs_read" => ("Read", target()),
-        "fs_edit" => ("Edit", target()),
-        "fs_write" => ("Write", target()),
-        "bash" => {
-            let command = tool_input(items, view)
-                .and_then(|input| str_field(input, "command"))
-                .and_then(|command| command.lines().next())
-                .map(str::to_string);
-            ("Run", command.unwrap_or_else(target))
-        }
-        "fs_grep" | "fs_glob" => ("Search", target()),
-        _ => (
-            "Call",
-            match &view.target {
-                Some(target) => format!("{} {target}", view.verb),
-                None => view.verb.clone(),
-            },
-        ),
-    }
-}
-
-fn tool_input<'a>(
-    items: &'a [AgentFrameItem],
-    view: &ToolCallView,
-) -> Option<&'a serde_json::Value> {
-    match items.get(view.request_index)? {
-        AgentFrameItem::ToolCall(call) if call.occurrence_id == view.occurrence_id => {
-            Some(&call.input)
-        }
-        _ => None,
     }
 }
 
@@ -485,10 +447,9 @@ fn permission_reason(items: &[AgentFrameItem], identity: &ToolCallIdentity) -> O
     })
 }
 
-/// A finished call's body; an unfinished one shows only a proposed edit or
-/// write.
+/// A finished call's body.
 fn body(items: &[AgentFrameItem], view: &ToolCallView) -> Option<CallBody> {
-    if !view.finished() && !matches!(view.tool_id.as_str(), "fs_edit" | "fs_write") {
+    if !view.finished() {
         return None;
     }
     let body = match tool_call_body(items, view)? {
@@ -512,10 +473,10 @@ fn body(items: &[AgentFrameItem], view: &ToolCallView) -> Option<CallBody> {
             }
             CallBody::Diff(lines)
         }
-        ToolCallBody::ContentPreview { lines, omitted, .. }
-        | ToolCallBody::Command { lines, omitted, .. }
-        | ToolCallBody::Raw { lines, omitted } => CallBody::Output { lines, omitted },
-        ToolCallBody::Summary(text) => CallBody::Text(text),
+        ToolCallBody::Output { lines, omitted } | ToolCallBody::Raw { lines, omitted } => {
+            CallBody::Output { lines, omitted }
+        }
+        ToolCallBody::Text(text) => CallBody::Text(text),
     };
     let empty = match &body {
         CallBody::Diff(lines) => lines.is_empty(),
@@ -652,7 +613,7 @@ mod tests {
         let receipt = receipts(turn)[0];
         assert_eq!(receipt.summary, "Read 1 file");
         assert!(!receipt.running && !receipt.failed);
-        assert_eq!(receipt.calls[0].title(), "Read src/a.rs");
+        assert_eq!(receipt.calls[0].title, "Read src/a.rs");
         assert_eq!(receipt.calls[0].status, CallStatus::Done);
         assert_eq!(turn.parts[1], TurnPart::Text("done".to_string()));
         assert_eq!(transcript.status, Status::Idle);
@@ -743,7 +704,7 @@ mod tests {
         let titles: Vec<(String, CallStatus)> = receipt
             .calls
             .iter()
-            .map(|call| (call.title(), call.status))
+            .map(|call| (call.title.clone(), call.status))
             .collect();
         assert_eq!(
             titles,
@@ -802,7 +763,7 @@ mod tests {
         let merged = receipts[0];
         assert_eq!(merged.key, 1);
         assert_eq!(merged.summary, "Ran 3 commands · 1 search");
-        let titles: Vec<String> = merged.calls.iter().map(Call::title).collect();
+        let titles: Vec<String> = merged.calls.iter().map(|call| call.title.clone()).collect();
         assert_eq!(
             titles,
             ["Run ls", "Run pwd", "Search x", "Run make"].map(str::to_string)
@@ -835,7 +796,7 @@ mod tests {
         let receipt = receipts(turn)[0];
         assert!(receipt.running);
         let call = &receipt.calls[0];
-        assert_eq!(call.title(), "Write ~/.config/x.toml");
+        assert_eq!(call.title, "Write ~/.config/x.toml");
         assert_eq!(call.status, CallStatus::Running);
         let approval = call
             .approval

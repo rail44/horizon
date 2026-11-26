@@ -129,7 +129,6 @@ horizon-workspace = { path = "crates/horizon-workspace" }
 keyboard-types = "0.8"
 pulldown-cmark = "0.13"
 horizon-theme-css = { path = "crates/horizon-theme-css" }
-horizon-agent = { path = "crates/horizon-agent" }
 horizon-config = { path = "crates/horizon-config" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-control = { path = "crates/horizon-control" }

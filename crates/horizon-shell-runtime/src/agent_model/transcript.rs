@@ -1,18 +1,20 @@
 //! The structural reading of a folded frame: turn spans, tool-activity
-//! bursts, per-call views, and the receipt
-//! aggregation. The per-tool JSON readers
-//! (`classify`, `affected_files`) are `horizon_agent::transcript`'s,
-//! which take plain tool ids and JSON.
+//! bursts, per-call views, and the receipt aggregation, from what ACP's
+//! tool call fields say: the title, the kind, the files.
 
 use std::collections::HashSet;
 use std::time::Duration;
 
-use horizon_agent::transcript::{FileEffect, ToolCallClassification, affected_files, classify};
-use serde_json::Value;
-
 use super::types::*;
 
-pub use horizon_agent::transcript::Burst;
+/// One tool burst within a turn: a maximal run of tool activity, `[start,
+/// end)` of the turn's items. A burst that has closed never reopens, so a
+/// turn can fold into several receipts as it goes on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Burst {
+    pub start: usize,
+    pub end: usize,
+}
 
 /// One turn's items, `[start, end)` into the frame's items. `ended` is
 /// `None` for the turn still in progress.
@@ -127,12 +129,12 @@ pub struct ToolCallView {
     /// Position of the call's item in the slice passed to
     /// [`build_tool_call_views`].
     pub request_index: usize,
-    /// The same position once the call has an output.
+    /// The same position once the call has finished.
     pub result_index: Option<usize>,
-    pub tool_id: String,
-    pub verb: String,
-    pub target: Option<String>,
-    pub affected_files: Vec<FileEffect>,
+    pub title: String,
+    pub kind: ToolKind,
+    /// The files it works on: those its change names, else its locations.
+    pub files: Vec<String>,
     pub outcome: Option<ToolOutcome>,
 }
 
@@ -149,6 +151,22 @@ impl ToolCallView {
 
     pub fn is_success(&self) -> bool {
         self.outcome == Some(ToolOutcome::Succeeded)
+    }
+}
+
+/// The files a call works on: those its change names, else its locations.
+fn files_of(call: &ToolCall) -> Vec<String> {
+    let changed: Vec<String> = (call.content.iter())
+        .flat_map(|content| match content {
+            ToolContent::Diff { changes, .. } => {
+                changes.iter().map(|(path, _)| path.clone()).collect()
+            }
+            ToolContent::Text(_) => Vec::new(),
+        })
+        .collect();
+    match changed.is_empty() {
+        true => call.locations.clone(),
+        false => changed,
     }
 }
 
@@ -179,23 +197,13 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 }
                 outcome => outcome,
             };
-            let output = call.output.as_ref().filter(|_| outcome.is_some());
-            let ToolCallClassification { verb, target, .. } =
-                classify(&call.tool_id, &call.input, output);
-            let affected_files = match &outcome {
-                Some(ToolOutcome::Succeeded | ToolOutcome::Failed) => {
-                    affected_files(&call.tool_id, &call.input, output)
-                }
-                _ => Vec::new(),
-            };
             ToolCallView {
                 occurrence_id: call.occurrence_id.clone(),
                 request_index: index,
                 result_index: outcome.is_some().then_some(index),
-                tool_id: call.tool_id.clone(),
-                verb,
-                target,
-                affected_files,
+                title: call.title.clone(),
+                kind: call.kind,
+                files: files_of(call),
                 outcome,
             }
         })
@@ -204,15 +212,17 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CallClass {
+    Read,
     Edit,
-    Bash,
+    Run,
     Query,
 }
 
-fn classify_call(tool_id: &str) -> CallClass {
-    match tool_id {
-        "fs_edit" | "fs_write" => CallClass::Edit,
-        "bash" => CallClass::Bash,
+fn class_of(kind: ToolKind) -> CallClass {
+    match kind {
+        ToolKind::Read => CallClass::Read,
+        ToolKind::Edit | ToolKind::Delete | ToolKind::Move => CallClass::Edit,
+        ToolKind::Execute => CallClass::Run,
         _ => CallClass::Query,
     }
 }
@@ -238,18 +248,15 @@ pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
             aggregate.individual_calls.push(call.clone());
             continue;
         }
-        match classify_call(&call.tool_id) {
-            CallClass::Edit => {
-                for file in &call.affected_files {
-                    edited_paths.insert(file.path.clone());
-                }
-            }
-            CallClass::Bash => aggregate.bash_count += 1,
-            CallClass::Query if call.tool_id == "fs_read" => {
-                if let Some(path) = &call.target {
-                    read_paths.insert(path.clone());
-                }
-            }
+        match class_of(call.kind) {
+            CallClass::Edit => edited_paths.extend(call.files.iter().cloned()),
+            CallClass::Run => aggregate.bash_count += 1,
+            // A read names its file; one that names none is counted by its
+            // title.
+            CallClass::Read => match call.files.is_empty() {
+                true => _ = read_paths.insert(call.title.clone()),
+                false => read_paths.extend(call.files.iter().cloned()),
+            },
             CallClass::Query => aggregate.query_count += 1,
         }
     }
@@ -259,18 +266,13 @@ pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
     aggregate
 }
 
-/// The item a view's `request_index` points at, with its output when the
-/// call has finished.
+/// The call item a view's `request_index` points at.
 pub fn tool_call_source<'a>(
     items: &'a [AgentFrameItem],
     call: &ToolCallView,
-) -> Option<(&'a str, &'a Value, Option<&'a Value>)> {
+) -> Option<&'a ToolCall> {
     let AgentFrameItem::ToolCall(item) = items.get(call.request_index)? else {
         return None;
     };
-    if item.occurrence_id != call.occurrence_id {
-        return None;
-    }
-    let output = call.result_index.and(item.output.as_ref());
-    Some((&item.tool_id, &item.input, output))
+    (item.occurrence_id == call.occurrence_id).then_some(item.as_ref())
 }

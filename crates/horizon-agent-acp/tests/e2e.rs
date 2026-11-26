@@ -869,7 +869,8 @@ async fn workspace_snapshot_asks_the_shells_control_plane() {
     assert_eq!(control.join().unwrap(), "workspace");
     assert!(
         collected.iter().filter_map(tool_update).any(|call| {
-            call.title == MaybeUndefined::Value("workspace_snapshot".to_string())
+            call.name == MaybeUndefined::Value("workspace_snapshot".to_string())
+                && call.title == MaybeUndefined::Value("Snapshot".to_string())
                 && has_status(call, v2::ToolCallStatus::Pending)
         }),
         "expected the tool call to have been requested too, got: {collected:?}"

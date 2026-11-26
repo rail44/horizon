@@ -254,6 +254,7 @@ fn a_tool_call_is_one_update_series_keyed_by_its_occurrence() {
         })
         .into(),
         outcome: ToolOutcome::Succeeded,
+        patch: None,
     };
     let updates = updates(
         &mut mapper(),

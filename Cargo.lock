@@ -2681,7 +2681,6 @@ dependencies = [
  "foldhash 0.2.0",
  "futures",
  "gethostname",
- "horizon-agent",
  "horizon-board",
  "horizon-cli",
  "horizon-components",
@@ -2804,7 +2803,6 @@ name = "horizon-agent-probe"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
- "horizon-agent",
  "horizon-shell-runtime",
  "horizon-wire",
  "serde_json",
@@ -2983,7 +2981,6 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "futures",
- "horizon-agent",
  "horizon-control",
  "horizon-terminal-core",
  "horizon-wire",

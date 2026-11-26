@@ -15,6 +15,7 @@
 
 mod attachment;
 mod mapping;
+mod tool_call;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

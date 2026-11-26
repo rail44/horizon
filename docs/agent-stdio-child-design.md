@@ -116,6 +116,22 @@ denial is the permission option of the kind `allow_once` or `reject_once`
 The ids the agent gives them are its own
 (`horizon-agent-host`'s `options`).
 
+The shell needs nothing of the agent's own code either. A session's
+title is the agent's (`session_info_update`'s `title`): Horizon's agent
+summarizes the first message with its small model once and records it
+(`Event::SessionTitled`); until a title comes, the shell names the
+session by its first message. A tool call is drawn from its standard
+fields alone: the row is its `title`, which Horizon's agent words whole
+("Read src/main.rs", "Run cargo test"); the receipt counts calls by
+their `kind` and the files they name; the body is the call's `content`:
+a `Diff`'s Git patch, drawn as its changed and context lines (a file only
+added as its content), or text (a command's output by its tail), or, for
+a call that gives none, its raw input and output. Horizon's `fs_edit` and
+`fs_write` make their patch as they write, from the spans an edit
+replaced or the content a write replaced, and keep it beside their
+output (`ToolCallResult::patch`), out of what the model reads. An edit
+recorded before that has no patch, and its row names its files only.
+
 When the child ends after it served, the shell starts it again, with no
 command of its own (board #114): the binary as it is then, so a rebuild
 is picked up by ending the child. The sessions the panes had open are

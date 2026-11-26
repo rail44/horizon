@@ -71,20 +71,11 @@ pub struct Receipt {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Call {
-    /// What the call does, worded as a noun: `Read`, `Run`.
-    pub verb: String,
-    /// What it does it to: a path, a command line, a pattern.
-    pub target: String,
+    /// What a person reads for the call, as the agent titles it.
+    pub title: String,
     pub status: CallStatus,
     pub body: Option<CallBody>,
     pub approval: Option<Approval>,
-}
-
-impl Call {
-    /// `{verb} {target}`.
-    pub fn title(&self) -> String {
-        format!("{} {}", self.verb, self.target)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

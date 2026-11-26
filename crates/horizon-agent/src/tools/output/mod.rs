@@ -34,6 +34,7 @@ struct Contents {
     body: Body,
     failed: bool,
     evidence: Evidence,
+    patch: Option<String>,
 }
 impl Response {
     pub(crate) fn succeeded(body: impl Into<Body>) -> Self {
@@ -41,6 +42,7 @@ impl Response {
             body: body.into(),
             failed: false,
             evidence: Evidence::default(),
+            patch: None,
         }))
     }
     pub(crate) fn failed(body: impl Into<Body>) -> Self {
@@ -50,6 +52,12 @@ impl Response {
     }
     fn evidence_mut(&mut self) -> &mut Evidence {
         &mut self.0.evidence
+    }
+    /// Gives the result what the call changed in files
+    /// ([`ToolCallResult::patch`]).
+    pub(crate) fn with_patch(mut self, patch: Option<String>) -> Self {
+        self.0.patch = patch;
+        self
     }
     pub(crate) fn mark_failed(&mut self) {
         self.0.failed = true;
@@ -73,6 +81,7 @@ impl Response {
             body: Body::External(output),
             failed,
             evidence: Evidence::default(),
+            patch: None,
         }))
     }
     pub(crate) fn into_result(self, identity: &ToolCallIdentity) -> ToolCallResult {
@@ -86,6 +95,7 @@ impl Response {
             occurrence_id: identity.occurrence_id.clone(),
             outcome,
             output: self.to_json().into(),
+            patch: self.0.patch,
         }
     }
     pub(crate) fn to_json(&self) -> Value {

@@ -154,7 +154,7 @@ fn a_tool_call_upserts_by_occurrence_id_through_its_lifecycle() {
     let views = build_tool_call_views(&model.frame.items);
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].identity(), identity("occ-1"));
-    assert_eq!(views[0].tool_id, "bash");
+    assert_eq!(views[0].title, "bash");
     assert!(!views[0].finished());
 
     apply(

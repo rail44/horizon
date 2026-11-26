@@ -80,7 +80,6 @@ pub(crate) mod styles {
         .dot.failed { background: var(--danger); }
         .dot.running { background: var(--accent); }
         .dot.denied { background: var(--warning); }
-        .verb { flex: none; color: var(--text-muted); }
         .target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
                   white-space: nowrap; }
         .mono { font-size: var(--meta-size); line-height: var(--meta-line);
@@ -581,11 +580,11 @@ fn receipt_line_text(receipt: &Receipt) -> String {
     }
     let in_flight = (receipt.calls.iter().rev())
         .find(|call| call.status == CallStatus::Running && call.approval.is_none())
-        .map(|call| chrome::in_flight(&call.verb, &call.target));
+        .map(|call| call.title.clone());
     let awaiting = || {
         (receipt.calls.iter().rev())
             .find(|call| call.approval.is_some())
-            .map(|call| format!("{} {}", call.verb, call.target))
+            .map(|call| call.title.clone())
     };
     in_flight
         .or_else(awaiting)
@@ -663,8 +662,7 @@ fn call_row(receipt: usize, index: usize, call: &Call, state: Agent) -> El {
                 CallStatus::Denied => Some(styles::DENIED),
             },
         ))))
-        .child(el("span").class(styles::VERB).text(&call.verb))
-        .child(el("span").class(styles::TARGET).text(&call.target));
+        .child(el("span").class(styles::TARGET).text(&call.title));
     let block = el("div").class(styles::CALL).child(row);
     if let Some(body) = call.body.clone() {
         row.on("click", move |_| {

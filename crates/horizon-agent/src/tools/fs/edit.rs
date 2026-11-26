@@ -163,6 +163,16 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles
     for (receipt, version) in receipts.iter_mut().zip(versions) {
         receipt.content_version = version;
     }
+    // What the call changed, against each file as it was.
+    let patch: String = (targets.iter())
+        .filter_map(|target| {
+            let replacements: Vec<(Range<usize>, &str)> = (target.placed.iter())
+                .flat_map(|(_, replacements)| replacements)
+                .map(|replacement| (replacement.span.clone(), replacement.text.as_str()))
+                .collect();
+            super::patch::edited(&target.resolved, &target.content, &replacements)
+        })
+        .collect();
     Response::succeeded(FileEdits {
         applied_count: receipts.len(),
         edits: receipts,
@@ -170,6 +180,7 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles
         failed_index: None,
         message: None,
     })
+    .with_patch((!patch.is_empty()).then_some(patch))
 }
 
 /// The target `edit` names, read and checked the first time the call meets

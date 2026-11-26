@@ -23,8 +23,7 @@ pub struct Session {
 
 fn call(verb: &str, target: &str, status: CallStatus, body: Option<CallBody>) -> Call {
     Call {
-        verb: verb.to_string(),
-        target: target.to_string(),
+        title: format!("{verb} {target}"),
         status,
         body,
         approval: None,

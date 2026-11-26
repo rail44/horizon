@@ -50,12 +50,47 @@ pub enum ToolCallStatus {
     Cancelled,
 }
 
+/// What kind of work a tool call does: its ACP `kind`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolKind {
+    Read,
+    Edit,
+    Delete,
+    Move,
+    Search,
+    Execute,
+    Think,
+    Fetch,
+    #[default]
+    Other,
+}
+
+/// What a tool call produced, as its ACP `content` carries it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolContent {
+    /// Text the call gives a person to read.
+    Text(String),
+    /// A change of files: the paths it names, whether each was added, and
+    /// its Git patch text when the agent gave one.
+    Diff {
+        changes: Vec<(String, bool)>,
+        patch: Option<String>,
+    },
+}
+
 /// One `tool_call_update` series, upserted by occurrence id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolCall {
     pub occurrence_id: String,
     /// The tool's name (`name`, or the `title` when there is no name).
     pub tool_id: String,
+    /// What a person reads for the call (`title`, or the name when there
+    /// is no title).
+    pub title: String,
+    pub kind: ToolKind,
+    /// The files it works on (`locations`).
+    pub locations: Vec<String>,
+    pub content: Vec<ToolContent>,
     pub status: ToolCallStatus,
     pub input: serde_json::Value,
     pub output: Option<serde_json::Value>,

@@ -28,6 +28,11 @@ pub struct ToolCallResult {
     pub occurrence_id: OccurrenceId,
     pub output: JsonValue,
     pub outcome: ToolOutcome,
+    /// What the call changed in files, as Git's patch text with absolute
+    /// paths (ACP's `git_patch`). Kept for the client's display and never
+    /// sent to the model, which has the call's `output`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
 }
 
 impl ToolCallResult {
@@ -50,6 +55,7 @@ impl ToolCallResult {
             occurrence_id,
             output,
             outcome,
+            patch: None,
         }
     }
 
@@ -73,6 +79,7 @@ impl ToolCallResult {
             occurrence_id,
             output: output.into(),
             outcome: ToolOutcome::Denied,
+            patch: None,
         }
     }
 
@@ -82,6 +89,7 @@ impl ToolCallResult {
             occurrence_id: identity.occurrence_id,
             outcome: ToolOutcome::Cancelled,
             output: serde_json::json!({ "cancelled": true }).into(),
+            patch: None,
         }
     }
 
@@ -93,6 +101,7 @@ impl ToolCallResult {
             occurrence_id: self.occurrence_id.clone(),
             outcome: ToolOutcome::Superseded { retry_occurrence_id: retry_occurrence.clone() },
             output: serde_json::json!({"message": "this attempt ended; a new attempt of the same call replaces it"}).into(),
+            patch: None,
         }
     }
 }

@@ -82,7 +82,8 @@ pub(super) struct Mapper {
     message_seq: u64,
     /// The id of the assistant text stream not yet committed.
     open_stream: Option<v2::MessageId>,
-    tool_ids: HashMap<String, String>,
+    /// Each tool call's tool and input, by its occurrence.
+    tool_ids: HashMap<String, (String, serde_json::Value)>,
     stop_reason: Option<v2::StopReason>,
     /// Errors of the turn in flight, not shown yet: the turn's failure
     /// carries them, or they become notices when it ends otherwise.
@@ -440,14 +441,19 @@ impl Mapper {
             }
             Event::ToolCallRequested(request) => {
                 self.message_seq += 1;
-                self.tool_ids
-                    .insert(request.occurrence_id.0.clone(), request.tool_id.clone());
+                self.tool_ids.insert(
+                    request.occurrence_id.0.clone(),
+                    (request.tool_id.clone(), request.input.0.clone()),
+                );
+                let input = &request.input.0;
+                let root = self.facts.workspace_root.as_deref();
                 let update = v2::ToolCallUpdate::new(request.occurrence_id.0.clone())
-                    .title(request.tool_id.clone())
+                    .title(super::tool_call::title(&request.tool_id, input))
                     .name(request.tool_id.clone())
                     .kind(tool_kind(&request.tool_id))
                     .status(v2::ToolCallStatus::Pending)
-                    .raw_input(request.input.0.clone());
+                    .locations(super::tool_call::locations(root, &request.tool_id, input))
+                    .raw_input(input.clone());
                 vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(update))]
             }
             Event::ToolCallStarted(identity) => {
@@ -468,9 +474,20 @@ impl Mapper {
                     }
                 };
                 // Its verdict (`auto_approved`, `policy_tier`) is in its output.
-                let update = v2::ToolCallUpdate::new(occurrence.clone())
+                let mut update = v2::ToolCallUpdate::new(occurrence.clone())
                     .status(status)
                     .raw_output(result.output.0.clone());
+                if let Some((tool_id, input)) = self.tool_ids.get(&occurrence) {
+                    let content = super::tool_call::content(
+                        tool_id,
+                        input,
+                        &result.output.0,
+                        result.patch.as_deref(),
+                    );
+                    if !content.is_empty() {
+                        update = update.content(content);
+                    }
+                }
                 let mut out = vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(update))];
                 out.extend(self.settle_approval(&occurrence));
                 out

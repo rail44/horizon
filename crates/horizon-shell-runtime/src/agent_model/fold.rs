@@ -338,6 +338,10 @@ impl AgentModel {
                     .push(AgentFrameItem::ToolCall(Box::new(ToolCall {
                         occurrence_id: occurrence_id.clone(),
                         tool_id: String::new(),
+                        title: String::new(),
+                        kind: ToolKind::Other,
+                        locations: Vec::new(),
+                        content: Vec::new(),
                         status: ToolCallStatus::Pending,
                         input: serde_json::Value::Null,
                         output: None,
@@ -350,6 +354,30 @@ impl AgentModel {
         };
         if let Some(named) = named {
             call.tool_id = named;
+        }
+        match &update.title {
+            MaybeUndefined::Value(title) => call.title = title.clone(),
+            _ if call.title.is_empty() => call.title = call.tool_id.clone(),
+            _ => {}
+        }
+        if let MaybeUndefined::Value(kind) = &update.kind {
+            call.kind = tool_kind(kind);
+        }
+        match update.locations {
+            MaybeUndefined::Undefined => {}
+            MaybeUndefined::Null => call.locations.clear(),
+            MaybeUndefined::Value(locations) => {
+                call.locations = (locations.into_iter())
+                    .map(|location| location.path.0.display().to_string())
+                    .collect()
+            }
+        }
+        match update.content {
+            MaybeUndefined::Undefined => {}
+            MaybeUndefined::Null => call.content.clear(),
+            MaybeUndefined::Value(content) => {
+                call.content = content.into_iter().filter_map(tool_content).collect()
+            }
         }
         if let MaybeUndefined::Value(status) = &update.status {
             call.status = match status {
@@ -449,6 +477,50 @@ fn block_text(block: &v2::ContentBlock) -> String {
 
 fn blocks_text(blocks: &[v2::ContentBlock]) -> String {
     blocks.iter().map(block_text).collect()
+}
+
+fn tool_kind(kind: &v2::ToolKind) -> ToolKind {
+    match kind {
+        v2::ToolKind::Read => ToolKind::Read,
+        v2::ToolKind::Edit => ToolKind::Edit,
+        v2::ToolKind::Delete => ToolKind::Delete,
+        v2::ToolKind::Move => ToolKind::Move,
+        v2::ToolKind::Search => ToolKind::Search,
+        v2::ToolKind::Execute => ToolKind::Execute,
+        v2::ToolKind::Think => ToolKind::Think,
+        v2::ToolKind::Fetch => ToolKind::Fetch,
+        _ => ToolKind::Other,
+    }
+}
+
+/// One item of a tool call's `content` this client draws: text, or a
+/// change of files.
+fn tool_content(content: v2::ToolCallContent) -> Option<ToolContent> {
+    match content {
+        v2::ToolCallContent::Content(content) => match content.content {
+            v2::ContentBlock::Text(text) => Some(ToolContent::Text(text.text)),
+            _ => None,
+        },
+        v2::ToolCallContent::Diff(diff) => Some(ToolContent::Diff {
+            changes: (diff.changes.into_iter())
+                .filter_map(|change| match change.operation {
+                    v2::DiffChangeOperation::Add(add) => {
+                        Some((add.path.0.display().to_string(), true))
+                    }
+                    v2::DiffChangeOperation::Modify(change)
+                    | v2::DiffChangeOperation::Delete(change) => {
+                        Some((change.path.0.display().to_string(), false))
+                    }
+                    v2::DiffChangeOperation::Move(pair) | v2::DiffChangeOperation::Copy(pair) => {
+                        Some((pair.path.0.display().to_string(), false))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            patch: diff.patch.map(|patch| patch.text),
+        }),
+        _ => None,
+    }
 }
 
 /// The select config option of `category` in the set, if it carries one,
