@@ -1,5 +1,10 @@
 # ACP をシェルと agentd の間の線にする
 
+> **2026-11-26:** agentd はなくなり、エージェントはシェルの stdio の ACP
+> の子プロセスになった（`docs/agent-stdio-child-design.md`、board #114）。
+> 線は Horizon の拡張のない ACP v2 で、シェルは v2 だけを話す（board
+> #116）。以下は agentd があった時点の記録。
+
 Status: implemented 2026-09-27（統合ブランチ上。main へのマージは未了）。
 決定の記録は board #63（本文と 2026-09-27 のコメント）。実装計画は
 `docs/acp-agentd-implementation-plan.md`。外部エージェント（段 E）は未着手。

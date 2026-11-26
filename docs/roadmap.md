@@ -12,8 +12,9 @@ history).
 The shell is Blitz-based (signals over a CSS document, painted by
 Vello), with every view — terminal, agent, board, Markdown, wiki,
 theme settings, the modals — written against `crates/horizon-ui`.
-Terminals and agent sessions are hosted by `horizon-terminald` and
-`horizon-agentd` and survive UI restarts; the workspace (tabs,
+Terminals are hosted by `horizon-terminald` and survive UI restarts;
+agent sessions run in `horizon-agent-acp`, the shell's stdio ACP child,
+and resume from their logs when it starts again; the workspace (tabs,
 weighted splits, focus, attachments) persists and restores.
 Terminal input implements Kitty's common disambiguation/event paths with a
 code-resident compliance matrix; its known higher-level gaps are explicit.
@@ -285,13 +286,19 @@ lands:
   `docs/image-viewer-design.md`): a `file://` link to an image clicked in
   a terminal opens it over the workspace, through the extensions' own
   `horizon:ui/opener`. Git diff is not started.
-- **The agent as a stdio ACP child of the shell — proposed 2026-11-25**
-  (board #114, `docs/agent-stdio-child-design.md`): agentd's code moves
-  into a library that is an ACP agent, the shell starts it as a
-  `horizon-agent-acp` child per window, each session logs to a file of
-  its own, board and wiki flow become crates composed in, and agentd
-  goes. The entry below is the line it would change.
-- **ACP as the shell↔agentd line — implemented 2026-09-27** (stages A–D
+- **The agent as a stdio ACP child of the shell — implemented
+  2026-11-26** (board #114, `docs/agent-stdio-child-design.md`): the
+  agent is a library that is an ACP agent, composed from what it is
+  given; the shell starts it as a `horizon-agent-acp` child per window
+  and starts it again when it ends; each session logs to a file of its
+  own; board and wiki flow are crates composed in; agentd and `Reload
+  Agent Runtime` are gone. The line is standard ACP v2 with no extension
+  of Horizon's, and the shell reads it by ACP's own marks. The shell
+  speaks v2 alone (board #116, 2026-11-26): an agent `[agent] command`
+  names is served when it speaks v2; the agents tried then spoke v1. The
+  entry below is the line before it.
+- **ACP as the shell↔agentd line — implemented 2026-09-27, superseded
+  by the entry above** (stages A–D
   on the integration branch, main merge pending; stage E, external
   agents, pending a config consultation) (`docs/acp-agentd-design.md`,
   `docs/acp-agentd-implementation-plan.md`; decision on board #63). The

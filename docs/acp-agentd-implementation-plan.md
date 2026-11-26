@@ -1,5 +1,8 @@
 # ACP 化の実装計画
 
+> **2026-11-26:** agentd はなくなった（`docs/agent-stdio-child-design.md`、
+> board #114）。以下は当時の計画の記録。
+
 Status: 段 A〜D implemented 2026-09-27（統合ブランチ上。main へのマージは
 未了）。段 E は未着手（config の相談が先）。設計は
 `docs/acp-agentd-design.md`、決定は board #63（本文と 2026-09-27 のコメント）。

@@ -1,5 +1,10 @@
 # Session Daemon — Design Decisions
 
+> **2026-11-26:** the agent daemon this led to (`horizon-agentd`) is gone:
+> the agent is the shell's stdio ACP child
+> (`docs/agent-stdio-child-design.md`). Terminals stay in
+> `horizon-terminald`.
+
 Status: decided 2026-07-07 (owner consultation in the project session);
 the `horizon-terminal-core` extraction-slice decisions (8, 9, and the
 color amendment to 4) added 2026-07-09. The exploration material and

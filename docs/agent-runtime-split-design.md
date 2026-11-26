@@ -1,5 +1,10 @@
 # Agent Runtime Split (horizon-agentd)
 
+> **2026-11-26:** `horizon-agentd` is gone. The agent is the shell's stdio
+> ACP child (`docs/agent-stdio-child-design.md`, board #114), started
+> again whenever it ends; `Reload Agent Runtime` went with the daemon.
+> What follows is the record of the daemon while it existed.
+
 > **Current status (2026-07-12):** the process described by this historical
 > landing record is now named `horizon-agentd` (`crates/horizon-agentd`).
 > Its socket override is `HORIZON_AGENTD_SOCKET`, and the reload command is
