@@ -201,6 +201,7 @@ impl SessionEnvironment<'_> {
                 SkillRegistry::embedded(&packages)
             })
             .with_packages(packages.clone())
+            .with_data_home(Some(agent_config.persistence.data_home.clone()))
             .with_mach_services(mach_services)
             .with_domain_policy(domains)
             .with_modules(self.modules.clone())

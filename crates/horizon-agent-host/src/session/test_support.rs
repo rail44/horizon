@@ -42,6 +42,7 @@ pub fn test_config() -> AgentConfig {
             sessions_dir: Default::default(),
             legacy_event_log: None,
             duckdb_path: None,
+            data_home: Default::default(),
         },
         tools: Default::default(),
     }

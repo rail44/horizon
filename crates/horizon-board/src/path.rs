@@ -71,7 +71,12 @@ fn scrub_git_env(cmd: &mut std::process::Command) {
 
 /// Computes the events.jsonl path for the project whose main root is `root`.
 pub fn events_path(root: &Path) -> PathBuf {
-    data_home()
+    events_path_in(&data_home(), root)
+}
+
+/// [`events_path`] under the data home `data_home`.
+pub fn events_path_in(data_home: &Path, root: &Path) -> PathBuf {
+    data_home
         .join("horizon")
         .join("board")
         .join(sanitize_root(root))

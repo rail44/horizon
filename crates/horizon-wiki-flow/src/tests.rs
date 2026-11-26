@@ -201,7 +201,11 @@ async fn a_thread_with_a_newer_comment_is_not_suspended() {
 
 #[test]
 fn the_wiki_adds_its_role_skill_and_tools() {
-    let packages = add(horizon_agent::packages::Packages::builder()).build();
+    let packages = add(
+        horizon_agent::packages::Packages::builder(),
+        std::env::temp_dir(),
+    )
+    .build();
     let role = packages
         .resolve_role(&RoleId(THREAD_ROLE_ID.into()))
         .unwrap();
@@ -224,9 +228,12 @@ fn the_wiki_adds_its_role_skill_and_tools() {
             execute: Arc::new(|_| Ok(serde_json::Value::Null)),
         };
         assert!(
-            add(horizon_agent::packages::Packages::builder())
-                .tools(vec![again])
-                .is_err(),
+            add(
+                horizon_agent::packages::Packages::builder(),
+                std::env::temp_dir()
+            )
+            .tools(vec![again])
+            .is_err(),
             "{tool}"
         );
     }
@@ -239,7 +246,11 @@ async fn a_thread_session_is_spawned_then_resumed_after_a_suspend() {
     let state = horizon_agent_host::session::test_support::state_with_packages(
         false,
         "mock",
-        add(horizon_agent::packages::Packages::builder()).build(),
+        add(
+            horizon_agent::packages::Packages::builder(),
+            std::env::temp_dir(),
+        )
+        .build(),
     );
     let path = dir.path().join("agent-events.jsonl");
     state.set_sessions_dir(path.clone());

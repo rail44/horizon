@@ -16,8 +16,12 @@ pub(super) struct AgentdBoardHost {
 }
 
 impl AgentdBoardHost {
-    pub(super) fn new(root: &Path, state: Arc<AgentdState>) -> Option<Self> {
-        let store = Store::from_dir(root).ok()?;
+    pub(super) fn new(
+        places: &super::BoardPlaces,
+        root: &Path,
+        state: Arc<AgentdState>,
+    ) -> Option<Self> {
+        let store = places.store(root).ok()?;
         Some(Self {
             store,
             root: root.to_path_buf(),

@@ -57,14 +57,6 @@ const KNOWLEDGE_BODY_CAP_CHARS: usize = 24_000;
 
 // --- path resolution -----------------------------------------------------
 
-/// Resolves the user's data home (`$XDG_DATA_HOME`, falling back to
-/// `~/.local/share`, then the OS temp dir), delegating to `config`'s
-/// resolver so the fallback chain stays identical to the event log's
-/// and DuckDB projection's built-in defaults.
-fn agent_data_home() -> PathBuf {
-    crate::config::agent_data_home()
-}
-
 /// Sanitizes a project root's absolute path into a directory-safe
 /// segment: every `/` (including the leading one) becomes `-`. E.g.
 /// `/home/user/src/project` → `-home-user-src-project`.
@@ -74,8 +66,8 @@ fn sanitize_root(root: &Path) -> String {
 
 /// The store directory for a project whose main root is `root`:
 /// `<data-home>/horizon/knowledge/<sanitized-root>`.
-fn store_dir_for_root(root: &Path) -> PathBuf {
-    agent_data_home()
+fn store_dir_for_root(data_home: &Path, root: &Path) -> PathBuf {
+    data_home
         .join("horizon")
         .join("knowledge")
         .join(sanitize_root(root))
@@ -190,9 +182,9 @@ fn discover_entries(store_dir: &Path) -> Vec<ParsedKnowledgeMd> {
 /// until the section would exceed `KNOWLEDGE_INDEX_CAP_CHARS`.
 /// `None` when `cwd` is not in a git repo, the store directory has no
 /// active entries, or the store doesn't exist yet.
-pub(crate) fn prompt_section(cwd: &Path) -> Option<String> {
+pub(crate) fn prompt_section(data_home: &Path, cwd: &Path) -> Option<String> {
     let root = main_root(cwd)?;
-    let store_dir = store_dir_for_root(&root);
+    let store_dir = store_dir_for_root(data_home, &root);
     let mut active: Vec<ParsedKnowledgeMd> = discover_entries(&store_dir)
         .into_iter()
         .filter(|e| e.status == KnowledgeStatus::Active)
@@ -230,13 +222,13 @@ use crate::tools::output::*;
 /// re-read from disk. Any status is readable. The entry is looked up by
 /// `id` in the store keyed by `root` (the session's project main root,
 /// resolved by the caller).
-pub(crate) fn execute_read(root: &Path, id: &str) -> Response {
+pub(crate) fn execute_read(data_home: &Path, root: &Path, id: &str) -> Response {
     if !is_valid_slug(id) {
         return error_output(format!(
             "knowledge_read: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
         ));
     }
-    let path = store_dir_for_root(root).join(format!("{id}.md"));
+    let path = store_dir_for_root(data_home, root).join(format!("{id}.md"));
     match std::fs::read_to_string(&path) {
         Ok(source) => match parse_knowledge_md(&source) {
             Some(entry) => {
@@ -271,7 +263,11 @@ pub(crate) fn execute_read(root: &Path, id: &str) -> Response {
 /// today. Optional fields (`anchors`, `status`) default to the existing
 /// entry's values (or empty/active for a new entry). No approval — the
 /// tool-event recording is the audit.
-pub(crate) fn execute_write(root: &Path, input: &crate::tools::input::KnowledgeWrite) -> Response {
+pub(crate) fn execute_write(
+    data_home: &Path,
+    root: &Path,
+    input: &crate::tools::input::KnowledgeWrite,
+) -> Response {
     let id = input.id.as_str();
     if !is_valid_slug(id) {
         return error_output(format!(
@@ -284,7 +280,7 @@ pub(crate) fn execute_write(root: &Path, input: &crate::tools::input::KnowledgeW
     let anchors = input.anchors.clone();
     let status = input.status.clone();
 
-    let path = store_dir_for_root(root).join(format!("{id}.md"));
+    let path = store_dir_for_root(data_home, root).join(format!("{id}.md"));
 
     // Read existing entry to preserve `created` and any fields the
     // caller didn't supply.
@@ -346,15 +342,15 @@ pub(crate) fn execute_write(root: &Path, input: &crate::tools::input::KnowledgeW
 mod tests {
     use super::*;
 
-    fn execute_read(root: &Path, raw: &serde_json::Value) -> serde_json::Value {
+    fn execute_read(data: &Path, root: &Path, raw: &serde_json::Value) -> serde_json::Value {
         crate::tools::test_support::with_input::<crate::tools::input::ReadEntry>(raw, |input| {
-            super::execute_read(root, &input.id)
+            super::execute_read(data, root, &input.id)
         })
     }
-    fn execute_write(root: &Path, raw: &serde_json::Value) -> serde_json::Value {
+    fn execute_write(data: &Path, root: &Path, raw: &serde_json::Value) -> serde_json::Value {
         crate::tools::test_support::with_input::<crate::tools::input::KnowledgeWrite>(
             raw,
-            |input| super::execute_write(root, input),
+            |input| super::execute_write(data, root, input),
         )
     }
 
@@ -387,8 +383,6 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        // FIXME: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("XDG_DATA_HOME", &dir) };
         dir
     }
 
@@ -545,19 +539,19 @@ mod tests {
 
     #[test]
     fn prompt_section_is_none_when_store_directory_does_not_exist() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("no-store");
         // No knowledge store written — prompt_section should return None.
-        assert_eq!(prompt_section(&root), None);
+        assert_eq!(prompt_section(&data, &root), None);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn prompt_section_lists_only_active_entries() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("active-only");
-        let store_dir = store_dir_for_root(&root);
+        let store_dir = store_dir_for_root(&data, &root);
         write_entry(
             &store_dir,
             "active-1",
@@ -569,20 +563,20 @@ mod tests {
             "---\nid: expired-1\ndescription: Expired entry\nsources: [\"s2\"]\ncreated: 2026-01-01\nupdated: 2026-01-01\nstatus: expired\n---\nbody\n",
         );
 
-        let section = prompt_section(&root).expect("must build a section");
+        let section = prompt_section(&data, &root).expect("must build a section");
         assert!(section.contains("active-1"));
         assert!(section.contains("Active entry"));
         assert!(!section.contains("expired-1"));
         assert!(section.contains("knowledge_read"));
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn prompt_section_adopts_newer_entries_first_when_capped() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("cap");
-        let store_dir = store_dir_for_root(&root);
+        let store_dir = store_dir_for_root(&data, &root);
         // Write many entries with long descriptions to exceed the cap.
         for i in 0..50 {
             let updated = format!("2026-01-{:02}", i + 1);
@@ -593,7 +587,7 @@ mod tests {
             write_entry(&store_dir, &format!("entry-{i:02}"), &body);
         }
 
-        let section = prompt_section(&root).expect("must build a section");
+        let section = prompt_section(&data, &root).expect("must build a section");
         assert!(
             section.chars().count() <= KNOWLEDGE_INDEX_CAP_CHARS,
             "section must not exceed the cap: {} chars",
@@ -610,12 +604,12 @@ mod tests {
             "oldest entry should be dropped when the cap is exceeded"
         );
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn prompt_section_is_none_outside_a_git_repository() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let dir = std::env::temp_dir().join(format!(
             "horizon-agent-knowledge-non-git-{}",
             uuid::Uuid::new_v4()
@@ -627,45 +621,45 @@ mod tests {
         // None. `scrub_git_env` preserves `GIT_CEILING_DIRECTORIES`.
         // FIXME: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::set_var("GIT_CEILING_DIRECTORIES", dir.parent().unwrap()) };
-        assert_eq!(prompt_section(&dir), None);
+        assert_eq!(prompt_section(&data, &dir), None);
         // FIXME: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::remove_var("GIT_CEILING_DIRECTORIES") };
         let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     // --- execute_read ---
 
     #[test]
     fn execute_read_returns_an_entry_for_a_known_id() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("read");
-        let store_dir = store_dir_for_root(&root);
+        let store_dir = store_dir_for_root(&data, &root);
         write_entry(
             &store_dir,
             "my-entry",
             &valid_frontmatter("my-entry", "Test entry", &["s"], "Body text."),
         );
-        let output = execute_read(&root, &serde_json::json!({ "id": "my-entry" }));
+        let output = execute_read(&data, &root, &serde_json::json!({ "id": "my-entry" }));
         assert_eq!(output["id"], "my-entry");
         assert_eq!(output["body"], "Body text.");
         assert_eq!(output["truncated"], false);
         assert_eq!(output["status"], "active");
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_read_rereads_after_disk_edit() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("read-reread");
-        let store_dir = store_dir_for_root(&root);
+        let store_dir = store_dir_for_root(&data, &root);
         write_entry(
             &store_dir,
             "e",
             &valid_frontmatter("e", "d", &["s"], "original"),
         );
-        let first = execute_read(&root, &serde_json::json!({ "id": "e" }));
+        let first = execute_read(&data, &root, &serde_json::json!({ "id": "e" }));
         assert_eq!(first["body"], "original");
 
         write_entry(
@@ -673,66 +667,67 @@ mod tests {
             "e",
             &valid_frontmatter("e", "d", &["s"], "edited"),
         );
-        let second = execute_read(&root, &serde_json::json!({ "id": "e" }));
+        let second = execute_read(&data, &root, &serde_json::json!({ "id": "e" }));
         assert_eq!(second["body"], "edited");
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_read_errors_for_unknown_id() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("read-unknown");
-        let output = execute_read(&root, &serde_json::json!({ "id": "no-such-entry" }));
+        let output = execute_read(&data, &root, &serde_json::json!({ "id": "no-such-entry" }));
         assert_eq!(output["is_error"], true);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_read_errors_on_missing_id_argument() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("read-no-arg");
-        let output = execute_read(&root, &serde_json::json!({}));
+        let output = execute_read(&data, &root, &serde_json::json!({}));
         assert_eq!(output["is_error"], true);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_read_errors_on_invalid_slug() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("read-bad-slug");
-        let output = execute_read(&root, &serde_json::json!({ "id": "Bad Slug!" }));
+        let output = execute_read(&data, &root, &serde_json::json!({ "id": "Bad Slug!" }));
         assert_eq!(output["is_error"], true);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_read_returns_any_status() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("read-expired");
-        let store_dir = store_dir_for_root(&root);
+        let store_dir = store_dir_for_root(&data, &root);
         write_entry(
             &store_dir,
             "exp",
             "---\nid: exp\ndescription: d\nsources: [\"s\"]\ncreated: 2026-01-01\nupdated: 2026-01-01\nstatus: expired\n---\nbody",
         );
-        let output = execute_read(&root, &serde_json::json!({ "id": "exp" }));
+        let output = execute_read(&data, &root, &serde_json::json!({ "id": "exp" }));
         assert_eq!(output["status"], "expired");
         assert_eq!(output["body"], "body");
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     // --- execute_write ---
 
     #[test]
     fn execute_write_creates_a_new_entry() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-new");
         let output = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "new-entry",
@@ -746,19 +741,20 @@ mod tests {
         assert!(output["path"].as_str().unwrap().contains("new-entry.md"));
 
         // Round-trip: read it back.
-        let read = execute_read(&root, &serde_json::json!({ "id": "new-entry" }));
+        let read = execute_read(&data, &root, &serde_json::json!({ "id": "new-entry" }));
         assert_eq!(read["description"], "A new entry");
         assert_eq!(read["body"], "Body text.");
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_upserts_an_existing_entry_preserving_created() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-upsert");
         // Write the initial entry.
         let first = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -771,6 +767,7 @@ mod tests {
 
         // Upsert with new content.
         let second = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -783,19 +780,20 @@ mod tests {
         assert_eq!(second["updated"], created, "updated must be today");
 
         // Verify the content was overwritten.
-        let read = execute_read(&root, &serde_json::json!({ "id": "e" }));
+        let read = execute_read(&data, &root, &serde_json::json!({ "id": "e" }));
         assert_eq!(read["description"], "updated desc");
         assert_eq!(read["body"], "updated body");
         assert_eq!(read["sources"].as_array().unwrap().len(), 2);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_validates_id_slug() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-bad-slug");
         let output = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "Bad Slug",
@@ -806,14 +804,15 @@ mod tests {
         );
         assert_eq!(output["is_error"], true);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_validates_description_non_empty() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-empty-desc");
         let output = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -824,14 +823,15 @@ mod tests {
         );
         assert_eq!(output["is_error"], true);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_validates_sources_non_empty() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-empty-sources");
         let output = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -842,14 +842,15 @@ mod tests {
         );
         assert_eq!(output["is_error"], true);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_accepts_optional_anchors_and_status() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-opts");
         let output = execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -862,18 +863,19 @@ mod tests {
         );
         assert_eq!(output["status"], "needs-review");
 
-        let read = execute_read(&root, &serde_json::json!({ "id": "e" }));
+        let read = execute_read(&data, &root, &serde_json::json!({ "id": "e" }));
         assert_eq!(read["status"], "needs-review");
         assert_eq!(read["anchors"].as_array().unwrap().len(), 2);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_preserves_anchors_and_status_on_upsert_without_them() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-preserve");
         execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -886,6 +888,7 @@ mod tests {
         );
         // Upsert without anchors/status — they should be preserved.
         execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -894,20 +897,21 @@ mod tests {
                 "sources": ["s"],
             }),
         );
-        let read = execute_read(&root, &serde_json::json!({ "id": "e" }));
+        let read = execute_read(&data, &root, &serde_json::json!({ "id": "e" }));
         assert_eq!(read["anchors"].as_array().unwrap(), &["a1"]);
         assert_eq!(read["status"], "needs-review");
         assert_eq!(read["description"], "d2");
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
     fn execute_write_caps_oversized_body() {
-        let _data = temp_data_home();
+        let data = temp_data_home();
         let root = temp_git_repo("write-cap");
         let big_body = "x".repeat(KNOWLEDGE_BODY_CAP_CHARS + 1_000);
         execute_write(
+            &data,
             &root,
             &serde_json::json!({
                 "id": "e",
@@ -916,10 +920,10 @@ mod tests {
                 "sources": ["s"],
             }),
         );
-        let read = execute_read(&root, &serde_json::json!({ "id": "e" }));
+        let read = execute_read(&data, &root, &serde_json::json!({ "id": "e" }));
         assert_eq!(read["truncated"], true);
         assert!(read["body"].as_str().unwrap().chars().count() <= KNOWLEDGE_BODY_CAP_CHARS);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&_data);
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

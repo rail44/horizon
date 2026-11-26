@@ -681,6 +681,7 @@ mod tests {
                 sessions_dir: std::path::PathBuf::from("/tmp/horizon-connection-test-sessions"),
                 legacy_event_log: None,
                 duckdb_path: None,
+                data_home: std::path::PathBuf::from("/tmp/horizon-connection-test-data"),
             },
             tools: horizon_agent::config::AgentToolsConfig::default(),
         };

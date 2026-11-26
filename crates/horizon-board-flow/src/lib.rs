@@ -61,9 +61,33 @@ impl ReplyAddress {
     }
 }
 
+/// Where the board is kept: the data home its stores are under, and the
+/// socket of the log daemon that writes them.
+#[derive(Clone, Debug)]
+pub struct BoardPlaces {
+    pub data_home: PathBuf,
+    pub logd_socket: PathBuf,
+}
+
+impl BoardPlaces {
+    /// The store of the project `dir` is in.
+    pub(crate) fn store(&self, dir: &Path) -> Result<horizon_board::Store, String> {
+        horizon_board::Store::from_dir_in(dir, &self.data_home, self.logd_socket.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// The board, composed into the host: the board's tools, its task and
 /// reviewer roles, and the sink that posts answers to its threads.
-pub struct BoardFlow;
+pub struct BoardFlow {
+    places: BoardPlaces,
+}
+
+impl BoardFlow {
+    pub fn new(places: BoardPlaces) -> Self {
+        Self { places }
+    }
+}
 
 impl Extension for BoardFlow {
     fn packages(&self, packages: PackagesBuilder) -> PackagesBuilder {
@@ -71,10 +95,14 @@ impl Extension for BoardFlow {
     }
 
     fn reply_sinks(&self) -> Vec<Arc<dyn ReplySink>> {
-        vec![Arc::new(sink::BoardSink)]
+        vec![Arc::new(sink::BoardSink::new(self.places.clone()))]
     }
 
     fn board_host(&self, state: &Arc<AgentdState>, root: &Path) -> Option<Arc<dyn BoardHost>> {
-        Some(Arc::new(host::AgentdBoardHost::new(root, state.clone())?))
+        Some(Arc::new(host::AgentdBoardHost::new(
+            &self.places,
+            root,
+            state.clone(),
+        )?))
     }
 }

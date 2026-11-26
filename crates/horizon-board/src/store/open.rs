@@ -26,6 +26,21 @@ impl Store {
         Ok(Self::at(crate::path::events_path(&root)))
     }
 
+    /// [`Self::from_dir`] with the data home and the logd socket given, not
+    /// read from the environment: what a program that composes the board
+    /// into itself uses.
+    pub fn from_dir_in(
+        dir: &Path,
+        data_home: &Path,
+        logd_socket: PathBuf,
+    ) -> Result<Self, StoreError> {
+        let root = crate::path::main_root(dir).ok_or(StoreError::NotInGitRepo)?;
+        Ok(Self::at_with_socket(
+            crate::path::events_path_in(data_home, &root),
+            logd_socket,
+        ))
+    }
+
     /// Opens a store at an explicit path (for testing).
     pub fn at(path: PathBuf) -> Self {
         Self::at_with_socket(path, horizon_wire::socket::default_logd_socket_path())

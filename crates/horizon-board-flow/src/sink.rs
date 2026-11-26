@@ -7,11 +7,19 @@ use super::operations::parse_session;
 use horizon_agent::contract::{SessionId, SessionInput};
 use horizon_agent_host::outbox::log::Index;
 use horizon_agent_host::outbox::{BoxFuture, Context, Reply, ReplySink};
-use horizon_board::{Comment, Store};
+use horizon_board::Comment;
 
 /// The board's reply sink: an answer addressed to a board task is posted to
 /// its thread; a review result is handed to the requesting task session.
-pub(super) struct BoardSink;
+pub(super) struct BoardSink {
+    places: super::BoardPlaces,
+}
+
+impl BoardSink {
+    pub(super) fn new(places: super::BoardPlaces) -> Self {
+        Self { places }
+    }
+}
 
 impl ReplySink for BoardSink {
     fn kinds(&self) -> &'static [&'static str] {
@@ -40,7 +48,7 @@ impl ReplySink for BoardSink {
             Ok(match address {
                 ReplyAddress::Board { root, task } => {
                     source_project(ctx.index, source, &root)?;
-                    let store = Store::from_dir(&root).map_err(|e| e.to_string())?;
+                    let store = self.places.store(&root)?;
                     store
                         .post_message(
                             task,

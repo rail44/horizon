@@ -11,7 +11,7 @@
 //! comment left to answer, and resumed by the next one.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use horizon_agent::contract::{SessionId, SessionInput};
@@ -44,23 +44,29 @@ struct WikiAddress {
 /// The wiki, composed into the host.
 pub struct WikiFlow {
     start_dir: Option<PathBuf>,
+    data_home: PathBuf,
 }
 
 impl WikiFlow {
     /// With the wiki of the project `start_dir` is in (the host's start
-    /// directory) answered.
-    pub fn new(start_dir: Option<PathBuf>) -> Self {
-        Self { start_dir }
+    /// directory) answered; the wikis are kept under `data_home`.
+    pub fn new(start_dir: Option<PathBuf>, data_home: PathBuf) -> Self {
+        Self {
+            start_dir,
+            data_home,
+        }
     }
 }
 
 impl Extension for WikiFlow {
     fn packages(&self, packages: PackagesBuilder) -> PackagesBuilder {
-        add(packages)
+        add(packages, self.data_home.clone())
     }
 
     fn trigger_sources(&self) -> Vec<Box<dyn TriggerSource>> {
-        source(self.start_dir.clone()).into_iter().collect()
+        source(self.start_dir.clone(), &self.data_home)
+            .into_iter()
+            .collect()
     }
 
     fn reply_sinks(&self) -> Vec<Arc<dyn ReplySink>> {
@@ -68,8 +74,9 @@ impl Extension for WikiFlow {
     }
 }
 
-/// Adds the wiki's tools, thread role and skill.
-fn add(packages: PackagesBuilder) -> PackagesBuilder {
+/// Adds the wiki's tools, thread role and skill; the wikis are kept under
+/// `data_home`.
+fn add(packages: PackagesBuilder, data_home: PathBuf) -> PackagesBuilder {
     let packages = packages
         .roles(vec![RoleDefinition {
             id: THREAD_ROLE_ID,
@@ -88,6 +95,7 @@ fn add(packages: PackagesBuilder) -> PackagesBuilder {
         .into_iter()
         .map(|definition| {
             let id = definition.id;
+            let data_home = data_home.clone();
             ExternalTool {
                 id: id.into(),
                 title: definition.title.into(),
@@ -104,7 +112,7 @@ fn add(packages: PackagesBuilder) -> PackagesBuilder {
                         .project_root
                         .as_deref()
                         .ok_or("The session is not in a repository, so it has no wiki")?;
-                    let store = Store::for_project(root).ok_or("No data directory for the wiki")?;
+                    let store = Store::for_project_in(&data_home, root);
                     agent::run_tool(&store, id, call.input)
                 }),
             }
@@ -121,9 +129,9 @@ fn add(packages: PackagesBuilder) -> PackagesBuilder {
 
 /// The wiki's trigger source for the project at `root` (the daemon's start
 /// directory); `None` outside a repository.
-fn source(root: Option<PathBuf>) -> Option<Box<dyn TriggerSource>> {
+fn source(root: Option<PathBuf>, data_home: &Path) -> Option<Box<dyn TriggerSource>> {
     let project = horizon_agent_host::worktree::project_root(&root?)?;
-    let store = Store::for_project(&project)?;
+    let store = Store::for_project_in(data_home, &project);
     Some(Box::new(WikiSource {
         project,
         store,

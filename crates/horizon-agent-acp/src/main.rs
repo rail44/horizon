@@ -10,19 +10,11 @@
 //! (`horizon_agent_host::startup::spawn_resume_task`); `initialize` is
 //! answered meanwhile, and the methods that read sessions wait for it.
 
-mod guidance;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use horizon_agent::registry::ProviderRegistry;
-use horizon_agent_host::extension::Extensions;
-use horizon_agent_host::hub::{self, flush_event_log_before_exit};
+use horizon_agent_acp::{Agent, Composition, Places, serve_until};
 use horizon_agent_host::session::AgentdState;
-use horizon_agent_host::startup::{StartupHooks, spawn_resume_task};
-use horizon_agent_host::{outbox, providers};
-use horizon_board_flow::BoardFlow;
-use horizon_wiki_flow::WikiFlow;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Test-only hook (`crates/horizon-agent-acp/tests/e2e.rs`): when set to a
@@ -65,25 +57,12 @@ fn wait_for_gate(gate: &Path) {
     }
 }
 
-/// Horizon's guidance, the board and the wiki, rooted at `start_dir`.
-/// What they add to the agent (prompt sections, roles, skills and tools)
-/// is carried on the agent configuration (`RigAgentConfig::packages`) to
-/// the providers and every session.
-fn extensions(start_dir: Option<PathBuf>) -> Extensions {
-    Extensions::new(vec![
-        Arc::new(guidance::HorizonGuidance),
-        Arc::new(BoardFlow),
-        Arc::new(WikiFlow::new(start_dir)),
-    ])
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // One accepted snapshot supplies conversation and auxiliary providers.
-    let raw_config = horizon_config::load();
-    let fence = (raw_config.sandbox.fence_path())
-        .unwrap_or_else(horizon_agent::tools::sandbox::fence_on_path);
-    horizon_agent::tools::sandbox::configure(std::sync::Arc::new(
+    let config = horizon_config::load();
+    let fence =
+        (config.sandbox.fence_path()).unwrap_or_else(horizon_agent::tools::sandbox::fence_on_path);
+    horizon_agent::tools::sandbox::configure(Arc::new(
         horizon_sandbox::runtime::FenceRuntime::new(fence),
     ));
     if let Err(unavailable) = horizon_agent::tools::sandbox::availability() {
@@ -92,71 +71,40 @@ async fn main() -> anyhow::Result<()> {
              call will ask to run outside a sandbox"
         );
     }
-    let extensions = extensions(std::env::current_dir().ok());
-    let mut agent_config = providers::agent_config(raw_config);
-    agent_config.rig.packages = extensions.packages();
-    // Resolved once at startup; a provider reload reads it again.
-    let config_path = horizon_config::resolved_path();
-    eprintln!("horizon-agent: starting (model={})", agent_config.rig.model);
-
-    let mut providers = ProviderRegistry::builtin_with_config(agent_config.clone());
-    if let Some(gate) = test_gate(TEST_MOCK_STREAM_GATE_VAR) {
-        providers.hold_mock_streams(Arc::new(move || wait_for_gate(&gate)));
-    }
     let checkpoints = !(horizon_agent::TEST_FIXTURES
         && std::env::var_os(TEST_NO_CHECKPOINTS_VAR).is_some_and(|set| !set.is_empty()));
-    let state = Arc::new(
-        AgentdState::new(
-            providers,
-            agent_config.clone(),
-            None,
-            config_path,
-            horizon_config::project_grants(raw_config),
-            horizon_config::trusted_projects(raw_config),
-        )
-        .with_checkpoints(checkpoints)
-        .with_extensions(extensions.clone()),
-    );
-    // The shell that started this process puts its control plane here;
-    // `workspace_snapshot` asks it.
-    let state = match std::env::var_os("HORIZON_SOCKET").filter(|socket| !socket.is_empty()) {
-        Some(socket) => Arc::new(
-            Arc::into_inner(state)
-                .expect("nothing holds the state yet")
-                .with_control_socket(PathBuf::from(socket)),
-        ),
-        None => state,
-    };
-
-    // The providers follow the configuration file.
-    let _config_watch = horizon_agent_host::config_watch::watch_config(state.clone());
-
-    spawn_resume_task(
-        state.clone(),
-        agent_config,
-        StartupHooks {
-            before_resume: test_gate(TEST_RESUME_GATE_VAR)
-                .map(|gate| Box::new(move || wait_for_gate(&gate)) as Box<dyn FnOnce() + Send>),
-            refused: Box::new(|error| {
-                eprintln!("horizon-agent: startup refused: {error:#}");
-                std::process::exit(1);
-            }),
-        },
-    );
-    outbox::spawn(
-        state.clone(),
-        extensions.trigger_sources(),
-        extensions.reply_sinks(),
-    );
-
-    run(tokio::io::stdin(), tokio::io::stdout(), state).await;
+    let agent = Agent::compose(Composition {
+        config: config.clone(),
+        // Resolved once at startup; a provider reload reads it again.
+        config_path: horizon_config::resolved_path(),
+        places: Places::from_env(),
+        start_dir: std::env::current_dir().ok(),
+        // The shell that started this process puts its control plane here;
+        // `workspace_snapshot` asks it.
+        control_socket: std::env::var_os("HORIZON_SOCKET")
+            .filter(|socket| !socket.is_empty())
+            .map(PathBuf::from),
+        checkpoints,
+        before_resume: test_gate(TEST_RESUME_GATE_VAR)
+            .map(|gate| Box::new(move || wait_for_gate(&gate)) as Box<dyn FnOnce() + Send>),
+        hold_mock_streams: test_gate(TEST_MOCK_STREAM_GATE_VAR)
+            .map(|gate| Arc::new(move || wait_for_gate(&gate)) as Arc<dyn Fn() + Send + Sync>),
+        refused: Box::new(|error| {
+            eprintln!("horizon-agent: startup refused: {error:#}");
+            std::process::exit(1);
+        }),
+    });
+    run(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        agent.state().clone(),
+    )
+    .await;
     exit_now()
 }
 
 /// Serves the client on `read`/`write` until it closes the connection or
-/// SIGTERM arrives, then flushes the session logs: an append only
-/// enqueues, so ending without the flush would drop what the writer thread
-/// has not taken yet.
+/// SIGTERM arrives, then flushes the session logs.
 async fn run<R, W>(read: R, write: W, state: Arc<AgentdState>)
 where
     R: AsyncRead + Send + 'static,
@@ -170,7 +118,7 @@ where
             None
         }
     };
-    let terminated = async {
+    let terminated = async move {
         match sigterm.as_mut() {
             Some(signal) => {
                 signal.recv().await;
@@ -178,15 +126,7 @@ where
             None => std::future::pending().await,
         }
     };
-    tokio::select! {
-        served = hub::serve(read, write, state.clone()) => {
-            if let Err(error) = served {
-                eprintln!("horizon-agent: the connection failed: {error}");
-            }
-        }
-        () = terminated => eprintln!("horizon-agent: terminated"),
-    }
-    flush_event_log_before_exit(state.writer());
+    serve_until(read, write, state, terminated).await;
 }
 
 /// Ends the process once the logs are flushed.
@@ -214,13 +154,6 @@ mod tests {
     /// returns while the writer thread is still inside this sleep and the
     /// log file is still empty when the assertion below reads it.
     const GATED_FIRST_WRITE: Duration = Duration::from_millis(750);
-
-    /// Every skill a package adds parses: composing the registry panics on
-    /// one that does not, which would stop every session at startup.
-    #[test]
-    fn every_skill_the_packages_add_parses() {
-        let _ = horizon_agent::skills::SkillRegistry::embedded(&extensions(None).packages());
-    }
 
     fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {
         Record {
@@ -269,7 +202,7 @@ mod tests {
 
         let agent_config = horizon_agent_host::session::test_support::test_config();
         let state = Arc::new(AgentdState::new(
-            ProviderRegistry::builtin_with_config(agent_config.clone()),
+            horizon_agent::registry::ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             Some(writer),
             None,

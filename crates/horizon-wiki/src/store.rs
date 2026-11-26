@@ -36,7 +36,17 @@ impl Store {
     /// The directory above every project's store, which also holds the
     /// installation's owner id ([`crate::thread::owner_id`]).
     pub fn wiki_root() -> Option<PathBuf> {
-        Some(data_home()?.join("horizon").join("wiki"))
+        Some(Self::wiki_root_in(&data_home()?))
+    }
+
+    /// [`Self::wiki_root`] under the data home `data_home`.
+    pub fn wiki_root_in(data_home: &Path) -> PathBuf {
+        data_home.join("horizon").join("wiki")
+    }
+
+    /// [`Self::for_project`] under the data home `data_home`.
+    pub fn for_project_in(data_home: &Path, project_root: &Path) -> Self {
+        Self::at(Self::wiki_root_in(data_home).join(sanitize(project_root)))
     }
 
     /// The store of the project `dir` is in (any worktree of it resolves to

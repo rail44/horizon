@@ -561,6 +561,11 @@ pub struct RigAgentConfig {
     /// registry is built, so a session captures it at spawn. `None` leaves
     /// the check off.
     pub decision: Option<crate::decision::DecisionConfig>,
+    /// Horizon's data home, where the knowledge store is kept
+    /// (`<data-home>/horizon/knowledge`); copied from
+    /// [`AgentPersistenceConfig::data_home`] onto every provider's config
+    /// when the registry is built. `None`: no knowledge store.
+    pub data_home: Option<PathBuf>,
 }
 
 impl Default for RigAgentConfig {
@@ -583,6 +588,7 @@ impl Default for RigAgentConfig {
             allowed_tool_ids: None,
             trusted_project: false,
             decision: None,
+            data_home: None,
         }
     }
 }
@@ -650,6 +656,9 @@ pub struct AgentPersistenceConfig {
     /// explicitly. The host splits it into `sessions_dir` once.
     pub legacy_event_log: Option<PathBuf>,
     pub duckdb_path: Option<PathBuf>,
+    /// Horizon's data home: `$HORIZON_DATA_HOME`, else `$XDG_DATA_HOME`,
+    /// else `~/.local/share`. The knowledge store is kept under it.
+    pub data_home: PathBuf,
 }
 
 impl AgentPersistenceConfig {
@@ -658,11 +667,12 @@ impl AgentPersistenceConfig {
     /// config-narrowing wave, leaving `HORIZON_AGENT_SESSIONS_DIR`/
     /// `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default as the
     /// only override path.
-    pub(crate) fn from_env() -> Self {
+    pub fn from_env() -> Self {
         let home = std::env::var(HOME_VAR).ok();
         let xdg_data_home = named_data_home();
         let sessions_dir_value = std::env::var(SESSIONS_DIR_VAR).ok();
         Self {
+            data_home: agent_data_home_from(xdg_data_home.clone(), home.clone()),
             legacy_event_log: sessions_dir_value.is_none().then(|| {
                 agent_data_home_from(xdg_data_home.clone(), home.clone())
                     .join("horizon")
@@ -713,15 +723,6 @@ pub(crate) fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<S
             None => std::env::temp_dir(),
         },
     }
-}
-
-/// Convenience wrapper around [`agent_data_home_from`] that reads the
-/// env vars itself, for callers that don't need the parameterized form
-/// (testability). The knowledge store (`crate::knowledge`) uses this to
-/// resolve its base directory the same way the event log and DuckDB
-/// projection do.
-pub(crate) fn agent_data_home() -> PathBuf {
-    agent_data_home_from(named_data_home(), std::env::var(HOME_VAR).ok())
 }
 
 /// The session logs' built-in default when `HORIZON_AGENT_SESSIONS_DIR`

@@ -10,7 +10,18 @@ use std::sync::Arc;
 
 /// The outbox with the board's sink plugged in, as the host runs it.
 fn board_outbox(state: Arc<AgentdState>, path: PathBuf) -> Outbox {
-    Outbox::new(state, path, Vec::new(), vec![Arc::new(BoardSink)])
+    // The board, wherever the sink is asked to post, is kept in a place of
+    // the test's own.
+    let places = crate::BoardPlaces {
+        data_home: path.with_extension("data"),
+        logd_socket: path.with_extension("logd.sock"),
+    };
+    Outbox::new(
+        state,
+        path,
+        Vec::new(),
+        vec![Arc::new(BoardSink::new(places))],
+    )
 }
 
 pub(super) fn repository() -> tempfile::TempDir {

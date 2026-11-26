@@ -122,6 +122,9 @@ struct Inner {
     skills: SkillRegistry,
     /// The roles, skills and tools packages add (`crate::packages`).
     packages: crate::packages::Packages,
+    /// Horizon's data home, where the knowledge tools keep their store
+    /// (`RigAgentConfig::data_home`). `None`: they have none.
+    data_home: Option<PathBuf>,
     /// Whether nobody is there to answer an approval prompt for this session
     /// (`roles::RoleDefinition::unattended`): a wiki thread, a board
     /// session. A call that would otherwise wait for a human resolves as a
@@ -324,6 +327,11 @@ impl ToolSessionState {
     /// `tools::board::execute_auto`/`execute_comment` read and write through.
     pub(crate) fn board_host(&self) -> Option<Arc<dyn crate::tools::board::BoardHost>> {
         self.inner.board.clone()
+    }
+
+    /// Where the knowledge tools keep their store, when they have one.
+    pub(crate) fn data_home(&self) -> Option<&Path> {
+        self.inner.data_home.as_deref()
     }
 
     pub fn workspace_root(&self) -> Option<&Path> {

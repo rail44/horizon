@@ -144,7 +144,10 @@ impl SessionModule for KnowledgeIndex {
         if !cx.trusted_project {
             return Vec::new();
         }
-        crate::knowledge::prompt_section(&cx.environment.cwd)
+        let Some(data_home) = cx.config.data_home.as_deref() else {
+            return Vec::new();
+        };
+        crate::knowledge::prompt_section(data_home, &cx.environment.cwd)
             .map(|text| Section {
                 name: "knowledge",
                 text,

@@ -125,6 +125,7 @@ impl ProviderRegistry {
             };
             provider_config.decision = config.decision.clone();
             provider_config.packages = config.rig.packages.clone();
+            provider_config.data_home = Some(config.persistence.data_home.clone());
             let provider = Arc::new(crate::providers::rig::Provider::for_entry(provider_config));
             registry.insert_under(id, provider.clone());
             if is_default {
@@ -141,6 +142,7 @@ impl ProviderRegistry {
                 Arc::new(crate::providers::rig::Provider::for_entry(
                     crate::config::RigAgentConfig {
                         decision: config.decision.clone(),
+                        data_home: Some(config.persistence.data_home.clone()),
                         ..config.rig.clone()
                     },
                 )),
@@ -293,6 +295,7 @@ mod tests {
                 sessions_dir: std::path::PathBuf::from("/tmp/horizon-registry-test-sessions"),
                 legacy_event_log: None,
                 duckdb_path: None,
+                data_home: std::path::PathBuf::from("/tmp/horizon-registry-test-data"),
             },
             tools: crate::config::AgentToolsConfig::default(),
         };

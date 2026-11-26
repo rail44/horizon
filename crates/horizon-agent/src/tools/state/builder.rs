@@ -55,6 +55,7 @@ impl ToolSessionBuilder {
                 recall,
                 skills: SkillRegistry::default(),
                 packages: Default::default(),
+                data_home: None,
                 unattended: false,
                 read_only: None,
                 loopback_connect: Vec::new(),
@@ -100,6 +101,12 @@ impl ToolSessionBuilder {
     /// Install the host-discovered skill registry.
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
         self.inner.skills = skills;
+        self
+    }
+
+    /// Where the knowledge tools keep their store.
+    pub fn with_data_home(mut self, data_home: Option<PathBuf>) -> Self {
+        self.inner.data_home = data_home;
         self
     }
 

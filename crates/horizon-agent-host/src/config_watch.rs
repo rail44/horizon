@@ -6,8 +6,9 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+pub use notify::RecommendedWatcher;
 use notify::event::{EventKind, ModifyKind};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{RecursiveMode, Watcher as _};
 
 use crate::session::AgentdState;
 
