@@ -96,14 +96,20 @@ The shell's ACP client stays: `agent_model` folds ACP updates, the
 views draw them, and `AgentCommand`/`AgentUpdate` are what a pane holds.
 What changes in `horizon-shell-runtime`'s `agent.rs` is how it reaches
 the agent: it starts `horizon-agent-acp` (from beside its own
-executable, as it finds the daemons today) with piped stdio, instead of
+executable, as it finds the daemons today), or the program and arguments
+`config.toml`'s `[agent] command` names, with piped stdio, instead of
 connecting to a socket or spawning a daemon. The one host tool,
 `workspace_snapshot`, asks the shell's control plane itself
 (`HORIZON_SOCKET`, the query `workspace`).
 
 The line is standard ACP v2 with no extension of Horizon's: the
 `initialize` both ends send carries no `_meta.horizon`, and ACP's own
-protocol version is all they compare. The shell reads what an agent
+protocol version is all they compare. The shell speaks v2 alone (board
+#116): an agent that answers v1 is not served. v2 is still behind the
+schema crate's `unstable_protocol_v2` feature, and the agents tried on
+2026-11-26 spoke v1 (opencode) or v1's shapes under a 2 (goose). An
+agent's session id is any string; one that is not a UUID gives the
+shell an id made from it, the same every run. The shell reads what an agent
 offers by the protocol's own marks, not by ids of Horizon's: the model and
 the effort are the config options of the `model` and `thought_level`
 categories, a model's provider is its entry's group, and an approval or a
