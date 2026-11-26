@@ -2941,12 +2941,11 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
 }
 
 #[test]
-fn tool_session_state_seeds_bash_cwd_from_the_workspace_root() {
-    let root = temp_workspace("bash-initial-cwd");
+fn bash_starts_in_the_workspace_root() {
+    let root = temp_workspace("bash-start-dir");
     let tool_state = ToolSessionState::new(root.clone());
 
-    assert_eq!(tool_state.bash_cwd(), root);
-    assert_eq!(*tool_state.bash_cwd_handle().lock().unwrap(), root);
+    assert_eq!(tool_state.bash_dir(), root);
 }
 
 // --- path safety regressions ---------------------------------------------

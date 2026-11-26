@@ -249,8 +249,11 @@ user-visible `batch` tool.
 
 ## Bash Semantics
 
-- Fresh process per command; the harness tracks the working directory across
-  calls (`cd` persists via tracking, not via a live shell).
+- Fresh process per command, every one in the session's workspace root
+  (after `worktree_enter`, the worktree); a `cd` lasts for that command
+  only, as in the frameworks compared in
+  `docs/research/agent-frameworks-core-and-extension-2026-11-23.md` (board
+  #114).
 - Wall-clock timeout, default 300s, per-call override up to a hard 1800s
   maximum. The catalog tells the model to omit the override normally and to
   use a shorter value only for an intentional quick probe; builds, tests,

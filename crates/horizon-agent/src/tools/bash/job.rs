@@ -17,15 +17,15 @@ use horizon_sandbox::{FilesystemGrantAccess, FilesystemGrantScope};
 #[cfg(test)]
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
-/// Values that can cross from the session thread into its bash FIFO. The cwd
-/// handle stays shared so a queued command observes earlier commands' `cd`.
+/// Values that can cross from the session thread into its bash FIFO. Every
+/// call starts in `cwd`, the session's workspace root: a `cd` lasts for its
+/// own call only.
 pub(crate) struct BashJob {
     session_id: SessionId,
     identity: ToolCallIdentity,
     input: Bash,
-    cwd: Arc<Mutex<PathBuf>>,
+    cwd: PathBuf,
     config: BashToolConfig,
     result_tx: Sender<BashCompletion>,
 }
@@ -41,7 +41,7 @@ impl BashJob {
             session_id,
             identity: request.identity(),
             input: request.input.bash().clone(),
-            cwd: tools.bash_cwd_handle(),
+            cwd: tools.bash_dir(),
             config: tools.bash_config(),
             result_tx,
         }
@@ -187,13 +187,13 @@ pub(crate) fn spawn_contained(
 }
 
 /// Test entry point for a host job without a session's approval machinery.
-/// Uses the same FIFO, cwd tracking, and completion boundary as approved jobs.
+/// Uses the same FIFO and completion boundary as approved jobs.
 #[cfg(test)]
 pub(super) fn spawn(
     session_id: SessionId,
     call_id: crate::contract::ToolCallId,
     input: Value,
-    cwd: Arc<Mutex<PathBuf>>,
+    cwd: PathBuf,
     config: BashToolConfig,
     result_tx: Sender<BashCompletion>,
 ) {
@@ -302,10 +302,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn queued_jobs_retain_work_and_observe_cwd_changes_even_after_a_panic() {
+    fn queued_jobs_retain_work_even_after_a_panic() {
         let dir = std::env::temp_dir().join(format!("horizon-bash-job-{}", uuid::Uuid::new_v4()));
-        let next = dir.as_path().join("next");
-        std::fs::create_dir_all(&next).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
         let tools = ToolSessionState::for_root(
             dir.as_path().to_path_buf(),
             AgentToolsConfig::default(),
@@ -327,11 +326,10 @@ mod tests {
             &tools,
             results.clone(),
         );
-        first.enqueue(move |job, _registration| {
+        first.enqueue(move |_job, _registration| {
             started.send(()).unwrap();
             blocked.recv().unwrap();
-            *job.cwd.lock().unwrap() = next;
-            panic!("first job failed after changing cwd");
+            panic!("first job failed");
         });
         running.recv_timeout(Duration::from_secs(2)).unwrap();
         let second = BashJob::new(
@@ -360,12 +358,7 @@ mod tests {
         assert_eq!(second.output["exit_code"], 0);
         assert_eq!(
             second.output["output"].as_str().unwrap().trim(),
-            dir.as_path()
-                .join("next")
-                .canonicalize()
-                .unwrap()
-                .to_str()
-                .unwrap()
+            dir.as_path().canonicalize().unwrap().to_str().unwrap()
         );
         assert_eq!(second.output["sandboxed"], false);
         assert_eq!(second.output["host_execution_approved"], true);

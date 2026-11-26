@@ -4,14 +4,7 @@ use super::{AgentToolsConfig, Inner, RecallContext, ToolSessionState};
 use crate::judge::JudgeHandle;
 use crate::skills::SkillRegistry;
 use crate::tools::network::SessionDomainPolicy;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    net::SocketAddr,
-    path::PathBuf,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, collections::HashMap, net::SocketAddr, path::PathBuf, rc::Rc, sync::Arc};
 
 /// Owns a session's initial capabilities until `build` makes the state shareable.
 /// Runtime grants remain operations on `ToolSessionState`; initial configuration
@@ -42,12 +35,12 @@ impl ToolSessionBuilder {
         tools: AgentToolsConfig,
         recall: RecallContext,
     ) -> Self {
-        // Bash's initial tracked cwd is "the workspace root"
+        // Every bash call starts in the workspace root
         // (`docs/agent-tools-design.md`); if no root could be established,
-        // fall back to the raw (non-canonicalized) current directory, and
-        // failing that, `/` — bash still needs *some* starting directory
-        // even when the file tools' stricter root requirement can't be met.
-        let bash_cwd = workspace_root
+        // in the raw (non-canonicalized) current directory, and failing
+        // that, `/` — bash still needs *some* starting directory even when
+        // the file tools' stricter root requirement can't be met.
+        let bash_dir = workspace_root
             .clone()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -57,7 +50,7 @@ impl ToolSessionBuilder {
                 recorded_mtimes: RefCell::new(HashMap::new()),
                 filesystem_grants: RefCell::new(Vec::new()),
                 own_worktree_grants: Vec::new(),
-                bash_cwd: Arc::new(Mutex::new(bash_cwd)),
+                bash_dir,
                 tools,
                 recall,
                 skills: SkillRegistry::default(),

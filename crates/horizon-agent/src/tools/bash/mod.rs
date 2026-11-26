@@ -1,5 +1,5 @@
-//! The `bash` tool starts a fresh process per call and tracks cwd across
-//! calls. [`BashJob`] captures thread-safe inputs; a call runs contained by
+//! The `bash` tool starts a fresh process per call, every one in the
+//! session's workspace root. [`BashJob`] captures thread-safe inputs; a call runs contained by
 //! the sandbox runtime or, once approved, with the host's authority. Both
 //! enqueue work through one per-session FIFO and deliver completions to the
 //! host session loop without blocking it.

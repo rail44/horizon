@@ -29,7 +29,6 @@ fn annotate_sandboxed_records_the_flag() {
         output_file: None,
         message: None,
         note: None,
-        cwd: None,
     });
     annotate_sandboxed(&mut output, true);
     assert_eq!(output.to_json()["sandboxed"], true);
@@ -41,7 +40,6 @@ fn annotate_sandboxed_records_the_flag() {
         output_file: None,
         message: None,
         note: None,
-        cwd: None,
     });
     annotate_sandboxed(&mut output, false);
     assert_eq!(output.to_json()["sandboxed"], false);
@@ -61,7 +59,6 @@ fn refused_hosts_are_recorded_without_interpreting_payload_flags() {
         output_file: None,
         message: None,
         note: None,
-        cwd: None,
     });
     annotate_refused_hosts(&mut response, vec!["example.test".into()]);
     let result = identity.finish(response);

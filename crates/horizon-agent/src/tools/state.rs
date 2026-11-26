@@ -7,7 +7,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -95,15 +95,10 @@ struct Inner {
     /// handed on: it belongs to this worktree, not to the session's
     /// authority.
     own_worktree_grants: Vec<horizon_sandbox::FilesystemGrant>,
-    /// The `bash` tool's tracked working directory
-    /// (`docs/agent-tools-design.md`, "Bash Semantics"): a fresh process per
-    /// call, with `cd` persisted across calls by the harness rather than a
-    /// live shell. Unlike the rest of this struct, this is `Arc<Mutex<_>>`
-    /// rather than `Rc<RefCell<_>>` — bash calls run on a dedicated
-    /// background thread (see `tools::bash::exec`), so the handle has to be
-    /// `Send`-able out of this otherwise UI-thread-confined struct. Bash is
-    /// deliberately not confined to `workspace_root`; approval is its gate.
-    bash_cwd: Arc<Mutex<PathBuf>>,
+    /// Where every `bash` call starts (`docs/agent-tools-design.md`, "Bash
+    /// Semantics"): the workspace root. A fresh process per call, and a `cd`
+    /// lasts for its own call only.
+    bash_dir: PathBuf,
     /// Resolved `[agent]` tuning for the bash/fs tools, read once when this
     /// state is created (config is applied at startup only — see
     /// `AGENTS.md`). `Copy`, so cheap to store by value here and to clone
@@ -419,21 +414,9 @@ impl ToolSessionState {
         self.inner.recorded_mtimes.borrow().get(path).copied()
     }
 
-    /// Clones out the shared handle to bash's tracked cwd, so the
-    /// background thread that actually runs a bash call (`tools::bash::
-    /// exec`) can read and update it without touching anything else on this
-    /// `Rc`-based, UI-thread-confined struct.
-    pub(crate) fn bash_cwd_handle(&self) -> Arc<Mutex<PathBuf>> {
-        Arc::clone(&self.inner.bash_cwd)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bash_cwd(&self) -> PathBuf {
-        self.inner
-            .bash_cwd
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+    /// Where every `bash` call starts.
+    pub(crate) fn bash_dir(&self) -> PathBuf {
+        self.inner.bash_dir.clone()
     }
 }
 

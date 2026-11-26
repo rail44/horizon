@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -10,10 +9,6 @@ use crate::frame::{AgentFrame, AgentFrameItem};
 
 use super::BashCompletion;
 
-fn cwd_handle(path: PathBuf) -> Arc<Mutex<PathBuf>> {
-    Arc::new(Mutex::new(path))
-}
-
 fn config() -> BashToolConfig {
     BashToolConfig::default()
 }
@@ -22,7 +17,7 @@ fn config() -> BashToolConfig {
 fn run_host(
     registration: &super::registry::Registration,
     input: &crate::tools::input::Bash,
-    cwd: &Arc<Mutex<PathBuf>>,
+    cwd: &Path,
     config: &BashToolConfig,
 ) -> crate::tools::output::Response {
     super::exec::run(
@@ -56,7 +51,7 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
 #[test]
 fn echo_round_trip_reports_output_and_exit_zero() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("echo-1".to_string());
 
     let output = run_host(
@@ -77,7 +72,7 @@ fn echo_round_trip_reports_output_and_exit_zero() {
 #[test]
 fn non_zero_exit_is_a_normal_result_carrying_the_code() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("exit-7".to_string());
 
     let output = run_host(
@@ -95,124 +90,35 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
     assert_eq!(output["exit_code"], 7);
 }
 
-// --- reported working directory ----------------------------------------
+// --- where a call runs -------------------------------------------------
 
-/// Where a call left bash, the model has to be able to see it: the directory
-/// carries forward, but a result that never said so left the next call
-/// guessing and re-pinning it.
+/// Every call starts in the same directory: a `cd` lasts for its own call,
+/// and the next one starts where the first did.
 #[test]
-fn a_call_that_changes_directory_reports_the_new_one() {
-    let base = scratch_dir("cd-report");
+fn a_cd_lasts_for_its_own_call_only() {
+    let base = scratch_dir("cd-own-call").canonicalize().unwrap();
     let sub = base.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
-    let cwd = cwd_handle(base.clone());
+    let session_id = SessionId::new();
 
-    let output = run_host(
-        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-1".into())),
+    let moved = run_host(
+        &super::registry::Registration::new(session_id, ToolCallId("cd-1".into())),
         &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
-        &cwd,
+        &base,
         &config(),
     )
     .to_json();
+    assert_eq!(moved["output"], format!("{}\n", sub.display()), "{moved}");
+    assert!(moved.get("cwd").is_none(), "{moved}");
 
-    assert_eq!(output["output"], format!("{}\n", sub.display()));
-    assert_eq!(
-        output["cwd"].as_str(),
-        Some(sub.display().to_string().as_str()),
-        "the result must name the directory the call moved to: {output}"
-    );
-}
-
-/// The report is the wrapper's `printf "$PWD"`, which runs after the
-/// command's group ends -- so a command that moves and *then* fails still
-/// reports its directory, and the next call really does start there. Gating
-/// the report on a zero exit would have hidden exactly the drift that made
-/// models re-pin the directory.
-#[test]
-fn a_failing_call_that_changed_directory_still_reports_it() {
-    let base = scratch_dir("cd-report-failure");
-    let sub = base.join("sub");
-    std::fs::create_dir_all(&sub).unwrap();
-    let cwd = cwd_handle(base.clone());
-
-    let output = run_host(
-        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-2".into())),
-        &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
-        &cwd,
-        &config(),
-    )
-    .to_json();
-
-    assert_eq!(output["exit_code"], 1);
-    assert_eq!(
-        output["cwd"].as_str(),
-        Some(sub.display().to_string().as_str()),
-        "a non-zero exit is not a reason to withhold the directory: {output}"
-    );
-    assert_eq!(*cwd.lock().unwrap(), sub);
-}
-
-/// Staying put reports nothing. `cwd` is present only on a change, so an
-/// unchanged directory neither re-writes the model's prompt cache nor makes
-/// a result differ from one recorded before the field existed.
-#[test]
-fn a_call_that_stays_put_omits_the_cwd_field() {
-    let base = scratch_dir("cd-report-unchanged");
-    let cwd = cwd_handle(base.clone());
-
-    let output = run_host(
-        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-3".into())),
+    let next = run_host(
+        &super::registry::Registration::new(session_id, ToolCallId("cd-2".into())),
         &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
-        &cwd,
+        &base,
         &config(),
     )
     .to_json();
-
-    assert!(
-        output.get("cwd").is_none(),
-        "an unchanged directory must serialize as absent, not null: {output}"
-    );
-}
-
-/// A timeout on the unsandboxed path reports no directory: the kill is a
-/// SIGKILL of the whole process group, wrapper bash included, so the
-/// `printf` that reports `$PWD` never runs. This pins that the absence is
-/// understood rather than accidental -- a timed-out call must not claim the
-/// tracked directory moved, or the next call would start where it did not.
-#[test]
-fn a_timed_out_call_reports_no_directory_when_the_kill_beat_the_report() {
-    let base = scratch_dir("cd-report-timeout");
-    let sub = base.join("sub");
-    std::fs::create_dir_all(&sub).unwrap();
-    let cwd = cwd_handle(base.clone());
-
-    let output = run_host(
-        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-4".into())),
-        &serde_json::from_value(json!({
-            "command": "cd sub && sleep 5",
-            "timeout_secs": 1
-        }))
-        .unwrap(),
-        &cwd,
-        &config(),
-    )
-    .to_json();
-
-    assert!(
-        output["message"]
-            .as_str()
-            .expect("message")
-            .contains("timed out")
-    );
-    assert!(
-        output.get("cwd").is_none(),
-        "a group SIGKILL takes the reporting wrapper with it: {output}"
-    );
-    assert_eq!(
-        *cwd.lock().unwrap(),
-        base,
-        "the tracked directory must not move on a report that never arrived"
-    );
+    assert_eq!(next["output"], format!("{}\n", base.display()), "{next}");
 }
 
 /// A per-test scratch directory under the host temp dir, created fresh so a
@@ -223,45 +129,42 @@ fn scratch_dir(label: &str) -> PathBuf {
     dir
 }
 
-/// A contained call runs the same wrapper on the same path, so a `cd`
-/// inside the sandbox reaches the model exactly like one outside it --
-/// including the failing case. Needs the sandbox runtime; where it is not
-/// installed there is no contained run to observe.
+/// A contained call starts where a host one does, and its `cd` lasts for
+/// that call only too. Needs the sandbox runtime; where it is not installed
+/// there is no contained run to observe.
 #[test]
-fn a_contained_call_reports_the_directory_it_moved_to() {
+fn a_contained_call_starts_in_its_directory_each_time() {
     if let Err(unavailable) = crate::tools::sandbox::availability() {
         eprintln!("skipping: no sandbox runtime here ({unavailable})");
         return;
     }
-    let base = scratch_dir("cd-report-contained");
+    let base = scratch_dir("cd-contained").canonicalize().unwrap();
     let sub = base.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
-    let cwd = cwd_handle(base.clone());
-    let call_id = ToolCallId("cd-contained".into());
-    let identity = crate::test_support::tool_identity(&call_id);
-
-    let output = super::exec::run(
-        &super::registry::Registration::for_execution(SessionId::new(), identity),
-        &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
-        &cwd,
-        &config(),
-        &super::exec::Execution::Contained {
-            runtime: crate::tools::sandbox::current(),
-            containment: horizon_sandbox::runtime::Containment {
-                writable: vec![base.clone()],
-                ..Default::default()
+    let contained = |id: &str, command: &str| {
+        let call_id = ToolCallId(id.into());
+        let identity = crate::test_support::tool_identity(&call_id);
+        super::exec::run(
+            &super::registry::Registration::for_execution(SessionId::new(), identity),
+            &serde_json::from_value(json!({ "command": command })).unwrap(),
+            &base,
+            &config(),
+            &super::exec::Execution::Contained {
+                runtime: crate::tools::sandbox::current(),
+                containment: horizon_sandbox::runtime::Containment {
+                    writable: vec![base.clone()],
+                    ..Default::default()
+                },
             },
-        },
-    )
-    .to_json();
+        )
+        .to_json()
+    };
 
-    assert_eq!(output["exit_code"], 1, "{output}");
-    assert_eq!(output["sandboxed"], true);
-    assert_eq!(
-        output["cwd"].as_str(),
-        Some(sub.display().to_string().as_str()),
-        "the contained path must carry the reported directory too: {output}"
-    );
+    let moved = contained("cd-contained-1", "cd sub && pwd");
+    assert_eq!(moved["sandboxed"], true, "{moved}");
+    assert_eq!(moved["output"], format!("{}\n", sub.display()), "{moved}");
+    let next = contained("cd-contained-2", "pwd");
+    assert_eq!(next["output"], format!("{}\n", base.display()), "{next}");
 }
 
 /// Git's automatic housekeeping is off in a contained call: it would write
@@ -273,7 +176,7 @@ fn a_contained_call_runs_git_without_its_automatic_housekeeping() {
         return;
     }
     let base = scratch_dir("git-housekeeping-contained");
-    let cwd = cwd_handle(base.clone());
+    let cwd = base.clone();
     let call_id = ToolCallId("git-contained".into());
     let identity = crate::test_support::tool_identity(&call_id);
 
@@ -304,7 +207,7 @@ fn a_contained_call_runs_git_without_its_automatic_housekeeping() {
 #[test]
 fn timeout_kills_the_process_and_reports_captured_partial_output() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("timeout-1".to_string());
 
     let started = Instant::now();
@@ -350,7 +253,7 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
 #[test]
 fn timeout_kill_reaches_a_setsid_grandchild() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("timeout-setsid".to_string());
     let marker =
         std::env::temp_dir().join(format!("horizon-setsid-kill-{}.txt", uuid::Uuid::new_v4()));
@@ -432,7 +335,7 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
 
     let missing_dir =
         std::env::temp_dir().join(format!("horizon-bash-missing-{}", uuid::Uuid::new_v4()));
-    let cwd = cwd_handle(missing_dir);
+    let cwd = missing_dir;
     let call_id = ToolCallId("spawn-fail-fd-check".to_string());
 
     let before = open_fd_count();
@@ -474,7 +377,7 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
 #[test]
 fn background_child_holding_the_pipe_does_not_hang_the_call() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("bg-pipe-holder".to_string());
 
     // The bash child exits immediately (bash doesn't wait for background
@@ -519,7 +422,7 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
 #[test]
 fn truncation_preserves_head_and_tail_and_spills_full_output() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("truncate-1".to_string());
 
     let output = run_host(
@@ -552,77 +455,12 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
     let _ = std::fs::remove_file(spill_path);
 }
 
-// --- cwd tracking -----------------------------------------------------
-
-#[test]
-fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
-    let session_id = SessionId::new();
-    let base = std::env::temp_dir().join(format!("horizon-bash-cwd-test-{}", uuid::Uuid::new_v4()));
-    let sub = base.join("sub");
-    std::fs::create_dir_all(&sub).expect("create test dirs");
-    let cwd = cwd_handle(base.clone());
-
-    let first = run_host(
-        &super::registry::Registration::new(session_id, ToolCallId("cwd-1".to_string())),
-        &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
-        &cwd,
-        &config(),
-    )
-    .to_json();
-    assert_eq!(first["exit_code"], 0);
-    let first_output = first["output"].as_str().expect("first output");
-    // Nothing but `pwd`'s own line: no cwd-tracking sentinel mixed in.
-    assert!(first_output.trim_end().ends_with("sub"));
-    assert_eq!(first_output, format!("{}\n", first_output.trim_end()));
-
-    let reported_cwd = first_output.trim().to_string();
-
-    let second = run_host(
-        &super::registry::Registration::new(session_id, ToolCallId("cwd-2".to_string())),
-        &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
-        &cwd,
-        &config(),
-    )
-    .to_json();
-    let second_output = second["output"].as_str().expect("second output");
-    assert_eq!(
-        second_output.trim(),
-        reported_cwd,
-        "the second call should see the cwd the first call `cd`ed into"
-    );
-
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-#[test]
-fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
-    let session_id = SessionId::new();
-    let base = std::env::temp_dir().join(format!("horizon-bash-cwd-noop-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&base).expect("create test dir");
-    // Canonicalize so the comparison survives macOS's `/var` ->
-    // `/private/var` symlink: the shell reports its PWD resolved, so an
-    // unresolved expectation fails even though the directory never
-    // changed.
-    let base = base.canonicalize().expect("canonicalize test dir");
-    let cwd = cwd_handle(base.clone());
-
-    let _ = run_host(
-        &super::registry::Registration::new(session_id, ToolCallId("cwd-noop".to_string())),
-        &serde_json::from_value(json!({ "command": "echo hi" })).unwrap(),
-        &cwd,
-        &config(),
-    );
-
-    assert_eq!(*cwd.lock().unwrap(), base);
-    let _ = std::fs::remove_dir_all(&base);
-}
-
 // --- kill registry ------------------------------------------------------
 
 #[test]
 fn kill_registry_entry_is_removed_after_normal_completion() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("registry-normal".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
 
@@ -645,7 +483,7 @@ fn kill_registry_entry_is_removed_after_normal_completion() {
 #[test]
 fn kill_registry_kills_a_running_child_and_removes_its_entry() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("registry-kill".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
 
@@ -697,7 +535,7 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
 /// still there.
 #[test]
 fn approved_bash_calls_for_the_same_session_are_serialized() {
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let session_id = SessionId::new();
     let sentinel = std::env::temp_dir().join(format!("horizon-bash-fifo-{}", uuid::Uuid::new_v4()));
     let sentinel_str = sentinel.display().to_string();
@@ -745,7 +583,7 @@ fn approved_bash_calls_for_the_same_session_are_serialized() {
 /// session's FIFO -- serialization is per-session, not global.
 #[test]
 fn bash_calls_for_different_sessions_are_not_serialized_against_each_other() {
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let (tx, rx) = crossbeam_channel::unbounded();
 
     // Each call marks that it runs, then waits for the other's mark: run
@@ -812,7 +650,7 @@ fn bash_calls_for_different_sessions_are_not_serialized_against_each_other() {
 #[test]
 fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("nice-check".to_string());
     // SAFETY: `getpriority` is a plain syscall wrapper with no
     // preconditions; `PRIO_PROCESS` + pid 0 means "the calling process".
@@ -1079,7 +917,7 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
 #[test]
 fn lossy_non_utf8_output_does_not_panic() {
     let session_id = SessionId::new();
-    let cwd = cwd_handle(std::env::temp_dir());
+    let cwd = std::env::temp_dir();
     let call_id = ToolCallId("non-utf8".to_string());
 
     let output = run_host(
@@ -1117,7 +955,7 @@ fn cancellation_prevents_a_queued_bash_call_from_starting() {
         session_id,
         call_id.clone(),
         json!({"command": "touch should-not-exist"}),
-        cwd_handle(directory.clone()),
+        directory.clone(),
         config(),
         results,
     );

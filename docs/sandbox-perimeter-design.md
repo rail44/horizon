@@ -162,7 +162,7 @@ What follows the root on activation:
 |---|---|
 | `ToolSessionState` root (`tools/state.rs`) | replaced by the prepared environment |
 | sandbox `writable_roots` | derived per call from the root |
-| `bash` tracked cwd | starts at the new root in the replacement tool state |
+| where `bash` starts | the new root, in the replacement tool state |
 | system prompt environment section | rebuilt by the provider on `EnvironmentPrepared` |
 | shell-facing root (`WorkspaceRootResolved`) | sent on activation, as at setup and attachment replay; the shell maps it to `session_info_update` and records it as the session's `directory` |
 | persisted `session_context` | `workspace_root` is the worktree and `isolated_worktree` is true from `EnvironmentActivated` onward |

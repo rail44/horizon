@@ -18,14 +18,12 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 
-#[expect(clippy::too_many_arguments)]
 pub(super) async fn run_async(
     registration: &Registration,
     command: &str,
     timeout: Duration,
     drain_grace: Duration,
     cwd: &Path,
-    cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
     execution: &Execution,
 ) -> Response {
@@ -78,13 +76,13 @@ pub(super) async fn run_async(
     };
     let raw_stderr_copy = raw_stderr.clone();
     let mut value = match outcome {
-        Ok(Ok(status)) => status_output(status, raw_stdout, raw_stderr, cwd_handle, config),
+        Ok(Ok(status)) => status_output(status, raw_stdout, raw_stderr, config),
         Ok(Err(wait_error)) => failed_output(
             &format!("failed to wait for bash: {wait_error}"),
             Some(raw_stdout),
             config,
         ),
-        Err(_) => timeout_output(timeout, raw_stdout, &raw_stderr, cwd_handle, config),
+        Err(_) => timeout_output(timeout, raw_stdout, config),
     };
 
     if !drained {
