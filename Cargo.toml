@@ -214,9 +214,20 @@ harness = false
 [lints]
 workspace = true
 
-# Debug-build CPU profiles show the hot code lives almost entirely in
-# dependencies (layout, shaping and rasterizing), so optimize external crates even in dev builds.
-# The `"*"` wildcard does not match workspace members, which keep the
-# default dev opt-level for debuggability and fast incremental builds.
+# A dependency's generic code is compiled in the crate that instantiates
+# it, at that crate's opt-level: the painting and text code a view runs
+# (blitz-paint, parley) is emitted in the workspace members, not in the
+# dependencies. At opt-level 0 the scenarios' frames
+# (`docs/performance-scenarios.md`, run with `--profile dev`) took about
+# twice as long as at 1. The cost is in the first build after a member
+# changes: about twice as long for the root package (12 s against 23 s,
+# measured 2026-11-27); the incremental builds after it took the same
+# time at either level.
+[profile.dev]
+opt-level = 1
+
+# Layout, shaping and rasterizing run in the dependencies, so they are
+# optimized fully even in dev builds. The `"*"` wildcard matches every
+# package that is not a workspace member.
 [profile.dev.package."*"]
 opt-level = 3
