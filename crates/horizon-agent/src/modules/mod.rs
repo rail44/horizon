@@ -226,6 +226,7 @@ pub(crate) fn builtin(
     role: Option<&'static RoleDefinition>,
 ) -> Vec<Arc<dyn SessionModule>> {
     let mut modules: Vec<Arc<dyn SessionModule>> = vec![
+        Arc::new(sections::PackageSections),
         Arc::new(sections::DelegationRouting),
         Arc::new(sections::RoleSection),
         Arc::new(sections::Skills),

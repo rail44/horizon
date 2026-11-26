@@ -428,10 +428,18 @@ This changes:
 
 ## System Prompt
 
-Thin, per current guidance (over-prescription measurably harms newer models):
-identity, an environment block (cwd, OS, git repo or not), a few lines of
-tool policy, the retry nudge, and an explicit caution list for destructive
-actions. No step-by-step workflows.
+The core prompt (`horizon_agent::prompt::system_prompt`) is a name ("You
+are a coding agent.") and the environment the session starts in: the
+working directory, the date, the OS, and whether it is a Git repository
+and on which branch. Everything else is a named section a module adds --
+a package adds one with `PackagesBuilder::sections`, and Horizon's own
+guidance (who the agent is in Horizon, communication norms, the caution
+list for destructive actions) is such a section, added by
+`horizon-agent-acp` (`guidance.rs`) -- and a tool's own guidance (paths,
+`$TMPDIR`, preferring the file tools to the shell) is in its description
+(board #114). No step-by-step workflows.
+
+The rest of this section records how the prompt grew before that split.
 
 **Addendum (2026-07-07).** The prompting survey
 (`docs/research/agent-prompting.md` Part 1.4) found short communication

@@ -4,6 +4,28 @@
 
 use super::{ResolveContext, Section, SessionModule};
 
+/// The sections packages add (`packages::PackagesBuilder::sections`), in the
+/// order they were added.
+pub(super) struct PackageSections;
+
+impl SessionModule for PackageSections {
+    fn sections(&self, cx: &ResolveContext<'_>) -> Vec<Section> {
+        let facts = crate::prompt::SectionFacts {
+            environment: cx.environment,
+            role_id: cx.role.map(|role| role.id),
+            trusted_project: cx.trusted_project,
+        };
+        (cx.config.packages.sections().iter())
+            .filter_map(|section| {
+                Some(Section {
+                    name: section.name(),
+                    text: section.text(&facts)?,
+                })
+            })
+            .collect()
+    }
+}
+
 /// The delegation-routing block, for a session offered `task`.
 pub(super) struct DelegationRouting;
 

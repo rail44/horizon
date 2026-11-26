@@ -30,7 +30,7 @@ pub mod modules;
 pub mod packages;
 pub mod persistence;
 pub(crate) mod policy;
-pub(crate) mod prompt;
+pub mod prompt;
 pub(crate) mod providers;
 pub mod registry;
 pub mod roles;

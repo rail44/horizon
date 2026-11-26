@@ -10,6 +10,8 @@
 //! (`horizon_agent_host::startup::spawn_resume_task`); `initialize` is
 //! answered meanwhile, and the methods that read sessions wait for it.
 
+mod guidance;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -63,11 +65,13 @@ fn wait_for_gate(gate: &Path) {
     }
 }
 
-/// The board and the wiki, rooted at `start_dir`. What they add to the
-/// agent (roles, skills and tools) is carried on the agent configuration
-/// (`RigAgentConfig::packages`) to the providers and every session.
+/// Horizon's guidance, the board and the wiki, rooted at `start_dir`.
+/// What they add to the agent (prompt sections, roles, skills and tools)
+/// is carried on the agent configuration (`RigAgentConfig::packages`) to
+/// the providers and every session.
 fn extensions(start_dir: Option<PathBuf>) -> Extensions {
     Extensions::new(vec![
+        Arc::new(guidance::HorizonGuidance),
         Arc::new(BoardFlow),
         Arc::new(WikiFlow::new(start_dir)),
     ])

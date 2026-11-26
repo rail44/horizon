@@ -2380,6 +2380,41 @@ fn test_environment(cwd: std::path::PathBuf) -> crate::prompt::SessionEnvironmen
     }
 }
 
+/// A package's prompt sections come before the built-in ones, in the order
+/// they were added, and a section with nothing to say is left out.
+#[test]
+fn a_packages_prompt_sections_come_before_the_built_in_ones() {
+    struct Named(&'static str, Option<&'static str>);
+    impl crate::prompt::PromptSection for Named {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn text(&self, _session: &crate::prompt::SectionFacts<'_>) -> Option<String> {
+            self.1.map(str::to_string)
+        }
+    }
+    let environment = test_environment(git_repo_with_agents_md("package-sections"));
+    let config = RigAgentConfig {
+        packages: crate::packages::Packages::builder()
+            .sections(vec![
+                std::sync::Arc::new(Named("first", Some("First."))),
+                std::sync::Arc::new(Named("silent", None)),
+            ])
+            .build(),
+        ..Default::default()
+    };
+
+    let sections = session_extra_sections(
+        &crate::modules::builtin(&config, None),
+        &environment,
+        &config,
+        None,
+        true,
+    );
+    assert_eq!(sections[0], "First.", "{sections:?}");
+    assert_eq!(sections[1], crate::prompt::DELEGATION_ROUTING_SECTION);
+}
+
 #[test]
 fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_role_less_session() {
     let cwd = git_repo_with_agents_md("role-less");

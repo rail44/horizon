@@ -916,32 +916,6 @@ fn system_prompt_stays_within_line_budget() {
     );
 }
 
-#[test]
-fn system_prompt_carries_communication_norms() {
-    // Model-agnostic behavior norms only (conciseness, faithful reporting,
-    // session persistence) -- see prompt.rs's module doc. This pins their
-    // presence without pinning wording.
-    let prompt = system_prompt(
-        &SessionEnvironment {
-            cwd: std::path::PathBuf::from("/repo"),
-            os: "linux",
-            git_repo: true,
-            date: "2026-11-26".into(),
-            git_branch: None,
-        },
-        &[],
-    );
-
-    let lower = prompt.to_ascii_lowercase();
-    assert!(lower.contains("be concise"));
-    assert!(lower.contains("report outcomes faithfully"));
-    assert!(lower.contains("survives application restarts"));
-    assert!(
-        !lower.contains("build or test"),
-        "the verify-after-change norm is not part of the prompt: {prompt}"
-    );
-}
-
 /// The calendar date comes from the days since the epoch, across a leap
 /// day and a year's end.
 #[test]
@@ -981,8 +955,10 @@ fn system_prompt_says_the_date_and_the_branch() {
     );
 }
 
+/// The core prompt is a name and the environment: how to talk, what to
+/// confirm, and tool policy are sections and tool descriptions now.
 #[test]
-fn system_prompt_carries_tool_policy() {
+fn the_core_prompt_is_a_name_and_the_environment() {
     let prompt = system_prompt(
         &SessionEnvironment {
             cwd: std::path::PathBuf::from("/repo"),
@@ -993,14 +969,12 @@ fn system_prompt_carries_tool_policy() {
         },
         &[],
     );
-
+    assert!(prompt.starts_with("You are a coding agent."), "{prompt}");
+    assert!(prompt.contains("Environment:"), "{prompt}");
     let lower = prompt.to_ascii_lowercase();
-    assert!(lower.contains("relative to the workspace root"));
-    assert!(prompt.contains("$TMPDIR"));
-    assert!(
-        !lower.contains("retry"),
-        "the retry nudge is not part of the prompt: {prompt}"
-    );
+    for gone in ["destructive", "concise", "$tmpdir", "horizon"] {
+        assert!(!lower.contains(gone), "`{gone}` in {prompt}");
+    }
 }
 
 /// The base prompt must not route to the delegation tool at all: that
@@ -1056,22 +1030,6 @@ fn delegation_routing_section_tells_the_two_modes_apart() {
     assert!(section.contains("Read tasks"), "{section}");
     assert!(section.contains("Write tasks"), "{section}");
     assert!(section.contains("review and merge"), "{section}");
-}
-
-#[test]
-fn system_prompt_carries_destructive_action_caution() {
-    let prompt = system_prompt(
-        &SessionEnvironment {
-            cwd: std::path::PathBuf::from("/repo"),
-            os: "linux",
-            git_repo: true,
-            date: "2026-11-26".into(),
-            git_branch: None,
-        },
-        &[],
-    );
-
-    assert!(prompt.to_ascii_lowercase().contains("destructive"));
 }
 
 #[test]

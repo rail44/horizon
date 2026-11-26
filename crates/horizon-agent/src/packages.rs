@@ -1,5 +1,5 @@
-//! What packages outside this crate add to the agent -- roles, skills and
-//! tools -- as one value the composition root (`horizon-agent-acp`) builds at
+//! What packages outside this crate add to the agent -- roles, skills,
+//! tools and prompt sections -- as one value the composition root (`horizon-agent-acp`) builds at
 //! startup and hands to what needs it: the provider registry and every
 //! session's tool state. Nothing here is global; a process that builds no
 //! `Packages` has the built-in roles, skills and tools only.
@@ -17,6 +17,7 @@ struct Inner {
     roles: Vec<&'static RoleDefinition>,
     skill_sources: Vec<&'static str>,
     tools: Vec<ExternalTool>,
+    sections: Vec<Arc<dyn crate::prompt::PromptSection>>,
 }
 
 /// Two `Packages` are equal when they are the same composition.
@@ -38,12 +39,16 @@ impl std::fmt::Debug for Packages {
                 "tools",
                 &self.0.tools.iter().map(|t| &t.id).collect::<Vec<_>>(),
             )
+            .field(
+                "sections",
+                &self.0.sections.iter().map(|s| s.name()).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
 
-/// Builds a [`Packages`]: each package adds its roles, skill sources and
-/// tools.
+/// Builds a [`Packages`]: each package adds its roles, skill sources,
+/// tools and prompt sections.
 #[derive(Default)]
 pub struct PackagesBuilder {
     inner: Inner,
@@ -108,6 +113,12 @@ impl PackagesBuilder {
         Ok(())
     }
 
+    /// Adds prompt sections, after the ones added before.
+    pub fn sections(mut self, sections: Vec<Arc<dyn crate::prompt::PromptSection>>) -> Self {
+        self.inner.sections.extend(sections);
+        self
+    }
+
     pub fn build(self) -> Packages {
         Packages(Arc::new(self.inner))
     }
@@ -148,5 +159,9 @@ impl Packages {
 
     pub(crate) fn tools(&self) -> &[ExternalTool] {
         &self.0.tools
+    }
+
+    pub(crate) fn sections(&self) -> &[Arc<dyn crate::prompt::PromptSection>] {
+        &self.0.sections
     }
 }

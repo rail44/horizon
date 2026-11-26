@@ -1,20 +1,11 @@
 //! Provider-agnostic system prompt for Horizon agent sessions.
 //!
-//! Deliberately thin, per `docs/agent-tools-design.md`'s "System Prompt"
-//! section: identity, an environment block, a few lines of tool policy, a
-//! destructive-action caution list, and — added 2026-07-07 after the
-//! prompting survey (`docs/research/agent-prompting.md` Part 1.4) showed
-//! them near-universal even among thin prompts — short communication
-//! norms. The environment block is the only part that varies per session.
-//! The norms are deliberately model-agnostic (Horizon expects to switch
-//! models, so provider-specific prompt lore is out of scope).
-//!
-//! **Workflow prescriptions.** This doc used
-//! to say "no step-by-step workflow prescriptions — over-prescription
-//! measurably harms newer models", model-agnostically (2026-07-07). That is
-//! now narrowed: a workflow prescription is permitted once it has been
-//! *measured* effective against Horizon's production models, and stays out
-//! otherwise.
+//! The core says only what every session needs and only the core knows:
+//! that the model is a coding agent, and the environment it starts in.
+//! Everything else -- how to talk, what to confirm before destroying
+//! something, who the agent is in the product around it -- is a named
+//! section a module adds, a package's [`PromptSection`] among them
+//! (`modules::sections`), and a tool's own guidance is in its description.
 //!
 //! [`system_prompt`]'s `extra_sections` parameter is a back-compatible
 //! injection point (`docs/research/agent-prompting.md` Part 2.5): an empty
@@ -145,6 +136,23 @@ pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
      search; read one to three known files yourself.\n\
      - Write tasks do a self-contained change on a branch of their own; you review and merge it.";
 
+/// Facts a [`PromptSection`] decides its text from.
+pub struct SectionFacts<'a> {
+    pub environment: &'a SessionEnvironment,
+    /// The session's role, when it has one.
+    pub role_id: Option<&'a str>,
+    /// Whether the session's project is trusted (its repository
+    /// instructions and skills are read).
+    pub trusted_project: bool,
+}
+
+/// A part of the system prompt a package adds (`packages::PackagesBuilder::
+/// sections`): its name, and its text for the session at hand, or none.
+pub trait PromptSection: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn text(&self, session: &SectionFacts<'_>) -> Option<String>;
+}
+
 /// Builds the system prompt (rig calls this the completion request's
 /// "preamble") from session environment facts, followed by any
 /// `extra_sections` appended verbatim (each separated by a blank line) — see
@@ -152,33 +160,13 @@ pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
 /// unchanged, so every existing call site keeps its exact current behavior.
 pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]) -> String {
     let mut prompt = format!(
-        "You are the Horizon agent, a coding assistant embedded in the Horizon desktop shell.\n\
-         Answer directly; use tools only when they add information you don't already have.\n\
-         Your session outlives this conversation window: it survives application restarts, and \
-         its full history is retained beyond what you can currently see.\n\
-         \n\
-         Communication:\n\
-         - Be concise; don't restate what the transcript already shows.\n\
-         - Report outcomes faithfully: state failures and partial results plainly rather than \
-         presenting them as success.\n\
+        "You are a coding agent.\n\
          \n\
          Environment:\n\
          - Working directory at session start: {cwd}\n\
          - Date at session start: {date}\n\
          - OS: {os}\n\
-         - Git repository: {git_repo}\n\
-         \n\
-         Tool policy:\n\
-         - File tools take a path that is absolute or relative to the workspace root, where \
-         bash commands start too.\n\
-         - Prefer targeted reads and searches (grep, glob, line-windowed reads) over dumping whole files.\n\
-         - Use $TMPDIR for temporary files: it is kept from one call to the next for the session.\n\
-         \n\
-         Treat these as destructive — confirm they match what the user asked before doing them:\n\
-         - Overwriting or deleting files or data.\n\
-         - Force-pushing, resetting, or discarding uncommitted changes.\n\
-         - Dropping, truncating, or migrating a database.\n\
-         - Any command whose effects reach outside the current workspace.",
+         - Git repository: {git_repo}",
         cwd = environment.cwd.display(),
         os = environment.os,
         date = environment.date,

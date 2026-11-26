@@ -31,7 +31,7 @@ MCP は範囲外とする。ツールの口(下の「ツール」)が、後か�
 
 | 段 | いつ | モジュールが返すもの | 実装 |
 |---|---|---|---|
-| 解決 | セッションの開始時と、worktree に移ったとき | system prompt の名前付きの節、提供しないツール | `SessionModule::sections`・`withholds_tool`、まとめるのは `session_prompt::resolve` |
+| 解決 | セッションの開始時と、worktree に移ったとき | system prompt の名前付きの節、提供しないツール | `SessionModule::sections`・`withholds_tool`、まとめるのは `session_prompt::resolve`。crate の外の拡張は `PackagesBuilder::sections` で節(`PromptSection`)を足し、組み込みの節より前に並ぶ |
 | context | 要求を組み立てる前に毎回 | 新しく伏せるツールの結果(元の記録は変えない) | `SessionModule::context`(`TierOneClearing`)、伏せるのはコアの `ClearingState` |
 | 可否 | tool call ごと | 許可 / 拒否(理由つき)/ 人に回す(`verdict`)。人に回す前に引き受けて後で答える(`review`) | `TierPolicy`・`JudgeModule`、門は `tools::gate` |
 | 継続 | ラウンドがツール呼び出しなしで終わったとき | 終える / 続ける(追記するメッセージつき) | `SessionModule::after_round`(`DecisionContinuation`) |
@@ -39,6 +39,8 @@ MCP は範囲外とする。ツールの口(下の「ツール」)が、後か�
 モジュールの一覧は、セッションを始めるときに agentd が一度だけ組み立て(`modules::Modules::compose`)、provider とツールの状態の両方に渡す。
 
 観測の段(イベントごとに副作用だけを持つ段)は置いていない。イベントの記録と ACP への写しはコアの持ち物で、モジュールとして差し替える必要が無い。イベントを見たいモジュールが現れたときに足す。
+
+コアの system prompt は、名乗り(「You are a coding agent.」)と、セッションを始めた環境(作業場所、日付、OS、Git とそのブランチ)だけである。話し方や壊す操作の確認など Horizon 自身の指針は、`horizon-agent-acp` が拡張として足す節で、ツールに固有の指針はツールの説明にある(ボード #114)。
 
 「解決」の段では、モジュールは節とツールを宣言するだけで、system prompt やツール一覧を直接書き換えることはしない。コアは前回のモデル呼び出しとの差分を取る。最初に送った system prompt とツール一覧はそのまま送り続け、変わった分は会話の後ろに追記するメッセージとして伝える。こうすると送る先頭部分が毎回同じになり、プロバイダのプロンプトキャッシュが効く(調査の §2「プロンプトキャッシュと先頭部分の固定」。pi・eve・Flue が同じ形をとる)。Anthropic の wire では、system・最後のツール・最後のメッセージに `cache_control` を置く(rig の `with_prompt_caching`)。
 
