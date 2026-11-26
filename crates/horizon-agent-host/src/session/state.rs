@@ -406,6 +406,8 @@ impl AgentdState {
                 model: None,
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -462,6 +464,11 @@ pub(super) struct SessionEntry {
     /// re-announced on a (re)attach. `None` for a provider that announces
     /// none (the mock provider).
     pub(super) reasoning: Option<horizon_agent::hosting::ReasoningSelection>,
+    /// The session's title (`Event::SessionTitled`), once it has one.
+    pub(super) title: Option<String>,
+    /// Whether the small model was asked for the title, so it is asked
+    /// once.
+    pub(super) title_asked: bool,
     pub(super) inbound: Sender<Command>,
     /// Requests an atomic history/live handoff from the session owner.
     /// The reply owns the subscription, so abandoning it revokes delivery.
@@ -523,6 +530,8 @@ mod tests {
                 model: None,
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -556,6 +565,8 @@ mod tests {
                 model: None,
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,

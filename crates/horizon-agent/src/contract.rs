@@ -253,6 +253,13 @@ pub enum Command {
     #[serde(skip)]
     #[schemars(skip)]
     ApplySessionModel(Box<crate::config::ResolvedModelSelection>),
+    /// The title the host made for the session, recorded on the session's
+    /// own thread. Host-internal.
+    #[serde(skip)]
+    #[schemars(skip)]
+    TitleSession {
+        title: String,
+    },
     /// Host-owned retry identity for a still-pending provider call.
     #[serde(skip)]
     #[schemars(skip)]
@@ -302,6 +309,11 @@ pub enum Event {
     /// [`Self::ModelSelected`], kept for a session started again.
     ReasoningSelected {
         level: crate::config::ReasoningLevel,
+    },
+    /// The session's title: its first message, summarized by the small
+    /// model. A session has one at most.
+    SessionTitled {
+        title: String,
     },
 
     InputOutcome(SessionInputOutcome),
@@ -465,6 +477,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Rewound { .. } => "rewound",
         Event::ModelSelected { .. } => "model_selected",
         Event::ReasoningSelected { .. } => "reasoning_selected",
+        Event::SessionTitled { .. } => "session_titled",
         Event::InputOutcome(_) => "input_outcome",
         Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
         Event::ConversationRecorded(_) => "conversation_recorded",

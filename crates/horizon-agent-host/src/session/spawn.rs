@@ -171,6 +171,8 @@ pub(super) fn spawn_session_thread_with_context(
             model,
             selection,
             reasoning: None,
+            title: None,
+            title_asked: false,
             inbound: inbound_tx,
             replay: replay_tx,
             parent_session_id: restored_worktree.as_ref().and(spawn_source_session_id),

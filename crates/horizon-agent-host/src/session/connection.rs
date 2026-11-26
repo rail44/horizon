@@ -330,6 +330,7 @@ impl Connection {
                 provider_id: entry.provider_id.clone(),
                 role_id: entry.role_id.clone(),
                 parent_session_id: entry.parent_session_id,
+                title: entry.title.clone(),
                 workspace_root: entry.workspace_root.clone(),
             })
             .collect()
@@ -345,6 +346,7 @@ impl Connection {
                 provider_id: entry.provider_id.clone(),
                 role_id: entry.role_id.clone(),
                 parent_session_id: entry.parent_session_id,
+                title: entry.title.clone(),
                 workspace_root: entry.workspace_root.clone(),
             })
     }
@@ -569,6 +571,8 @@ mod tests {
                 model: Some("stored-model".to_string()),
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -610,6 +614,8 @@ mod tests {
                 model: None,
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: Some(parent_id),
@@ -704,6 +710,8 @@ mod tests {
                 model: Some("test-model".to_string()),
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,

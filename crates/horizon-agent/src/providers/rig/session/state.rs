@@ -196,7 +196,9 @@ impl SessionLoopState {
                     }
                     self.record_active_input();
                 }
-                Command::AcknowledgeDelivery { .. } | Command::SendSessionInput { .. } => {}
+                Command::AcknowledgeDelivery { .. }
+                | Command::SendSessionInput { .. }
+                | Command::TitleSession { .. } => {}
                 Command::ActivateWorktree { base } => {
                     self.activation.push_back(base);
                     if !self.execution.has_pending_tools() {

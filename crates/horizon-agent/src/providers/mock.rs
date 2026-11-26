@@ -217,7 +217,8 @@ impl Provider for MockProvider {
                     | Command::EnvironmentActivationFailed { .. }
                     | Command::AcknowledgeDelivery { .. }
                     | Command::SendSessionInput { .. }
-                    | Command::SetSessionReasoning { .. } => {}
+                    | Command::SetSessionReasoning { .. }
+                    | Command::TitleSession { .. } => {}
                     Command::SetSessionModel { .. } | Command::ApplySessionModel(_) => {
                         let _ = events_tx.send(
                             Event::Error(crate::contract::Error {

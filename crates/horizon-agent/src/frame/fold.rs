@@ -123,6 +123,7 @@ pub(crate) fn apply_agent_event_to_frame(
         | Event::SessionResumed
         | Event::Rewound { .. }
         | Event::ModelSelected { .. }
+        | Event::SessionTitled { .. }
         | Event::ReasoningSelected { .. }
         | Event::InputQueuePaused(_)
         | Event::InputStarted(_)

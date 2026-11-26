@@ -450,7 +450,12 @@ impl Shared {
                         .workspace_root
                         .clone()
                         .unwrap_or_else(|| fallback.clone());
-                    v2::SessionInfo::new(mapping::acp_session_id(summary.session_id), cwd)
+                    let info =
+                        v2::SessionInfo::new(mapping::acp_session_id(summary.session_id), cwd);
+                    match summary.title {
+                        Some(title) => info.title(title),
+                        None => info,
+                    }
                 })
                 .collect();
             let _ = responder.respond(v2::ListSessionsResponse::new(sessions));

@@ -146,6 +146,7 @@ pub(super) fn run_session(
     );
     horizon_agent::tools::restore_file_versions(&tool_state, &history);
     let selections = super::model_selection::selections_in(&history);
+    super::title::restore(state, session_id, &history);
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_context_and_history(
             session_id,

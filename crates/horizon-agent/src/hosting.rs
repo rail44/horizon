@@ -143,6 +143,8 @@ pub struct SessionSummary {
     /// that owns a worktree reports it again after the worktree has been
     /// revalidated.
     pub parent_session_id: Option<SessionId>,
+    /// The session's title, once it has one.
+    pub title: Option<String>,
     /// This session's *actual* confinement directory, as `horizon-agent-host`
     /// itself resolved it -- the authoritative counterpart to `SessionNew.
     /// workspace_root` (that field is only ever the caller's pre-spawn

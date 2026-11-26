@@ -139,6 +139,7 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
             | Event::SessionResumed
             | Event::Rewound { .. }
             | Event::ModelSelected { .. }
+            | Event::SessionTitled { .. }
             | Event::ReasoningSelected { .. }
             | Event::InputQueuePaused(_)
             | Event::InputStarted(_)

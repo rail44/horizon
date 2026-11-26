@@ -605,3 +605,23 @@ fn choice(word: &str) -> Choice {
         name: word.into(),
     }
 }
+
+/// The title the agent gives the session is kept, and one cleared goes.
+#[test]
+fn the_agents_title_is_kept() {
+    let mut model = AgentModel::default();
+    let info = |title: Option<&str>| {
+        v2::SessionUpdate::SessionInfoUpdate(
+            v2::SessionInfoUpdate::new().title(title.map(str::to_string)),
+        )
+    };
+    apply(
+        &mut model,
+        v2::SessionUpdate::SessionInfoUpdate(v2::SessionInfoUpdate::new()),
+    );
+    assert_eq!(model.title, None);
+    apply(&mut model, info(Some("Fix the build")));
+    assert_eq!(model.title.as_deref(), Some("Fix the build"));
+    apply(&mut model, info(None));
+    assert_eq!(model.title, None);
+}

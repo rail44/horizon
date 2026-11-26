@@ -170,6 +170,8 @@ mod tests {
                 model: None,
                 selection: None,
                 reasoning: None,
+                title: None,
+                title_asked: false,
                 inbound,
                 replay,
                 parent_session_id: None,

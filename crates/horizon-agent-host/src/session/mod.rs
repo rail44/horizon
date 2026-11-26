@@ -59,6 +59,7 @@ mod state;
 mod subscription;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+mod title;
 
 pub(crate) use self::attachment::{AttachmentLease, Bootstrap};
 pub use self::connection::Connection;

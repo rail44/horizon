@@ -273,15 +273,14 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     until("the message", &|| text().contains("hello there"));
     until("the answer", &|| text().contains("ACP-OK"));
     // The tab is named for what the session is about: the message, and
-    // then the small model's summary of it (the stand-in's one reply).
+    // then the title the agent gives the session, its small model's
+    // summary of the message (the stand-in's one reply).
     let title = || {
         shell
             .model
             .with_untracked(|model| model.tab_summaries()[1].title.clone())
     };
-    until("a title", &|| {
-        ["hello there", "ACP-OK"].contains(&title().as_str())
-    });
+    until("the agent's title", &|| title() == "ACP-OK");
 
     // What the session is doing is the model's, in the runtime's words:
     // the turn ended, in the pane that has the keys, so it has been

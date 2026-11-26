@@ -42,6 +42,9 @@ pub struct AgentModel {
     /// The session's subagents with work under way, in the order they were
     /// first announced.
     pub subagents: Vec<Subagent>,
+    /// The title the agent gives the session (`session_info_update`), once
+    /// it has given one.
+    pub title: Option<String>,
     clock: TurnClock,
 }
 
@@ -148,6 +151,11 @@ impl AgentModel {
                 apply_subagent(&mut self.subagents, update)
             }
             v2::SessionUpdate::ToolCallUpdate(update) => self.apply_tool_call(update),
+            v2::SessionUpdate::SessionInfoUpdate(update) => match update.title {
+                MaybeUndefined::Value(title) => self.title = Some(title),
+                MaybeUndefined::Null => self.title = None,
+                MaybeUndefined::Undefined => {}
+            },
             v2::SessionUpdate::ConfigOptionUpdate(update) => {
                 if let Some(selection) = model_selection(&update.config_options) {
                     self.selection = Some(selection);

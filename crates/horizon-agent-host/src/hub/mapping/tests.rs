@@ -733,3 +733,23 @@ fn the_model_option_groups_the_catalog_with_the_current_model() {
         Some(&("other".to_string(), vec![id("other", "m")]))
     );
 }
+
+/// The session's title is its information: a `session_info_update` with
+/// the title.
+#[test]
+fn a_title_is_said_as_the_sessions_information() {
+    let mut mapper = mapper();
+    let said = updates(
+        &mut mapper,
+        &[Event::SessionTitled {
+            title: "Fix the build".into(),
+        }],
+    );
+    let [v2::SessionUpdate::SessionInfoUpdate(info)] = said.as_slice() else {
+        panic!("{said:?}");
+    };
+    assert_eq!(
+        info.title,
+        agent_client_protocol::schema::MaybeUndefined::Value("Fix the build".to_string())
+    );
+}

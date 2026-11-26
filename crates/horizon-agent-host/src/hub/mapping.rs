@@ -519,6 +519,11 @@ impl Mapper {
             // What the session now runs reaches the client as the applied
             // selection the provider announces.
             Event::ModelSelected { .. } | Event::ReasoningSelected { .. } => Vec::new(),
+            Event::SessionTitled { title } => {
+                vec![Outgoing::update(v2::SessionUpdate::SessionInfoUpdate(
+                    v2::SessionInfoUpdate::new().title(title.clone()),
+                ))]
+            }
             // A notice is for now, not the history: a replay leaves it out.
             Event::ProviderRateLimited(limited) => {
                 if self.replaying {

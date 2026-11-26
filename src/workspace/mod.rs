@@ -24,7 +24,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
-use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
 use horizon_config::RawConfig;
 use horizon_terminal_core::{TerminalNotification, TerminalUpdate};
 use horizon_theme_css::{Theme, themed};
@@ -276,18 +275,6 @@ pub struct Starting {
 
 use horizon_theme::spec::{FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE};
 
-/// What summarizes a first message into a title under `config`.
-fn summarizer(config: &RawConfig) -> Option<Arc<AuxiliaryClient>> {
-    let small = config.resolved_small_model().ok()?;
-    let config = AuxiliaryConfig::resolve(
-        &small.provider.vendor,
-        small.provider.base_url,
-        small.provider.api_key_env,
-        small.model,
-    );
-    Some(Arc::new(AuxiliaryClient::new(config.ok()?)))
-}
-
 /// Hands a notification a program in a terminal session asked for to the
 /// desktop.
 pub type Notify = Rc<dyn Fn(SessionId, TerminalNotification)>;
@@ -508,9 +495,6 @@ struct Kept {
     sessions: Held<TerminalPlugin>,
     agents: Held<AgentPlugin>,
     spawn_agent: Option<SpawnAgent>,
-    /// What summarizes an agent session's first message into its title:
-    /// the configuration's `small_model`, if it names a usable one.
-    summarizer: RefCell<Option<Arc<AuxiliaryClient>>>,
     /// How the sessions made and not yet started are to begin.
     starting: RefCell<HashMap<SessionId, Start>>,
     keymap: RefCell<Keymap>,
@@ -756,7 +740,6 @@ impl Shell {
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
                     }
-                    session.set_summarizer(kept.summarizer.borrow().clone());
                     // (The session as the pane shows it now: the agent
                     // names a new one after it is shown.)
                     let ask = Callback::new(move |asked| {
@@ -1287,11 +1270,6 @@ impl Shell {
         *kept.config.borrow_mut() = config.clone();
         kept.configured_size.set(theme.font_size);
         *kept.keymap.borrow_mut() = Keymap::from_config(config);
-        let summarizer = summarizer(config);
-        for session in kept.agents.borrow().values() {
-            session.set_summarizer(summarizer.clone());
-        }
-        *kept.summarizer.borrow_mut() = summarizer;
         self.theme.set(theme);
         self.reload_extensions(config.extensions.clone());
     }
@@ -1348,7 +1326,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             sessions,
             agents,
             spawn_agent: opening.agents,
-            summarizer: RefCell::new(summarizer(&opening.config)),
             starting: RefCell::default(),
             keymap: RefCell::new(Keymap::from_config(&opening.config)),
             spawn,
