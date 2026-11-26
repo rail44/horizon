@@ -869,6 +869,8 @@ fn system_prompt_reports_environment_facts() {
         cwd: std::path::PathBuf::from("/home/user/project"),
         os: "linux",
         git_repo: true,
+        date: "2026-11-26".into(),
+        git_branch: None,
     };
 
     let prompt = system_prompt(&environment, &[]);
@@ -884,6 +886,8 @@ fn system_prompt_reports_non_git_directory() {
         cwd: std::path::PathBuf::from("/tmp"),
         os: "macos",
         git_repo: false,
+        date: "2026-11-26".into(),
+        git_branch: None,
     };
 
     let prompt = system_prompt(&environment, &[]);
@@ -900,6 +904,8 @@ fn system_prompt_stays_within_line_budget() {
         cwd: std::path::PathBuf::from("/home/user/project"),
         os: "linux",
         git_repo: true,
+        date: "2026-11-26".into(),
+        git_branch: None,
     };
 
     let line_count = system_prompt(&environment, &[]).lines().count();
@@ -920,6 +926,8 @@ fn system_prompt_carries_communication_norms() {
             cwd: std::path::PathBuf::from("/repo"),
             os: "linux",
             git_repo: true,
+            date: "2026-11-26".into(),
+            git_branch: None,
         },
         &[],
     );
@@ -934,6 +942,45 @@ fn system_prompt_carries_communication_norms() {
     );
 }
 
+/// The calendar date comes from the days since the epoch, across a leap
+/// day and a year's end.
+#[test]
+fn utc_date_reads_the_calendar() {
+    use std::time::{Duration, UNIX_EPOCH};
+    let day = |days: u64| {
+        crate::prompt::utc_date(UNIX_EPOCH + Duration::from_secs(days * 86_400 + 3_600))
+    };
+    assert_eq!(day(0), "1970-01-01");
+    assert_eq!(day(11_016), "2000-02-29");
+    assert_eq!(day(11_017), "2000-03-01");
+    assert_eq!(day(20_088), "2024-12-31");
+    assert_eq!(day(20_089), "2025-01-01");
+}
+
+/// The environment says the date the session started, and the branch when
+/// there is one.
+#[test]
+fn system_prompt_says_the_date_and_the_branch() {
+    let prompt = system_prompt(
+        &SessionEnvironment {
+            cwd: std::path::PathBuf::from("/repo"),
+            os: "linux",
+            git_repo: true,
+            date: "2026-11-26".into(),
+            git_branch: Some("main".into()),
+        },
+        &[],
+    );
+    assert!(
+        prompt.contains("Date at session start: 2026-11-26"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Git repository: yes, on branch main"),
+        "{prompt}"
+    );
+}
+
 #[test]
 fn system_prompt_carries_tool_policy() {
     let prompt = system_prompt(
@@ -941,6 +988,8 @@ fn system_prompt_carries_tool_policy() {
             cwd: std::path::PathBuf::from("/repo"),
             os: "linux",
             git_repo: true,
+            date: "2026-11-26".into(),
+            git_branch: None,
         },
         &[],
     );
@@ -967,6 +1016,8 @@ fn base_prompt_carries_no_delegation_routing() {
             cwd: std::path::PathBuf::from("/repo"),
             os: "linux",
             git_repo: true,
+            date: "2026-11-26".into(),
+            git_branch: None,
         },
         &[],
     );
@@ -1014,6 +1065,8 @@ fn system_prompt_carries_destructive_action_caution() {
             cwd: std::path::PathBuf::from("/repo"),
             os: "linux",
             git_repo: true,
+            date: "2026-11-26".into(),
+            git_branch: None,
         },
         &[],
     );
@@ -1027,6 +1080,8 @@ fn system_prompt_with_no_extra_sections_matches_the_base_prompt_exactly() {
         cwd: std::path::PathBuf::from("/repo"),
         os: "linux",
         git_repo: true,
+        date: "2026-11-26".into(),
+        git_branch: None,
     };
 
     // An empty slice must reproduce today's prompt byte-for-byte -- the
@@ -1045,6 +1100,8 @@ fn system_prompt_appends_extra_sections_after_the_base_prompt() {
         cwd: std::path::PathBuf::from("/repo"),
         os: "linux",
         git_repo: true,
+        date: "2026-11-26".into(),
+        git_branch: None,
     };
     let base = system_prompt(&environment, &[]);
     let extra_sections = vec!["Repository instructions (AGENTS.md):\n\nRun the tests.".to_string()];

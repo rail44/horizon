@@ -2375,6 +2375,8 @@ fn test_environment(cwd: std::path::PathBuf) -> crate::prompt::SessionEnvironmen
         cwd,
         os: "linux",
         git_repo: true,
+        date: "2026-11-26".into(),
+        git_branch: None,
     }
 }
 

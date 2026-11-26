@@ -87,7 +87,8 @@ fn build_definitions() -> Vec<Definition> {
             "Read File".to_string(),
             legend_after(
                 &format!(
-                    "Read a known text file or a relevant line window, with line numbers. \
+                    "Read a known text file or a relevant line window, with line numbers; use \
+                it rather than cat or sed in bash. \
                 The path is absolute or relative to the workspace root. Use fs_grep to locate \
                 specific content before \
                 reading a large file, and fs_glob when the file path is unknown. Pass \
@@ -155,7 +156,9 @@ fn build_definitions() -> Vec<Definition> {
             description: legend_after(
                 "Run a shell command via `bash -c` in a fresh subprocess -- not a persistent \
                 shell. Every call runs in the session's workspace root (after `worktree_enter`, \
-                the worktree); a `cd` lasts for that call only. \
+                the worktree); a `cd` lasts for that call only. A command runs only through \
+                this tool: one written in a reply does nothing. To read or search files, prefer \
+                fs_read, fs_grep and fs_glob to cat, sed, grep or find. \
                 Runs in a sandbox: it writes only the workspace (not its `.git/hooks` or \
                 `.git/config`) and its $TMPDIR, kept for the session, and reaches only the \
                 session's allowed hosts. A blocked write fails with \"Read-only file system\"; \
