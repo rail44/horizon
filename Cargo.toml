@@ -223,11 +223,32 @@ workspace = true
 # changes: about twice as long for the root package (12 s against 23 s,
 # measured 2026-11-27); the incremental builds after it took the same
 # time at either level.
+#
+# A dev build carries the line tables a backtrace names files and lines
+# with, for the members only: the dependencies' were most of every
+# binary's size (the `horizon` binary 508 MiB against 209 MiB without
+# them, the test binaries 11.0 GiB against 3.9 GiB, measured
+# 2026-11-27), and a frame in a dependency still has its function's
+# name. A `rustflags` entry that sets `-C debuginfo` (a
+# `~/.cargo/config.toml` of the machine's) comes after these and
+# overrides them.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 # Layout, shaping and rasterizing run in the dependencies, so they are
 # optimized fully even in dev builds. The `"*"` wildcard matches every
 # package that is not a workspace member.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
+
+# A build a debugger can show the variables of:
+# `cargo build --profile debugging`, into `target/debugging`.
+[profile.debugging]
+inherits = "dev"
+opt-level = 0
+debug = true
+
+[profile.debugging.package."*"]
+debug = true
