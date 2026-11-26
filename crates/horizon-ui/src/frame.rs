@@ -77,7 +77,22 @@ pub fn frame(seconds: f64) {
 
 pub(crate) fn frame_of(shared: &Rc<Shared>, seconds: f64) {
     enter(shared);
+    lay_out(shared, seconds);
+    before_paint(shared, &mut shared.document.borrow_mut());
+    flush_pending_events(shared);
+    // What a handler wrote is laid out before it is painted.
+    if shared.written_since_layout.get() {
+        lay_out(shared, seconds);
+    }
+}
+
+/// Lays the document out, and again while the work that follows a layout
+/// wrote to it or asked for it. Blitz paints from lists a layout builds,
+/// so the document is painted only as last laid out: a node removed after
+/// a layout is still in those lists, and painting it panics (board #115).
+fn lay_out(shared: &Rc<Shared>, seconds: f64) {
     for _ in 0..LAYOUTS_A_FRAME {
+        shared.written_since_layout.set(false);
         {
             let mut document = shared.document.borrow_mut();
             restyle_on_a_new_scale(&mut document, &shared.styled_at);
@@ -85,13 +100,19 @@ pub(crate) fn frame_of(shared: &Rc<Shared>, seconds: f64) {
             round_to_device_pixels(&mut document);
             after_layout(shared, &mut document);
         }
-        if !shared.relayout.take() {
-            break;
+        let asked = shared.relayout.take();
+        if !asked && !shared.written_since_layout.get() {
+            return;
         }
         run_effects(shared);
     }
-    before_paint(shared, &mut shared.document.borrow_mut());
-    flush_pending_events(shared);
+    // Out of layouts with work still writing: laid out once more without
+    // it, so what is painted is what is there.
+    if shared.written_since_layout.replace(false) {
+        let mut document = shared.document.borrow_mut();
+        document.resolve(seconds);
+        round_to_device_pixels(&mut document);
+    }
 }
 
 /// Dispatches the events the document queued outside a dispatch: those of

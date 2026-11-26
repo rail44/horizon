@@ -134,3 +134,37 @@ fn a_signal_made_after_a_page_has_gone_is_not_that_pages_to_take_along() {
     app.run_effects();
     assert_eq!(runs.get(), before + 1);
 }
+
+/// Blitz paints from the lists a layout builds (`paint_children`). Work
+/// after a layout that removes an element, without asking for another
+/// layout, leaves the frame laid out again before it is painted: no list
+/// names a node that is gone (board #115, where painting one panicked).
+#[test]
+fn an_element_removed_after_a_layout_is_in_no_list_painted_from() {
+    let removed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let once = removed.clone();
+    let app = App::new(200, 200, "Test", "div { height: 20px; }", move || {
+        let child = el("div");
+        each_layout(move |_| {
+            if !once.replace(true) {
+                child.remove();
+            }
+        });
+        el("div").child(child)
+    });
+    app.resolve();
+    assert!(removed.get());
+    let document = app.document();
+    let document = document.borrow();
+    let mut pending = vec![document.root_node().id];
+    while let Some(id) = pending.pop() {
+        let node = document.get_node(id).expect("a node in the tree");
+        for painted in node.paint_children.borrow().iter().flatten() {
+            assert!(
+                document.get_node(*painted).is_some(),
+                "{id:?} paints {painted:?}, which is gone"
+            );
+        }
+        pending.extend(node.children.iter().copied());
+    }
+}

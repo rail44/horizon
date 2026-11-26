@@ -74,6 +74,10 @@ pub(crate) struct Shared {
     pub(crate) polled: RefCell<Vec<PollWork>>,
     /// Whether the document was written to since the shell last asked.
     pub(crate) written: Cell<bool>,
+    /// Whether the document was written to since it was last laid out:
+    /// Blitz paints from lists a layout builds, which name a node removed
+    /// after it (board #115).
+    pub(crate) written_since_layout: Cell<bool>,
     /// The style sheets already in the document, by name (`sheet.rs`).
     pub(crate) sheets: RefCell<HashSet<String>>,
     /// Whether something woke the page since the shell last asked: a
@@ -112,6 +116,7 @@ impl Shared {
             retired: RefCell::default(),
             polled: RefCell::default(),
             written: Cell::new(false),
+            written_since_layout: Cell::new(false),
             sheets: RefCell::default(),
             woken: Arc::new(AtomicBool::new(true)),
             waker: RefCell::default(),
@@ -174,6 +179,7 @@ pub(crate) fn fresh_id() -> u64 {
 pub(crate) fn with_document<R>(work: impl FnOnce(&mut BaseDocument) -> R) -> R {
     let shared = shared();
     shared.written.set(true);
+    shared.written_since_layout.set(true);
     let mut document = shared.document.borrow_mut();
     work(&mut document)
 }
@@ -220,6 +226,7 @@ impl Shared {
 pub(crate) fn write(work: impl FnOnce(&mut BaseDocument) + 'static) {
     let shared = shared();
     shared.written.set(true);
+    shared.written_since_layout.set(true);
     let Ok(mut document) = shared.document.try_borrow_mut() else {
         shared.later.borrow_mut().push(Box::new(work));
         return;
