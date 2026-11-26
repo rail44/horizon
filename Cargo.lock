@@ -2681,7 +2681,6 @@ dependencies = [
  "foldhash 0.2.0",
  "futures",
  "gethostname",
- "horizon-acp",
  "horizon-agent",
  "horizon-board",
  "horizon-cli",
@@ -2721,13 +2720,6 @@ dependencies = [
  "wasmtime-wasi",
  "wat",
  "winit",
-]
-
-[[package]]
-name = "horizon-acp"
-version = "0.1.0"
-dependencies = [
- "horizon-wire",
 ]
 
 [[package]]
@@ -2771,7 +2763,6 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "duckdb",
- "horizon-acp",
  "horizon-agent",
  "horizon-agent-host",
  "horizon-board-flow",
@@ -2795,7 +2786,6 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "crossbeam-channel",
- "horizon-acp",
  "horizon-agent",
  "horizon-config",
  "horizon-control",
@@ -2814,9 +2804,9 @@ name = "horizon-agent-probe"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
- "horizon-acp",
  "horizon-agent",
  "horizon-shell-runtime",
+ "horizon-wire",
  "serde_json",
  "tokio",
  "uuid",
@@ -2841,7 +2831,6 @@ name = "horizon-board-flow"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
- "horizon-acp",
  "horizon-agent",
  "horizon-agent-host",
  "horizon-board",
@@ -2994,7 +2983,6 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "futures",
- "horizon-acp",
  "horizon-agent",
  "horizon-control",
  "horizon-terminal-core",

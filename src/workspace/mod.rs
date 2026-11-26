@@ -298,12 +298,12 @@ pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 /// Starts an agent session.
 pub type SpawnAgent = Box<dyn Fn(Starting) -> AgentSession>;
 
-/// Switches an agent session's model and effort through the agent runtime.
-/// Each call waits for the runtime's answer, and is made off the UI thread.
+/// Sets an agent session's config options (its model, its effort) through
+/// the agent runtime. Each call waits for the runtime's answer, and is
+/// made off the UI thread.
 pub trait Models: Send + Sync {
-    fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String>;
-    /// Switches the session's reasoning effort to the level `level` names.
-    fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String>;
+    /// Sets the option `config_id` to its entry `value`.
+    fn set_option(&self, session: SessionId, config_id: &str, value: &str) -> Result<(), String>;
 }
 
 /// What is done on the UI thread with what a thread came back with.
@@ -318,9 +318,6 @@ type Asks<Of, Answer> = Arc<dyn Fn(Of) -> Result<Answer, String> + Send + Sync>;
 /// The agent runtime beyond starting a session in it: what the reload
 /// command and the board need of it.
 pub struct AgentRuntime {
-    /// Ends the runtime, starts it again and lists its sessions. Called
-    /// off the UI thread.
-    pub restart: Asks<(), Vec<RunningAgent>>,
     /// Attaches to a session of the runtime as it is now.
     pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
     /// A session of the runtime, if it has it. Called off the UI thread.
@@ -339,7 +336,6 @@ pub type ReloadTerminals = Arc<
 /// The runtime being ended and started again.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reloading {
-    Agents,
     Terminals,
 }
 
@@ -729,16 +725,6 @@ impl Shell {
                     let (root, plugin) = self.shown::<TerminalPlugin>(id, mounted);
                     shown_plugin = Some(plugin);
                     root
-                }
-                // (Its session is attached to again when the runtime is
-                // back, and the pane made again.)
-                (Some((SessionKind::Agent, _)), _)
-                    if kept.reloading.get() == Some(Reloading::Agents) =>
-                {
-                    el("div")
-                        .class(styles::EMPTY)
-                        .attr("tabindex", "0")
-                        .text("Reloading the agent runtime")
                 }
                 (Some((SessionKind::Agent, session_id)), Some(spawn)) => {
                     let running = kept.agents.borrow().get(&session_id).cloned();

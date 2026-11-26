@@ -35,13 +35,15 @@ runtime — run `cargo build --workspace` first (and again after touching
 `crates/horizon-agent`, `crates/horizon-agent-host`, the flows composed
 into it (`crates/horizon-board-flow`, `crates/horizon-wiki-flow`) or
 `crates/horizon-agent-acp`, or
-`crates/horizon-terminal-core`/`crates/horizon-terminald`), then use the
-matching reload command from the command palette to retry:
-`Reload Agent Runtime` restarts the agent's child on its current build
-(sessions resume from their logs) and leaves terminals alone, `Reload Terminal Runtime` has the terminal daemon hand its terminals
-to the rebuilt binary (`docs/terminald-handover-design.md`): the sessions,
-and whatever runs in them, go on. A terminal daemon built before handovers
-is drained instead, once, and its terminals end.
+`crates/horizon-terminal-core`/`crates/horizon-terminald`). The agent's
+child is started again whenever it ends, from the binary as it is then,
+and the panes it had open are attached to their sessions again with
+`session/resume`: to have a rebuilt agent used, end the child (`pkill -f
+horizon-agent-acp`), or restart Horizon. For the terminals, `Reload
+Terminal Runtime` from the command palette has the terminal daemon hand
+its terminals to the rebuilt binary (`docs/terminald-handover-design.md`):
+the sessions, and whatever runs in them, go on. A terminal daemon built
+before handovers is drained instead, once, and its terminals end.
 
 **A terminal protocol bump needs a full Horizon restart, not a runtime
 reload.** The terminal hub compares its protocol version in its `hello`

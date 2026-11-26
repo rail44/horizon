@@ -26,11 +26,11 @@ use std::time::Duration;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp as acp;
 use horizon_agent::contract::{
     Event, Exit, MessageRole, ProviderEvent, ProviderId, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::persistence::event_log::{Appender, WriterHandle};
+use horizon_agent_host::options as acp;
 use horizon_daemon_testkit::{
     AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound, cargo_bin_exe_var,
     resolve_daemon_binary, wait_for_exit,
@@ -1511,7 +1511,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     assert!(!outside.exists());
 }
 
-/// The server-side substance of `Reload Agent Runtime`: drain a live
+/// The server-side substance of the agent's process starting again: end a live
 /// session gracefully (not a crash), respawn against the same paths, and
 /// confirm the session survives with its transcript intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

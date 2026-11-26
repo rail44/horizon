@@ -4,8 +4,8 @@
 //! socket as the [`TerminalHub`] rtc trait — a sibling of, and completely
 //! independent from, `horizon-agentd`'s agent hub.
 //!
-//! **Why this is a separate process.** `Reload Agent Runtime` restarts the
-//! agent runtime constantly (an agent-side rebuild, a `[provider]` change);
+//! **Why this is a separate process.** The agent's process is restarted
+//! constantly (an agent-side rebuild, a `[provider]` change);
 //! before this split it also killed every PTY, taking the interactive CLIs
 //! running in them down with it, because one process hosted both. Two thirds
 //! of the daemon commits in the measured window touched only the agent side
@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// A dropped connection is *not* a session lifecycle event: the terminals
 /// keep running (process-scoped), which is the whole point — a UI restart,
-/// or a `Reload Agent Runtime` that happens to reconnect everything, finds
+/// or a restart of the agent's process that happens to reconnect everything, finds
 /// them alive and re-attaches. Only their subscriber bridges to the departed
 /// client are cleared.
 async fn handle_connection(

@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::options as acp;
 use agent_client_protocol::Client;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp as acp;
 use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd};
 use tokio::sync::{mpsc, oneshot};

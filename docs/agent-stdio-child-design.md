@@ -28,10 +28,10 @@ are.
 |---|---|---|
 | Closing the window | Agent sessions go on; board and wiki sessions keep starting | The child ends with the window; the next start resumes the sessions from their logs, a turn in flight settled as interrupted |
 | Two windows | Share one daemon | Each starts a child of its own |
-| Agent code changed | `Reload Agent Runtime` drains and respawns the daemon | `Reload Agent Runtime` closes the child's stdin and starts the rebuilt binary; panes re-attach |
+| Agent code changed | `Reload Agent Runtime` drains and respawns the daemon | The child, ended, is started again from the rebuilt binary; panes re-attach |
 | A changed `_horizon/*` extension | A full app restart | Still a full app restart: the shell's side changed too |
 | Trying the agent without the app | `horizon-agent-probe` starts a daemon of its own | Start the binary and speak ACP to it |
-| A crash in native agent code (DuckDB) | Ends agentd | Ends the child; the window and terminals go on |
+| A crash in native agent code (DuckDB) | Ends agentd | Ends the child, which is started again; the window and terminals go on |
 
 ## The shape
 
@@ -107,7 +107,25 @@ connecting to a socket or spawning a daemon. The one host tool,
 
 The line is standard ACP v2 with no extension of Horizon's: the
 `initialize` both ends send carries no `_meta.horizon`, and ACP's own
-protocol version is all they compare.
+protocol version is all they compare. The shell reads what an agent
+offers by the protocol's own marks, not by ids of Horizon's: the model and
+the effort are the config options of the `model` and `thought_level`
+categories, a model's provider is its entry's group, and an approval or a
+denial is the permission option of the kind `allow_once` or `reject_once`
+(`allow_always` or `reject_always` when it offers no one-time choice).
+The ids the agent gives them are its own
+(`horizon-agent-host`'s `options`).
+
+When the child ends after it served, the shell starts it again, with no
+command of its own (board #114): the binary as it is then, so a rebuild
+is picked up by ending the child. The sessions the panes had open are
+attached to again with `session/resume`, `session/list`'s baseline
+companion that every agent with sessions has; the panes are not made
+again, and their folds start over from the replay. Whether a session
+outlives its process is the agent's own matter: one that no longer has
+it refuses the resume, and the pane says the session cannot be reached.
+A child that ends three times in a row before it serves is given up on,
+and its panes fail.
 
 ### What the child needs that agentd had
 
@@ -268,8 +286,9 @@ Each stage ends with the gate clean.
    projection caught up on demand, and the migration.
 3. **The stdio child.** `horizon-agent-acp`; the shell starts it in
    place of connecting to agentd, over the extensions it uses now, less
-   `drain`, `watch_board` and `rewind_session`. `Reload Agent Runtime`
-   restarts the child. Tests move to `Channel::duplex()`. The probe
+   `drain`, `watch_board` and `rewind_session`. The child is started
+   again when it ends (at first by `Reload Agent Runtime`, retired with
+   the shell's ids of Horizon's after stage 5). Tests move to `Channel::duplex()`. The probe
    becomes a client of the binary.
 4. **agentd goes.** The binary, the agent half of
    `horizon-daemon-testkit`, the socket helpers only agentd used, the

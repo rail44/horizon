@@ -530,7 +530,7 @@ fn body(items: &[AgentFrameItem], view: &ToolCallView) -> Option<CallBody> {
 fn model_label(model: &AgentModel) -> String {
     let name = (model.selection.as_ref()).map(|selection| selection.model.clone());
     match (name, &model.effort) {
-        (Some(name), Some(effort)) => format!("{name} · {}", effort.current),
+        (Some(name), Some(effort)) => format!("{name} · {}", effort.current.name),
         (Some(name), None) => name,
         (None, _) => String::new(),
     }
@@ -1119,9 +1119,14 @@ mod tests {
             waiting: false,
             seen_at_epoch_ms: 1_000,
         });
+        let high = crate::agent_model::Choice {
+            value: "high".to_string(),
+            name: "high".to_string(),
+        };
         session.effort = Some(crate::agent_model::EffortSelection {
-            current: "high".to_string(),
-            choices: vec!["high".to_string()],
+            config_id: "effort".to_string(),
+            current: high.clone(),
+            choices: vec![high],
         });
         let adapted = adapt(&session, true, 64_000);
         assert_eq!(adapted.transcript.model, "gpt-x · high");

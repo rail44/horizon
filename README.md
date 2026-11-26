@@ -131,7 +131,7 @@ the palette lists it under),
 `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <occurrence-id>`, `cancel-turn <session-id>`,
-`reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
+`reload-terminal-runtime`, `reload-config`,
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.

@@ -34,7 +34,6 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Send { .. } => "send",
         Subcommand::SetModel { .. } => "set-model",
         Subcommand::SetEffort { .. } => "set-effort",
-        Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
         Subcommand::ReloadTerminalRuntime => "reload-terminal-runtime",
         Subcommand::ReloadConfig => "reload-config",
         Subcommand::OpenTerminalInSessionDirectory => "open-terminal-in-session-directory",
@@ -178,7 +177,6 @@ pub fn to_request(
             command_name,
             serde_json::json!({ "session_id": session_id, "level": level }),
         ),
-        Subcommand::ReloadAgentRuntime => invoke(command_name, serde_json::json!({})),
         Subcommand::ReloadTerminalRuntime => invoke(command_name, serde_json::json!({})),
         Subcommand::ReloadConfig => invoke(command_name, serde_json::json!({})),
         Subcommand::OpenTerminalInSessionDirectory => invoke(command_name, serde_json::json!({})),
@@ -530,8 +528,7 @@ mod tests {
     fn reload_terminal_runtime_is_a_bare_invoke_named_like_its_command() {
         // `docs/terminald-split-design.md` decision 3: the CLI verb is the
         // external name of `CommandId::ReloadTerminalRuntime`, carries no
-        // arguments, and stays distinct from `reload-agent-runtime` --
-        // one restarts the agent daemon, the other kills every PTY.
+        // arguments.
         assert_eq!(
             external_name(&Subcommand::ReloadTerminalRuntime),
             "reload-terminal-runtime"
@@ -545,11 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn reload_agent_runtime_and_reload_config_are_bare_invokes() {
-        assert_eq!(
-            external_name(&Subcommand::ReloadAgentRuntime),
-            "reload-agent-runtime"
-        );
+    fn reload_config_is_a_bare_invoke() {
         assert_eq!(external_name(&Subcommand::ReloadConfig), "reload-config");
 
         let Request::Invoke(invoke) = to_request(&Subcommand::ReloadConfig, None, None) else {

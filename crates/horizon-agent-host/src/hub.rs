@@ -1,6 +1,6 @@
 //! The host's ACP v2 agent side (`docs/agent-stdio-child-design.md`): one
-//! JSON-RPC connection, multiplexing every session by its id, plus the `_horizon/*` extension methods
-//! (`crates/horizon-acp`). The process-lifetime state stays in
+//! JSON-RPC connection, multiplexing every session by its id. The
+//! process-lifetime state stays in
 //! [`crate::session::AgentdState`], reached through the same
 //! [`Connection`] seam.
 //!
@@ -20,12 +20,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::options as acp;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client, Error};
-use horizon_acp as acp;
 use horizon_agent::config::ReasoningLevel;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::hosting::SessionNew;

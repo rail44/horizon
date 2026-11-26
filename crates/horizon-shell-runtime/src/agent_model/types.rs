@@ -203,26 +203,56 @@ pub struct AgentFrame {
     pub settled_revision: u64,
 }
 
-/// The session's selected provider and model, read from the `model` config
-/// option.
+/// The session's model, read from its config option of the `model`
+/// category: the current entry's name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelSelection {
     pub model: String,
 }
 
-/// What the `model` config option offers: each provider's models, in the
-/// option's order, and which one is current.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModelChoices {
-    pub current: Option<(String, String)>,
-    pub providers: Vec<(String, Vec<String>)>,
+/// One entry of a select config option: the value id sent to choose it,
+/// and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub value: String,
+    pub name: String,
 }
 
-/// The session's reasoning effort, read from the `effort` config option:
-/// the level its requests send, and the levels its model takes, lowest
-/// first, as their words (`"none"`, `"minimal"`, ... `"max"`).
+/// A group of a select config option's entries, by its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceGroup {
+    pub name: String,
+    pub entries: Vec<Choice>,
+}
+
+/// What the session's config option of the `model` category offers: its
+/// id, its entries in their groups in the option's order (an option
+/// without groups is one group, named as the option is), and the current
+/// entry's value id.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelChoices {
+    pub config_id: String,
+    pub current: Option<String>,
+    pub groups: Vec<ChoiceGroup>,
+}
+
+impl ModelChoices {
+    /// The current entry, and the name of its group.
+    pub fn current(&self) -> Option<(&str, &Choice)> {
+        let current = self.current.as_deref()?;
+        (self.groups.iter()).find_map(|group| {
+            (group.entries.iter())
+                .find(|entry| entry.value == current)
+                .map(|entry| (group.name.as_str(), entry))
+        })
+    }
+}
+
+/// The session's reasoning effort, read from its config option of the
+/// `thought_level` category: its id, the current entry, and the entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffortSelection {
-    pub current: String,
-    pub choices: Vec<String>,
+    pub config_id: String,
+    pub current: Choice,
+    pub choices: Vec<Choice>,
 }

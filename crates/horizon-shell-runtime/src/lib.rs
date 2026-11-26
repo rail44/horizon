@@ -49,8 +49,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use horizon_acp::SessionId;
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_wire::SessionId;
 use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
 
@@ -348,46 +348,28 @@ impl AgentdHandle {
         })?
     }
 
-    /// Call from a background task: the effort picker's confirm path, as
-    /// [`Self::set_session_model`] is the model picker's. `level` is the
-    /// level's word.
-    pub fn set_session_effort(&self, session_id: SessionId, level: String) -> Result<(), String> {
-        request(&self.ops, |reply| agent::Op::SetSessionEffort {
-            session_id,
-            level,
-            reply,
-        })
-        .map_err(|error| {
-            error.describe(
-                "session runtime stopped before the effort switch was sent",
-                "the effort switch did not complete in time",
-                "session runtime stopped before the effort switch completed",
-            )
-        })?
-    }
-
-    /// Call from a background task: the model picker's confirm path. The
-    /// reply carries the daemon's synchronous validation error (unknown
-    /// provider, unknown session, empty model id) when the switch was
-    /// rejected; on success the `config_option_update` on the attachment's
-    /// event channel is the UI's confirmation.
-    pub fn set_session_model(
+    /// Call from a background task: sets the session's config option
+    /// `config_id` to the entry `value` (the model picker's and the effort
+    /// picker's confirm path). The reply carries the agent's refusal; on
+    /// success the `config_option_update` on the attachment's event channel
+    /// is the UI's confirmation.
+    pub fn set_session_option(
         &self,
         session_id: SessionId,
-        provider: String,
-        model: String,
+        config_id: String,
+        value: String,
     ) -> Result<(), String> {
-        request(&self.ops, |reply| agent::Op::SetSessionModel {
+        request(&self.ops, |reply| agent::Op::SetSessionOption {
             session_id,
-            provider,
-            model,
+            config_id,
+            value,
             reply,
         })
         .map_err(|error| {
             error.describe(
-                "session runtime stopped before the model switch was sent",
-                "the model switch did not complete in time",
-                "session runtime stopped before the model switch completed",
+                "session runtime stopped before the option was sent",
+                "setting the option did not complete in time",
+                "session runtime stopped before the option was set",
             )
         })?
     }

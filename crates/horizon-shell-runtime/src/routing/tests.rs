@@ -95,14 +95,14 @@ async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() 
     let id = SessionId::new();
     let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
-    let _old_inbound = routes.open_inbound(old).unwrap();
+    let _old_inbound = open_inbound(&routes, old).unwrap();
     let (new_tx, _new_rx) = tokio::sync::mpsc::channel(16);
     let current = routes.register_agent(id, new_tx);
     assert!(
-        routes.open_inbound(old).is_none(),
+        open_inbound(&routes, old).is_none(),
         "a replaced route opens nothing"
     );
-    let mut inbound = routes.open_inbound(current).unwrap();
+    let mut inbound = open_inbound(&routes, current).unwrap();
     routes.agent_failed(old, "stale failure".into());
     routes.deliver_to(old, Inbound::Opened(Ok(())));
     assert!(inbound.try_recv().is_err());
@@ -192,7 +192,7 @@ async fn a_session_the_agent_named_is_routed_by_its_name_until_attached_by_it() 
     let (started, named) = (SessionId::new(), SessionId::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     let first = routes.register_agent(started, tx);
-    let mut first_inbound = routes.open_inbound(first).unwrap();
+    let mut first_inbound = open_inbound(&routes, first).unwrap();
     routes.name(started, named);
     assert_eq!(
         news_rx.try_recv().unwrap(),
@@ -216,7 +216,7 @@ async fn a_session_the_agent_named_is_routed_by_its_name_until_attached_by_it() 
     // Attached by its name, the later attachment is the one told.
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     let second = routes.register_agent(named, tx);
-    let mut second_inbound = routes.open_inbound(second).unwrap();
+    let mut second_inbound = open_inbound(&routes, second).unwrap();
     routes.route_update(update());
     assert!(matches!(second_inbound.try_recv(), Ok(Inbound::Event(_))));
     assert!(first_inbound.try_recv().is_err());
@@ -224,4 +224,16 @@ async fn a_session_the_agent_named_is_routed_by_its_name_until_attached_by_it() 
     // The started attachment's end lets go of the name.
     routes.unregister_agent(first);
     assert_eq!(routes.agent_of(started), started);
+}
+
+/// Opens `key`'s inbound queue as a first opening does, with commands of
+/// its own.
+fn open_inbound(
+    routes: &AgentRoutes,
+    key: RouteKey<SessionId>,
+) -> Option<tokio::sync::mpsc::UnboundedReceiver<Inbound>> {
+    let (_, commands) = tokio::sync::mpsc::unbounded_channel();
+    routes
+        .open_inbound(key, Some(commands))
+        .map(|(inbound, _)| inbound)
 }

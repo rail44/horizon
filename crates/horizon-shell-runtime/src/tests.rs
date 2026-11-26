@@ -320,7 +320,7 @@ async fn recv_output(events: crossbeam_channel::Receiver<TerminalUpdate>, bytes:
 /// separate route tables, so an agent-runtime failure never reaches a
 /// terminal pane. Before the split one `Routes` served both, and
 /// `connection_failed` fanned a `TerminalUpdate::Error` out to every
-/// terminal — exactly the coupling `Reload Agent Runtime` made visible.
+/// terminal.
 #[test]
 fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
     let (workspace_roots, _workspace_roots_rx) = unbounded();
@@ -331,7 +331,7 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
     let (terminal_event_tx, terminal_event_rx) = unbounded();
     let (command_tx, _command_rx) = tokio::sync::mpsc::unbounded_channel();
     terminal_routes.register_terminal(terminal_id, terminal_event_tx, command_tx);
-    let agent_id = horizon_acp::SessionId::new();
+    let agent_id = horizon_wire::SessionId::new();
     let (agent_event_tx, mut agent_event_rx) = tokio::sync::mpsc::channel(16);
     agent_routes.register_agent(agent_id, agent_event_tx);
 

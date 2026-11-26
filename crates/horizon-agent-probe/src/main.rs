@@ -27,11 +27,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use horizon_acp::SessionId;
 use horizon_shell_runtime::agent_model::{
     AgentEvent, AgentFrameItem, AgentModel, Permission, ToolCall,
 };
 use horizon_shell_runtime::{AgentCommand, AgentUpdate, AgentdHandle, AttachmentState};
+use horizon_wire::SessionId;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: horizon-agent-probe [--dir DIR] [--home DIR] \

@@ -1197,8 +1197,11 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     });
 }
 
+/// `set-model` and `set-effort` name an entry of the session's own config
+/// options: for a session this shell has not attached to, there is none,
+/// and the runtime is not asked. (Over a real agent: `tests/agentd.rs`.)
 #[test]
-fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
+fn the_control_plane_sets_no_option_of_a_session_it_has_not_attached() {
     use std::sync::{Arc, Mutex, mpsc};
 
     use horizon::workspace::Models;
@@ -1206,37 +1209,26 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
     use horizon_control::host::executor::ControlRequest;
 
     #[derive(Default)]
-    struct Switched(Mutex<Vec<(SessionId, String, String)>>);
-    impl Models for Switched {
-        fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
-            if model == "gone" {
-                return Err("no such model".to_string());
-            }
-            (self.0.lock().unwrap()).push((session, provider.to_string(), model.to_string()));
-            Ok(())
-        }
-        fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String> {
-            (self.0.lock().unwrap()).push((session, "effort".to_string(), level.to_string()));
+    struct Asked(Mutex<Vec<String>>);
+    impl Models for Asked {
+        fn set_option(&self, _: SessionId, config_id: &str, value: &str) -> Result<(), String> {
+            (self.0.lock().unwrap()).push(format!("{config_id}={value}"));
             Ok(())
         }
     }
 
-    let switched = Arc::new(Switched::default());
+    let asked = Arc::new(Asked::default());
     let opened = open_with(Opening {
-        models: Some(switched.clone()),
+        models: Some(asked.clone()),
         ..Opening::default()
     });
-    let session = SessionId::new();
-    let ask = |model: &str| {
+    let session = SessionId::new().as_uuid().to_string();
+    let ask = |command: &str, args: serde_json::Value| {
         let (reply, answer) = mpsc::channel();
         opened.shell.control_answering(
             &ControlRequest::Invoke(Invoke {
-                command: "set-model".to_string(),
-                args: serde_json::json!({
-                    "session_id": session.as_uuid().to_string(),
-                    "provider": "local",
-                    "model": model,
-                }),
+                command: command.to_string(),
+                args,
             }),
             move |body| reply.send(body).unwrap(),
         );
@@ -1244,39 +1236,17 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("an answer")
     };
-    let answer = ask("small");
-    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
-    assert_eq!(
-        *switched.0.lock().unwrap(),
-        [(session, "local".to_string(), "small".to_string())]
+    let answer = ask(
+        "set-model",
+        serde_json::json!({ "session_id": session, "provider": "local", "model": "small" }),
     );
-    // What the runtime refuses is the answer.
-    let answer = ask("gone");
-    std::assert_matches!(
-        &answer, EnvelopeBody::Error(error) if error.message.contains("no such model"),
-        "{answer:?}"
+    std::assert_matches!(answer, EnvelopeBody::Error(_), "{answer:?}");
+    let answer = ask(
+        "set-effort",
+        serde_json::json!({ "session_id": session, "level": "high" }),
     );
-
-    // The effort goes the same way.
-    let (reply, answer) = mpsc::channel();
-    opened.shell.control_answering(
-        &ControlRequest::Invoke(Invoke {
-            command: "set-effort".to_string(),
-            args: serde_json::json!({
-                "session_id": session.as_uuid().to_string(),
-                "level": "high",
-            }),
-        }),
-        move |body| reply.send(body).unwrap(),
-    );
-    let answer = answer
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("an answer");
-    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
-    assert_eq!(
-        switched.0.lock().unwrap().last(),
-        Some(&(session, "effort".to_string(), "high".to_string()))
-    );
+    std::assert_matches!(answer, EnvelopeBody::Error(_), "{answer:?}");
+    assert!(asked.0.lock().unwrap().is_empty());
 }
 
 /// A file whose making tells a program in a test's terminal to go on:

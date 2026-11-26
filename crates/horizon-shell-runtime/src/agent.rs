@@ -18,7 +18,7 @@ use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{
     Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
-use horizon_acp::{EFFORT_CONFIG_ID, MODEL_CONFIG_ID, SessionId};
+use horizon_wire::SessionId;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -65,16 +65,11 @@ pub(super) enum Op {
     SessionList {
         reply: crossbeam_channel::Sender<Result<Vec<SessionSummary>, String>>,
     },
-    SetSessionModel {
+    SetSessionOption {
         session_id: SessionId,
-        provider: String,
-        model: String,
-        reply: crossbeam_channel::Sender<Result<(), String>>,
-    },
-    SetSessionEffort {
-        session_id: SessionId,
-        /// The level's word.
-        level: String,
+        config_id: String,
+        /// The value id of the entry chosen.
+        value: String,
         reply: crossbeam_channel::Sender<Result<(), String>>,
     },
 }
@@ -83,10 +78,16 @@ pub(super) enum Op {
 /// its logs and exit before it is killed.
 const CHILD_EXIT: Duration = Duration::from_secs(5);
 
+/// How many times in a row a child may end before it served, before the
+/// runtime gives up starting it.
+const START_ATTEMPTS: u32 = 3;
+
 /// Starts `binary` as the agent runtime's child and serves `ops` over its
-/// standard input and output until the runtime is stopped or the child
-/// ends. Its standard error is appended to `log`; its own children reach
-/// this Horizon through `HORIZON_SOCKET`, the control socket.
+/// standard input and output until the runtime is stopped. A child that
+/// ends after it served is started again, and the sessions it had open are
+/// attached to again with `session/resume`, which an agent that no longer
+/// has one refuses; one that keeps ending before it serves is given up on. Its standard error is appended to `log`; its own children
+/// reach this Horizon through `HORIZON_SOCKET`, the control socket.
 pub(super) fn spawn(
     binary: PathBuf,
     control_socket: PathBuf,
@@ -110,46 +111,64 @@ pub(super) fn spawn(
             }
         };
         runtime.block_on(async {
-            let mut child = match start_child(&binary, &control_socket, &log) {
-                Ok(child) => child,
-                Err(error) => {
-                    routes.connection_failed(error);
+            let (mut served, mut failed_starts) = (false, 0);
+            loop {
+                let mut child = match start_child(&binary, &control_socket, &log) {
+                    Ok(child) => child,
+                    Err(error) => {
+                        routes.connection_failed(error);
+                        return;
+                    }
+                };
+                let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
+                    routes.connection_failed("the agent runtime has no standard streams".into());
                     return;
+                };
+                let end = run_stream(
+                    output,
+                    input,
+                    &mut ops,
+                    routes.clone(),
+                    control.clone(),
+                    served,
+                )
+                .await;
+                // The child's input is closed with the connection: it
+                // flushes its logs and ends.
+                if tokio::time::timeout(CHILD_EXIT, child.wait())
+                    .await
+                    .is_err()
+                {
+                    eprintln!("the agent runtime did not end in {CHILD_EXIT:?}; killing it");
+                    let _ = child.kill().await;
                 }
-            };
-            let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
-                routes.connection_failed("the agent runtime has no standard streams".into());
-                return;
-            };
-            let end = run_stream(output, input, &mut ops, routes.clone(), control.clone()).await;
-            match end {
-                StreamEnd::Cancelled | StreamEnd::Dropped => {
-                    routes.connection_failed("the agent runtime stopped".to_string());
+                match end {
+                    StreamEnd::Cancelled | StreamEnd::Dropped => {
+                        routes.connection_failed("the agent runtime stopped".to_string());
+                        return;
+                    }
+                    // It served, and ended: another is started.
+                    StreamEnd::EstablishedFailure(error) => {
+                        eprintln!("the agent runtime ended: {error}; starting it again");
+                        routes.connection_lost();
+                        (served, failed_starts) = (true, 0);
+                    }
+                    StreamEnd::GenerationMismatch { message }
+                    | StreamEnd::VersionRejected { message }
+                    | StreamEnd::PreHelloTransport { message }
+                    | StreamEnd::Silence { message }
+                    | StreamEnd::Fatal(message) => {
+                        eprintln!("the agent runtime did not start: {message}");
+                        failed_starts += 1;
+                        if failed_starts >= START_ATTEMPTS {
+                            routes.connection_failed(message);
+                            return;
+                        }
+                        routes.connection_lost();
+                        tokio::time::sleep(Duration::from_millis(200 * u64::from(failed_starts)))
+                            .await;
+                    }
                 }
-                StreamEnd::GenerationMismatch { message }
-                | StreamEnd::VersionRejected { message } => {
-                    eprintln!("{message}");
-                    routes.connection_failed(format!(
-                        "{message} -- restart Horizon to use the rebuilt agent"
-                    ));
-                }
-                StreamEnd::PreHelloTransport { message } | StreamEnd::Silence { message } => {
-                    eprintln!("the agent runtime did not start: {message}");
-                    routes.connection_failed(message);
-                }
-                StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
-                    eprintln!("the agent runtime stopped: {error}");
-                    routes.connection_failed(error);
-                }
-            }
-            // The child's input is closed with the connection: it flushes
-            // its logs and ends.
-            if tokio::time::timeout(CHILD_EXIT, child.wait())
-                .await
-                .is_err()
-            {
-                eprintln!("the agent runtime did not end in {CHILD_EXIT:?}; killing it");
-                let _ = child.kill().await;
             }
         });
         control.mark_stopped();
@@ -205,6 +224,7 @@ pub(super) fn spawn_test_stream<S>(
             &mut ops,
             routes.clone(),
             control.clone(),
+            false,
         ));
         match end {
             StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
@@ -289,12 +309,15 @@ fn client(
         )
 }
 
+/// Serves `ops` over one connection. `again`: an earlier connection served
+/// and ended, and the sessions it had open are opened again on this one.
 async fn run_stream<R, W>(
     read: R,
     write: W,
     ops: &mut UnboundedReceiver<Op>,
     routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
+    again: bool,
 ) -> StreamEnd
 where
     R: AsyncRead + Send + 'static,
@@ -314,6 +337,12 @@ where
                 return Ok(error.into());
             }
             main_control.mark_established();
+            // The sessions the connection before had open are opened again.
+            if again {
+                for route in main_routes.reopened() {
+                    resume(&main_routes, route, &connection, None);
+                }
+            }
             let end = loop {
                 tokio::select! {
                     _ = main_control.cancelled() => break StreamEnd::Cancelled,
@@ -435,95 +464,68 @@ fn handle_op(
                 return;
             };
             let request = v2::NewSessionRequest::new(workspace_root);
-            open_session(routes, route, connection, commands, |connection, routes| {
-                connection
-                    .build_session_from(request)
-                    .start_session()
-                    .on_receiving_result(async move |result| {
-                        match result {
-                            Ok(opened) => {
-                                let response = &opened.response;
-                                // The agent names the session.
-                                if let Some(named) = parse_session_id(&response.session_id) {
-                                    routes.name(route.session_id(), named);
-                                }
-                                routes.deliver_to(
-                                    route,
-                                    Inbound::Event(AgentEvent::Update(Box::new(
-                                        v2::SessionUpdate::ConfigOptionUpdate(
-                                            v2::ConfigOptionUpdate::new(
-                                                response.config_options.clone(),
+            open_session(
+                routes,
+                route,
+                connection,
+                Some(commands),
+                |connection, routes| {
+                    connection
+                        .build_session_from(request)
+                        .start_session()
+                        .on_receiving_result(async move |result| {
+                            match result {
+                                Ok(opened) => {
+                                    let response = &opened.response;
+                                    // The agent names the session.
+                                    if let Some(named) = parse_session_id(&response.session_id) {
+                                        routes.name(route.session_id(), named);
+                                    }
+                                    routes.deliver_to(
+                                        route,
+                                        Inbound::Event(AgentEvent::Update(Box::new(
+                                            v2::SessionUpdate::ConfigOptionUpdate(
+                                                v2::ConfigOptionUpdate::new(
+                                                    response.config_options.clone(),
+                                                ),
                                             ),
-                                        ),
-                                    ))),
-                                );
-                                routes.deliver_to(route, Inbound::Opened(Ok(())));
+                                        ))),
+                                    );
+                                    routes.deliver_to(route, Inbound::Opened(Ok(())));
+                                }
+                                Err(error) => {
+                                    let error =
+                                        format!("failed to start the agent session: {error}");
+                                    routes.not_named(route.session_id(), error.clone());
+                                    routes.deliver_to(route, Inbound::Opened(Err(error)))
+                                }
                             }
-                            Err(error) => {
-                                let error = format!("failed to start the agent session: {error}");
-                                routes.not_named(route.session_id(), error.clone());
-                                routes.deliver_to(route, Inbound::Opened(Err(error)))
-                            }
-                        }
-                        Ok(())
-                    })
-            });
+                            Ok(())
+                        })
+                },
+            );
         }
-        Op::AttachAgent { route, commands } => {
-            let request =
-                v2::ResumeSessionRequest::new(acp_session_id(route.session_id()), resume_cwd())
-                    .replay_from(v2::ReplayFrom::from(v2::ReplayFromStart::new()));
-            open_session(routes, route, connection, commands, |connection, routes| {
-                connection
-                    .resume_session_from(request)
-                    .start_session()
-                    .on_receiving_result(async move |result| {
-                        let opened = result.map(|_| ()).map_err(|error| {
-                            format!("failed to attach to the agent session: {error}")
-                        });
-                        routes.deliver_to(route, Inbound::Opened(opened));
-                        Ok(())
-                    })
-            });
-        }
+        Op::AttachAgent { route, commands } => resume(routes, route, connection, Some(commands)),
         Op::SessionList { reply } => {
             let connection = connection.clone();
             tokio::spawn(async move {
                 let _ = reply.send(list_sessions(&connection).await);
             });
         }
-        Op::SetSessionModel {
+        Op::SetSessionOption {
             session_id,
-            provider,
-            model,
+            config_id,
+            value,
             reply,
         } => {
             let request = v2::SetSessionConfigOptionRequest::new(
                 acp_session_id(routes.agent_of(session_id)),
-                MODEL_CONFIG_ID,
-                v2::SessionConfigOptionValue::id(horizon_acp::encode_model_option_id(
-                    &provider, &model,
-                )),
+                config_id,
+                v2::SessionConfigOptionValue::id(value),
             );
             let request = send(connection, request);
             tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "set session model", request).await;
-                let _ = reply.send(result.map(|_| ()));
-            });
-        }
-        Op::SetSessionEffort {
-            session_id,
-            level,
-            reply,
-        } => {
-            let request = v2::SetSessionConfigOptionRequest::new(
-                acp_session_id(routes.agent_of(session_id)),
-                EFFORT_CONFIG_ID,
-                v2::SessionConfigOptionValue::id(level),
-            );
-            let request = send(connection, request);
-            tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "set session effort", request).await;
+                let result = call(OP_TIMEOUT, "set session option", request).await;
                 let _ = reply.send(result.map(|_| ()));
             });
         }
@@ -533,17 +535,45 @@ fn handle_op(
 /// Opens `route`'s inbound queue, sends the opening request `send`
 /// builds (whose response callback must deliver [`Inbound::Opened`]), and
 /// starts the attachment task.
+/// Attaches to a session the agent has, with `session/resume` and its
+/// history replayed from the start. `commands`: the pane's, when the
+/// session is first attached to; none when it is attached to again.
+fn resume(
+    routes: &Arc<AgentRoutes>,
+    route: RouteKey<SessionId>,
+    connection: &V2ConnectionTo<Agent>,
+    commands: Option<UnboundedReceiver<AgentCommand>>,
+) {
+    let request = v2::ResumeSessionRequest::new(
+        acp_session_id(routes.agent_of(route.session_id())),
+        resume_cwd(),
+    )
+    .replay_from(v2::ReplayFrom::from(v2::ReplayFromStart::new()));
+    open_session(routes, route, connection, commands, |connection, routes| {
+        connection
+            .resume_session_from(request)
+            .start_session()
+            .on_receiving_result(async move |result| {
+                let opened = result
+                    .map(|_| ())
+                    .map_err(|error| format!("failed to attach to the agent session: {error}"));
+                routes.deliver_to(route, Inbound::Opened(opened));
+                Ok(())
+            })
+    });
+}
+
 fn open_session(
     routes: &Arc<AgentRoutes>,
     route: RouteKey<SessionId>,
     connection: &V2ConnectionTo<Agent>,
-    commands: UnboundedReceiver<AgentCommand>,
+    commands: Option<UnboundedReceiver<AgentCommand>>,
     send: impl FnOnce(
         &V2ConnectionTo<Agent>,
         Arc<AgentRoutes>,
     ) -> Result<(), agent_client_protocol::Error>,
 ) {
-    let Some(inbound) = routes.open_inbound(route) else {
+    let Some((inbound, commands)) = routes.open_inbound(route, commands) else {
         return;
     };
     if let Err(error) = send(connection, routes.clone()) {

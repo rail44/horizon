@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::options as acp;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp as acp;
 use horizon_agent::contract::{
     self, ApprovalRequest, Event, MessageRole, SessionId, SessionState, TurnEndReason,
 };
@@ -175,18 +175,16 @@ fn model_entry(provider: &str, model: &str, name: String) -> v2::SessionConfigSe
 }
 
 /// The `model` config option at `(provider, model)`: the catalog's models,
-/// a group for each provider, with the current one always among them. With
-/// no catalog, the current model alone.
+/// a group for each provider, each entry named by its model, with the
+/// current one always among them. With no catalog, the current model alone,
+/// in its provider's group.
 pub(super) fn model_option(
     catalog: &[ModelGroup],
     provider: &str,
     model: &str,
 ) -> v2::SessionConfigOption {
     let value = acp::encode_model_option_id(provider, model);
-    let option = if catalog.is_empty() {
-        let entry = model_entry(provider, model, format!("{provider} · {model}"));
-        v2::SessionConfigOption::select(acp::MODEL_CONFIG_ID, "Model", value, vec![entry])
-    } else {
+    let option = {
         let mut groups: Vec<v2::SessionConfigSelectGroup> = (catalog.iter())
             .map(|group| {
                 let mut entries: Vec<_> = (group.models.iter())

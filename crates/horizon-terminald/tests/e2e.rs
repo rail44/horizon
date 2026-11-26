@@ -8,7 +8,7 @@
 //! v17 terminald split (`docs/terminald-split-design.md`), plus the split's
 //! **acceptance test**:
 //! [`an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable`]
-//! spawns *both* daemons and proves that the whole `Reload Agent Runtime`
+//! spawns *both* daemons and proves that the whole agent restart
 //! sequence — graceful drain, process exit, respawn — leaves a terminald
 //! session attachable with its retained frame and a live shell. That is the
 //! property the split exists for, and the one thing no unit test can show.
@@ -525,7 +525,7 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
 
 /// **The terminald split's acceptance property**
 /// (`docs/terminald-split-design.md` decisions 1-2): the exact sequence
-/// `Reload Agent Runtime` performs against the agent runtime — close its
+/// a restart of the agent's process goes through — close its
 /// connection, wait for the process to exit, start a fresh one on the same
 /// session logs — leaves a `horizon-terminald` session fully usable: still listed,
 /// still attachable, its retained frame intact, and its shell still alive
@@ -557,7 +557,7 @@ async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable(
     .await;
     let _ = screen_until(&mut attachment, "BEFORE_AGENT_RELOAD").await;
 
-    // `Reload Agent Runtime`, faithfully: close the agent runtime's
+    // The agent's restart, faithfully: close the agent runtime's
     // connection, confirm the process is gone, then start a fresh one on the
     // same session logs.
     drop(agentd.connect().await);

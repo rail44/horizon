@@ -1,5 +1,6 @@
-//! The ids Horizon's agent and shell agree on inside standard ACP: the
-//! session config options' ids and values, and the permission options'.
+//! The ids this agent gives its session config options and their values,
+//! and its permission options. A client reads the options by their
+//! categories, groups and kinds; it needs none of these.
 
 /// `configId` of the session config option that selects the provider and
 /// model (`category: model`, `select`).

@@ -1,23 +1,18 @@
-//! `Reload Agent Runtime` and `Reload Terminal Runtime`: one runtime ended
-//! and started again, the other left as it is
-//! (`docs/terminald-split-design.md`).
-//!
-//! Either runtime keeps its sessions, so they are attached to again and
-//! their panes drawn again: the agent runtime's are its own to keep, the
-//! terminal runtime's are handed to its next image
-//! (`docs/terminald-handover-design.md`). A workspace the reload leaves
-//! with no tab gets one new terminal.
+//! `Reload Terminal Runtime`: the terminal runtime's sessions handed to its
+//! next image (`docs/terminald-handover-design.md`), attached to again and
+//! their panes drawn again. A workspace the reload leaves with no tab gets
+//! one new terminal. The agent's child is started again with the window
+//! instead.
 
 use std::rc::Rc;
 
 use horizon_shell_runtime::TerminalSessionHandle;
-use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
+use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::{SessionId, SessionInventory, SessionKind, Workspace};
 use uuid::Uuid;
 
 use super::held::{inventory_of, take_in};
-use super::{Modal, Reloading, RunningAgent, Shell};
-use crate::agent::plugin::AgentPlugin;
+use super::{Reloading, Shell};
 use crate::plugin::Running;
 use crate::terminal::Session;
 use crate::terminal::plugin::TerminalPlugin;
@@ -64,74 +59,6 @@ impl Shell {
         }
         self.rearranged
             .update(|times| *times = times.wrapping_add(1));
-    }
-
-    pub(super) fn reload_agent_runtime(&self) {
-        let kept = self.kept();
-        let Some(reload) = kept.agent_runtime.as_ref() else {
-            return;
-        };
-        if kept.reloading.get().is_some() {
-            return;
-        }
-        kept.reloading.set(Some(Reloading::Agents));
-        // The session the model picker is for, and the list it shows, go
-        // with the runtime.
-        if matches!(
-            self.modal.get_untracked(),
-            Some(Modal::Models(_) | Modal::Effort(_))
-        ) {
-            self.modal.set(None);
-        }
-        // The sessions are let go of without a word to them: they are
-        // the runtime's to keep. Their panes say what is going on.
-        kept.agents.borrow_mut().clear();
-        kept.looked_for.borrow_mut().clear();
-        self.remake_panes(SessionKind::Agent);
-        let restart = reload.restart.clone();
-        self.in_background(
-            move || restart(()),
-            |shell, running| shell.agents_reloaded(running),
-        );
-    }
-
-    fn agents_reloaded(&self, running: Result<Vec<RunningAgent>, String>) {
-        let kept = self.kept();
-        let Some(reload) = kept.agent_runtime.as_ref() else {
-            return;
-        };
-        let running = match running {
-            Ok(running) => running,
-            // The panes stay as they are; the command can be given again.
-            Err(error) => {
-                eprintln!("failed to list agent sessions: {error}");
-                kept.reloading.set(None);
-                return;
-            }
-        };
-        // The workspace goes by what the runtime has now, as it does when
-        // the shell opens.
-        // (The terminals are as the workspace has them: their runtime was
-        // not asked.)
-        self.model.update(|model| {
-            let terminals = sessions_of(model, SessionKind::Terminal);
-            let inventory = SessionInventory::new(
-                (terminals.into_iter())
-                    .map(|session| (SessionKind::Terminal, session))
-                    .chain(inventory_of::<AgentPlugin>(&running)),
-            );
-            if let Err(error) = take_in(model, inventory, &running) {
-                eprintln!("failed to bring the workspace to the agent runtime: {error}");
-            }
-        });
-        let known = (self.model).with_untracked(|model| sessions_of(model, SessionKind::Agent));
-        for session in known {
-            let attached = Rc::new((reload.attach)(session));
-            kept.agents.borrow_mut().insert(session, attached);
-        }
-        kept.reloading.set(None);
-        kept.refocus.set(true);
-        self.remake_panes(SessionKind::Agent);
     }
 
     pub(super) fn reload_terminal_runtime(&self) {

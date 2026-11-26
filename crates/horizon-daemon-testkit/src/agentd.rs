@@ -303,8 +303,8 @@ impl AgentdProcess {
     }
 
     /// Brings an identical process back up at exactly the same socket, event
-    /// log and DuckDB projection -- what `Reload Agent Runtime` does once
-    /// the drain has completed and the old process is gone.
+    /// log and DuckDB projection -- what the shell does when the agent's
+    /// process has ended.
     pub fn respawn_at_same_paths(mut self) -> Self {
         // The first must have let the sessions go: its client closed the
         // connection, and it flushes and ends.

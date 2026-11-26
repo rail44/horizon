@@ -1,10 +1,9 @@
 //! The vocabulary between `horizon-agent-host`'s session threads and the
 //! connections serving them: the per-attachment event stream
 //! ([`AgentWireEvent`]), the spawn request and listing summaries, and the
-//! host-tool exchange. `horizon-agent-host` maps these onto ACP v2 and the
-//! `_horizon/*` extensions (`crates/horizon-acp`,
-//! `docs/acp-agentd-design.md`); none of these types is serialized onto a
-//! socket itself.
+//! host-tool exchange. `horizon-agent-host` maps these onto ACP v2
+//! (`docs/agent-stdio-child-design.md`); none of these types is serialized
+//! onto a socket itself.
 //!
 //! This module references [`crate::contract`] types (`Event`, `SessionId`,
 //! ...); nothing in `contract` references this module.

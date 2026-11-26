@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from the live wire types (the LogHub rtc trait and the IngestRequest/IngestReply vocabularies). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp -p horizon-terminal-core -p horizon-board wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
+  "$comment": "Generated from the live wire types (the LogHub rtc trait and the IngestRequest/IngestReply vocabularies). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-terminal-core -p horizon-board wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
   "$defs": {
     "ClientHello": {
       "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection (the hub's `hello`).",

@@ -2,7 +2,7 @@
 //! child, the sessions started in it, and what the runtime tells the shell
 //! outside any session (the directory a session came to work in).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
@@ -20,13 +20,11 @@ enum Told {
 
 type Wake = Arc<Mutex<Option<Waker>>>;
 
-/// The runtime in use: `Reload Agent Runtime` puts another in its place.
+/// The agent runtime: `horizon-agent-acp`, the shell's child, for as long
+/// as the window lives.
 #[derive(Clone)]
 pub struct Agentd {
-    handle: Arc<Mutex<AgentdHandle>>,
-    control_socket: PathBuf,
-    log: PathBuf,
-    tell: Sender<Told>,
+    handle: AgentdHandle,
     told: Receiver<Told>,
     waker: Wake,
 }
@@ -39,10 +37,7 @@ impl Agentd {
         let waker = Wake::default();
         let handle = Self::connect(control_socket, log, &tell, &waker);
         Self {
-            handle: Arc::new(Mutex::new(handle)),
-            control_socket: control_socket.to_path_buf(),
-            log: log.to_path_buf(),
-            tell,
+            handle,
             told,
             waker,
         }
@@ -78,9 +73,8 @@ impl Agentd {
         handle
     }
 
-    /// The runtime as it is now.
     pub fn handle(&self) -> AgentdHandle {
-        self.handle.lock().unwrap().clone()
+        self.handle.clone()
     }
 
     /// The sessions the runtime has.
@@ -95,24 +89,10 @@ impl Agentd {
             .collect())
     }
 
-    /// Ends the runtime and starts one in its place, which resumes the
-    /// sessions from their logs. Waits for the first to be gone: it flushes
-    /// its logs as it ends.
-    pub fn restart(&self) {
-        let old = self.handle();
-        old.stop_and_wait();
-        let new = Self::connect(&self.control_socket, &self.log, &self.tell, &self.waker);
-        *self.handle.lock().unwrap() = new;
-    }
-
-    /// This runtime as the shell's reload command and board use it.
+    /// This runtime as the board uses it.
     pub fn runtime(&self) -> AgentRuntime {
-        let (restarted, attached, found) = (self.clone(), self.clone(), self.clone());
+        let (attached, found) = (self.clone(), self.clone());
         AgentRuntime {
-            restart: Arc::new(move |()| {
-                restarted.restart();
-                restarted.running()
-            }),
             attach: Box::new(move |session| attached.attach(session)),
             find: Arc::new(move |session| {
                 Ok(found
@@ -162,11 +142,7 @@ impl Agentd {
 pub struct RuntimeModels(pub Agentd);
 
 impl Models for RuntimeModels {
-    fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
-        (self.0.handle()).set_session_model(session, provider.to_string(), model.to_string())
-    }
-
-    fn set_effort(&self, session: SessionId, level: &str) -> Result<(), String> {
-        (self.0.handle()).set_session_effort(session, level.to_string())
+    fn set_option(&self, session: SessionId, config_id: &str, value: &str) -> Result<(), String> {
+        (self.0.handle()).set_session_option(session, config_id.to_string(), value.to_string())
     }
 }

@@ -40,14 +40,12 @@ command_ids! {
         CloseActiveTab,
         TerminateActiveSession,
         TerminateAllDetachedSessions,
-        ReloadAgentRuntime,
         /// Has `horizon-terminald` hand every terminal to its next image,
         /// the rebuilt binary (`docs/terminald-handover-design.md`):
         /// picking up a `horizon-terminal-core` change replaces the code
         /// of the process that owns every PTY, and the terminal sessions
-        /// -- and whatever runs inside them -- go on. Separate from
-        /// [`CommandId::ReloadAgentRuntime`] (`docs/terminald-split-design.md`
-        /// decision 3).
+        /// -- and whatever runs inside them -- go on. The agent's child is
+        /// started again with the window instead (board #114).
         ReloadTerminalRuntime,
         ReloadConfig,
         /// Puts the workspace in one of the configuration's layouts
@@ -208,13 +206,6 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Terminate every detached session (not attached to any pane).",
             ),
-            CommandId::ReloadAgentRuntime => (
-                "reload-agent-runtime",
-                "Reload Agent Runtime",
-                CommandCategory::Agent,
-                "Restart the agent runtime (horizon-agent-acp) on its current build; \
-                          agent sessions resume from their logs. Terminals are unaffected.",
-            ),
             CommandId::ReloadTerminalRuntime => (
                 "reload-terminal-runtime",
                 "Reload Terminal Runtime",
@@ -300,7 +291,6 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::SplitUp => state.visible_pane_count > 0,
         CommandId::NewTab
         | CommandId::FocusNextPane
-        | CommandId::ReloadAgentRuntime
         | CommandId::ReloadTerminalRuntime
         | CommandId::ReloadConfig
         | CommandId::ApplyLayout
@@ -366,7 +356,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 21);
+        assert_eq!(commands.len(), 20);
         let ids: Vec<CommandId> = commands.iter().map(|command| command.id).collect();
         assert_eq!(
             ids,
@@ -382,7 +372,6 @@ mod tests {
                 CommandId::CloseActiveTab,
                 CommandId::TerminateActiveSession,
                 CommandId::TerminateAllDetachedSessions,
-                CommandId::ReloadAgentRuntime,
                 CommandId::ReloadTerminalRuntime,
                 CommandId::ReloadConfig,
                 CommandId::ApplyLayout,
@@ -399,12 +388,12 @@ mod tests {
         assert_eq!(commands[4].title, "New Tab…");
         assert_eq!(commands[5].title, "Move to Tab…");
         assert_eq!(commands[9].title, "Terminate Active Session");
-        assert_eq!(commands[12].title, "Reload Terminal Runtime");
-        assert_eq!(commands[13].title, "Reload Config");
-        assert_eq!(commands[14].title, "Apply Layout…");
-        assert_eq!(commands[15].title, "Reset Extensions");
-        assert_eq!(commands[17].title, "Open Board");
-        assert_eq!(commands[20].title, "Reset Font Size");
+        assert_eq!(commands[11].title, "Reload Terminal Runtime");
+        assert_eq!(commands[12].title, "Reload Config");
+        assert_eq!(commands[13].title, "Apply Layout…");
+        assert_eq!(commands[14].title, "Reset Extensions");
+        assert_eq!(commands[16].title, "Open Board");
+        assert_eq!(commands[19].title, "Reset Font Size");
     }
 
     #[test]
@@ -417,10 +406,8 @@ mod tests {
 
     #[test]
     fn only_session_ending_commands_are_marked_destructive() {
-        // Neither reload ends a session: `ReloadAgentRuntime` resumes the
-        // agent sessions from the event log, and `ReloadTerminalRuntime`
-        // hands the terminals to the daemon's next image
-        // (`docs/terminald-handover-design.md`).
+        // `ReloadTerminalRuntime` ends no session: it hands the terminals
+        // to the daemon's next image (`docs/terminald-handover-design.md`).
         for command in core_commands() {
             let expected = matches!(
                 command.id,

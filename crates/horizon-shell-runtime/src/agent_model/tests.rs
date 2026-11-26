@@ -1,6 +1,5 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::MODEL_CONFIG_ID;
 use serde_json::json;
 
 use super::*;
@@ -53,16 +52,8 @@ fn permission(occurrence: &str) -> Permission {
         "session",
         "Run bash",
         vec![
-            v2::PermissionOption::new(
-                horizon_acp::PERMISSION_OPTION_APPROVE,
-                "Approve",
-                v2::PermissionOptionKind::AllowOnce,
-            ),
-            v2::PermissionOption::new(
-                horizon_acp::PERMISSION_OPTION_DENY,
-                "Deny",
-                v2::PermissionOptionKind::RejectOnce,
-            ),
+            v2::PermissionOption::new("approve", "Approve", v2::PermissionOptionKind::AllowOnce),
+            v2::PermissionOption::new("deny", "Deny", v2::PermissionOptionKind::RejectOnce),
         ],
     )
     .subject(v2::RequestPermissionSubject::ToolCall(Box::new(
@@ -343,31 +334,30 @@ fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
     assert_eq!(model.frame.settled_revision, settled + 3);
 }
 
+/// The model is read from the option of the `model` category, whatever its
+/// id: its groups, its entries' names and value ids, and the current one.
 #[test]
-fn the_model_option_sets_the_selection() {
+fn the_model_option_sets_the_selection_and_the_choices() {
     let mut model = AgentModel::default();
-    let value = horizon_acp::encode_model_option_id("openrouter", "anthropic/claude-x");
-    let entry =
-        v2::SessionConfigSelectOption::new(value.clone(), "openrouter · anthropic/claude-x");
-    let option = v2::SessionConfigOption::select(MODEL_CONFIG_ID, "Model", value, vec![entry]);
-    apply(
-        &mut model,
-        v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![option])),
-    );
-    assert_eq!(
-        model.selection,
-        Some(ModelSelection {
-            model: "anthropic/claude-x".into(),
-        })
-    );
-
-    let value = horizon_acp::encode_model_option_id("default", "gpt-5");
+    let group = |name: &str, entries: &[(&str, &str)]| {
+        v2::SessionConfigSelectGroup::new(
+            name,
+            name,
+            (entries.iter())
+                .map(|(value, name)| v2::SessionConfigSelectOption::new(*value, *name))
+                .collect::<Vec<_>>(),
+        )
+    };
     let option = v2::SessionConfigOption::select(
-        MODEL_CONFIG_ID,
+        "llm",
         "Model",
-        value.clone(),
-        vec![v2::SessionConfigSelectOption::new(value, "default · gpt-5")],
-    );
+        "id-2",
+        vec![
+            group("Fast", &[("id-1", "small")]),
+            group("Deep", &[("id-2", "large"), ("id-3", "larger")]),
+        ],
+    )
+    .category(v2::SessionConfigOptionCategory::Model);
     apply(
         &mut model,
         v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![option])),
@@ -375,9 +365,36 @@ fn the_model_option_sets_the_selection() {
     assert_eq!(
         model.selection,
         Some(ModelSelection {
-            model: "gpt-5".into(),
+            model: "large".into(),
         })
     );
+    assert_eq!(model.models.config_id, "llm");
+    let named: Vec<(&str, Vec<&str>)> = (model.models.groups.iter())
+        .map(|group| {
+            let entries = group.entries.iter().map(|entry| entry.name.as_str());
+            (group.name.as_str(), entries.collect())
+        })
+        .collect();
+    assert_eq!(
+        named,
+        [("Fast", vec!["small"]), ("Deep", vec!["large", "larger"])]
+    );
+    let (group, entry) = model.models.current().expect("the current entry");
+    assert_eq!((group, entry.value.as_str()), ("Deep", "id-2"));
+
+    // An option of no category is not the model.
+    let other = v2::SessionConfigOption::select(
+        "model",
+        "Model",
+        "x",
+        vec![v2::SessionConfigSelectOption::new("x", "x")],
+    );
+    let mut model = AgentModel::default();
+    apply(
+        &mut model,
+        v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![other])),
+    );
+    assert_eq!(model.selection, None);
 }
 
 #[test]
@@ -386,8 +403,8 @@ fn the_effort_option_sets_the_effort_and_its_absence_clears_it() {
     let entries = ["low", "high"]
         .map(|level| v2::SessionConfigSelectOption::new(level, level))
         .to_vec();
-    let option =
-        v2::SessionConfigOption::select(horizon_acp::EFFORT_CONFIG_ID, "Effort", "high", entries);
+    let option = v2::SessionConfigOption::select("effort", "Effort", "high", entries)
+        .category(v2::SessionConfigOptionCategory::ThoughtLevel);
     apply(
         &mut model,
         v2::SessionUpdate::ConfigOptionUpdate(v2::ConfigOptionUpdate::new(vec![option])),
@@ -395,8 +412,9 @@ fn the_effort_option_sets_the_effort_and_its_absence_clears_it() {
     assert_eq!(
         model.effort,
         Some(EffortSelection {
-            current: "high".into(),
-            choices: vec!["low".into(), "high".into()],
+            config_id: "effort".into(),
+            current: choice("high"),
+            choices: vec![choice("low"), choice("high")],
         })
     );
     // A model that takes no effort comes without the option.
@@ -579,4 +597,11 @@ fn a_failed_call_whose_approval_was_denied_reads_as_denied() {
     );
     let views = build_tool_call_views(&model.frame.items);
     assert_eq!(views[0].outcome, Some(ToolOutcome::Denied));
+}
+
+fn choice(word: &str) -> Choice {
+    Choice {
+        value: word.into(),
+        name: word.into(),
+    }
 }

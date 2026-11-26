@@ -45,7 +45,7 @@ use crate::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate}
 ///
 /// **This slice is append-only** (`docs/terminald-split-design.md` decision
 /// 5): `horizon-terminald` is rarely restarted
-/// — a running one keeps its PTYs across every `Reload Agent Runtime` — so a
+/// — a running one keeps its PTYs across every restart of the agent's process — so a
 /// reshape of [`TerminalHub`], [`TerminalAttachment`], or this crate's
 /// vocabularies is a *heavy* change that kills every live shell on the next
 /// `Reload Terminal Runtime`. Evolve by appending (new methods, new
@@ -148,8 +148,7 @@ pub struct TerminalAttachment {
 /// The terminal hub — `horizon-terminald`'s whole rtc surface
 /// (`docs/terminald-split-design.md` decision 1). Carved off the agent
 /// daemon's hub in v17 so terminal hosting lives in its own rarely-restarted process:
-/// `Reload Agent Runtime` drains the *agent* daemon and never touches a
-/// PTY, while `Reload Terminal Runtime` has this one hand its terminals to
+/// a restart of the agent's process never touches a PTY, while `Reload Terminal Runtime` has this one hand its terminals to
 /// its next image ([`hand_over`](TerminalHub::hand_over)).
 ///
 /// **Append-only from here on** (design decision 5): every

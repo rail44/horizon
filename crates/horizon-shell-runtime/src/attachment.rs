@@ -11,10 +11,10 @@ use agent_client_protocol::Agent;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionId};
+use horizon_wire::SessionId;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use super::routing::{AgentRoutes, RouteKey, cancelled_permission};
+use super::routing::{AgentRoutes, Commands, RouteKey, cancelled_permission};
 use crate::agent_model::{AgentEvent, Permission, PermissionDecision, ToolCallIdentity};
 
 /// How long an attachment may stay short of ready.
@@ -106,21 +106,54 @@ pub(super) fn acp_session_id(session_id: SessionId) -> v2::SessionId {
     v2::SessionId::new(session_id.as_uuid().to_string())
 }
 
+/// A permission request an attachment holds: who answers it, and the
+/// options it offers.
+struct Held {
+    identity: ToolCallIdentity,
+    responder: Responder<v2::RequestPermissionResponse>,
+    options: Vec<v2::PermissionOption>,
+}
+
 /// The permission requests an attachment holds, oldest first.
 #[derive(Default)]
-struct HeldPermissions(Vec<(ToolCallIdentity, Responder<v2::RequestPermissionResponse>)>);
+struct HeldPermissions(Vec<Held>);
 
 impl HeldPermissions {
-    fn take(
-        &mut self,
-        identity: &ToolCallIdentity,
-    ) -> Option<Responder<v2::RequestPermissionResponse>> {
-        let index = self.0.iter().position(|(held, _)| held == identity)?;
-        Some(self.0.remove(index).1)
+    fn take(&mut self, identity: &ToolCallIdentity) -> Option<Held> {
+        let index = self.0.iter().position(|held| held.identity == *identity)?;
+        Some(self.0.remove(index))
     }
 
     fn drain(&mut self) -> Vec<(ToolCallIdentity, Responder<v2::RequestPermissionResponse>)> {
-        std::mem::take(&mut self.0)
+        (self.0.drain(..))
+            .map(|held| (held.identity, held.responder))
+            .collect()
+    }
+}
+
+/// The option of `kinds`' first kind a request offers, by its kind: a
+/// one-time choice before one remembered.
+fn option_of(
+    options: &[v2::PermissionOption],
+    kinds: [v2::PermissionOptionKind; 2],
+) -> Option<&v2::PermissionOptionId> {
+    (kinds.iter())
+        .find_map(|kind| options.iter().find(|option| option.kind == *kind))
+        .map(|option| &option.option_id)
+}
+
+/// Answers a held request with the option of `kinds`, or as cancelled when
+/// it offers none. Whether it was answered with one.
+fn answer(held: Held, kinds: [v2::PermissionOptionKind; 2]) -> bool {
+    match option_of(&held.options, kinds) {
+        Some(option) => {
+            let _ = held.responder.respond(selected(&option.0, None));
+            true
+        }
+        None => {
+            let _ = held.responder.respond(cancelled_permission());
+            false
+        }
     }
 }
 
@@ -140,8 +173,11 @@ pub(super) async fn run(
     route: RouteKey<SessionId>,
     connection: V2ConnectionTo<Agent>,
     mut inbound: UnboundedReceiver<Inbound>,
-    mut commands: UnboundedReceiver<AgentCommand>,
+    commands: Commands,
 ) {
+    // Taken before anything is told the pane: an attachment on the
+    // connection before ends, and says so, first.
+    let mut commands = commands.lock_owned().await;
     let mut phase = AttachmentState::Restoring;
     let mut held = HeldPermissions::default();
     let restore_timeout = tokio::time::sleep(RESTORE_TIMEOUT);
@@ -180,9 +216,13 @@ pub(super) async fn run(
                         continue;
                     };
                     if let Some(previous) = held.take(&permission.identity) {
-                        let _ = previous.respond(cancelled_permission());
+                        let _ = previous.responder.respond(cancelled_permission());
                     }
-                    held.0.push((permission.identity.clone(), responder));
+                    held.0.push(Held {
+                        identity: permission.identity.clone(),
+                        responder,
+                        options: request.options.clone(),
+                    });
                     let event = AgentEvent::PermissionRequested(permission);
                     if !routes.send_agent(route, AgentUpdate::Event(Box::new(event))).await {
                         break;
@@ -237,6 +277,7 @@ struct Session {
 impl Session {
     /// Carries out one pane command. `false` once the pane is gone.
     async fn command(&self, command: AgentCommand, held: &mut HeldPermissions) -> bool {
+        use v2::PermissionOptionKind::{AllowAlways, AllowOnce, RejectAlways, RejectOnce};
         let session_id = acp_session_id(self.routes.agent_of(self.route.session_id()));
         match command {
             AgentCommand::Prompt { text } => {
@@ -260,22 +301,28 @@ impl Session {
                 true
             }
             AgentCommand::Approve { identity } => match held.take(&identity) {
-                Some(responder) => {
-                    let _ = responder.respond(selected(PERMISSION_OPTION_APPROVE, None));
-                    self.resolved(identity, PermissionDecision::Approved).await
+                Some(request) => {
+                    let decision = match answer(request, [AllowOnce, AllowAlways]) {
+                        true => PermissionDecision::Approved,
+                        false => PermissionDecision::Cancelled,
+                    };
+                    self.resolved(identity, decision).await
                 }
                 None => true,
             },
             // A reason is the next message: the agent hears it after the
             // denial.
             AgentCommand::Deny { identity, reason } => match held.take(&identity) {
-                Some(responder) => {
-                    let _ = responder.respond(selected(PERMISSION_OPTION_DENY, None));
+                Some(request) => {
+                    let decision = match answer(request, [RejectOnce, RejectAlways]) {
+                        true => PermissionDecision::Denied,
+                        false => PermissionDecision::Cancelled,
+                    };
                     if let Some(reason) = reason.filter(|reason| !reason.trim().is_empty()) {
                         let request = v2::PromptRequest::new(session_id, vec![reason.into()]);
                         self.report_failure("prompt", self.connection.send_request(request));
                     }
-                    self.resolved(identity, PermissionDecision::Denied).await
+                    self.resolved(identity, decision).await
                 }
                 None => true,
             },

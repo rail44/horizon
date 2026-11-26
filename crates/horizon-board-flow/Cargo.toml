@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-horizon-acp = { path = "../horizon-acp" }
 horizon-agent = { path = "../horizon-agent" }
 horizon-agent-host = { path = "../horizon-agent-host" }
 horizon-board = { path = "../horizon-board" }

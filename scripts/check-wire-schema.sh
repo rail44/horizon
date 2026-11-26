@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Merge-time skew-discipline check for the wire-schema artifacts
 # (docs/remoc-adoption-design.md §4 rule 3, second half). The nextest drift
-# tests (crates/horizon-acp/tests/wire_schema.rs,
-# crates/horizon-terminal-core/tests/wire_schema.rs,
+# tests (crates/horizon-terminal-core/tests/wire_schema.rs,
 # crates/horizon-board/tests/wire_schema.rs) already guarantee each
 # committed artifact matches its live wire types; this script compares them
 # against the merge-base's copies and fails if any change is a *reshape*

@@ -13,7 +13,7 @@ use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
-use horizon_acp::{PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, SessionId};
+use horizon_wire::SessionId;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -292,18 +292,16 @@ impl FakeAgentd {
         let mut request = v2::RequestPermissionRequest::new(
             acp_session_id(session_id),
             "Run bash",
-            vec![
-                v2::PermissionOption::new(
-                    PERMISSION_OPTION_APPROVE,
-                    "Approve",
-                    v2::PermissionOptionKind::AllowOnce,
-                ),
-                v2::PermissionOption::new(
-                    PERMISSION_OPTION_DENY,
-                    "Deny",
-                    v2::PermissionOptionKind::RejectOnce,
-                ),
-            ],
+            // Ids of the agent's own: the client chooses by kind, a
+            // one-time choice before one remembered.
+            [
+                ("yes-always", v2::PermissionOptionKind::AllowAlways),
+                ("yes-once", v2::PermissionOptionKind::AllowOnce),
+                ("no-always", v2::PermissionOptionKind::RejectAlways),
+                ("no-once", v2::PermissionOptionKind::RejectOnce),
+            ]
+            .map(|(id, kind)| v2::PermissionOption::new(id, id, kind))
+            .to_vec(),
         );
         request.subject = Some(v2::RequestPermissionSubject::ToolCall(Box::new(
             v2::ToolCallPermissionSubject::new(v2::ToolCallUpdate::new(
@@ -437,9 +435,8 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     assert!(fake.calls.try_recv().is_err());
 }
 
-/// `Reload Agent Runtime`'s client-runtime core: stopping the agent runtime
-/// reaches only its own connection, and the terminal session keeps
-/// streaming frames.
+/// Stopping the agent runtime reaches only its own connection, and the
+/// terminal session keeps streaming frames.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
@@ -780,7 +777,7 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
         })
         .unwrap();
     let (option, _) = selected(answer.block_task().await.unwrap());
-    assert_eq!(option, PERMISSION_OPTION_APPROVE);
+    assert_eq!(option, "yes-once");
     assert_eq!(
         resolved(next_agent_event(&mut handle).await),
         (identity("occ-1"), PermissionDecision::Approved)
@@ -796,7 +793,7 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
         })
         .unwrap();
     let (option, _) = selected(answer.block_task().await.unwrap());
-    assert_eq!(option, PERMISSION_OPTION_DENY);
+    assert_eq!(option, "no-once");
     // The reason is the next message.
     let AgentCall::Prompt(text) = fake.next_call().await else {
         panic!("the reason as a prompt");

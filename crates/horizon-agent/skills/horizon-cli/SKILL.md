@@ -84,9 +84,6 @@ truth for which ones are destructive in this build.
 
 ## Runtime/config reload
 
-- `horizon reload-agent-runtime` — respawn `horizon-agentd` (recovers from a
-  stale/rebuilt agent binary). Terminal sessions are unaffected: they live in
-  a separate daemon (`docs/terminald-split-design.md`).
 - `horizon reload-terminal-runtime` — have `horizon-terminald`, the daemon
   that owns every PTY, hand its terminals to the rebuilt binary: the
   sessions, and whatever runs inside them, go on. Only needed after a

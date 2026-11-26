@@ -46,7 +46,7 @@ pub struct ModelGroup {
 pub struct AgentdState {
     /// The live provider registry, behind a `Mutex` so a `Reload Config`
     /// can rebuild it in place (see [`Self::reload_provider_config`])
-    /// without a `Reload Agent Runtime`. Read at session-spawn time
+    /// without the process starting again. Read at session-spawn time
     /// (see `run`/`spawn`/`resume`); a running session keeps its spawn-time
     /// config for its whole lifetime, so a swap takes effect for the next
     /// session, not a running turn.
@@ -121,8 +121,8 @@ pub struct AgentdState {
     /// project root is not in this list gets embedded skills only and no
     /// `AGENTS.md`/`CLAUDE.md` instructions; behavioral defense (sandbox,
     /// approval) is unaffected. Same lifecycle as `project_grants`:
-    /// startup-only, refreshed on `Reload Agent Runtime` (agent-process respawn),
-    /// not live-reloadable. Empty at every test construction site.
+    /// startup-only, refreshed when the agent's process starts again, not
+    /// live-reloadable. Empty at every test construction site.
     pub(super) trusted_projects: Vec<std::path::PathBuf>,
     /// What a `task` child starts with of its requester's authority, left
     /// by the requester's host just before it spawns the child and taken
@@ -268,8 +268,7 @@ impl AgentdState {
     /// Re-reads `[[providers]]` from the config file at [`Self::config_path`] and
     /// rebuilds both the provider registry and the agent config in place, so
     /// a `Reload Config` can push a model/base-URL change to the running agent process
-    /// without a `Reload Agent Runtime` (which exists for agent-code reloads
-    /// -- see `docs/terminald-split-design.md` decision 2). A read/parse error
+    /// without the process starting again. A read/parse error
     /// leaves the previous registry untouched and is returned to the caller;
     /// a missing file resolves to built-in defaults, the same outcome
     /// `Reload Config`'s UI-side `horizon_config::reload` already yields for

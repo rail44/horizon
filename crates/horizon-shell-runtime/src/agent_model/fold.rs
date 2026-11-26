@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use horizon_acp::{EFFORT_CONFIG_ID, MODEL_CONFIG_ID, decode_model_option_id};
 
 use super::types::*;
 
@@ -444,86 +443,86 @@ fn blocks_text(blocks: &[v2::ContentBlock]) -> String {
     blocks.iter().map(block_text).collect()
 }
 
-/// The `effort` config option's current level and entries, if the set
-/// carries one.
+/// The select config option of `category` in the set, if it carries one,
+/// and its entries in their groups (an option without groups is one group,
+/// named as the option is).
+fn select_of(
+    options: &[v2::SessionConfigOption],
+    category: v2::SessionConfigOptionCategory,
+) -> Option<(
+    &v2::SessionConfigOption,
+    &v2::SessionConfigSelect,
+    Vec<ChoiceGroup>,
+)> {
+    let option = (options.iter()).find(|option| option.category.as_ref() == Some(&category))?;
+    let v2::SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let entries = |entries: &[v2::SessionConfigSelectOption]| -> Vec<Choice> {
+        (entries.iter())
+            .map(|entry| Choice {
+                value: entry.value.0.to_string(),
+                name: entry.name.clone(),
+            })
+            .collect()
+    };
+    let groups = match &select.options {
+        v2::SessionConfigSelectOptions::Ungrouped(ungrouped) => vec![ChoiceGroup {
+            name: option.name.clone(),
+            entries: entries(ungrouped),
+        }],
+        v2::SessionConfigSelectOptions::Grouped(groups) => (groups.iter())
+            .map(|group| ChoiceGroup {
+                name: group.name.clone(),
+                entries: entries(&group.options),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some((option, select, groups))
+}
+
+/// The session's reasoning effort, from its option of the `thought_level`
+/// category, if the set carries one.
 pub fn effort_selection(options: &[v2::SessionConfigOption]) -> Option<EffortSelection> {
-    let option = options
-        .iter()
-        .find(|option| option.config_id.0.as_ref() == EFFORT_CONFIG_ID)?;
-    let v2::SessionConfigKind::Select(select) = &option.kind else {
-        return None;
-    };
-    let choices = match &select.options {
-        v2::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
-        v2::SessionConfigSelectOptions::Grouped(groups) => groups
-            .iter()
-            .flat_map(|group| group.options.iter())
-            .collect(),
-        _ => Vec::new(),
-    };
+    let (option, select, groups) =
+        select_of(options, v2::SessionConfigOptionCategory::ThoughtLevel)?;
+    let choices: Vec<Choice> = groups.into_iter().flat_map(|group| group.entries).collect();
+    let value = select.current_value.0.to_string();
+    let current = (choices.iter())
+        .find(|choice| choice.value == value)
+        .cloned()
+        .unwrap_or(Choice {
+            name: value.clone(),
+            value,
+        });
     Some(EffortSelection {
-        current: select.current_value.0.to_string(),
-        choices: (choices.into_iter())
-            .map(|entry| entry.value.0.to_string())
-            .collect(),
+        config_id: option.config_id.0.to_string(),
+        current,
+        choices,
     })
 }
 
-/// What the `model` config option offers, if the set carries one: its
-/// entries' provider and model, read from their value ids, grouped by
-/// provider in the option's order.
+/// What the session's option of the `model` category offers, if the set
+/// carries one.
 pub fn model_choices(options: &[v2::SessionConfigOption]) -> Option<ModelChoices> {
-    let option = options
-        .iter()
-        .find(|option| option.config_id.0.as_ref() == MODEL_CONFIG_ID)?;
-    let v2::SessionConfigKind::Select(select) = &option.kind else {
-        return None;
-    };
-    let entries: Vec<&v2::SessionConfigSelectOption> = match &select.options {
-        v2::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
-        v2::SessionConfigSelectOptions::Grouped(groups) => groups
-            .iter()
-            .flat_map(|group| group.options.iter())
-            .collect(),
-        _ => Vec::new(),
-    };
-    let mut providers: Vec<(String, Vec<String>)> = Vec::new();
-    for entry in entries {
-        let Some((provider, model)) = decode_model_option_id(&entry.value.0) else {
-            continue;
-        };
-        match providers.iter_mut().find(|(name, _)| name == provider) {
-            Some((_, models)) => models.push(model.to_string()),
-            None => providers.push((provider.to_string(), vec![model.to_string()])),
-        }
-    }
-    let current = decode_model_option_id(&select.current_value.0)
-        .map(|(provider, model)| (provider.to_string(), model.to_string()));
-    Some(ModelChoices { current, providers })
+    let (option, select, groups) = select_of(options, v2::SessionConfigOptionCategory::Model)?;
+    Some(ModelChoices {
+        config_id: option.config_id.0.to_string(),
+        current: Some(select.current_value.0.to_string()),
+        groups,
+    })
 }
 
-/// The provider and model of the `model` config option, if the set carries
-/// one: its current value id, decoded.
+/// The session's model, if the set carries an option of the `model`
+/// category: its current entry's name (the value id, if no entry has it).
 pub fn model_selection(options: &[v2::SessionConfigOption]) -> Option<ModelSelection> {
-    let option = options
-        .iter()
-        .find(|option| option.config_id.0.as_ref() == MODEL_CONFIG_ID)?;
-    let v2::SessionConfigKind::Select(select) = &option.kind else {
-        return None;
+    let choices = model_choices(options)?;
+    let model = match choices.current() {
+        Some((_, entry)) => entry.name.clone(),
+        None => choices.current.clone()?,
     };
-    let current = select.current_value.0.as_ref();
-    let entries: Vec<&v2::SessionConfigSelectOption> = match &select.options {
-        v2::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
-        v2::SessionConfigSelectOptions::Grouped(groups) => groups
-            .iter()
-            .flat_map(|group| group.options.iter())
-            .collect(),
-        _ => Vec::new(),
-    };
-    let _ = entries;
-    decode_model_option_id(current).map(|(_, model)| ModelSelection {
-        model: model.to_owned(),
-    })
+    Some(ModelSelection { model })
 }
 
 /// A subagent reported running or waiting on the human is kept, in the

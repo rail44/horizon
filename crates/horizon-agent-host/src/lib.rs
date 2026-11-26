@@ -11,6 +11,7 @@ mod checkpoint;
 pub mod config_watch;
 pub mod extension;
 pub mod hub;
+pub mod options;
 pub mod outbox;
 pub mod providers;
 pub mod session;

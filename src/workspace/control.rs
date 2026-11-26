@@ -53,8 +53,32 @@ impl Shell {
                     reply(error_body("the agent runtime is not running"));
                     return;
                 };
+                // The entry named `model` in the group named `provider`.
+                let Some(choices) = self
+                    .kept()
+                    .agents
+                    .borrow()
+                    .get(&session_id)
+                    .cloned()
+                    .map(|agent| agent.models())
+                else {
+                    reply(error_body("the session is not attached here"));
+                    return;
+                };
+                let entry = (choices.groups.iter())
+                    .filter(|group| group.name == provider)
+                    .flat_map(|group| group.entries.iter())
+                    .find(|entry| entry.name == model || entry.value == model)
+                    .map(|entry| entry.value.clone());
+                let Some(value) = entry else {
+                    reply(error_body(format!(
+                        "the session offers no {provider} {model}"
+                    )));
+                    return;
+                };
+                let option = choices.config_id;
                 std::thread::spawn(move || {
-                    reply(match models.switch(session_id, &provider, &model) {
+                    reply(match models.set_option(session_id, &option, &value) {
                         Ok(()) => EnvelopeBody::Ok { session_id: None },
                         Err(error) => error_body(format!("model switch failed: {error}")),
                     });
@@ -65,8 +89,21 @@ impl Shell {
                     reply(error_body("the agent runtime is not running"));
                     return;
                 };
+                let agent = self.kept().agents.borrow().get(&session_id).cloned();
+                let Some(effort) = agent.and_then(|agent| agent.effort()) else {
+                    reply(error_body("the session has no effort to set"));
+                    return;
+                };
+                let entry = (effort.choices.iter())
+                    .find(|entry| entry.name == level || entry.value == level)
+                    .map(|entry| entry.value.clone());
+                let Some(value) = entry else {
+                    reply(error_body(format!("the session offers no effort {level}")));
+                    return;
+                };
+                let option = effort.config_id;
                 std::thread::spawn(move || {
-                    reply(match models.set_effort(session_id, &level) {
+                    reply(match models.set_option(session_id, &option, &value) {
                         Ok(()) => EnvelopeBody::Ok { session_id: None },
                         Err(error) => error_body(format!("effort switch failed: {error}")),
                     });

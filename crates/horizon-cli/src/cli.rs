@@ -119,16 +119,13 @@ pub enum Subcommand {
         session_id: String,
         level: String,
     },
-    ReloadAgentRuntime,
-    /// `reload-agent-runtime`'s terminal-daemon counterpart
-    /// (`docs/terminald-split-design.md` decision 3). Destructive: it
-    /// restarts the process that owns every PTY, so every terminal session
-    /// ends with it.
+    /// Has `horizon-terminald` hand every terminal to its next image, the
+    /// rebuilt binary (`docs/terminald-handover-design.md`).
     ReloadTerminalRuntime,
     ReloadConfig,
     /// Opens a new terminal tab whose cwd is the active session's directory
     /// (`docs/session-relationship-design.md` decision 4a) -- a bare invoke
-    /// like `ReloadAgentRuntime`/`ReloadConfig`, since v1 always targets
+    /// like `ReloadConfig`, since v1 always targets
     /// "whichever session is active", never a client-supplied id.
     OpenTerminalInSessionDirectory,
     Sessions,
@@ -186,7 +183,6 @@ Subcommands:\n  \
   send <session-id> [text]\n  \
   set-model <session-id> <provider> <model>\n  \
   set-effort <session-id> <level>\n  \
-  reload-agent-runtime\n  \
   reload-terminal-runtime\n  \
   reload-config\n  \
   open-terminal-in-session-directory\n  \
@@ -305,10 +301,6 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             let level = next_required(&mut positionals, "set-effort", "level")?;
             reject_extra(&mut positionals, "set-effort")?;
             Subcommand::SetEffort { session_id, level }
-        }
-        "reload-agent-runtime" => {
-            reject_extra(&mut positionals, "reload-agent-runtime")?;
-            Subcommand::ReloadAgentRuntime
         }
         "reload-terminal-runtime" => {
             reject_extra(&mut positionals, "reload-terminal-runtime")?;
@@ -820,10 +812,6 @@ mod tests {
             Subcommand::CancelTurn {
                 session_id: "s-1".to_string()
             }
-        );
-        assert_eq!(
-            parse(&args(&["reload-agent-runtime"])).unwrap().subcommand,
-            Subcommand::ReloadAgentRuntime
         );
         assert_eq!(
             parse(&args(&["reload-terminal-runtime"]))

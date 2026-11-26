@@ -112,8 +112,9 @@ quote event-log lines (seq numbers) and CLI output.
 
 - The event log and DuckDB projection are the owner's real data — read
   freely, never write, never delete.
-- Do not `reload-agent-runtime`, `reload-terminal-runtime` or
-  `reload-config` casually: they affect the owner's whole live instance.
+- Do not end the agent's process (`horizon-agent-acp`), or run
+  `reload-terminal-runtime` or `reload-config`, casually: they affect the
+  owner's whole live instance.
   `reload-terminal-runtime` hands every PTY the owner has open to a new
   daemon image; never run it unasked.
 - Approving/denying affects real sessions; when in doubt, deny and

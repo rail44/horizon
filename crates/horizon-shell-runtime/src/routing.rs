@@ -12,14 +12,19 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use super::attachment::{AgentUpdate, AttachmentState, Inbound};
+use super::attachment::{AgentCommand, AgentUpdate, AttachmentState, Inbound};
 use crate::agent_model::AgentEvent;
 use agent_client_protocol::v2::Responder;
 use agent_client_protocol::v2::schema as v2;
 use crossbeam_channel::Sender;
-use horizon_acp::SessionId;
 use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
+use horizon_wire::SessionId;
+use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
+
+/// A pane's commands to its session, held by one attachment task at a
+/// time.
+pub(super) type Commands = Arc<tokio::sync::Mutex<UnboundedReceiver<AgentCommand>>>;
 
 /// Identifies one local attachment, including replacements of the same session.
 /// This identity never crosses the wire: late events and handle cleanup must
@@ -67,6 +72,13 @@ struct AgentRoute {
     inbound: Option<tokio::sync::mpsc::UnboundedSender<Inbound>>,
     /// Whether the attachment has reached `Ready`.
     ready: bool,
+    /// The pane's commands, once the session's opening op was dispatched:
+    /// an attachment task holds them while it runs, and the next one on
+    /// another connection takes them up.
+    commands: Option<Commands>,
+    /// The connection the attachment was on is gone: it is opened again on
+    /// the next.
+    reopen: bool,
 }
 
 impl Drop for AgentRoute {
@@ -168,6 +180,8 @@ impl AgentRoutes {
                 cancelled: tokio::sync::watch::channel(false).0,
                 inbound: None,
                 ready: false,
+                commands: None,
+                reopen: false,
             },
         );
         key
@@ -188,20 +202,27 @@ impl AgentRoutes {
         }
     }
 
-    /// Opens the inbound queue of `key`'s attachment task. `None` when the
-    /// route has already been replaced or retired.
+    /// Opens the inbound queue of `key`'s attachment task, and hands it the
+    /// pane's commands: `commands` when the session is first opened, the
+    /// ones kept from before when it is opened again. `None` when the route
+    /// has already been replaced or retired.
     pub(super) fn open_inbound(
         &self,
         key: RouteKey<SessionId>,
-    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<Inbound>> {
+        commands: Option<UnboundedReceiver<AgentCommand>>,
+    ) -> Option<(UnboundedReceiver<Inbound>, Commands)> {
         let mut state = self.state.lock().unwrap();
         let route = state
             .agent
             .get_mut(&key.session_id)
             .filter(|route| route.key == key)?;
+        if let Some(commands) = commands {
+            route.commands = Some(Arc::new(tokio::sync::Mutex::new(commands)));
+        }
+        let commands = route.commands.clone()?;
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         route.inbound = Some(sender);
-        Some(receiver)
+        Some((receiver, commands))
     }
 
     /// Records that `key`'s attachment reached `Ready`.
@@ -377,8 +398,31 @@ impl AgentRoutes {
         }
     }
 
-    /// The connection is gone: a ready attachment is disconnected, one
-    /// still opening has failed. Later registrations inherit the failure.
+    /// The connection is gone, and another is to come: each attachment task
+    /// on it ends (its inbound queue closes), and its session is opened
+    /// again on the next connection ([`Self::reopened`]). The routes, and
+    /// the panes' channels, stay.
+    pub(super) fn connection_lost(&self) {
+        let mut state = self.state.lock().unwrap();
+        for route in state.agent.values_mut() {
+            if route.inbound.take().is_some() {
+                route.reopen = true;
+                route.ready = false;
+            }
+        }
+    }
+
+    /// The sessions to open again on a new connection.
+    pub(super) fn reopened(&self) -> Vec<RouteKey<SessionId>> {
+        let mut state = self.state.lock().unwrap();
+        (state.agent.values_mut())
+            .filter_map(|route| std::mem::take(&mut route.reopen).then_some(route.key))
+            .collect()
+    }
+
+    /// The connection is gone for good: a ready attachment is
+    /// disconnected, one still opening has failed. Later registrations
+    /// inherit the failure.
     pub(super) fn connection_failed(&self, message: String) {
         let mut state = self.state.lock().unwrap();
         state.failure = Some(message.clone());

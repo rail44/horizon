@@ -67,6 +67,29 @@ impl Drop for Scratch {
     }
 }
 
+/// The test's `horizon-agent-acp` child, if one runs.
+fn agent_child_of_now() -> Option<u32> {
+    let own = std::process::id().to_string();
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find_map(|entry| {
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let status = std::fs::read_to_string(entry.path().join("status")).ok()?;
+            let parent = status.lines().find_map(|line| line.strip_prefix("PPid:"))?;
+            let command = std::fs::read(entry.path().join("cmdline")).ok()?;
+            (parent.trim() == own
+                && String::from_utf8_lossy(&command).contains("horizon-agent-acp"))
+            .then_some(pid)
+        })
+}
+
+/// The test's `horizon-agent-acp` child.
+fn agent_child() -> u32 {
+    agent_child_of_now().expect("the agent's process")
+}
+
 fn press(app: &App, key: Key, modifiers: Modifiers) {
     app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
         key,
@@ -363,20 +386,59 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         text().contains("mock-model · high")
     });
 
-    // `Reload Agent Runtime`: while the daemon is replaced the pane says
-    // so, then it is back on the same session, with what was said in it,
-    // and a further message is answered by the new daemon.
-    let before = agentd.handle();
-    shell.execute(CommandId::ReloadAgentRuntime);
-    app.run_effects();
-    app.resolve();
-    assert!(text().contains("Reloading the agent runtime"), "{}", text());
-    assert!(shell.agent(pane).is_none());
-    until("the pane again", &|| shell.agent(pane).is_some());
-    assert!(!agentd.handle().same_runtime(&before));
-    assert_eq!(shell.model.with_untracked(Workspace::tab_count), 2);
-    until("what was said", &|| text().contains("hello there"));
-    // The pane made again has the keys on the view: Enter into its field.
+    // The control plane sets the same options, by the names of their
+    // entries: an effort, and a model in a group of the `model` option.
+    let session = (shell.model)
+        .with_untracked(|model| model.pane_session_id(pane))
+        .expect("the pane's session")
+        .as_uuid()
+        .to_string();
+    let control = |command: &str, args: serde_json::Value| {
+        let (reply, answer) = std::sync::mpsc::channel();
+        shell.control_answering(
+            &ControlRequest::Invoke(Invoke {
+                command: command.to_string(),
+                args,
+            }),
+            move |body| reply.send(body).unwrap(),
+        );
+        answer
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an answer")
+    };
+    let answer = control(
+        "set-effort",
+        serde_json::json!({ "session_id": session, "level": "low" }),
+    );
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+    until("the effort set", &|| text().contains("mock-model · low"));
+    let answer = control(
+        "set-model",
+        serde_json::json!({ "session_id": session, "provider": "mock", "model": "mock-model" }),
+    );
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+    let answer = control(
+        "set-model",
+        serde_json::json!({ "session_id": session, "provider": "mock", "model": "none-such" }),
+    );
+    std::assert_matches!(answer, EnvelopeBody::Error(_), "{answer:?}");
+
+    // The agent's process ends: the shell starts it again, and the pane,
+    // as it was drawn, is attached to its session again with
+    // `session/resume` -- what was said in it is back, and a further
+    // message is answered by the new process.
+    let element = shell.pane_element(pane);
+    let first = agent_child();
+    let _ = Command::new("kill")
+        .args(["-KILL", &first.to_string()])
+        .status();
+    until("another process", &|| {
+        agent_child_of_now().is_some_and(|now| now != first)
+    });
+    until("what was said", &|| {
+        text().contains("hello there") && !text().contains("reopen the session")
+    });
+    assert_eq!(shell.pane_element(pane), element);
     enter();
     commit("and again");
     enter();
