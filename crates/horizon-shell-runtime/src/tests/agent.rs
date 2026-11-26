@@ -18,7 +18,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use super::super::attachment::acp_session_id;
+use super::super::routing::acp_session_id;
 use super::super::*;
 use super::{
     FakeBehavior, TerminalCall, expect_terminald_handshake, next_terminal_call, recv_output,

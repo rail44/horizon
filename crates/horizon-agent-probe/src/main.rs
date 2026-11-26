@@ -133,7 +133,11 @@ fn run(args: Args) -> Result<(), String> {
         "sessions": data.join("horizon/sessions"),
     }));
 
-    let (agentd, _roots) = AgentdHandle::start(&control, &home.join("agent.log"));
+    let (agentd, _roots) = AgentdHandle::start(
+        horizon_shell_runtime::AgentProgram::horizon(),
+        &control,
+        &home.join("agent.log"),
+    );
     let outcome = drive(&agentd, &dir, &args);
     agentd.stop_and_wait();
     outcome

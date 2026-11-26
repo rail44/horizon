@@ -237,3 +237,20 @@ fn open_inbound(
         .open_inbound(key, Some(commands))
         .map(|(inbound, _)| inbound)
 }
+
+/// An agent's session id is any string: a UUID is the shell's id as it is,
+/// and any other gives the same id every time, which addresses the session
+/// by the agent's own string again.
+#[test]
+fn any_session_id_an_agent_gives_has_an_id_of_the_shells_and_back() {
+    let uuid = SessionId::new();
+    let named = v2::SessionId::new(uuid.as_uuid().to_string());
+    assert_eq!(session_id_of(&named), uuid);
+    assert_eq!(acp_session_id(uuid), named);
+
+    let text = v2::SessionId::new("sess_01JX-not-a-uuid");
+    let made = session_id_of(&text);
+    assert_eq!(session_id_of(&text), made);
+    assert_ne!(session_id_of(&v2::SessionId::new("sess_other")), made);
+    assert_eq!(acp_session_id(made), text);
+}

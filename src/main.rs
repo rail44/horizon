@@ -69,7 +69,15 @@ fn run_window() {
         &horizon_wire::socket::default_terminald_socket_path(),
         &control_socket,
     );
-    let agentd = Agentd::start(&control_socket, &control_socket.with_file_name("agent.log"));
+    // The ACP agent the configuration names, else Horizon's own.
+    let program = (horizon_config::load().agent.program())
+        .map(|(program, args)| horizon_shell_runtime::AgentProgram { program, args })
+        .unwrap_or_else(horizon_shell_runtime::AgentProgram::horizon);
+    let agentd = Agentd::start(
+        program,
+        &control_socket,
+        &control_socket.with_file_name("agent.log"),
+    );
     let store = WorkspaceStateStore::from_environment();
     let wake = horizon::wake::Wake::default();
     let (poster, clicked) = desktop_notify::poster(wake.clone());

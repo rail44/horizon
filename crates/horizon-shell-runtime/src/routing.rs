@@ -143,9 +143,31 @@ struct TerminalRoute {
     commands: Option<tokio::sync::mpsc::UnboundedSender<TerminalCommand>>,
 }
 
-/// Parses an ACP session id; the daemon uses the `SessionId` uuid string.
-pub(super) fn parse_session_id(id: &v2::SessionId) -> Option<SessionId> {
-    Uuid::parse_str(&id.0).ok().map(SessionId::from_uuid)
+/// The agents' names of the sessions the shell knows by an id made from
+/// them, to address the sessions by again.
+static AGENT_NAMES: std::sync::LazyLock<Mutex<HashMap<SessionId, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The shell's id of the session an agent names `id`. An ACP session id is
+/// any string: one that is a UUID is the id itself, and any other gives an
+/// id made from it (a name-based UUID), the same every time, so the
+/// workspace kept from a run finds the session again in the next.
+pub(super) fn session_id_of(id: &v2::SessionId) -> SessionId {
+    if let Ok(uuid) = Uuid::parse_str(&id.0) {
+        return SessionId::from_uuid(uuid);
+    }
+    let made = SessionId::from_uuid(Uuid::new_v5(&Uuid::NAMESPACE_OID, id.0.as_bytes()));
+    AGENT_NAMES.lock().unwrap().insert(made, id.0.to_string());
+    made
+}
+
+/// The agent's name of the session the shell knows as `session_id`: the
+/// one an id was made from, else the id as a UUID's string.
+pub(super) fn acp_session_id(session_id: SessionId) -> v2::SessionId {
+    match AGENT_NAMES.lock().unwrap().get(&session_id) {
+        Some(name) => v2::SessionId::new(name.clone()),
+        None => v2::SessionId::new(session_id.as_uuid().to_string()),
+    }
 }
 
 impl AgentRoutes {
@@ -294,12 +316,9 @@ impl AgentRoutes {
 
     /// One `session/update` from the connection.
     pub(super) fn route_update(&self, notification: v2::UpdateSessionNotification) {
-        let Some(session_id) = parse_session_id(&notification.session_id) else {
-            return;
-        };
-        if let v2::SessionUpdate::SubagentUpdate(subagent) = &notification.update
-            && let Some(child) = parse_session_id(&subagent.session_id)
-        {
+        let session_id = session_id_of(&notification.session_id);
+        if let v2::SessionUpdate::SubagentUpdate(subagent) = &notification.update {
+            let child = session_id_of(&subagent.session_id);
             let parent = self.local_of(session_id);
             self.parents.lock().unwrap().insert(child, parent);
         }
@@ -364,9 +383,7 @@ impl AgentRoutes {
         request: v2::RequestPermissionRequest,
         responder: Responder<v2::RequestPermissionResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        let Some(session_id) = parse_session_id(&request.session_id) else {
-            return responder.respond(cancelled_permission());
-        };
+        let session_id = session_id_of(&request.session_id);
         // A subagent's request is shown where its parent is.
         let local = self.local_of(session_id);
         let routed = self.state.lock().unwrap().agent.contains_key(&local);

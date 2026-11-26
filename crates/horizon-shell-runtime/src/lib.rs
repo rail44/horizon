@@ -45,7 +45,7 @@ pub use routing::RuntimeNews;
 pub use terminal::HandOver;
 mod terminal;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -71,6 +71,24 @@ const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6
 /// The agent runtime's binary, found beside this executable (or named by
 /// `HORIZON_AGENT_ACP_BINARY`, `horizon_wire::spawn::resolve_daemon_binary`).
 pub const AGENT_BINARY_NAME: &str = "horizon-agent-acp";
+
+/// The ACP agent the runtime starts as its child: a program and its
+/// arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentProgram {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl AgentProgram {
+    /// Horizon's own agent, [`AGENT_BINARY_NAME`].
+    pub fn horizon() -> Self {
+        Self {
+            program: horizon_wire::spawn::resolve_daemon_binary(AGENT_BINARY_NAME),
+            args: Vec::new(),
+        }
+    }
+}
 
 /// The client of the agent runtime (`horizon-agent-acp`, this process's
 /// child): agent sessions and the connection-global host-tool exchange.
@@ -212,20 +230,25 @@ impl AgentdHandle {
     ///
     /// The child's own children reach this Horizon through
     /// `control_socket`; its standard error is appended to `log`.
-    pub fn start(control_socket: &Path, log: &Path) -> (Self, Receiver<RuntimeNews>) {
-        Self::start_within(control_socket, log, Timeouts::default())
+    pub fn start(
+        program: AgentProgram,
+        control_socket: &Path,
+        log: &Path,
+    ) -> (Self, Receiver<RuntimeNews>) {
+        Self::start_within(program, control_socket, log, Timeouts::default())
     }
 
     /// [`Self::start`], waiting on the runtime for `timeouts` in place of
     /// its own: a test's shorter ones.
     pub fn start_within(
+        program: AgentProgram,
         control_socket: &Path,
         log: &Path,
         timeouts: Timeouts,
     ) -> (Self, Receiver<RuntimeNews>) {
         let (handle, workspace_roots, ops) = Self::parts(timeouts);
         agent::spawn(
-            horizon_wire::spawn::resolve_daemon_binary(AGENT_BINARY_NAME),
+            program,
             control_socket.to_path_buf(),
             log.to_path_buf(),
             ops,

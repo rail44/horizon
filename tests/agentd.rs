@@ -178,7 +178,6 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // SAFETY: nextest runs this test in a process of its own, and nothing
     // else in it has started yet.
     unsafe {
-        std::env::set_var("HORIZON_AGENT_ACP_BINARY", binary("horizon-agent-acp"));
         std::env::set_var("HORIZON_LOGD_BINARY", binary("horizon-logd"));
         std::env::set_var("HORIZON_CONFIG", &config);
         std::env::set_var("HORIZON_TEST_MOCK_KEY", "mock");
@@ -215,6 +214,10 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     std::fs::create_dir_all(directory.join("run")).unwrap();
 
     let agentd = Agentd::start(
+        horizon_shell_runtime::AgentProgram {
+            program: binary("horizon-agent-acp"),
+            args: Vec::new(),
+        },
         &directory.join("control.sock"),
         &directory.join("agent.log"),
     );

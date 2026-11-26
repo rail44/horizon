@@ -23,9 +23,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use super::attachment::{AgentCommand, Inbound, acp_session_id};
+use super::attachment::{AgentCommand, Inbound};
 use super::common::{EstablishError, OP_TIMEOUT, RuntimeControl, StreamEnd};
-use super::routing::{AgentRoutes, RouteKey, parse_session_id};
+use super::routing::{AgentRoutes, RouteKey, acp_session_id, session_id_of};
 use crate::agent_model::AgentEvent;
 
 /// A daemon-side agent session as `session/list` reports it.
@@ -36,11 +36,11 @@ pub struct SessionSummary {
 }
 
 impl SessionSummary {
-    fn from_info(info: v2::SessionInfo) -> Option<Self> {
-        Some(Self {
-            session_id: parse_session_id(&info.session_id)?,
+    fn from_info(info: v2::SessionInfo) -> Self {
+        Self {
+            session_id: session_id_of(&info.session_id),
             workspace_root: Some(info.cwd.0.clone()),
-        })
+        }
     }
 }
 
@@ -82,14 +82,14 @@ const CHILD_EXIT: Duration = Duration::from_secs(5);
 /// runtime gives up starting it.
 const START_ATTEMPTS: u32 = 3;
 
-/// Starts `binary` as the agent runtime's child and serves `ops` over its
+/// Starts `program` as the agent runtime's child and serves `ops` over its
 /// standard input and output until the runtime is stopped. A child that
 /// ends after it served is started again, and the sessions it had open are
 /// attached to again with `session/resume`, which an agent that no longer
 /// has one refuses; one that keeps ending before it serves is given up on. Its standard error is appended to `log`; its own children
 /// reach this Horizon through `HORIZON_SOCKET`, the control socket.
 pub(super) fn spawn(
-    binary: PathBuf,
+    program: super::AgentProgram,
     control_socket: PathBuf,
     log: PathBuf,
     mut ops: UnboundedReceiver<Op>,
@@ -113,7 +113,7 @@ pub(super) fn spawn(
         runtime.block_on(async {
             let (mut served, mut failed_starts) = (false, 0);
             loop {
-                let mut child = match start_child(&binary, &control_socket, &log) {
+                let mut child = match start_child(&program, &control_socket, &log) {
                     Ok(child) => child,
                     Err(error) => {
                         routes.connection_failed(error);
@@ -175,10 +175,10 @@ pub(super) fn spawn(
     });
 }
 
-/// Starts `binary` with piped standard input and output, its standard
+/// Starts `program` with piped standard input and output, its standard
 /// error appended to `log`.
 fn start_child(
-    binary: &Path,
+    program: &super::AgentProgram,
     control_socket: &Path,
     log: &Path,
 ) -> Result<tokio::process::Child, String> {
@@ -192,7 +192,8 @@ fn start_child(
         .open(log)
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
-    tokio::process::Command::new(binary)
+    tokio::process::Command::new(&program.program)
+        .args(&program.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(stderr)
@@ -200,7 +201,7 @@ fn start_child(
         .env_remove("HORIZON_SESSION_ID")
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| format!("could not start {}: {error}", binary.display()))
+        .map_err(|error| format!("could not start {}: {error}", program.program.display()))
 }
 
 #[cfg(test)]
@@ -260,9 +261,8 @@ fn client(
                         connection: V2ConnectionTo<Agent>| {
                 // A session whose information changed may work elsewhere
                 // now: its directory is read again from `session/list`.
-                if let v2::SessionUpdate::SessionInfoUpdate(_) = &notification.update
-                    && let Some(session_id) = parse_session_id(&notification.session_id)
-                {
+                if let v2::SessionUpdate::SessionInfoUpdate(_) = &notification.update {
+                    let session_id = session_id_of(&notification.session_id);
                     let routes = updates.clone();
                     let connection = connection.clone();
                     tokio::spawn(async move {
@@ -279,8 +279,8 @@ fn client(
                 // `session/list` no longer lists has ended.
                 if let v2::SessionUpdate::Notice(notice) = &notification.update
                     && notice.severity == v2::NoticeSeverity::Error
-                    && let Some(session_id) = parse_session_id(&notification.session_id)
                 {
+                    let session_id = session_id_of(&notification.session_id);
                     let routes = updates.clone();
                     tokio::spawn(async move {
                         if let Ok(sessions) = list_sessions(&connection).await
@@ -478,9 +478,8 @@ fn handle_op(
                                 Ok(opened) => {
                                     let response = &opened.response;
                                     // The agent names the session.
-                                    if let Some(named) = parse_session_id(&response.session_id) {
-                                        routes.name(route.session_id(), named);
-                                    }
+                                    let named = session_id_of(&response.session_id);
+                                    routes.name(route.session_id(), named);
                                     routes.deliver_to(
                                         route,
                                         Inbound::Event(AgentEvent::Update(Box::new(
@@ -599,12 +598,7 @@ async fn list_sessions(connection: &V2ConnectionTo<Agent>) -> Result<Vec<Session
         let mut request = v2::ListSessionsRequest::new();
         request.cursor = cursor;
         let response = call(OP_TIMEOUT, "agent list", send(connection, request)).await?;
-        summaries.extend(
-            response
-                .sessions
-                .into_iter()
-                .filter_map(SessionSummary::from_info),
-        );
+        summaries.extend(response.sessions.into_iter().map(SessionSummary::from_info));
         match response.next_cursor {
             Some(next) => cursor = Some(next),
             None => return Ok(summaries),

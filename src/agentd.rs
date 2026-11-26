@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
+use horizon_shell_runtime::AgentProgram;
 use horizon_shell_runtime::{AgentdHandle, RuntimeNews};
 use horizon_ui::reactive_graph::traits::Update;
 use horizon_workspace::SessionId;
@@ -32,10 +33,10 @@ pub struct Agentd {
 impl Agentd {
     /// Starts the runtime. Its sessions' commands reach this shell
     /// through `control_socket`; its diagnostics are appended to `log`.
-    pub fn start(control_socket: &Path, log: &Path) -> Self {
+    pub fn start(program: AgentProgram, control_socket: &Path, log: &Path) -> Self {
         let (tell, told) = crossbeam_channel::unbounded();
         let waker = Wake::default();
-        let handle = Self::connect(control_socket, log, &tell, &waker);
+        let handle = Self::connect(program, control_socket, log, &tell, &waker);
         Self {
             handle,
             told,
@@ -44,12 +45,13 @@ impl Agentd {
     }
 
     fn connect(
+        program: AgentProgram,
         control_socket: &Path,
         log: &Path,
         tell: &Sender<Told>,
         waker: &Wake,
     ) -> AgentdHandle {
-        let (handle, news) = AgentdHandle::start(control_socket, log);
+        let (handle, news) = AgentdHandle::start(program, control_socket, log);
         // The runtime's stream is passed on to the UI thread, which is woken
         // to take it in.
         fn pass_on<T: Send + 'static>(

@@ -88,6 +88,9 @@ pub struct RawConfig {
     /// `[sandbox]`: the runtime the agent's `bash` calls are contained by.
     /// See [`RawSandboxConfig`].
     pub sandbox: RawSandboxConfig,
+    /// `[agent]`: the ACP agent the agent panes speak to. See
+    /// [`RawAgentConfig`].
+    pub agent: RawAgentConfig,
     /// `trusted_projects`: absolute repository toplevels whose repository
     /// content (`.horizon/skills/` skills, `AGENTS.md`/`CLAUDE.md`
     /// instructions) an agent session may load into its system prompt. A
@@ -122,6 +125,32 @@ impl RawConfig {
 
 /// `[sandbox]`: the runtime the agent's `bash` calls are contained by
 /// (`docs/sandbox-runtime-design.md`). Read when `horizon-agentd` starts.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RawAgentConfig {
+    /// The program Horizon starts as its ACP agent, then its arguments.
+    /// `None` (or empty): Horizon's own, `horizon-agent-acp`.
+    pub command: Option<Vec<String>>,
+}
+
+impl RawAgentConfig {
+    /// The program and its arguments, `~/` expanded in the program; `None`
+    /// when unset.
+    pub fn program(&self) -> Option<(PathBuf, Vec<String>)> {
+        let (program, args) = self.command.as_deref()?.split_first()?;
+        let program = program.trim();
+        if program.is_empty() {
+            return None;
+        }
+        let program = match program.strip_prefix("~/") {
+            Some(rest) => horizon_sandbox::home_dir()
+                .map_or_else(|| PathBuf::from(program), |home| home.join(rest)),
+            None => PathBuf::from(program),
+        };
+        Some((program, args.to_vec()))
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawSandboxConfig {

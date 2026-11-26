@@ -348,6 +348,20 @@ cyan = "#56b6c2"
 # fence = "/opt/homebrew/bin/fence"
 
 # ---------------------------------------------------------------------------
+# [agent] — the ACP agent the agent panes speak to
+# (docs/agent-stdio-child-design.md). Horizon starts it as its child and
+# speaks ACP v2 over its standard input and output; any agent that does,
+# with sessions, can stand in.
+#
+#   command — the program, then its arguments. A leading "~/" in the
+#             program is expanded against $HOME. Unset: Horizon's own,
+#             horizon-agent-acp, beside the horizon executable.
+#
+# Read when Horizon starts; a restart picks a change up.
+# [agent]
+# command = ["/usr/local/bin/some-acp-agent", "--acp"]
+
+# ---------------------------------------------------------------------------
 # [grants] — per-project filesystem trees and network destinations agent
 # sessions start with.
 #

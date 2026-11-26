@@ -840,3 +840,23 @@ fn default_models_effort_is_read_as_written() {
         Some("high")
     );
 }
+
+/// `[agent] command` names the program Horizon starts as its ACP agent,
+/// then its arguments; unset or empty, there is none and Horizon's own is
+/// started.
+#[test]
+fn the_agent_command_is_a_program_and_its_arguments() {
+    let config = parse("[agent]\ncommand = [\"/opt/acp/agent\", \"--acp\", \"-v\"]\n").unwrap();
+    assert_eq!(
+        config.agent.program(),
+        Some((
+            std::path::PathBuf::from("/opt/acp/agent"),
+            vec!["--acp".to_string(), "-v".to_string()]
+        ))
+    );
+    assert_eq!(parse("").unwrap().agent.program(), None);
+    assert_eq!(
+        parse("[agent]\ncommand = []\n").unwrap().agent.program(),
+        None
+    );
+}

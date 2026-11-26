@@ -14,7 +14,7 @@ use agent_client_protocol::v2::schema as v2;
 use horizon_wire::SessionId;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use super::routing::{AgentRoutes, Commands, RouteKey, cancelled_permission};
+use super::routing::{AgentRoutes, Commands, RouteKey, acp_session_id, cancelled_permission};
 use crate::agent_model::{AgentEvent, Permission, PermissionDecision, ToolCallIdentity};
 
 /// How long an attachment may stay short of ready.
@@ -100,10 +100,6 @@ impl AttachmentState {
             };
         }
     }
-}
-
-pub(super) fn acp_session_id(session_id: SessionId) -> v2::SessionId {
-    v2::SessionId::new(session_id.as_uuid().to_string())
 }
 
 /// A permission request an attachment holds: who answers it, and the
