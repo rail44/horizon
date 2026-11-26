@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::ReplyAddress;
 use super::roles;
-use horizon_agent_host::session::{AgentdState, spawn_session_thread};
+use horizon_agent_host::session::{AgentHostState, spawn_session_thread};
 
 static START_SESSION: Mutex<()> = Mutex::new(());
 
@@ -41,7 +41,7 @@ enum Operation {
 }
 
 pub(crate) async fn operate(
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     store: &Store,
     root: &Path,
     caller: SessionId,
@@ -158,7 +158,7 @@ pub(crate) async fn operate(
 }
 
 async fn reviewer_session(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     store: &Store,
     root: &Path,
     task: u64,
@@ -223,7 +223,7 @@ fn queue(target: SessionId, input: SessionInput) -> Result<Vec<Event>, String> {
 }
 
 async fn task_session(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     store: &Store,
     root: &Path,
     id: u64,
@@ -242,7 +242,7 @@ async fn task_session(
 }
 
 fn ensure_started(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     id: SessionId,
     root: &Path,
     role: &str,
@@ -275,21 +275,21 @@ fn ensure_started(
 }
 /// Makes what the writer has been handed durable, which a read of the
 /// flushed records waits for.
-fn flush(state: &Arc<AgentdState>) -> Result<(), String> {
+fn flush(state: &Arc<AgentHostState>) -> Result<(), String> {
     let writer = state.writer().ok_or("Session persistence is unavailable")?;
     writer.flush().map_err(|e| e.to_string())
 }
 /// One session's records, in order: a board operation asks about one
 /// session at a time, and the event log as a whole is not read for it.
 fn session_records(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     id: SessionId,
 ) -> Result<Vec<event_log::Record>, String> {
     flush(state)?;
     state.flushed_session_records(id)
 }
 pub(super) fn same_project(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     root: &Path,
     target: SessionId,
 ) -> Result<(), String> {

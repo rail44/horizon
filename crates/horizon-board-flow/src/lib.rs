@@ -12,7 +12,7 @@ use horizon_agent::packages::PackagesBuilder;
 use horizon_agent::tools::BoardHost;
 use horizon_agent_host::extension::Extension;
 use horizon_agent_host::outbox::ReplySink;
-use horizon_agent_host::session::AgentdState;
+use horizon_agent_host::session::AgentHostState;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -98,8 +98,8 @@ impl Extension for BoardFlow {
         vec![Arc::new(sink::BoardSink::new(self.places.clone()))]
     }
 
-    fn board_host(&self, state: &Arc<AgentdState>, root: &Path) -> Option<Arc<dyn BoardHost>> {
-        Some(Arc::new(host::AgentdBoardHost::new(
+    fn board_host(&self, state: &Arc<AgentHostState>, root: &Path) -> Option<Arc<dyn BoardHost>> {
+        Some(Arc::new(host::AgentHostBoardHost::new(
             &self.places,
             root,
             state.clone(),

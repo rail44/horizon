@@ -5,21 +5,21 @@ use std::sync::Arc;
 
 use horizon_agent::contract::{Event, SessionId, ToolCallRequest};
 use horizon_agent::tools::BoardHost;
-use horizon_agent_host::session::AgentdState;
+use horizon_agent_host::session::AgentHostState;
 use horizon_board::{Position, Store};
 use serde_json::Value;
 
-pub(super) struct AgentdBoardHost {
+pub(super) struct AgentHostBoardHost {
     store: Store,
     root: PathBuf,
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
 }
 
-impl AgentdBoardHost {
+impl AgentHostBoardHost {
     pub(super) fn new(
         places: &super::BoardPlaces,
         root: &Path,
-        state: Arc<AgentdState>,
+        state: Arc<AgentHostState>,
     ) -> Option<Self> {
         let store = places.store(root).ok()?;
         Some(Self {
@@ -91,7 +91,7 @@ impl AgentdBoardHost {
     }
 }
 
-impl BoardHost for AgentdBoardHost {
+impl BoardHost for AgentHostBoardHost {
     fn list(&self, status_filter: Option<&str>) -> Result<Value, String> {
         serde_json::to_value(self.store.list(status_filter, true).map_err(render)?.items)
             .map_err(render)

@@ -323,7 +323,7 @@ impl AgentConfig {
 }
 
 /// One resolved `[[providers]]` entry as the caller (`horizon-agent-acp`'s
-/// `main` / `AgentdState::reload_provider_config`) translates it from
+/// `main` / `AgentHostState::reload_provider_config`) translates it from
 /// `horizon_config`'s own resolution. Secrets stay out: the
 /// config file records at most the environment variable's **name**
 /// ([`Self::api_key_env`]) — never a value.

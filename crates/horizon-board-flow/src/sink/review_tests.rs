@@ -3,13 +3,13 @@ use horizon_agent::contract::{Command, Event, InputResult, SessionInputOutcome, 
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent_host::outbox::Outbox;
 use horizon_agent_host::outbox::log::Pending;
-use horizon_agent_host::session::AgentdState;
+use horizon_agent_host::session::AgentHostState;
 use horizon_agent_host::session::test_support::record;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The outbox with the board's sink plugged in, as the host runs it.
-fn board_outbox(state: Arc<AgentdState>, path: PathBuf) -> Outbox {
+fn board_outbox(state: Arc<AgentHostState>, path: PathBuf) -> Outbox {
     // The board, wherever the sink is asked to post, is kept in a place of
     // the test's own.
     let places = crate::BoardPlaces {

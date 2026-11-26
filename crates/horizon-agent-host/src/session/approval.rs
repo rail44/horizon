@@ -16,14 +16,14 @@ use super::events::{
     apply_and_send_session_events, persist_and_send_session_event, report_persistence_failure,
     send_session_event,
 };
-use super::state::AgentdState;
+use super::state::AgentHostState;
 
 /// Carries out what the verdict stage's gate did with a call
 /// (`horizon_agent::tools::gate`): a prompt's events, already in the live
 /// state, go to the subscribers; a decision goes out as any approval's
 /// outcome does.
 pub(super) fn deliver_gate_step(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
     call_id: ToolCallId,
@@ -46,7 +46,7 @@ pub(super) fn deliver_gate_step(
 /// (`gate::reissue`), publishes what that recorded, tells the provider, and
 /// carries out what the gate did with it.
 pub(super) fn begin_reissued_approval(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     session_id: SessionId,
     request: horizon_agent::contract::ToolCallRequest,
@@ -75,7 +75,7 @@ pub(super) fn begin_reissued_approval(
 /// shared this helper from its own click handler; that path retired with
 /// the runtime split.)
 pub(super) fn dispatch_inbound_command(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -173,7 +173,7 @@ pub(super) fn dispatch_inbound_command(
 }
 
 fn resolve_and_forward(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -214,7 +214,7 @@ fn approval_decision_payload(decision: &ApprovalDecision) -> ApprovalDecisionPay
 }
 
 pub(super) fn forward_approval_outcome(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
     logged_call_id: ToolCallId,

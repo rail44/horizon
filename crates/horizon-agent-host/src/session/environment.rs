@@ -1,12 +1,12 @@
 //! Build a session's tool environment and activate a replacement durably.
 
 use super::events::send_session_event;
-use super::exploration::AgentdExplorationHost;
+use super::exploration::AgentHostExplorationHost;
 use super::setup::{
     configured_domains, configured_filesystem_grants, configured_loopback_connect,
     configured_mach_services, project_is_trusted, skill_discovery_root, tool_session_builder_for,
 };
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 use crate::worktree;
 use crossbeam_channel::Sender;
 use horizon_agent::config::AgentConfig;
@@ -26,7 +26,7 @@ use std::sync::Arc;
 /// Stable session identity and spawn-time configuration, shared by initial
 /// construction and later activation. Config reloads affect future sessions.
 pub(super) struct SessionEnvironment<'a> {
-    pub(super) state: &'a Arc<AgentdState>,
+    pub(super) state: &'a Arc<AgentHostState>,
     pub(super) session_id: SessionId,
     pub(super) provider_id: &'a ProviderId,
     pub(super) role_id: Option<&'a RoleId>,
@@ -109,7 +109,7 @@ impl SessionEnvironment<'_> {
             if role_id.is_some_and(horizon_agent::roles::is_exploration) {
                 None
             } else {
-                Some(Arc::new(AgentdExplorationHost {
+                Some(Arc::new(AgentHostExplorationHost {
                     state: state.clone(),
                     requester_id: session_id,
                     provider_id: provider_id.clone(),

@@ -77,15 +77,15 @@ uv run --locked --script duckdb-ext/sql/check.py fixture
 
 | unit | 後のコミット | 事前の確かめ |
 | --- | ---: | ---: |
-| `HostTools for AgentdHostTools.execute_auto` | 5 | 5 |
-| `AgentdState.writer` | 4 | 2 |
-| `AgentdState.skipped_lines_summary` | 3 | 2 |
-| `ExplorationHost for AgentdExplorationHost.terminate` | 3 | 3 |
+| `HostTools for AgentHostHostTools.execute_auto` | 5 | 5 |
+| `AgentHostState.writer` | 4 | 2 |
+| `AgentHostState.skipped_lines_summary` | 3 | 2 |
+| `ExplorationHost for AgentHostExplorationHost.terminate` | 3 | 3 |
 | `tests.real_git.*` の関数と型 10 個 | 1〜3 | 同じ |
 | `tests.real_git.Drop for EnclosingRepoGuard`、`tests.real_git.EnclosingRepoGuard`(型と impl) | 2 | 2 |
 | `tests.real_git.Drop for EnclosingRepoGuard.drop` | 2 | 0 |
 | `tests.real_git.EnclosingRepoGuard.capture` | 2 | 0 |
-| `AgentdState.mark_resume_ready`、`AgentdState.set_writer` | 2 | 2 |
+| `AgentHostState.mark_resume_ready`、`AgentHostState.set_writer` | 2 | 2 |
 | `Default for State.default` | 2 | 2 |
 | `AgentdHandle.begin_reload`、`AgentdHandle.stop_and_wait` | 2 | 2 |
 | `AgentdHandle.same_runtime` | 1 | 1 |
@@ -96,7 +96,7 @@ uv run --locked --script duckdb-ext/sql/check.py fixture
 事前の確かめの方法(囲む unit を上へたどり、その系譜の深さ 1 以上の同一性に `.` と unit の名前を付けて、同じ区間の `unit_changes` を数える)を SQL に写し、前の SQL のキャッシュで動かすと、27 個、57 コミットになり、依頼文の数と一致した。違いは次の 2 つだった。
 
 - **2 段以上の入れ子での相対名(3 個、5 コミット)。** 事前の確かめの方法は、祖先の名前に unit 自身の名前だけを付ける。`tests.real_git.EnclosingRepoGuard.capture` の module の祖先 `tests.isolation_announcement` からは `tests.isolation_announcement.capture` を探すことになり、見つからない。組んだ規則は親のリンクから下の相対名(`EnclosingRepoGuard.capture`)を保つので、`tests.isolation_announcement.EnclosingRepoGuard.capture` につながる。`… .Drop for EnclosingRepoGuard.drop`(d7a3046a の module の改名)と、`decide.Drop for OnDrop.drop`(cad2cfab の method `complete` → `decide` の `content_match`)も同じである。
-- **つながった後の祖先のリンク(2 個、3 コミット)。** `AgentdState.writer` と `AgentdState.skipped_lines_summary` は、8d8cdd0e の `inherited` で `SessiondState.*` につながった後、0d72fc00 の method 自身の `content_match` で `Connection.*` へ、さらに 4e7fb81e の `file_rename` と `inherited` へ歩く。事前の確かめの方法は囲む unit の系譜の名前だけを使うので、method 自身の古いリンクをたどらない。
+- **つながった後の祖先のリンク(2 個、3 コミット)。** `AgentHostState.writer` と `AgentHostState.skipped_lines_summary` は、8d8cdd0e の `inherited` で `SessiondState.*` につながった後、0d72fc00 の method 自身の `content_match` で `Connection.*` へ、さらに 4e7fb81e の `file_rename` と `inherited` へ歩く。事前の確かめの方法は囲む unit の系譜の名前だけを使うので、method 自身の古いリンクをたどらない。
 
 依頼文が挙げた例(`begin_reload` と `stop_and_wait` が 2 ずつ、`execute_auto` が 5、`tests.real_git.*` が 1〜3、`TerminaldHandle` の 2 つが 0)は、すべてそのとおりだった。
 
@@ -122,11 +122,11 @@ uv run --locked --script duckdb-ext/sql/check.py fixture
 
 ## 4. HEAD の候補
 
-コミット数が変わった unit は 74 個で、すべて増えた(計 172 コミット)。履歴が空だった 30 個のほかに、44 個が増えた。増えた数の大きいものは、`AgentdState.new` 2 → 15、`AgentdState.send_command` 2 → 8、`ExplorationHost for AgentdExplorationHost.start` 4 → 9、`AgentRoutes.settle_routes` 5 → 10、`Store.clear_projections_for_session` 1 → 5、`FakeTerminalHub.terminal_attachment` 1 → 5 である。`unit_churn` の行は 78 行で値が変わった。
+コミット数が変わった unit は 74 個で、すべて増えた(計 172 コミット)。履歴が空だった 30 個のほかに、44 個が増えた。増えた数の大きいものは、`AgentHostState.new` 2 → 15、`AgentHostState.send_command` 2 → 8、`ExplorationHost for AgentHostExplorationHost.start` 4 → 9、`AgentRoutes.settle_routes` 5 → 10、`Store.clear_projections_for_session` 1 → 5、`FakeTerminalHub.terminal_attachment` 1 → 5 である。`unit_churn` の行は 78 行で値が変わった。
 
 ### churn と fan-in × churn
 
-`unit_churn` の上位 10 件(`run_session` 51、`build_definitions` 49、`WorkspaceShell.execute` 45 …… `TerminalSession.spawn` 34)は、順も数も前と同じだった。`unit_fan_in_churn` の上位 10 件(`Event`、`AgentdState`、`ToolCallResult`、`Command`、`ToolCallRequest`、`RigAgentConfig`、`MessageRole`、`WorkspaceShell`、`SessionId` の impl、`CommandId`)も同じだった。`unit_fan_in_churn` は 35 行で値が変わり、上位 50 件では `WriterHandle.flush`(7 → 10 コミット)が 52 位から 36 位に上がり、36〜50 位が 1 つずつ下がった。
+`unit_churn` の上位 10 件(`run_session` 51、`build_definitions` 49、`WorkspaceShell.execute` 45 …… `TerminalSession.spawn` 34)は、順も数も前と同じだった。`unit_fan_in_churn` の上位 10 件(`Event`、`AgentHostState`、`ToolCallResult`、`Command`、`ToolCallRequest`、`RigAgentConfig`、`MessageRole`、`WorkspaceShell`、`SessionId` の impl、`CommandId`)も同じだった。`unit_fan_in_churn` は 35 行で値が変わり、上位 50 件では `WriterHandle.flush`(7 → 10 コミット)が 52 位から 36 位に上がり、36〜50 位が 1 つずつ下がった。
 
 ### `clone_change_consistency`(既定の `contain`)
 
@@ -208,7 +208,7 @@ uv run --locked --script duckdb-ext/sql/check.py fixture
 ## 8. 記録と食い違った点、気づいた点
 
 - **事前の確かめの数との差(30 個・65 コミット と 27 個・57 コミット)は、2 節の 2 つで説明できた。** 事前の確かめの方法を写した SQL は 27 個・57 コミットを再現した。
-- **impl を改名すると、その中で行に触れられない method が多い。** `inherited` の 143 本のうち 122 本は内側の unit に hunk が触れていなかった。系譜が切れていたのは履歴が空の 33 個だけでなく、ほかに 44 個の unit が履歴の一部を失っていた(`AgentdState.new` の 13 コミットなど)。
+- **impl を改名すると、その中で行に触れられない method が多い。** `inherited` の 143 本のうち 122 本は内側の unit に hunk が触れていなかった。系譜が切れていたのは履歴が空の 33 個だけでなく、ほかに 44 個の unit が履歴の一部を失っていた(`AgentHostState.new` の 13 コミットなど)。
 - **型の `content_match` の交差が、その型の method に伝わった。** e30128b4 の `OverviewItem` と `PaletteItem` は、型のリンクが交差していたため、`kind_color` も 2 × 2 でつながった(impl のリンクは交差していない)。型と impl が同じ限定名を持つので、どちらのリンクからも同じ method が届く。
 - **最初の書き方(相関のある副問い合わせ)は、空のキャッシュからの更新で spill の上限を超えた。** fixture では見えなかった。
 

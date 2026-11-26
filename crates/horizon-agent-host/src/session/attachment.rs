@@ -12,7 +12,7 @@ use horizon_agent::live::LiveState;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 
 pub(super) type AttachRequest = oneshot::Sender<Bootstrap>;
 
@@ -109,7 +109,7 @@ pub(crate) struct Bootstrap {
 }
 
 pub(crate) struct AttachmentLease {
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     session: SessionId,
     id: Uuid,
     // Keep the cancellation signal open while queued final events drain.
@@ -155,7 +155,7 @@ impl Drop for AttachmentLease {
 /// progress uses the same stream lock, so its snapshot and updates also join
 /// without a gap. A timed-out caller cannot leave a subscription installed.
 pub(super) fn capture(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     session: SessionId,
     live: &LiveState,
     reply: AttachRequest,
@@ -230,7 +230,7 @@ pub(super) fn capture(
 
 #[cfg(test)]
 pub(super) fn subscribe(
-    state: &AgentdState,
+    state: &AgentHostState,
     session: SessionId,
 ) -> mpsc::UnboundedReceiver<AgentWireEvent> {
     lock_unpoisoned(&state.agent_subscribers)

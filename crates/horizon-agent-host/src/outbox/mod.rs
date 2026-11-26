@@ -25,7 +25,7 @@ use horizon_agent::contract::{Command, InputResult, SessionId, SessionInput};
 use horizon_agent::persistence::event_log::Record;
 use serde::Deserialize;
 
-use crate::session::AgentdState;
+use crate::session::AgentHostState;
 use log::{Index, Pending, Tail};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -36,7 +36,7 @@ const SESSION_KIND: &str = "session";
 /// What a source or sink may read and do during one pass.
 #[derive(Clone, Copy)]
 pub struct Context<'a> {
-    pub state: &'a Arc<AgentdState>,
+    pub state: &'a Arc<AgentHostState>,
     pub index: &'a Index,
 }
 
@@ -50,7 +50,7 @@ impl Context<'_> {
 }
 
 pub fn receipt(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     index: &Index,
     target: SessionId,
     input: SessionInput,
@@ -65,7 +65,7 @@ pub fn receipt(
 /// Reads a log of its own and turns its new entries into session inputs.
 pub trait TriggerSource: Send + Sync {
     /// Sees every agent-log record as it is read, before delivery runs.
-    fn observe(&mut self, _state: &Arc<AgentdState>, _record: &Record) {}
+    fn observe(&mut self, _state: &Arc<AgentHostState>, _record: &Record) {}
     /// One pass over the source's log.
     fn tick<'a>(&'a mut self, ctx: Context<'a>) -> BoxFuture<'a, Result<(), String>>;
 }
@@ -123,7 +123,7 @@ pub fn parse_session(id: &str) -> Result<SessionId, String> {
 }
 
 pub struct Outbox {
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     tail: Tail,
     index: Index,
     acknowledging: HashSet<(SessionId, String)>,
@@ -133,7 +133,7 @@ pub struct Outbox {
 
 impl Outbox {
     pub fn new(
-        state: Arc<AgentdState>,
+        state: Arc<AgentHostState>,
         path: PathBuf,
         sources: Vec<Box<dyn TriggerSource>>,
         sinks: Vec<Arc<dyn ReplySink>>,
@@ -302,7 +302,7 @@ impl Outbox {
 
 /// Runs the outbox every 250 ms once session resume is ready.
 pub fn spawn(
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     sources: Vec<Box<dyn TriggerSource>>,
     sinks: Vec<Arc<dyn ReplySink>>,
 ) {

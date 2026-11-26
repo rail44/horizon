@@ -2,13 +2,13 @@
 //! becomes a new approval, before any contact is made.
 
 use crate::session::approval::begin_reissued_approval;
-use crate::session::state::AgentdState;
+use crate::session::state::AgentHostState;
 use horizon_agent::contract::{ApprovalKind, Command, SessionId, ToolCallRequest};
 use horizon_agent::live::LiveState;
 use std::sync::Arc;
 
 pub(super) fn fold_domain_grant_required(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,

@@ -180,7 +180,12 @@ consumer positions; the registry is process-wide and in-memory.
 
 - Whether recall's query path moves to logd when the projection
   migrates, or earlier.
-- Crash-window semantics of decision 2 (what agentd's send blocks on,
+- Crash-window semantics of decision 2 (what the writer's send blocks on,
   and for how long, before surfacing the error).
+- Decisions 2 and 4 take agentd as the agent events' writer, holding the
+  projection live. Since 2026-11-26 the agent's child writes a log per
+  session and the projection is caught up on demand
+  (`docs/agent-stdio-child-design.md`), so the migration would start from
+  that instead.
 - The distro libduckdb 1.5.0 pin (`AGENTS.md` Build setup) is
   orthogonal but will constrain any future extension adoption.

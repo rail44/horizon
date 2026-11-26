@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use horizon_agent_acp::{Agent, Composition, Places, serve_until};
-use horizon_agent_host::session::AgentdState;
+use horizon_agent_host::session::AgentHostState;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Test-only hook (`crates/horizon-agent-acp/tests/e2e.rs`): when set to a
@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// Serves the client on `read`/`write` until it closes the connection or
 /// SIGTERM arrives, then flushes the session logs.
-async fn run<R, W>(read: R, write: W, state: Arc<AgentdState>)
+async fn run<R, W>(read: R, write: W, state: Arc<AgentHostState>)
 where
     R: AsyncRead + Send + 'static,
     W: AsyncWrite + Send + 'static,
@@ -201,7 +201,7 @@ mod tests {
         }
 
         let agent_config = horizon_agent_host::session::test_support::test_config();
-        let state = Arc::new(AgentdState::new(
+        let state = Arc::new(AgentHostState::new(
             horizon_agent::registry::ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             Some(writer),

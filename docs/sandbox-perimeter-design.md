@@ -129,7 +129,7 @@ own term; `workspace.*` is taken by the shell's tab/pane structure.
 
 - **Input**: none (`tools/input`, the `Empty` input type).
 - **Approval**: automatic (`AutoAllowRead`), like `workspace_snapshot` and
-  `board_read`: a fixed, validated operation performed by the daemon, not
+  `board_read`: a fixed, validated operation performed by the agent, not
   an arbitrary command.
 - **Execution**: the `HostTools::enter_worktree` boundary
   (`tools/execution.rs`), implemented by `horizon-agent-host`'s
@@ -183,8 +183,7 @@ identity and are re-adopted from the persisted root
 
 ### Spawn surface
 
-There is no `isolate` knob: the ACP `_meta.horizon` session request
-(`SessionNewMeta`, `crates/horizon-acp/src/meta.rs`), the CLI
+There is no `isolate` knob: the ACP `session/new` request, the CLI
 (`new agent`), the control-plane dispatcher (`src/control_plane.rs`),
 `PendingAgentSpawn` (`src/workspace/session_creation.rs`), and the view
 chooser (`src/view_chooser.rs`) carry none, and `horizon-agent-host` creates

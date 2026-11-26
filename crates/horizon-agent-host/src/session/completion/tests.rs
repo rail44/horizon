@@ -712,7 +712,7 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
 
 // Exercise the real acceptance boundary before the decision-specific handler.
 fn deliver_judgment(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live: &LiveState,
     commands: &Sender<Command>,
     session: SessionId,

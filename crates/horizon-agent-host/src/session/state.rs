@@ -1,4 +1,4 @@
-//! Process-lifetime session state: the shared [`AgentdState`] every
+//! Process-lifetime session state: the shared [`AgentHostState`] every
 //! connection and every session thread works through, and the per-session
 //! [`SessionEntry`] its registry holds.
 
@@ -43,7 +43,7 @@ pub struct ModelGroup {
     pub models: Vec<String>,
 }
 
-pub struct AgentdState {
+pub struct AgentHostState {
     /// The live provider registry, behind a `Mutex` so a `Reload Config`
     /// can rebuild it in place (see [`Self::reload_provider_config`])
     /// without the process starting again. Read at session-spawn time
@@ -137,7 +137,7 @@ pub struct AgentdState {
     checkpoints: bool,
 }
 
-impl AgentdState {
+impl AgentHostState {
     pub fn new(
         providers: ProviderRegistry,
         agent_config: AgentConfig,
@@ -421,7 +421,7 @@ impl AgentdState {
 
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
     /// was a live session to route it to. A caller decides what a miss
-    /// means: [`super::exploration::AgentdExplorationHost::terminate`]
+    /// means: [`super::exploration::AgentHostExplorationHost::terminate`]
     /// deliberately ignores one -- a task session that already
     /// ended on its own needs no shutdown.
     pub fn send_command(&self, session_id: SessionId, command: Command) -> bool {
@@ -489,7 +489,7 @@ pub(super) struct SessionEntry {
     pub(super) spawn_source_session_id: Option<SessionId>,
     /// The directory this session's file tools are actually confined to --
     /// its own worktree path if `worktree.is_some()`, else whatever
-    /// `SessionNew.workspace_root` carried. Read by [`AgentdState::
+    /// `SessionNew.workspace_root` carried. Read by [`AgentHostState::
     /// session_directory`].
     pub(super) workspace_root: Option<PathBuf>,
     /// This session's own worktree, entered through environment activation

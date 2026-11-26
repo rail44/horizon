@@ -11,7 +11,7 @@
 - **Horizon のソースは 1 回目から変わっていない。** 1 回目の 2ebd0ecb から b3b94fc1 まで、`src/`・`crates/`・`preview-plugin/` の差分は無い(`git diff --stat 2ebd0ecb b3b94fc1 -- src crates preview-plugin` が空)。変わったのは `docs/` と `duckdb-ext/` だけで、unit は `duckdb-ext/` の分だけ 9,264 から 9,293 に増えた(どれも上位に入っていない)。前の判定が引く行番号は、すべてそのまま有効である。候補の出入りは、すべて層の側の変化による。
 - **判定の数**(`問題あり` / `問題なし` / `判断できない`):`unit_churn` 5 / 5 / 0、`unit_fan_in_churn` 3 / 7 / 0、`clone_change_consistency` 4 / 6 / 0、`cochange_without_reference` 0 / 10 / 0、`module_cycles` 2 / 2 / 1。合わせて 14 / 30 / 1(2 回目は 13 / 31 / 1)。
 - **判定の無かった候補は 22 件で、そのうち `問題あり` は 4 件だった。** 新しい原因は 3 つある。(1) 4 つのリストのモーダル(パレット、ビューの選択、セッションの管理、モデルの選択)が、`render.rs` の重ね描きと `modals.rs` の開く・閉じる・取り消すで並行に手書きされていて、振る舞いの修正がモーダルごとに後から写された(1c27f1ab は同じ修正を 4 箇所に当て、0a921404 のパレットの修正は翌日の d39ea089 で残りの 2 つに写された)。`unit_churn` 8 番と `clone_change_consistency` 7 番の 2 つの信号が指した。(2) テスト専用の `Store.append_event` が本番の `agent_events` の INSERT を写している(`問題あり(小)`)。(3) 設定の型 `NamedProviderConfig` が provider のモデル一覧を取りに行く method を持ち、それが `config.rs` と `providers/rig/model_limits.rs` の循環を閉じている(`問題あり(小)`)。
-- **2 回目の `問題あり` 13 件のうち 7 件は今も上位 10 件にある。** 外れた 6 件のうち 5 件(`session_lifecycle.rs` と `commands.rs` の `WorkspaceShell` impl、`AgentdState` impl、`AgentdHandle` と `TerminaldHandle`、`tests.real_git` と `worktree.rs`)は `attribution := 'all'` で戻り、1 件(2 つの `expect_finished`)は `include_tests := true` で戻る。M1(最も内側の unit への帰属)と前置きの帰属は同じ 1 つの変数で戻るので、変数では 2 つを分けられない。継承の規則には戻す変数が無い。
+- **2 回目の `問題あり` 13 件のうち 7 件は今も上位 10 件にある。** 外れた 6 件のうち 5 件(`session_lifecycle.rs` と `commands.rs` の `WorkspaceShell` impl、`AgentHostState` impl、`AgentdHandle` と `TerminaldHandle`、`tests.real_git` と `worktree.rs`)は `attribution := 'all'` で戻り、1 件(2 つの `expect_finished`)は `include_tests := true` で戻る。M1(最も内側の unit への帰属)と前置きの帰属は同じ 1 つの変数で戻るので、変数では 2 つを分けられない。継承の規則には戻す変数が無い。
 - **2 回目の 10 個の原因のうち 6 個は今の上位に出た。** 出なかった 4 個は、`commands.rs` のボードの処理(method の最高は churn の 332 位)、`AgentdHandle` と `TerminaldHandle` の同じ操作(クローンの 39 位)、継続の 3 つの写し(クローンの 47 位)、real-git のテストの補助関数の写し(クローンの 15 位)である。
 - **組んだ規則を 1 つずつ戻すと、今の 45 件のうち 36 件の有無か数が変わる。** そのうち候補自身の数が変わるのは 19 件で、残りの 17 件は戻した規則で入ってくる候補に押し出されるだけである。どの規則を戻しても動かないのは 9 件(churn 2〜5、fan-in 1・4・6、クローン 2・5)である。`cochange_without_reference` の上位 10 件は、すべて結合 100%・共有 3〜5 の同点の帯にあり、N1・帰属・M5 のどれを戻しても大半が押し出される。
 - **今回の読みで、co-change とクローンの誤報の新しい形を 5 つ見つけた(N4〜N8)。** 移動のコミットが churn に残ること(`SessionId` impl は 5 コミットのうち 4 つが移動)、新しいビューを試作した 3 日間のコミットが組を作ること、第 3 の unit を通した結び付きが参照として数えられないこと、`mod x;` の宣言とそのファイルの item の組、クローンの側が解決しないとテストの印が付かないことである。
@@ -103,7 +103,7 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 | # | unit | 種類 | fan-in(ファイル) | コミット | 移動 | 積 | 2 回目 | 判定 |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
 | 1 | `crates/horizon-agent/src/contract.rs` `Event` | type | 89 | 24 | 1 | 2,136 | 1 | 問題なし(引用) |
-| 2 | `crates/horizon-agentd/src/session/state.rs` `AgentdState` | type | 30 | 26 | 4 | 780 | 3 | 問題あり(引用) |
+| 2 | `crates/horizon-agentd/src/session/state.rs` `AgentHostState` | type | 30 | 26 | 4 | 780 | 3 | 問題あり(引用) |
 | 3 | `crates/horizon-agent/src/contract/tool_result.rs` `ToolCallResult` | type | 59 | 12 | 2 | 708 | 7 | 問題なし(引用) |
 | 4 | `crates/horizon-agent/src/contract.rs` `Command` | type | 41 | 17 | 1 | 697 | 6 | 問題なし(引用) |
 | 5 | `crates/horizon-agent/src/contract.rs` `ToolCallRequest` | type | 64 | 9 | 1 | 576 | 11 位(1 回目 6) | 問題なし(引用) |
@@ -113,14 +113,14 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 | 9 | `crates/horizon-wire/src/session.rs` `SessionId` | impl | 78 | 5 | 4 | 390 | 入った | 問題なし |
 | 10 | `crates/horizon-workspace/src/commands.rs` `CommandId` | type | 13 | 30 | 1 | 390 | 入った | 問題なし |
 
-この表は帰属の記録 2 節の「後」の上位 10 件、継承の記録 4 節の上位 10 件と同じである。**2 回目から出た 5 件**はすべて impl で、今の順位は `ToolSessionState` impl 213 位(31 × 1)、`LiveState` impl 197 位(34 × 1)、`AgentdState` impl 62 位(21 × 5)、`Workspace` impl 91 位(14 × 5)、`WriterHandle` impl 59 位(27 × 4)である。`attribution := 'all'` で 5 件とも上位に戻る(2、4、5、8、9 位)。
+この表は帰属の記録 2 節の「後」の上位 10 件、継承の記録 4 節の上位 10 件と同じである。**2 回目から出た 5 件**はすべて impl で、今の順位は `ToolSessionState` impl 213 位(31 × 1)、`LiveState` impl 197 位(34 × 1)、`AgentHostState` impl 62 位(21 × 5)、`Workspace` impl 91 位(14 × 5)、`WriterHandle` impl 59 位(27 × 4)である。`attribution := 'all'` で 5 件とも上位に戻る(2、4、5、8、9 位)。
 
 ### 判定
 
 前の判定を引いたもの。
 
 1. **`Event` — 問題なし(1 回目の 1 番)。** イベントログの語彙で、網羅的な `match` への伝播をコンパイラが強制する(`contract.rs:273-423`)。
-2. **`AgentdState` 型 — 問題あり(2 回目 2 節の 3 番)。** 同じ snapshot から作る `providers` と `agent_config` を別々の `Mutex` のフィールドとして持つ(`horizon-agentd/src/session/state.rs:42`、46)。reload は 2 つを別々に入れ替え(`state.rs:183-193`)、起動は別々に読む(`session/run.rs:79-88`、112)。
+2. **`AgentHostState` 型 — 問題あり(2 回目 2 節の 3 番)。** 同じ snapshot から作る `providers` と `agent_config` を別々の `Mutex` のフィールドとして持つ(`horizon-agentd/src/session/state.rs:42`、46)。reload は 2 つを別々に入れ替え(`state.rs:183-193`)、起動は別々に読む(`session/run.rs:79-88`、112)。
 3. **`ToolCallResult` — 問題なし(2 回目 2 節の 7 番)。** wire のデータ型で、変更はコンパイラが使う側に強制する(`contract/tool_result.rs:26-31`)。
 4. **`Command` — 問題なし(1 回目の 3 番)。** wire のコマンドと内部の 3 つの variant の同居は意図した形と読める(`contract.rs:249-262`)。
 5. **`ToolCallRequest` — 問題なし(1 回目の 6 番)。** 7 行のデータ型で、fan-in は契約の型を皆が使うことを示すだけである(`contract.rs:871`)。
@@ -219,7 +219,7 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 前の判定を引いたもの。辺の表で、判定が指した辺が今の循環に残っていることを確かめた。
 
 1. **`judge/*`・`policy.rs`・`tools/*` — 問題あり(小)(1 回目の 1 番)。** judge から tools への辺は、`start_approval_gate`(`judge/mod.rs:301-345`)の `ToolCompletion`・`ToolSessionState`・`live_frame_for_session` と、`builtin_tool_description` の `Definition`・`definitions`、`JudgeHandle.start` の `ToolCompletion` で、1 回目が指した辺そのものである。
-2. **`board_flow/operations.rs` と `session/*` — 判断できない(1 回目の 4 番)。** session から board_flow への辺は、1 回目が指した 2 本(`session/board.rs:105` の `BoardHost for AgentdBoardHost.operate` から `operate`、`session/connection.rs:113` の `ensure_board_organizer` から `organizer_session`)だけだった。問いは 11 節に書いた。
+2. **`board_flow/operations.rs` と `session/*` — 判断できない(1 回目の 4 番)。** session から board_flow への辺は、1 回目が指した 2 本(`session/board.rs:105` の `BoardHost for AgentHostBoardHost.operate` から `operate`、`session/connection.rs:113` の `ensure_board_organizer` から `organizer_session`)だけだった。問いは 11 節に書いた。
 4. **`rig/clearing.rs`・`completion.rs`・`conversation/*`・`mapping.rs` — 問題なし(1 回目の 5 番)。** 親子の参照(`completion/*`)はまとめられて消え、残った循環を閉じる辺は、1 回目が指した `conversation/upgrade.rs` の `restore_tool`(`upgrade.rs:148-`)から `completion.rs:640` の `replay_safe_tool_arguments` への 1 本だった。
 
 判定の無かった 2 個を読んだ。
@@ -237,8 +237,8 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 | churn 7 | `commands.rs` の `WorkspaceShell` impl | churn 3(42) | 7(42) | 2,429 位(1) | `attribution := 'all'` → 7 位(42)。数え方の記録で M1 により 16 コミット |
 | churn 9 | `WorkspaceShell.new` | 上位外 | 9(41) | **4**(41) | — |
 | churn 10 | `WorkspaceShell` 型 | 上位外 | 10(40) | **5**(40)、fan-in **8** | — |
-| fan-in 3 | `AgentdState` 型 | 上位外 | 3(750) | **2**(780) | — |
-| fan-in 5 | `AgentdState` impl | fan-in 7(357) | 5(714) | 62 位(105) | `attribution := 'all'` → 5 位(714)。帰属の記録で 24 → 5 コミット |
+| fan-in 3 | `AgentHostState` 型 | 上位外 | 3(750) | **2**(780) | — |
+| fan-in 5 | `AgentHostState` impl | fan-in 7(357) | 5(714) | 62 位(105) | `attribution := 'all'` → 5 位(714)。帰属の記録で 24 → 5 コミット |
 | fan-in 10 | `RigAgentConfig` | fan-in 5(450) | 10(575) | **6**(575) | — |
 | クローン 1 | `TerminalSession.spawn` と `WorkspaceShell` | 1(28 / 17) | 1(28 / 34) | **1**(14 / 34) | — |
 | クローン 3 | `AgentdHandle` と `TerminaldHandle` | 8(9 / 0) | 3(25 / 0) | 39 位(1 / 0、両側 1) | `attribution := 'all'` → 7 位(11 / 0、両側 4)。`clone_sides := 'overlap'` だけでは戻らない(method の組に分かれ、最高 28 位の `register_agent` と `register_terminal` 3 / 0、両側 3)。2 つを同時に戻すと 10 位(`begin_reload` の組 10 / 0、両側 3。impl が境の行で側の集合に入り、`all` で中の変更をすべて数える)。`clone_before_both := true` は 44 位(2 / 0) |
@@ -249,7 +249,7 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 
 太字は今も上位 10 件にあるもので、**13 件のうち 7 件**である。外れた 6 件は、5 件が `attribution := 'all'`、1 件が `include_tests := true` で戻る。
 
-- **2 つの既知の件は、同じ実験で確かめられた。** `AgentdState` impl は `attribution := 'all'` で 5 位に戻り、そのとき同じ原因の型は 3 位(750)になる(既定では型が 2 位)。`AgentdHandle` と `TerminaldHandle` は、`contain` では側が 2 つの impl に解決し、最も内側への帰属で impl には自分の行の変更しか付かないので 1 / 0 になる。`attribution := 'all'` で戻り、`overlap` では戻らないことが、この説明と合う。ただし今の順位は 39 位で、依頼文と継承の記録 4 節の 41 位と 2 つ違う。継承の記録の後に `duckdb-ext/` の unit と履歴が増えたことのほかに理由があるかは、切り分けていない。
+- **2 つの既知の件は、同じ実験で確かめられた。** `AgentHostState` impl は `attribution := 'all'` で 5 位に戻り、そのとき同じ原因の型は 3 位(750)になる(既定では型が 2 位)。`AgentdHandle` と `TerminaldHandle` は、`contain` では側が 2 つの impl に解決し、最も内側への帰属で impl には自分の行の変更しか付かないので 1 / 0 になる。`attribution := 'all'` で戻り、`overlap` では戻らないことが、この説明と合う。ただし今の順位は 39 位で、依頼文と継承の記録 4 節の 41 位と 2 つ違う。継承の記録の後に `duckdb-ext/` の unit と履歴が増えたことのほかに理由があるかは、切り分けていない。
 - **M1 と前置きの帰属は、変数では分けられない。** README の Parameters の表のとおり `attribution` は `innermost` と `all` の 2 値で、前置きの帰属は `innermost` の一部である。どちらの規則が外したかは、8・9 個目の増分の記録(数え方の記録 2 節、帰属の記録 2 節)の順位で書いた。
 - **継承の規則には戻す変数が無い。** 13 件のうち継承の規則で数が変わったものは、継承の記録 4 節によればクローンの組では無い(`AgentdHandle` と `TerminaldHandle` は `contain` で impl が側なので変わらない、と同節が書く)。
 - **5 つの変数をすべて戻すと、13 件すべてが 2 回目の上位に戻る**(`AgentdHandle` と `TerminaldHandle` は 3 位ではなく 4 位で、片側は 25 / 0、両側 4)。
@@ -262,7 +262,7 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 | --- | --- | --- | --- | --- | --- | --- |
 | 1. 4 本の送信路 | `TerminalSession.spawn`、`WorkspaceShell` 型、`WorkspaceShell.new` | 4、5、10 | 8 | 1 | 480 位(`execute` と `new`、結合 50%) | `src/workspace/mod.rs` が 2 モジュールの循環(22 位)に入る。原因の辺ではない |
 | 2. `reconcile` のビューの構築 | `reconcile`、`spawn_agent_resume` | 6 | 15 | 片側のある組なし | なし | なし |
-| 3. `AgentdState` の 2 つの lock | `AgentdState` 型、`reload_provider_config` | 18 | 2 | なし | 329 位(`Provider.for_entry` と `reload_provider_config`) | `state.rs` が 3 モジュールの循環(8 位)に入る |
+| 3. `AgentHostState` の 2 つの lock | `AgentHostState` 型、`reload_provider_config` | 18 | 2 | なし | 329 位(`Provider.for_entry` と `reload_provider_config`) | `state.rs` が 3 モジュールの循環(8 位)に入る |
 | 4. `RigAgentConfig` の 3 種類の値 | `RigAgentConfig` 型 | 25 | 6 | なし | 1,026 位(`RawConfig` と) | `config.rs` の循環(5 位)の要素。判定した辺は別 |
 | 5. `commands.rs` のボードの処理 | `commands.rs:143-447` の 7 つの method | 332(`open_board_task_session`、6) | 1,464 | 23 位(`open_board_organizer` と `spawn_agent_lookup_attach`、1 / 1) | なし | なし |
 | 6. `AgentdHandle` と `TerminaldHandle` の同じ操作 | 2 つの impl と `begin_reload`・`stop_and_wait`・`register_*` | 353(`register_agent`、6) | 316(`AgentdHandle` impl) | 39 | 92 位(`register_agent` と `AgentRoutes.send_agent`、83%) | なし |
@@ -341,7 +341,7 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 
 1. **`TerminalSession.spawn` と `WorkspaceShell` の 4 本の送信路**(`src/terminal/session.rs:206-214`、`src/workspace/mod.rs:383-402`、421-424、450-453、465-468):churn 4・5・10 番、fan-in 8 番、クローン 1 番の 5 行が指した。
 2. **`WorkspaceShell.reconcile` の中のビューの構築**(`session_lifecycle.rs:313-416`):churn 6 番。今回は method 自身が指した。
-3. **`AgentdState` の 2 つの lock**(`horizon-agentd/src/session/state.rs:42`、46、183-193、`session/run.rs:79-112`):fan-in 2 番(型)。
+3. **`AgentHostState` の 2 つの lock**(`horizon-agentd/src/session/state.rs:42`、46、183-193、`session/run.rs:79-112`):fan-in 2 番(型)。
 4. **`RigAgentConfig` の 3 種類の値**(`horizon-agent/src/config.rs:519-610`):fan-in 6 番。
 5. **judge と tools の循環を閉じる `start_approval_gate`**(`horizon-agent/src/judge/mod.rs:301-345`):循環 1 番。
 6. **テスト用の描画で監査の事象が「memory: seeded」になる写し間違い**(`frame/test_support.rs:156-166`):クローン 5 番。
@@ -375,7 +375,7 @@ nice -n 19 duckdb-ext/sql/run.sh sql target/code-db/repo target/code-db/measure/
 
 ## 11. 未決の問い
 
-1 回目 5 節の 4 番と 2 回目 9 節の問いは残っている。`horizon-agentd` のボードの入口、つまりボードのツールの host の `board_flow::operate` への委譲(`session/board.rs:105` の `BoardHost for AgentdBoardHost.operate`)と、ACP の `Connection::ensure_board_organizer` の `board_flow::organizer_session` の呼び出し(`session/connection.rs:113-119`)を `session/` に置くのか、`board_flow/` をボードの唯一の置き場とするのか、である。
+1 回目 5 節の 4 番と 2 回目 9 節の問いは残っている。`horizon-agentd` のボードの入口、つまりボードのツールの host の `board_flow::operate` への委譲(`session/board.rs:105` の `BoardHost for AgentHostBoardHost.operate`)と、ACP の `Connection::ensure_board_organizer` の `board_flow::organizer_session` の呼び出し(`session/connection.rs:113-119`)を `session/` に置くのか、`board_flow/` をボードの唯一の置き場とするのか、である。
 
 - **入口は `session/` に置く、が意図の場合。** 2 本の辺は入口から機能への委譲で、状態を戻す依存ではない。循環 2 番(9 モジュール)は問題が無く、`module_cycles` はこの 9 モジュールの循環を出し続ける(誤報として残る)。
 - **`board_flow/` が唯一の置き場、が意図の場合。** 2 本の辺は層の逆転で、2 つの入口を `board_flow/` に移すことがリファクタリングになる。今の辺の表から 2 本を除いて数え直すと、`board_flow/operations.rs`、`session/board.rs`、`session/connection.rs` が循環から外れ、`session/` の中の 6 モジュール(`spawn.rs`、`run.rs`、`environment.rs`、`exploration.rs`、`panic.rs`、`resume.rs`)の循環が残る(`spawn` → `run` → `environment` → `exploration` → `spawn` と、`run` → `panic` → `resume` → `spawn`)。この 6 モジュールの循環は判定していない。この数え直しは辺の表を手で追ったもので、SQL で確かめてはいない。

@@ -94,7 +94,7 @@ uv run --locked --script duckdb-ext/sql/check.py explain target/code-db/head
 
 - **N1 の co-change 2・3 は残った。** 2 組とも、共有 7 のうちリンクのコミットは 1 つで、除いても 6 である。上位から外れたのは M5(両方がテストの unit)による。6〜10 番は読み判定 2 の見込みどおり、6 番は共有 3、7〜10 番は共有 2 になった(6 番は `min_shared` 3 を満たすが、結合 100% で共有 4〜5 の組に抜かれる)。
 - **N2 は 6 組すべての片側を減らしたが、上位に残ったものが多い。** 1 番 28 / 34 → 14 / 34、2 番 19 / 7 → 7 / 7、3 番 25 / 0 → 11 / 0、4 番 14 / 8 → 5 / 8、5 番 3 / 19 → 3 / 2、8 番 14 / 1 → 片側 1(その 1 は側 b の作成のコミット)。この値は読み判定 2 の表の「共存後の片側」の列と同じだった。1〜4 番は減っても上位 10 の中で並びが変わっただけである。
-- **M1 の見込み 11 件のうち 4 件は残った。** churn 6 番の `horizon-workspace` の `Workspace` impl(43 → 36 コミット、7 位)、fan-in 2・5・9 番の `ToolSessionState`・`AgentdState`・`WriterHandle` の impl(39 → 36、34 → 24、22 → 20 コミット)。5 節の、impl に残った doc コメントと属性の行の分である。逆に、見込みに無かった co-change 10 番は、数は変わらず(共有 5、100%)、M1 で数の変わった別の組に抜かれて 11 位になった。
+- **M1 の見込み 11 件のうち 4 件は残った。** churn 6 番の `horizon-workspace` の `Workspace` impl(43 → 36 コミット、7 位)、fan-in 2・5・9 番の `ToolSessionState`・`AgentHostState`・`WriterHandle` の impl(39 → 36、34 → 24、22 → 20 コミット)。5 節の、impl に残った doc コメントと属性の行の分である。逆に、見込みに無かった co-change 10 番は、数は変わらず(共有 5、100%)、M1 で数の変わった別の組に抜かれて 11 位になった。
 - **M5 はクローンに効かない。** 機構の表はクローン 9・10 番を M5 に数えたが、依頼文の M5 は co-change の組だけを対象にしている。
 - **M6 の見込みのうち、循環 1 と 5 は小さくなって残った**(下の循環の表)。
 
@@ -134,7 +134,7 @@ uv run --locked --script duckdb-ext/sql/check.py explain target/code-db/head
 各信号の上位 10 件。入った候補は判定していない。
 
 - **`unit_churn`**:`run_session`(50)、`build_definitions`(49)、`WorkspaceShell.execute`(45)、`WorkspaceShell.new`(41)、`WorkspaceShell` 型(40)、`WorkspaceShell.reconcile`(38、入った)、`horizon-workspace` の `Workspace` impl(36)、`ToolSessionState` impl(36、入った)、`run_provider_stream`(35、入った)、`Render for WorkspaceShell.render`(34、入った)。11・12 位は `spawn_rig_session`、`TerminalSession.spawn`(34)。`move_commits`(リンクのコミットの数)は、`run_session` 3、`build_definitions` 5、`run_provider_stream` 5、ほかは 1〜2 だった。
-- **`unit_fan_in_churn`**:`Event`、`ToolSessionState` impl(39 → 36)、`AgentdState` 型、`Command`、`ToolCallResult`、`RigAgentConfig`、`WriterHandle` impl、`ToolCallRequest`(入った)、`MessageRole`(入った)、`AgentdState` impl(34 → 24)。
+- **`unit_fan_in_churn`**:`Event`、`ToolSessionState` impl(39 → 36)、`AgentHostState` 型、`Command`、`ToolCallResult`、`RigAgentConfig`、`WriterHandle` impl、`ToolCallRequest`(入った)、`MessageRole`(入った)、`AgentHostState` impl(34 → 24)。
 - **`clone_change_consistency`**:`spawn` と `WorkspaceShell`(14 / 34)、`command_for` と `term_key_code`(17 / 0)、`apply_agent_event_to_frame` と `project_event`(10 / 6)、`apply_agent_event_to_frame` と `fold_until_terminal`(7 / 7)、`apply_agent_event_to_frame` と `render_agent_transcript`(8 / 5)、`project_event` と `fold_until_terminal`(5 / 8)、`AgentdHandle` と `TerminaldHandle`(9 / 0)、`WorkspaceShell.open_palette` と `open_session_manager`(3 / 4、入った)、`tools/tests.rs`(unit に解決しない)と `src/board/model.rs` の `tests`(0 / 7、入った)、`horizon-workspace` の `persistence.rs` の `tests` と `tests.rs`(7 / 0、入った)。
 - **`cochange_without_reference`**:`NamedProviderConfig` と `RawConfig.resolved_providers`、`NamedProviderConfig` と `ResolvedProviderConfig`(読み判定 2 の 4・5 番)、`AgentView.render_composer_hints` と `stop_button`、`ProviderSummary` と `RawNamedProviderConfig`、`ViewKindState` と `ViewKind` の 4 組、`placeholder` と `task_lines`、`placeholder` と `turn_chip`(どれも結合 100%、共有 4〜5)。
 
@@ -251,7 +251,7 @@ HEAD の複製で、キャッシュを消してからの初回の更新は、`ru
   | impl(853) | 51 | 692 | 110 |
   | module(874) | 329 | 525 | 20 |
 
-  依頼文の括弧の中の「属性」が、囲む unit 自身の属性(構文木では外にあるので、もともと範囲に入らない)を指すのか、内側の item の属性を指すのかは、定義から決まらない。実装は定義の文言どおり(内側の unit の範囲だけを除く)にして既定にし、判断を残した。比べるために、「自分の行の変更がコードの行を含まない impl とモジュールの `modified` を数えない」という扱いを、測定のセッションだけで `unit_changes` を差し替えて測った(コミットしていない)。この扱いでは、機構の表が M1 に数えた 11 件はすべて上位から外れ(churn 3・5・6・7・8、fan-in 2・4・5・8・9、クローン 10)、`unit_churn` と `unit_fan_in_churn` の上位 10 件から impl が無くなった。一方で、`問題あり` の `AgentdState` impl(fan-in 5 番。同じ原因の型は 2 位に残る)と、`AgentdHandle` と `TerminaldHandle`(クローン 3 番)も外れた。後者は、断片を含む impl が側になり、method の変更が数えられなくなるためである。この扱いは本文の分類(空行、`//`、`#[`)を使うので、言語の知識を `lang/` の外に持ち込むことにもなる。
+  依頼文の括弧の中の「属性」が、囲む unit 自身の属性(構文木では外にあるので、もともと範囲に入らない)を指すのか、内側の item の属性を指すのかは、定義から決まらない。実装は定義の文言どおり(内側の unit の範囲だけを除く)にして既定にし、判断を残した。比べるために、「自分の行の変更がコードの行を含まない impl とモジュールの `modified` を数えない」という扱いを、測定のセッションだけで `unit_changes` を差し替えて測った(コミットしていない)。この扱いでは、機構の表が M1 に数えた 11 件はすべて上位から外れ(churn 3・5・6・7・8、fan-in 2・4・5・8・9、クローン 10)、`unit_churn` と `unit_fan_in_churn` の上位 10 件から impl が無くなった。一方で、`問題あり` の `AgentHostState` impl(fan-in 5 番。同じ原因の型は 2 位に残る)と、`AgentdHandle` と `TerminaldHandle`(クローン 3 番)も外れた。後者は、断片を含む impl が側になり、method の変更が数えられなくなるためである。この扱いは本文の分類(空行、`//`、`#[`)を使うので、言語の知識を `lang/` の外に持ち込むことにもなる。
 - **M1 はクローンの側の数を減らす。** `clone_change_consistency` は、断片を含む最も小さい unit を側にするので、複数の method にまたがる断片の側は impl になる。innermost では、その impl の数に method の変更が入らない。`AgentdHandle` と `TerminaldHandle` は 25 / 0 → 16 / 0(M1 だけ)になった。機構 M4(片側の数を断片で数える)は今回の 5 つに入っていない。
 - **M5 と M1 は、`問題あり` を 1 件ずつ、判定の理由そのものの形で外した**(2 節の 2 番と 4 番)。どちらも変数で前に戻せる。
 

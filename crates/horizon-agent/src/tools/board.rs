@@ -39,7 +39,7 @@ pub(crate) fn session_schema() -> Value {
 
 /// The host capability `board_read` and `board_comment` are built on: read
 /// the board (list items or show one) and append a comment. Implemented by
-/// `horizon-board-flow` (`AgentdBoardHost`) using `horizon_board::Store`
+/// `horizon-board-flow` (`AgentHostBoardHost`) using `horizon_board::Store`
 /// and installed on each session's `ToolSessionState` via
 /// [`ToolSessionState::with_board_host`].
 ///

@@ -79,12 +79,11 @@ DeepInfra は rig の `Effort` の 6 段と `none` をそのまま受け付け�
   今の段と選択肢を知らせ(`ProviderEvent::SessionReasoning`)、`horizon-agent-host` が
   セッションごとに最後の知らせを持って再接続のたびに送り直す。
 - **ACP**: `session/set_config_option` の 2 つ目の設定項目、id `effort`
-  (`horizon_acp::EFFORT_CONFIG_ID`、カテゴリ `thought_level`)。値は段の語、
-  項目はモデルの選択肢。モデルが受け付けない段への切り替えは要求の時点で
-  拒む。切り替えはモデルと同じく次のターンから効く。Horizon の拡張の語彙は
-  増えない(`HORIZON_ACP_EXT_VERSION` はそのまま)。effort を知らないシェルは
-  その項目を読み飛ばし、知らないデーモンは切り替えを `Unknown config option`
-  で拒む。
+  (`horizon_agent_host::options::EFFORT_CONFIG_ID`、カテゴリ `thought_level`)。
+  値は段の語、項目はモデルの選択肢。モデルが受け付けない段への切り替えは
+  要求の時点で拒む。切り替えはモデルと同じく次のターンから効く。effort を
+  知らないシェルはその項目を読み飛ばし、知らないエージェントは切り替えを
+  `Unknown config option` で拒む。
 - **ジャッジと要約**: `crate::auxiliary::reasoning_off`(`Reasoning::Off` を
   受け付けられなければ付けずに送る)。
 - **画面と操作**: composer のチップは `model · effort`。モデルピッカーの最初の

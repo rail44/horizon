@@ -10,7 +10,7 @@ use horizon_agent::packages::{Packages, PackagesBuilder};
 use horizon_agent::tools::BoardHost;
 
 use crate::outbox::{ReplySink, TriggerSource};
-use crate::session::AgentdState;
+use crate::session::AgentHostState;
 
 /// One addition to the host. Every method has a default that adds nothing.
 pub trait Extension: Send + Sync + 'static {
@@ -30,7 +30,7 @@ pub trait Extension: Send + Sync + 'static {
     }
 
     /// The board tool's host for a session rooted at `root`.
-    fn board_host(&self, _state: &Arc<AgentdState>, _root: &Path) -> Option<Arc<dyn BoardHost>> {
+    fn board_host(&self, _state: &Arc<AgentHostState>, _root: &Path) -> Option<Arc<dyn BoardHost>> {
         None
     }
 }
@@ -70,7 +70,7 @@ impl Extensions {
 
     pub(crate) fn board_host(
         &self,
-        state: &Arc<AgentdState>,
+        state: &Arc<AgentHostState>,
         root: &Path,
     ) -> Option<Arc<dyn BoardHost>> {
         self.0

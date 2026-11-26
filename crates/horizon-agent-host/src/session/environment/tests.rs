@@ -292,7 +292,7 @@ fn a_session_writing_in_its_own_worktree_writes_only_once_prepared_for_it() {
             occurrence_id: OccurrenceId("board-write".into()),
         };
         match execute_agent_tool(
-            &super::super::host_tools::AgentdHostTools {
+            &super::super::host_tools::AgentHostHostTools {
                 state: state.clone(),
             },
             &tools,

@@ -141,7 +141,7 @@ pub struct TaskStart {
 
 /// The host capability `task` is built on: spawn a peer session,
 /// subscribe to its events, terminate it. Implemented by `horizon-agent-host`
-/// (`session::AgentdExplorationHost`) and installed on the requester's
+/// (`session::AgentHostExplorationHost`) and installed on the requester's
 /// `ToolSessionState`; the requester's own workspace root, provider, and
 /// session id are baked into the implementation at construction, so this
 /// trait stays as narrow as the tool actually needs.

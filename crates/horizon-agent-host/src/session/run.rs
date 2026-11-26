@@ -24,13 +24,13 @@ use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnviro
 use super::events::{
     persist_and_send_session_event, report_persistence_failure, send_session_event,
 };
-use super::host_tools::AgentdHostTools;
+use super::host_tools::AgentHostHostTools;
 use super::panic::{
     SessionLoopPhase, catch_session_panic, record_session_loop_panic,
     record_unexpected_provider_exit,
 };
 use super::setup::project_is_trusted;
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 use crate::worktree::WorktreeInfo;
 
 /// The session's whole lifetime, from `Initialize` through to the
@@ -51,7 +51,7 @@ pub(super) fn run_session(
     workspace_root: Option<PathBuf>,
     spawn_source_session_id: Option<SessionId>,
     restored_worktree: Option<WorktreeInfo>,
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<crate::session::attachment::AttachRequest>,
     history: Vec<Event>,
@@ -183,7 +183,7 @@ pub(super) fn run_session(
         async_results_tx.clone(),
     );
 
-    let host = AgentdHostTools {
+    let host = AgentHostHostTools {
         state: state.clone(),
     };
 
@@ -325,7 +325,7 @@ pub(super) fn run_session(
 #[expect(clippy::too_many_arguments)]
 fn handle_provider_event(
     host: &dyn HostTools,
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     tool_state: &ToolSessionState,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,

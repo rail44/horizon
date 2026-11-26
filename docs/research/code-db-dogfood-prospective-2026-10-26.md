@@ -127,7 +127,7 @@ README の初回 20〜26 s より長かったが、その原因は切り分け�
 | 4 | `crates/horizon-agent/src/live.rs` `LiveState` | impl | 204 | 34 | 296 | 17 | 578 | — |
 | 5 | `crates/horizon-agent/src/config.rs` `RigAgentConfig` | type | 92 | 25 | 293 | 18 | 450 | 3 |
 | 6 | `crates/horizon-agent/src/contract.rs` `ToolCallRequest` | type | 7 | 64 | 1,103 | 6 | 384 | 3 |
-| 7 | `crates/horizon-agentd/src/session/state.rs` `AgentdState` | impl | 173 | 21 | 98 | 17 | 357 | 3 |
+| 7 | `crates/horizon-agentd/src/session/state.rs` `AgentHostState` | impl | 173 | 21 | 98 | 17 | 357 | 3 |
 | 8 | `src/workspace/session_lifecycle.rs` `WorkspaceShell` | impl | 490 | 8 | 28 | 44 | 352 | 13 |
 | 9 | `crates/horizon-agent/src/persistence/event_log/writer.rs` `WriterHandle` | impl | 271 | 27 | 120 | 13 | 351 | — |
 | 10 | `crates/horizon-agent/src/tools/catalog.rs` `definitions` | function | 3 | 8 | 10 | 42 | 336 | 40 |
@@ -142,7 +142,7 @@ README の初回 20〜26 s より長かったが、その原因は切り分け�
 4. **`LiveState` impl — 問題なし。** fold と永続化の境界である(`live.rs:122-345`)。17 コミットのうち 7 つは、クレートの分割、改名 3 回、衛生作業、`pub` の縮小、remoc hub の削除という、リポジトリ全体の機械的な掃除だった。残りは、永続化の意味の変更(コミットしてから fold する、失敗を閉じる側に倒す)である。履歴を受け取るコンストラクタは 3 段の入れ子になっていて、文脈の引数が 1 つ増えるたびに 1 段増えた(`live.rs:204-260`)。ただし、その費用は 1 ファイルの中で閉じている。
 5. **`RigAgentConfig` — 問題あり。** 1 つの構造体が 3 種類の値を持っている(`config.rs:519-610`)。(a) provider への接続(`kind`・`api_key_env`・`model`・`base_url`)。(b) 常に定数で、テストが小さい値を入れるためだけにフィールドになっている調整値(`iteration_cap`・`doom_loop_window`・`stream_flush_*`・`repository_instructions_cap_chars`・`max_output_tokens`・`clearing_threshold_pct`、各フィールドの注釈がそう書いている)。(c) セッションごとの値(`allowed_tool_ids`・`trusted_project`・`decision`)。(c) は、プロセス全体の設定を複製してから書き換えて作られる。書き換える箇所は `registry.rs:117`、`providers/rig/mod.rs:126`、`rig/session/turn.rs:541`、`rig/session/mod.rs:89`、`rig/session/environment.rs:26` で、`trusted_project` と `allowed_tool_ids` は 2 箇所ずつで書き換えられている。セッションの判断が 1 つ増えるたびに provider の設定にフィールドが増え、fan-in 25 ファイル(テストの構築の多く)が影響を受ける。18 コミットの件名も、ツールの制限、信頼、継続判定、圧縮のように、provider とは別の機能が並ぶ。リファクタリングは、接続、ループの調整値、セッションの引数を別の型に分けることである。
 6. **`ToolCallRequest` — 問題なし。** 7 行のデータ型で、6 コミットしか変わっていない(`contract.rs:871`)。fan-in 64 は、皆が使う契約の型であることを示すだけである。
-7. **`AgentdState` impl — 問題あり。** プロセス全体の状態で、16 個のフィールドがそれぞれ別の `Mutex` を持つ(`horizon-agentd/src/session/state.rs:40-122`)。設定の reload は、`agent_config` と `providers`(後者は前者から作る)を、別々の lock で順に入れ替える(`state.rs:183-193`)。セッションを起動する `run_session` は、`providers` を lock して `start_session` を呼び(`session/run.rs:79-88`)、その後で `agent_config` を別に lock して複製する(`run.rs:112`)。reload はどちらの側でも `lifecycle` の lock を取らない(`session/connection.rs:215-217`。`lifecycle` を取るのは `handle_session_new` の登録の部分と、スレッドの終了だけである)。そのため、起動が reload と重なると、新しい registry と古い `agent_config`(judge の `base_url` など)の組み合わせでセッションが始まりうる。重なる窓は狭いが、同じ snapshot から作った 2 つの値を 2 つの lock で持つことが原因である。リファクタリングは、2 つを 1 つの snapshot として 1 つの lock(または 1 つの差し替え可能な参照)で持つことである。17 コミットは、ボード・信頼・複数 provider のように、daemon の機能のたびにフィールドが増えた履歴だった。
+7. **`AgentHostState` impl — 問題あり。** プロセス全体の状態で、16 個のフィールドがそれぞれ別の `Mutex` を持つ(`horizon-agentd/src/session/state.rs:40-122`)。設定の reload は、`agent_config` と `providers`(後者は前者から作る)を、別々の lock で順に入れ替える(`state.rs:183-193`)。セッションを起動する `run_session` は、`providers` を lock して `start_session` を呼び(`session/run.rs:79-88`)、その後で `agent_config` を別に lock して複製する(`run.rs:112`)。reload はどちらの側でも `lifecycle` の lock を取らない(`session/connection.rs:215-217`。`lifecycle` を取るのは `handle_session_new` の登録の部分と、スレッドの終了だけである)。そのため、起動が reload と重なると、新しい registry と古い `agent_config`(judge の `base_url` など)の組み合わせでセッションが始まりうる。重なる窓は狭いが、同じ snapshot から作った 2 つの値を 2 つの lock で持つことが原因である。リファクタリングは、2 つを 1 つの snapshot として 1 つの lock(または 1 つの差し替え可能な参照)で持つことである。17 コミットは、ボード・信頼・複数 provider のように、daemon の機能のたびにフィールドが増えた履歴だった。
 8. **`session_lifecycle.rs` の `WorkspaceShell` impl — 問題あり。** `unit_churn` の 2 番と同じ候補で、fan-in は 8 ファイルである。
 9. **`WriterHandle` impl — 問題なし。** 公開する面は `open*`・`failure`・`append`・`flush` だけで、小さく安定している(`event_log/writer.rs:70-350`)。13 コミットのうち 5 つは機械的な掃除で、残りは中の耐久性の意味の変更(失敗の保持、起動の差分化)だった。fan-in 27 の側は変わっていない。
 10. **`definitions` — 問題なし(信号の誤り)。** `unit_churn` の 4 番と同じである。fan-in 8 は今の小さい関数のもので、コミット 42 は移る前の本体のものなので、積は別々の unit の値を掛けている。
@@ -264,7 +264,7 @@ README の初回 20〜26 s より長かったが、その原因は切り分け�
 信号ごとに、誤りに共通していたことを書く。
 
 - **`unit_churn`**:誤りの 6 件のうち 3 件は impl・容器の型(`TerminalSession`、`ToolSessionState`、`Inner`)で、入れ子の和や、能力を足すたびに伸びる容器だった。1 件は同一性の取り違え(`definitions`)、2 件は設計どおりの変更点(`execute`、`project_event` の impl)だった。当たった 4 件は、どれも `src/workspace/` と `src/terminal/session.rs` のシェルの配線で、「機能を 1 つ足すと N 箇所が変わる」箇所だった。テストの unit は、上位 50 件のうち 35 件がモジュールで、入れ子による水増しが特に強かった。
-- **`unit_fan_in_churn`**:誤りの 7 件のうち 4 件(`Event`、`Command`、`ToolCallRequest`、`WriterHandle`)は契約の型か安定した面で、fan-in が大きいのは設計上皆が import するためだった。churn も variant の追加で、コンパイラが伝播を強制している。`LiveState` と `WriterHandle` のコミットの 4〜7 割は、改名と衛生作業の一斉変更だった。当たった 3 件のうち 2 件(`RigAgentConfig`、`AgentdState`)は、「違う寿命の値を 1 つの構造体に入れている」型だった。
+- **`unit_fan_in_churn`**:誤りの 7 件のうち 4 件(`Event`、`Command`、`ToolCallRequest`、`WriterHandle`)は契約の型か安定した面で、fan-in が大きいのは設計上皆が import するためだった。churn も variant の追加で、コンパイラが伝播を強制している。`LiveState` と `WriterHandle` のコミットの 4〜7 割は、改名と衛生作業の一斉変更だった。当たった 3 件のうち 2 件(`RigAgentConfig`、`AgentHostState`)は、「違う寿命の値を 1 つの構造体に入れている」型だった。
 - **`clone_change_consistency`**:片側の数は断片を囲む unit の変更の数で、10 組のどれでも、断片の伝播の漏れを示していなかった。誤りの 7 件のうち 3 件は、`Event` の網羅的な `match` の no-op の一覧で、コンパイラが不整合を止める。2 件はテストどうしの組の一方が unit に解決しなかったもの、1 件は対応表どうしの見かけの一致、1 件はテスト用の provider の小さい重複だった。当たった 3 件は、クローンが本物で、片側の数とは無関係に、読めば写しの費用が分かった。
 - **`cochange_without_reference`**:上位 10 組のうち 6 組がテストの unit を含んでいた。テストでない 4 組は、設計で決めたクレートの境界の写し(2 組)と、wire の全型への一律の方針変更(2 組)だった。結合 100% の同点が多く(共有 4 以上で 33 組)、上位 10 件の後半は名前順で決まっていた。
 - **`module_cycles`**:3 個は、Rust の親子のモジュールの相互参照と、1 つの型の impl をファイルに分けた形、トレイトと工場の同居で説明できた。当たった 1 個(judge と tools)は、循環を閉じる 2 つの向きの辺(`start_approval_gate` と `ToolCompletion`)を読むと、置き場所の問題が具体的に見えた。
@@ -275,7 +275,7 @@ README の初回 20〜26 s より長かったが、その原因は切り分け�
 
 1. **`TerminalSession.spawn` と `WorkspaceShell` の 4 本の送信路**(`src/terminal/session.rs:206-214`、`src/workspace/mod.rs:383-402`):端末からシェルへの事象を 1 つ足すたびに、セッションのフィールドと引数、シェルのフィールドとチャネル、`install_terminal_session`、`wire_*` の 4 箇所が変わる。
 2. **`WorkspaceShell.reconcile` の中のビューの構築**(`src/workspace/session_lifecycle.rs:313-416`):ペインの種類ごとの分岐が、同期の処理の中に直接書かれている。ボードの 2 本の腕はほぼ同じで、ボードのペインの `match` は他の 2 箇所にもある。ビューの種類を 1 つ足すと、呼び出し元 19 の関数を変えることになる。
-3. **`AgentdState` の 2 つの lock**(`horizon-agentd/src/session/state.rs:183-193`、`session/run.rs:79-112`):同じ snapshot から作る `providers` と `agent_config` を、reload は別々に入れ替え、起動は別々に読む。重なると、新しい registry と古い設定が組み合わさる。
+3. **`AgentHostState` の 2 つの lock**(`horizon-agentd/src/session/state.rs:183-193`、`session/run.rs:79-112`):同じ snapshot から作る `providers` と `agent_config` を、reload は別々に入れ替え、起動は別々に読む。重なると、新しい registry と古い設定が組み合わさる。
 4. **`RigAgentConfig` の 3 種類の値**(`horizon-agent/src/config.rs:519-610`):セッションごとの値が、プロセスの設定の複製を書き換えて作られ、`trusted_project` と `allowed_tool_ids` は 2 箇所ずつで書き換えられる。セッションの判断が増えるたびに、provider の設定が伸びる。
 5. **自動継続のターンの始め方の 3 つの写し**(`rig/session/continuation.rs:287-303`、`rig/session/turn.rs:325-343`・387-405):イベントログ(`persistence/event_log/turn.rs:49`)が読む事象の並びを 3 箇所が別々に持っている。4 つ目の似た経路(`turn.rs:530-551`)は、すでに `AutoContinue` を送っていない。
 6. **`src/workspace/commands.rs` の中のボードのセッションの処理**(`commands.rs:136-448`):ファイルの文書は dispatcher と `control_plane_*` と書いているが、約 300 行のボードの処理が同じ impl にあり、ボードの変更がコマンドのファイルに入る。
@@ -297,5 +297,5 @@ README の初回 20〜26 s より長かったが、その原因は切り分け�
 - **同一性。** unit の同一性は `(path, kind, qualified_name)` なので、改名・移動で履歴が切れ、名前が残ると履歴が誤って続く(8 節)。判定ではコミットの件名と git の履歴で確かめたが、確かめたのは上位の候補だけである。
 - **閾値と同点。** `cochange_without_reference` の上位は、閾値と、同点のときの名前順に強く依存する。
 - **文脈の取り方。** 呼び出し元・呼び出し先は `unit_edges` の深さ 1 で、`local` の記号、トレイト越しの呼び出し、マクロの中はグラフの記録の制限を引き継ぐ。
-- **reload の競合。** `AgentdState` の競合は、コードを読んで導いたもので、再現はしていない。
+- **reload の競合。** `AgentHostState` の競合は、コードを読んで導いたもので、再現はしていない。
 - **作業ツリー。** 作業ツリーは HEAD 2ebd0ecb のままで、索引・jscpd の報告・キャッシュはその木から作った。`origin/main` の新しいコミットは見ていない。

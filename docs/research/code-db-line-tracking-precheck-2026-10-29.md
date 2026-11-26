@@ -12,7 +12,7 @@
 
 - **標本 65 個(関数・メソッド 55、型・module・impl 10)で、`unit_history` の 730 コミットのうち 474 が `git log -L` と一致し、256(35.1 %)は `-L` に無かった。`-L` だけにあるコミットは 20 だった。** 集めた Jaccard 係数は 0.632、unit ごとの平均は 0.665、2 つの集合が一致した unit は 25 個である(5 節)。
 - **`-L` に無かった 256 のうち 243(標本の `unit_history` の 33.3 %)は、系譜が別のファイルへつないだ移動の先にあった。** 元のファイルが消えた移動(ファイルの分割)112、元のファイルが残った抽出の `content_match` 93、別のファイルへの `body_move` 21、git が元のファイルを別のファイルへの改名と判定した移動 17 である。残りは、同じファイルの中での改名を伴う `body_move` 6、名前は続くが `-L` の行がそのコミットで新しく書かれたことになるもの 4、前身の行のうち今の範囲に残らなかった行への変更 2、`-L` が別の経路で前身に達したもの 1 だった(4 節)。
-- **`inherited` のリンクと `file_rename` のリンクの先のコミットは、標本では 1 つも失われなかった。** `-L` はファイルの改名を自分でたどり(`--follow` は `-L` には無く、要らない)、impl の改名で触れられなかった method の行はそのまま続くからである。`AgentdState.new` の 15 → 5 と `AgentdHandle.begin_reload` の 2 → 1 は、`inherited` ではなく、それぞれファイルの分割(0d72fc00)と、同じファイルの中で行が別の impl の写しに対応づけられたこと(a4fd9605)で失われた(4 節)。
+- **`inherited` のリンクと `file_rename` のリンクの先のコミットは、標本では 1 つも失われなかった。** `-L` はファイルの改名を自分でたどり(`--follow` は `-L` には無く、要らない)、impl の改名で触れられなかった method の行はそのまま続くからである。`AgentHostState.new` の 15 → 5 と `AgentdHandle.begin_reload` の 2 → 1 は、`inherited` ではなく、それぞれファイルの分割(0d72fc00)と、同じファイルの中で行が別の impl の写しに対応づけられたこと(a4fd9605)で失われた(4 節)。
 - **今の unit 9,427 個すべてに `-L` を走らせると、テストでない関数・メソッド 3,518 個の `unit_history` 9,407 コミットのうち 2,043(21.7 %)が `-L` に無く、そのうち 1,839 が別のファイルへの移動の先だった(自動の分類)。** 標本の割合が高いのは、層の作り方が churn の上位と他ファイルの系譜を厚く取ったためである(5 節)。
 - **数の順位は、標本で Spearman 0.743(関数・メソッドで 0.720)、テストでない関数・メソッド全体で 0.666 だった。** 全体の上位 10 件の重なりは 6/10、上位 100 件は 60/100 である。`run_session` は 1 位から 30 位、`paint_terminal` は 27 位から 4,216 位、`ToolSessionBuilder.with_root` は 35 位から 4,576 位に下がる(5 節)。
 - **`-L` だけにあるコミット(標本 20)は、多くが `-L` の行の写像が別のコードの旧い行へ続いたものだった(13)。** ほかは、系譜の閾値に届かなかった改名を `-L` がたどったもの 2、`body_move` の残り殻で系譜が意図して切った履歴を `-L` が名前の残った行でたどったもの 2、差分が行を別の名前の unit の旧い行に対応づけたため、データベースが unit にコミットを 1 つも記録しないもの 3 である(4 節)。
@@ -35,7 +35,7 @@
 
 乱数の種は 20261029(Python の `random.Random`)。`unit_churn` の順(コミット数の降順、行数の降順、path、開始行)で全 unit に順位を付け、テストでない unit から引いた。
 
-- 指定の 5 個:`crates/horizon-agent/src/tools/catalog.rs` の `build_definitions`、`crates/horizon-agentd/src/session/run.rs` の `run_session`、`src/runtime/mod.rs` の `AgentdHandle.begin_reload` と `AgentdHandle.stop_and_wait`、`AgentdState.new`。
+- 指定の 5 個:`crates/horizon-agent/src/tools/catalog.rs` の `build_definitions`、`crates/horizon-agentd/src/session/run.rs` の `run_session`、`src/runtime/mod.rs` の `AgentdHandle.begin_reload` と `AgentdHandle.stop_and_wait`、`AgentHostState.new`。
 - 他ファイルの系譜の 3 個:`unit_history` のうち、深さ 1 以上で今の path と違うファイルの同一性が渡したコミットの数が最も多い 3 個(テストを除く)。この数え方の 1 位は `run_session`(30)で、指定に入っているので次の 3 個を取った:`spawn_rig_session`(22)、`paint_terminal`(22)、`ToolSessionBuilder.with_root`(21)。この数え方はファイルの改名の先も含む。
 - 関数・メソッドから、順位 1〜100 で 15、101〜1,000 で 15、1,001 以降でコミット 1 以上から 15、コミット 0 から 3(テストでない関数・メソッドでコミット 0 は 2 個しかなく、2 個になった)。
 - 型・module・impl から、順位 1〜1,000 で 3、1,001 以降でコミット 1 以上から 3、コミット 1 以上の全体から 2、impl だけから 2。順位で層を分けた 8 個には impl が入らなかったので、impl の 2 個を足した。囲む unit は 8 節で別に扱う。
@@ -74,7 +74,7 @@ UH だけのコミットは、まず自動の規則で分けた。各コミッ�
 | 指定 | function | `crates/horizon-agentd/src/session/run.rs` | `run_session` | 1 | 51 | 24 | 24 | 27 | 0 | 0.47 | A27 |  |
 | 指定 | method | `src/runtime/mod.rs` | `AgentdHandle.begin_reload` | 3415 | 2 | 1 | 1 | 1 | 0 | 0.50 | F1 |  |
 | 指定 | method | `src/runtime/mod.rs` | `AgentdHandle.stop_and_wait` | 3858 | 2 | 1 | 1 | 1 | 0 | 0.50 | F1 |  |
-| 指定 | method | `crates/horizon-agentd/src/session/state.rs` | `AgentdState.new` | 76 | 15 | 5 | 5 | 10 | 0 | 0.33 | A10 |  |
+| 指定 | method | `crates/horizon-agentd/src/session/state.rs` | `AgentHostState.new` | 76 | 15 | 5 | 5 | 10 | 0 | 0.33 | A10 |  |
 | 他ファイル | function | `crates/horizon-agent/src/providers/rig/session/mod.rs` | `spawn_rig_session` | 9 | 34 | 12 | 12 | 22 | 0 | 0.35 | A22 |  |
 | 他ファイル | function | `src/terminal/paint.rs` | `paint_terminal` | 27 | 23 | 1 | 1 | 22 | 0 | 0.04 | B22 |  |
 | 他ファイル | method | `crates/horizon-agent/src/tools/state/builder.rs` | `ToolSessionBuilder.with_root` | 35 | 22 | 1 | 1 | 21 | 0 | 0.05 | C21 |  |
@@ -120,7 +120,7 @@ UH だけのコミットは、まず自動の規則で分けた。各コミッ�
 | 1001– | function | `crates/horizon-agentd/src/board_flow/dispatch.rs` | `handle_event` | 2499 | 2 | 2 | 2 | 0 | 0 | 1.00 |  |  |
 | 1001– | function | `crates/horizon-sandbox-runtime/src/execute.rs` | `become_child_subreaper` | 6073 | 1 | 1 | 1 | 0 | 0 | 1.00 |  |  |
 | 1001– | function | `crates/horizon-agent/src/tools/bash/registry.rs` | `lock` | 3726 | 2 | 3 | 2 | 0 | 1 | 0.67 |  | a1 |
-| 1001– | method | `crates/horizon-agentd/src/session/board.rs` | `BoardHost for AgentdBoardHost.list` | 2256 | 3 | 3 | 3 | 0 | 0 | 1.00 |  |  |
+| 1001– | method | `crates/horizon-agentd/src/session/board.rs` | `BoardHost for AgentHostBoardHost.list` | 2256 | 3 | 3 | 3 | 0 | 0 | 1.00 |  |  |
 | 1001– | function | `src/terminal/paint.rs` | `paint_row_items` | 2679 | 2 | 1 | 1 | 1 | 0 | 0.50 | B1 |  |
 | 1001– | function | `src/agent/turns/mod.rs` | `pluralize` | 2178 | 3 | 2 | 2 | 1 | 0 | 0.67 | A1 |  |
 | 0 件 | method | `src/runtime/mod.rs` | `TerminaldHandle.stop_and_wait` | 9427 | 0 | 1 | 0 | 0 | 1 | 0.00 |  | d1 |
@@ -156,7 +156,7 @@ UH だけのコミットは、まず自動の規則で分けた。各コミッ�
 
 `inherited`、`file_rename`、同じファイルの中の `content_match` を壁とするものは標本に無かった。
 
-- **A(元のファイルが消えた移動)。** ファイルをディレクトリに分けたコミットである。`run_session` の 27 と `AgentdState.new` の 10、`Connection.session_list` の 6 などは 0d72fc00(`crates/horizon-sessiond/src/session.rs` を削除し、`session/run.rs`、`session/state.rs` など 11 ファイルを追加)、`spawn_rig_session` の 22 は faeccb05(`providers/rig/session.rs` → `session/mod.rs`)、`Render for WorkspaceShell.render` の 13 は 7b588c08(`src/workspace.rs` → `src/workspace/render.rs`)、`AgentView` の 12 は 7441ae10(`src/agent/view.rs` → `src/agent/view/mod.rs`)。どれも git は元のファイルを削除と判定し(改名の相手を選ばない)、`-L` はそのコミットで範囲の全体が新しいファイルに追加されたとして止まる(0d72fc00 の `-L` の差分は `new file mode`、`@@ -0,0 +40,280 @@`)。
+- **A(元のファイルが消えた移動)。** ファイルをディレクトリに分けたコミットである。`run_session` の 27 と `AgentHostState.new` の 10、`Connection.session_list` の 6 などは 0d72fc00(`crates/horizon-sessiond/src/session.rs` を削除し、`session/run.rs`、`session/state.rs` など 11 ファイルを追加)、`spawn_rig_session` の 22 は faeccb05(`providers/rig/session.rs` → `session/mod.rs`)、`Render for WorkspaceShell.render` の 13 は 7b588c08(`src/workspace.rs` → `src/workspace/render.rs`)、`AgentView` の 12 は 7441ae10(`src/agent/view.rs` → `src/agent/view/mod.rs`)。どれも git は元のファイルを削除と判定し(改名の相手を選ばない)、`-L` はそのコミットで範囲の全体が新しいファイルに追加されたとして止まる(0d72fc00 の `-L` の差分は `new file mode`、`@@ -0,0 +40,280 @@`)。
 - **B(元のファイルが残る抽出)。** `paint_terminal` の 22、`TerminalView.handle_key` の 13、`dump_frame` の 5、`TerminalView.handle_mouse_up` の 4、`paint_row_items` の 1 は 1b15a6a5(`src/terminal/mod.rs` から `paint.rs`、`keyboard.rs`、`pointer.rs`、`diagnostics.rs` を切り出し、`mod.rs` は 1,280 行の変更で残る)。`spawn_host` の 12 は beaa9d6b、`ProviderRegistry.builtin_with_config` の 10 は ee77f42b(`contract.rs` → `registry.rs`)、`build_definitions` の 4 は a6b0c63f(`src/agent/tools/mod.rs` → `catalog.rs`)とその前の連鎖。
 - **C(別のファイルへの `body_move`)。** すべて `ToolSessionBuilder.with_root` の 4f65ca21(`ToolSessionState.with_root` の本体が `tools/state/builder.rs` の `ToolSessionBuilder.with_root` に移り、名前は `state.rs` に残った)。
 - **D(git の改名の判定が別のファイルを選んだ)。** すべて `apply_agent_event_to_frame` の f04c7bf1。git は `crates/horizon-agent/src/frame.rs` を `frame/queries.rs` への改名(R052)と判定し、関数は `frame/fold.rs` に移った。`-L` は `fold.rs` の範囲をそのコミットでの追加として止まる。
@@ -218,7 +218,7 @@ Spearman は、標本の unit の UH の数と `-L` の数の順位相関(同順
 | `run_session` | 51(1) | 24(30) | 27:A(0d72fc00 のファイルの分割) |
 | `AgentdHandle.begin_reload` | 2(3,415) | 1(6,544) | 1:F(a4fd9605)。8d8cdd0e の `inherited` は `-L` も越えた |
 | `AgentdHandle.stop_and_wait` | 2(3,858) | 1(8,137) | 1:F(a4fd9605) |
-| `AgentdState.new` | 15(76) | 5(869) | 10:A(0d72fc00)。8d8cdd0e の `inherited`(同じファイルの中の impl の改名)は `-L` も越えた |
+| `AgentHostState.new` | 15(76) | 5(869) | 10:A(0d72fc00)。8d8cdd0e の `inherited`(同じファイルの中の impl の改名)は `-L` も越えた |
 | `spawn_rig_session` | 34(9) | 12(154) | 22:A(faeccb05) |
 | `paint_terminal` | 23(27) | 1(4,216) | 22:B(1b15a6a5) |
 | `ToolSessionBuilder.with_root` | 22(35) | 1(4,576) | 21:C(4f65ca21) |
@@ -241,9 +241,9 @@ Spearman は、標本の unit の UH の数と `-L` の数の順位相関(同順
 | `paint_terminal` | 23 | 1 | 22 | どれも同じ 1、取り戻し 0 | 1(0)、0.01 s | 17(16)、0.08 s | 18(16)、0.38 s | 18(16)、0.54 s |
 | `run_session` | 51 | 24 | 27 | どれも同じ 24、取り戻し 0 | 15(0)、0.01 s | 27(12)、0.10 s | 27(12)、0.26 s | 27(12)、0.69 s |
 | `ToolSessionBuilder.with_root` | 22 | 1 | 21 | どれも同じ 1、取り戻し 0 | 1(0)、0.01 s | 16(15)、0.02 s | 16(15)、0.11 s | 16(15)、0.12 s |
-| `AgentdState.new` | 15 | 5 | 10 | どれも同じ 5、取り戻し 0 | 5(0)、0.01 s | 13(7)、0.04 s | 13(7)、0.11 s | 13(7)、0.17 s |
+| `AgentHostState.new` | 15 | 5 | 10 | どれも同じ 5、取り戻し 0 | 5(0)、0.01 s | 13(7)、0.04 s | 13(7)、0.11 s | 13(7)、0.17 s |
 
-blame の欄は、HEAD の同じ範囲の blame が返した異なるコミットの数(括弧は、そのうち `-L` が失ったコミット)と時間である。`git log -L` は写しの検出の指定を受け付けるが、4 つとも集合は変わらなかった。`git blame -C` は移動元のファイル(`src/terminal/mod.rs`、`crates/horizon-sessiond/src/session.rs`、`crates/horizon-agent/src/tools/state.rs` など)の行まで戻り、失ったコミットの 7〜16 個を返した。blame のコミットは 1 つを除いてすべて UH の中にあった(`paint_terminal` の `-C -C` では `spikes/gpui-terminal/src/main.rs` まで戻った 1 つ、`AgentdState.new` で 1 つが UH の外)。blame は行ごとに最後のコミットしか返さないので、その数は履歴の下限であり、行の変更の全体を得るには、blame が示す移動元の範囲から改めて `-L` をつなぐ必要がある(試していない)。
+blame の欄は、HEAD の同じ範囲の blame が返した異なるコミットの数(括弧は、そのうち `-L` が失ったコミット)と時間である。`git log -L` は写しの検出の指定を受け付けるが、4 つとも集合は変わらなかった。`git blame -C` は移動元のファイル(`src/terminal/mod.rs`、`crates/horizon-sessiond/src/session.rs`、`crates/horizon-agent/src/tools/state.rs` など)の行まで戻り、失ったコミットの 7〜16 個を返した。blame のコミットは 1 つを除いてすべて UH の中にあった(`paint_terminal` の `-C -C` では `spikes/gpui-terminal/src/main.rs` まで戻った 1 つ、`AgentHostState.new` で 1 つが UH の外)。blame は行ごとに最後のコミットしか返さないので、その数は履歴の下限であり、行の変更の全体を得るには、blame が示す移動元の範囲から改めて `-L` をつなぐ必要がある(試していない)。
 
 ## 8. 型・module・impl(囲む unit)
 

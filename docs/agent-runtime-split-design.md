@@ -317,14 +317,14 @@ unchanged — every new code path added this step is reached only through
   (`crossbeam_channel::select!`) on its own thread, so a later `approve`/
   `deny` command's `resolve_approval` call finds the same thread-local entry
   `register_session_runtime` put there. This also makes the host-tool round
-  trip trivial: `AgentdHostTools::execute_auto` really does block this one
+  trip trivial: `AgentHostHostTools::execute_auto` really does block this one
   thread on a channel recv while Horizon answers over the wire (`host_tool_
   request`/`_response`, matched by a `request_id` -> reply-channel map) —
   harmless because nothing else needs this thread, but would deadlock a
   single-threaded async runtime.
 - **`process_agent_provider_event` reused as-is, unchanged.** agentd's
   `session::handle_provider_event` calls the exact function `app::runtime::
-  agent`'s in-process effect used to call, passing `AgentdHostTools` where
+  agent`'s in-process effect used to call, passing `AgentHostHostTools` where
   Horizon passed `WorkspaceHostTools` — the `HostTools` seam from step 1 is
   exactly what made tool execution relocatable without touching the tool
   catalog. The resulting `Processing::horizon_events` are folded into
@@ -407,13 +407,13 @@ unchanged — every new code path added this step is reached only through
   `horizon-agentd` too.** `session::Connection`'s `sessions`/
   `pending_host_tool_requests` maps are constructed fresh per accepted
   connection (`main::run_session_hosting_loop`), not held at the
-  `AgentdState` (process) level. Since `session_load`/reconnect don't exist
+  `AgentHostState` (process) level. Since `session_load`/reconnect don't exist
   yet and agentd serves one connection at a time by construction, this
   keeps the lifetime story simple: a session's thread has nowhere to send
   events once its connection is gone (the `outgoing` channel's receiver is
   dropped with the connection) and is not explicitly torn down — it idles
   until the process exits. Revisit once step 4 defines what a live session
-  should do across a reconnect; moving these maps to `AgentdState` is the
+  should do across a reconnect; moving these maps to `AgentHostState` is the
   likely shape of that change.
 - **The streaming tool-call-argument-preview feature
   (`ToolCallProgress`/`ToolCallPreparing`) originally did not cross the
@@ -499,7 +499,7 @@ decisions:
   second connection-global control message, `wire::Control::
   SkippedLines(String)`, carries `persistence::event_log::ReadReport::
   skipped_summary`'s human-readable text (already computed at startup by
-  `main::open_persistence`, previously only `eprintln!`'d). `AgentdState`
+  `main::open_persistence`, previously only `eprintln!`'d). `AgentHostState`
   gained a `skipped_lines_summary` cell, set alongside `set_writer` in
   `spawn_resume_task`, before `mark_resume_ready`. Sending it from inside
   `Control::Hello`'s reply was rejected: hello must keep answering
@@ -645,11 +645,11 @@ reversal, not the original plan.
     an accepted (arguably useful, forensically) consequence rather than
     something to suppress, not a design goal in itself.
 
-- **`AgentdState` absorbed what used to be `Connection`'s own state**
+- **`AgentHostState` absorbed what used to be `Connection`'s own state**
   (`sessions`, `pending_host_tool_requests`) **plus a new `outgoing` cell**
   (`Mutex<Option<UnboundedSender<Envelope>>>`), exactly the shape step 3's
-  notes predicted ("moving these maps to `AgentdState` is the likely shape
-  of that change"). `Connection` is now a thin `Arc<AgentdState>` wrapper.
+  notes predicted ("moving these maps to `AgentHostState` is the likely shape
+  of that change"). `Connection` is now a thin `Arc<AgentHostState>` wrapper.
   `outgoing` is what makes a session spawned before any connection exists
   (a resumed session at startup) representable at all: every session thread
   sends through this shared, swappable cell (`send_envelope`, which
@@ -663,7 +663,7 @@ reversal, not the original plan.
 - **`session_load` is answered by the session's own thread, not read out of
   its `LiveState` from another thread.** `LiveState`'s internal `Rc<RefCell<
   ..>>` is deliberately `!Send` (see its own doc comments), so it can't be
-  stashed in the cross-thread `AgentdState.sessions` map the way `inbound`
+  stashed in the cross-thread `AgentHostState.sessions` map the way `inbound`
   already is. Instead, `SessionEntry` gained a `replay: Sender<Sender<
   Vec<Event>>>` — a tiny request/reply channel, agentd-internal only (not
   part of the wire contract): `Connection::replay_events` sends a one-shot
@@ -834,7 +834,7 @@ noticeably before `session_list`/`session_new` answered.
   separate `spawn_blocking` task — `hello`/`session_list`/`session_load`/
   `session_new` no longer wait on it at all. A rebuild failure keeps the
   existing non-fatal stderr line and is also folded (appended, not
-  clobbered) into `AgentdState`'s skipped-lines-style status, so a client
+  clobbered) into `AgentHostState`'s skipped-lines-style status, so a client
   that connects *after* the failure still learns about it via the existing
   `Control::SkippedLines` channel.
 - **A cheap freshness check skips the rebuild on an unchanged log.**
@@ -950,9 +950,9 @@ new: the writer thread now *keeps* the `Store` it opened, instead of
 dropping it right after the rebuild, so every event appended for the rest
 of the process's life is projected live too -- this is also the basis for
 the `recall_search`/`recall_read` agent tools (`tools::recall`). One
-casualty: a rebuild failure is no longer folded into `AgentdState`'s
+casualty: a rebuild failure is no longer folded into `AgentHostState`'s
 skipped-lines-style status (the writer module has no handle to
-`AgentdState`), so that specific client-visible surfacing regressed to
+`AgentHostState`), so that specific client-visible surfacing regressed to
 stderr-only; still reported, just not over the wire.
 
 ### Addendum (2026-07-24): session panics are durable and terminal

@@ -156,7 +156,7 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 ### agentd 側
 
 - `hub.rs` と `SessionHub` の remoc 実装を、**接続ごとに一つの
-  `Agent.v2()...connect_to(ByteStreams)`** に置き換える。`AgentdState` は
+  `Agent.v2()...connect_to(ByteStreams)`** に置き換える。`AgentHostState` は
   `Arc` で共有。`horizon_wire::daemon::run` の accept loop は残し、
   `serve_connection` の remoc 版の隣に「生の `UnixStream` を閉包に渡す」
   版を足す。

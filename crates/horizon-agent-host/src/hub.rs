@@ -1,7 +1,7 @@
 //! The host's ACP v2 agent side (`docs/agent-stdio-child-design.md`): one
 //! JSON-RPC connection, multiplexing every session by its id. The
 //! process-lifetime state stays in
-//! [`crate::session::AgentdState`], reached through the same
+//! [`crate::session::AgentHostState`], reached through the same
 //! [`Connection`] seam.
 //!
 //! `initialize` succeeds for any v2 client. A client at another extension
@@ -36,7 +36,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::DAEMON_NAME;
-use crate::session::{AgentdState, Connection, ForkError};
+use crate::session::{AgentHostState, Connection, ForkError};
 
 use attachment::Opening;
 
@@ -602,7 +602,7 @@ fn answer<T: agent_client_protocol::JsonRpcResponse>(
 /// Serves one accepted connection until the client goes away. A dropped
 /// connection is never a session lifecycle event: every attachment on it
 /// ends as `Detached` and the sessions keep running.
-pub async fn serve<R, W>(read: R, write: W, state: Arc<AgentdState>) -> Result<(), Error>
+pub async fn serve<R, W>(read: R, write: W, state: Arc<AgentHostState>) -> Result<(), Error>
 where
     R: AsyncRead + Send + 'static,
     W: AsyncWrite + Send + 'static,

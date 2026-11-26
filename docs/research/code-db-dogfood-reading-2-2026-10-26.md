@@ -16,7 +16,7 @@
   - `cochange_without_reference`:残った 3、出た 7、入った 7。入った 7 件はすべて系譜による。
   - `module_cycles`:5 個とも同じ(グラフは系譜を読まない)。
 - **判定の数**(`問題あり` / `問題なし` / `判断できない`):`unit_churn` 4 / 6 / 0、`unit_fan_in_churn` 3 / 7 / 0、`clone_change_consistency` 4 / 6 / 0、`cochange_without_reference` 1 / 9 / 0、`module_cycles` 1 / 3 / 1。
-- **新しく入った 19 件のうち `問題あり` は 5 件で、そのうち新しい原因は 2 つだった。** 1 つはテスト用の描画関数で、監査用の 10 個の事象が「memory: seeded」として描かれる写し間違い、もう 1 つは real-git のテストの補助関数の写しで、git の大域設定から切り離す修正が片方では条件の内側に入ったことである。残りの 3 件は 1 回目と同じ原因(端末の 4 本の送信路、`AgentdState` の 2 つの lock)を、別の unit の側から指したものだった。
+- **新しく入った 19 件のうち `問題あり` は 5 件で、そのうち新しい原因は 2 つだった。** 1 つはテスト用の描画関数で、監査用の 10 個の事象が「memory: seeded」として描かれる写し間違い、もう 1 つは real-git のテストの補助関数の写しで、git の大域設定から切り離す修正が片方では条件の内側に入ったことである。残りの 3 件は 1 回目と同じ原因(端末の 4 本の送信路、`AgentHostState` の 2 つの lock)を、別の unit の側から指したものだった。
 - **系譜は、名前を残して本体が 1 つの unit に移った場合を解いた**(1 回目の `definitions` が上位から消え、本体を受けた `build_definitions` が入った)。ただし、受け手の `build_definitions` も、ツールの一覧というデータの表で `問題なし` だった。
 - **系譜は、新しい誤報の機構を 2 つ持ち込んだ。** (1) 前身をたどると、移動・改名・分割のコミットが両方の unit の共有コミットになる。`cochange_without_reference` の上位 10 件のうち 4 件は、共有 5 コミットのうち 3 つが系譜のリンクのコミットで、それを除くと閾値(共有 3)を下回る。(2) クローンの片側だけの変更に、もう片側がまだ無かった頃のコミットが入る。上位 10 組のうち 6 組で片側の数が減り、1 組(`AgentFrameItem`)は 0 になる。どちらも SQL だけで除ける。
 - **1 回目の 6 つの機構のうち、系譜で解けたのは「名前が残り本体が移った」の一部だけだった。** 他の 5 つは系譜と無関係か、系譜で数が大きくなった(`cochange_without_reference` は 2,917 組から 8,424 組になった)。
@@ -70,7 +70,7 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 | 5 | `src/workspace/session_lifecycle.rs` `WorkspaceShell` | impl | 490 | 44 | 44 | 0 | 0 / 1 | `commands.rs` の impl(17)、`mod.rs` の impl(15) | 13 | 2 |
 | 6 | `crates/horizon-workspace/src/operations.rs` `Workspace` | impl | 485 | 43 | 16 | 2 | 0 / 1 | `lib.rs` の `tests`・`src/workspace/mod.rs` の `tests`(各 17)、`query.rs` の impl(10) | 7 | 入った |
 | 7 | `src/workspace/commands.rs` `WorkspaceShell` | impl | 928 | 42 | 42 | 0 | 0 / 1 | `session_lifecycle.rs` の impl(17)、`command_enabled`(15) | 13 | 3 |
-| 8 | `crates/horizon-agentd/src/session/connection.rs` `Connection` | impl | 273 | 41 | 21 | 3 | 0 / 1 | `AgentdState` impl・`run_session`(各 19) | 11 | 入った |
+| 8 | `crates/horizon-agentd/src/session/connection.rs` `Connection` | impl | 273 | 41 | 21 | 3 | 0 / 1 | `AgentHostState` impl・`run_session`(各 19) | 11 | 入った |
 | 9 | `src/workspace/mod.rs` `WorkspaceShell.new` | method | 74 | 41 | 21 | 2 | 1 / 27 | `WorkspaceShell` 型(33)、`execute`・`reconcile`(各 20) | 13 | 入った |
 | 10 | `src/workspace/mod.rs` `WorkspaceShell` | type | 102 | 40 | 21 | 2 | 113 / 23 | `WorkspaceShell.new`(33)、`execute`・`reconcile`(各 20) | 13 | 入った |
 
@@ -110,10 +110,10 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 
 入った 6 件を読んだ。
 
-1. **`run_session` — 問題なし。** daemon の 1 セッションの組み立ての場所である(`crates/horizon-agentd/src/session/run.rs:47-296`)。provider の起動、環境の準備、`LiveState` の作成、ツールの実行時の登録、`select!` の事象ループを順に行う。引数は 12 個で `#[allow(clippy::too_many_arguments)]` が付いている(run.rs:46)が、呼び出し元は `spawn.rs:186` の 1 箇所だけで、引数の束の費用はその 2 箇所に閉じている。50 コミットの件名は、skill、grant、proxy、judge、explore、信頼、ボードのように、daemon の機能を足すたびにこの関数を通した履歴である。2026-09-22 の 4fe9f4fd(「Separate agent environment construction from the session loop」)で環境の構築が `SessionEnvironment`(`session/environment`)に出され、その後の 7 コミットは、入力・ツールの結果・寿命の分離と、機能の削除(d7a3046a、2e6a5f32)だった。機能を足すたびに触る形は、すでに解かれた後の履歴である。なお、1 回目の `AgentdState` の判定が指した 2 つの lock を別々に読む箇所(run.rs:79-88 と 112)はこの関数の中にあるが、原因は `AgentdState` の側で、ここでは数えない。
+1. **`run_session` — 問題なし。** daemon の 1 セッションの組み立ての場所である(`crates/horizon-agentd/src/session/run.rs:47-296`)。provider の起動、環境の準備、`LiveState` の作成、ツールの実行時の登録、`select!` の事象ループを順に行う。引数は 12 個で `#[allow(clippy::too_many_arguments)]` が付いている(run.rs:46)が、呼び出し元は `spawn.rs:186` の 1 箇所だけで、引数の束の費用はその 2 箇所に閉じている。50 コミットの件名は、skill、grant、proxy、judge、explore、信頼、ボードのように、daemon の機能を足すたびにこの関数を通した履歴である。2026-09-22 の 4fe9f4fd(「Separate agent environment construction from the session loop」)で環境の構築が `SessionEnvironment`(`session/environment`)に出され、その後の 7 コミットは、入力・ツールの結果・寿命の分離と、機能の削除(d7a3046a、2e6a5f32)だった。機能を足すたびに触る形は、すでに解かれた後の履歴である。なお、1 回目の `AgentHostState` の判定が指した 2 つの lock を別々に読む箇所(run.rs:79-88 と 112)はこの関数の中にあるが、原因は `AgentHostState` の側で、ここでは数えない。
 2. **`build_definitions` — 問題なし。** 1 回目に `definitions` の誤りとして指摘した履歴が、系譜で本体を受けた関数に付いた。本体はツールの一覧で、`Definition` を 15 個と `SynchronousTool::*.definition(…)` を並べた `vec![…]` である(`crates/horizon-agent/src/tools/catalog.rs:25-381`)。49 コミットは、ツールの追加・削除と説明文の調整(task の経路の文言など)で、項目はそれぞれ独立していて、1 つを変えても他を変えさせない。入力の形は、cf9a2daa 以後、多くが検証つきの入力型から作られる(`super::input::schema`、`SynchronousTool`)。手書きの `json!` が残るのは `workspace.snapshot`、2 つの mock、`board.read`・`board.comment` の 5 箇所(`catalog.rs:31`、145、163、311、349)で、これは入力型との食い違いの余地だが、一覧という形の費用ではない。
 6. **`horizon-workspace` の `operations.rs` の `Workspace` impl — 問題なし。** ワークスペースのモデルの操作(タブ・ペイン・分割・閉じる・移動)を並べた impl で、method は 7〜42 行、系譜で数えても 1 つあたり 9 コミット以下である(`crates/horizon-workspace/src/operations.rs:24-544`)。43 コミットは入れ子の和に、分割の前の履歴が足されたものである。05bcc113(2026-07-03「Split workspace domain modules by responsibility」)で、この impl から `query.rs` と `session.rs` の impl が分かれたが、残ったこの impl の前後の類似度は 0.47 で、分かれた側はどれも前身の半分に届かないので、`body_move` は起きず、`src/workspace.rs` の頃の impl 全体の履歴(初めのプロトタイプから)がこの impl に残った(`unit_successions` の 05bcc113 の行)。co-change の相手が 2 つのテストモジュールなのは、モデルの操作を変えるとモデルとシェルのテストが変わるためである。
-8. **`horizon-agentd` の `Connection` impl — 問題なし。** 1 本の接続から見た `AgentdState` への窓口で、型の文書が「thin by design」と書いている(`crates/horizon-agentd/src/session/connection.rs:20-29`)。method は 3〜28 行の委譲で、多いものでも `handle_session_new` の 11 コミットである(`connection.rs:31-323`)。41 コミットは入れ子の和に、`horizon-sessiond/src/session.rs` の頃の履歴が足されたものである。co-change の相手が `AgentdState` と `run_session` なのは、daemon の制御の呼び出しを 1 つ足すと、窓口・状態・セッションの 3 つに 1 つずつ足す形だからである。`reload_provider_config`(connection.rs:215-217)は 1 回目の `AgentdState` の判定の箇所だが、原因は `AgentdState` の側にある。
+8. **`horizon-agentd` の `Connection` impl — 問題なし。** 1 本の接続から見た `AgentHostState` への窓口で、型の文書が「thin by design」と書いている(`crates/horizon-agentd/src/session/connection.rs:20-29`)。method は 3〜28 行の委譲で、多いものでも `handle_session_new` の 11 コミットである(`connection.rs:31-323`)。41 コミットは入れ子の和に、`horizon-sessiond/src/session.rs` の頃の履歴が足されたものである。co-change の相手が `AgentHostState` と `run_session` なのは、daemon の制御の呼び出しを 1 つ足すと、窓口・状態・セッションの 3 つに 1 つずつ足す形だからである。`reload_provider_config`(connection.rs:215-217)は 1 回目の `AgentHostState` の判定の箇所だが、原因は `AgentHostState` の側にある。
 9. **`WorkspaceShell.new` — 問題あり(1 回目の `TerminalSession.spawn` と同じ原因)。** シェルの構築で、端末からシェルへの 4 本の送信路を作り(`src/workspace/mod.rs:421-424`)、フィールドに入れ(450-453)、受け手の `wire_*` を起動する(465-468)。事象を 1 つ足すと、ここの 3 箇所が 1 行ずつ増える。41 コミットの大半は、移行の M2〜M5 とその後の機能(ボード、プレビュー、モデルの選択)のフィールドの初期化だが、名指しできる費用はこの送信路の部分である。
 10. **`WorkspaceShell` 型 — 問題あり(同じ原因)。** シェルの根のフィールドの並び(`src/workspace/mod.rs:302-403`)で、4 本の送信路のフィールドとその説明(383-402)を持つ。40 コミットのうち送信路を足したのは 4 つ(704657ba の exit、91ea6a31 の title、cf63a944 の notify、6b1977e8 の cwd)で、残りは機能ごとに独立したフィールドの追加だった。
 
@@ -125,9 +125,9 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1 | `crates/horizon-agent/src/contract.rs` `Event` | type | 152 | 89 | 3,079 | 24 | 21 | 2,136 | 3 | 1 |
 | 2 | `crates/horizon-agent/src/tools/state.rs` `ToolSessionState` | impl | 223 | 31 | 192 | 39 | 37 | 1,209 | 40 | 2 |
-| 3 | `crates/horizon-agentd/src/session/state.rs` `AgentdState` | type | 91 | 30 | 212 | 25 | 9 | 750 | 3 | 入った |
+| 3 | `crates/horizon-agentd/src/session/state.rs` `AgentHostState` | type | 91 | 30 | 212 | 25 | 9 | 750 | 3 | 入った |
 | 4 | `crates/horizon-agent/src/live.rs` `LiveState` | impl | 204 | 34 | 296 | 22 | 17 | 748 | — | 4 |
-| 5 | `crates/horizon-agentd/src/session/state.rs` `AgentdState` | impl | 173 | 21 | 98 | 34 | 17 | 714 | 3 | 7 |
+| 5 | `crates/horizon-agentd/src/session/state.rs` `AgentHostState` | impl | 173 | 21 | 98 | 34 | 17 | 714 | 3 | 7 |
 | 6 | `crates/horizon-agent/src/contract.rs` `Command` | type | 77 | 41 | 747 | 17 | 15 | 697 | 3 | 3 |
 | 7 | `crates/horizon-agent/src/contract/tool_result.rs` `ToolCallResult` | type | 6 | 59 | 497 | 11 | 3 | 649 | 3 | 入った |
 | 8 | `crates/horizon-workspace/src/operations.rs` `Workspace` | impl | 485 | 14 | 318 | 43 | 16 | 602 | 7 | 入った |
@@ -138,7 +138,7 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 
 **出た 3 件**は、`ToolCallRequest`(64 × 8 = 512、11 位)、`session_lifecycle.rs` の `WorkspaceShell` impl(8 × 44 = 352)、`definitions`(8 × 1)である。`definitions` は系譜で外れ、他の 2 件は自分の数がほぼ同じまま、系譜で増えた候補に抜かれた。
 
-**入った 3 件はすべて系譜による。** 名前で数えた積は、`AgentdState` 型が 30 × 9 = 270、`ToolCallResult` が 59 × 3 = 177、`Workspace` impl が 14 × 16 = 224 で、1 回目の 10 位(336)に届かない。`AgentdState` 型の祖先は 4 段で、`horizon-agentd/src/session.rs`(a5bbe2f6 で作られた)から `horizon-sessiond` を通って今のファイルに届く。`ToolCallResult` の祖先は `contract.rs` の同名の型(9eb4adea で `contract/tool_result.rs` に移った)と、その前の `src/agent/…` の型である。
+**入った 3 件はすべて系譜による。** 名前で数えた積は、`AgentHostState` 型が 30 × 9 = 270、`ToolCallResult` が 59 × 3 = 177、`Workspace` impl が 14 × 16 = 224 で、1 回目の 10 位(336)に届かない。`AgentHostState` 型の祖先は 4 段で、`horizon-agentd/src/session.rs`(a5bbe2f6 で作られた)から `horizon-sessiond` を通って今のファイルに届く。`ToolCallResult` の祖先は `contract.rs` の同名の型(9eb4adea で `contract/tool_result.rs` に移った)と、その前の `src/agent/…` の型である。
 
 ### 判定
 
@@ -147,14 +147,14 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 1. **`Event` — 問題なし(1 回目の 1 番)。** イベントログの語彙で、網羅的な `match` 5 箇所への伝播をコンパイラが強制する(`contract.rs:273-423`、559 ほか)。
 2. **`ToolSessionState` impl — 問題なし(1 回目の 2 番)。** 1 セッションのツールの能力の容器で、fan-in は各ツールの getter の呼び出しである(`tools/state.rs:232-470`)。
 4. **`LiveState` impl — 問題なし(1 回目の 4 番)。** fold と永続化の境界で、費用はファイルの中で閉じている(`live.rs:122-345`)。増えた 5 コミットはクレートの分割の前の履歴だった。
-5. **`AgentdState` impl — 問題あり(1 回目の 7 番)。** reload が `agent_config` と `providers` を別々の lock で入れ替え(`horizon-agentd/src/session/state.rs:183-193`)、起動が別々に読む(`session/run.rs:79-88`、112)。17 から 34 に増えたコミットは、`horizon-sessiond` の頃の、daemon の機能ごとのフィールドと method の追加で、原因の読み方は変わらない。
+5. **`AgentHostState` impl — 問題あり(1 回目の 7 番)。** reload が `agent_config` と `providers` を別々の lock で入れ替え(`horizon-agentd/src/session/state.rs:183-193`)、起動が別々に読む(`session/run.rs:79-88`、112)。17 から 34 に増えたコミットは、`horizon-sessiond` の頃の、daemon の機能ごとのフィールドと method の追加で、原因の読み方は変わらない。
 6. **`Command` — 問題なし(1 回目の 3 番)。** wire のコマンドと内部の 3 つの variant の同居は意図した形と読める(`contract.rs:249-262`)。
 9. **`WriterHandle` impl — 問題なし(1 回目の 9 番)。** 公開する面は小さく安定している(`event_log/writer.rs:70-350`)。増えた 9 コミットは、`src/agent/…` の頃の作成・移動と、`crate` 内への縮小や lint の一斉の修正だった。
 10. **`RigAgentConfig` — 問題あり(1 回目の 5 番)。** 接続、ループの調整値、セッションごとの値の 3 種類を 1 つの構造体が持つ(`config.rs:519-610`)。
 
 入った 3 件を読んだ。
 
-3. **`AgentdState` 型 — 問題あり(1 回目の `AgentdState` impl と同じ原因)。** 型の定義そのもので、同じ snapshot から作る `providers` と `agent_config` を別々の `Mutex` のフィールドとして持つ(`horizon-agentd/src/session/state.rs:42`、46。型は 33-123)。費用の在りかは impl の判定と同じで、型と impl の 2 行が同じ原因を指している。fan-in 30 ファイルは、daemon の各部(接続、セッション、ツールの host、ボード)が状態を読む箇所である。
+3. **`AgentHostState` 型 — 問題あり(1 回目の `AgentHostState` impl と同じ原因)。** 型の定義そのもので、同じ snapshot から作る `providers` と `agent_config` を別々の `Mutex` のフィールドとして持つ(`horizon-agentd/src/session/state.rs:42`、46。型は 33-123)。費用の在りかは impl の判定と同じで、型と impl の 2 行が同じ原因を指している。fan-in 30 ファイルは、daemon の各部(接続、セッション、ツールの host、ボード)が状態を読む箇所である。
 7. **`ToolCallResult` — 問題なし。** 4 つのフィールドの wire のデータ型で(`crates/horizon-agent/src/contract/tool_result.rs:26-31`)、`#[serde(deny_unknown_fields)]` で永続化される。fan-in 59 は、ツールの結果を作る側(各ツールの実装)と読む側(fold、projection、provider の対応)で、契約の型を皆が import する形である。11 コミットは、クレートの分割、JSON の値の扱いの変更、呼び出しの同一性(`occurrence_id`)の追加、結果の意味(`ToolOutcome`)の明示で、どれもフィールドの変更をコンパイラが使う側に強制する。1 回目の `ToolCallRequest` と同じ理由である。
 8. **`Workspace` impl — 問題なし。** `unit_churn` の 6 番と同じ候補である。fan-in 14 ファイルは、シェルとテストがモデルの操作を呼ぶ箇所で、公開の method の名前と引数は分割の後ほとんど変わっていない。
 
@@ -240,7 +240,7 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 入った 7 件を読んだ。
 
 2. **2 つの `mod tests;` — 問題なし(信号の誤り)。** どちらも loc 1 の宣言で(`crates/horizon-agent/src/lib.rs:39`、`crates/horizon-agent/src/tools/mod.rs:167`)、本体はそれぞれの `tests.rs` にある。7 つの共有コミットは、どれも 2026-06-30〜07-03 の `src/agent/…` の頃のもので(d1379c69、e25169de、d337d4fb、259016bc、e41cce7e、9c12672e、a6b0c63f)、エージェントのモジュールを作り、分け、整理したときに、2 つの前身のインラインのテストモジュールが一緒に変わったものである。うち 1 つは両側にとって系譜のリンクのコミットだった。名前を残した宣言が、本体がファイルに移る前の履歴を持ち続ける、系譜の記録 6 節の `mod tests;` と同じ形である。
-3. **`horizon-agentd` の 2 つのテスト関数 — 問題なし。** どちらも `SessionEntry` を 10 個のフィールドの構造体のリテラルで作って `AgentdState` に入れ、1 つの読み取りを確かめるテストである(`crates/horizon-agentd/src/session/state.rs:381-404`、`crates/horizon-agentd/src/session/connection.rs:388-417`)。7 つの共有コミット(モデルの id、セッションの関係、remoc、モジュールの分割、モデルの表示、接続の寿命、作業の場所)は、どれも `SessionEntry` にフィールドを足すか変えたもので、`SessionEntry` のリテラルは daemon の中に 9 箇所ある。1 回目の `tests.table` と同じく、型の形が変わると各テストの fixture が一緒に変わる形で、コンパイラが伝播を強制する。費用はテストの中にある。
+3. **`horizon-agentd` の 2 つのテスト関数 — 問題なし。** どちらも `SessionEntry` を 10 個のフィールドの構造体のリテラルで作って `AgentHostState` に入れ、1 つの読み取りを確かめるテストである(`crates/horizon-agentd/src/session/state.rs:381-404`、`crates/horizon-agentd/src/session/connection.rs:388-417`)。7 つの共有コミット(モデルの id、セッションの関係、remoc、モジュールの分割、モデルの表示、接続の寿命、作業の場所)は、どれも `SessionEntry` にフィールドを足すか変えたもので、`SessionEntry` のリテラルは daemon の中に 9 箇所ある。1 回目の `tests.table` と同じく、型の形が変わると各テストの fixture が一緒に変わる形で、コンパイラが伝播を強制する。費用はテストの中にある。
 6. **`Definition` と `tool_result_message` — 問題なし。** 7 行の構造体(`crates/horizon-agent/src/tools/catalog.rs:7-14`)と、ツールの結果の受け取りを知らせる 6 行の関数(`crates/horizon-agent/src/tools/execution.rs:209-214`)で、互いを参照せず、一緒に変える理由も無い。5 つの共有コミットは、エージェントの永続化の最初の追加(d1379c69、2 つの前身が同じコミットで作られた)、モジュールの整理(d337d4fb、a6b0c63f。この 2 つが両側にとって系譜のリンクのコミット)、可視性の一斉の縮小(ac33849e、b656cc27)だった。
 7. **`detached_session_count` と `terminate_session` — 問題なし。** どちらもワークスペースのモデルの 6〜19 行の method である(`crates/horizon-workspace/src/query.rs:224-229`、`crates/horizon-workspace/src/session.rs:56-74`)。5 つの共有コミットは、`src/workspace.rs` からの移動(abedcf4b)、`query.rs` と `session.rs` への分割(05bcc113)、クレートへの切り出し(64078019)の 3 つのリンクのコミットと、可視性の一斉の変更(ac33849e)、初期の close と terminate の分離(bccbaa24)だった。移動のたびに両方が一緒に「変わった」ことになった。
 8. **`session_count` と `terminate_session` — 問題なし。** 7 番と同じ 5 コミットである。`session_count` は `#[cfg(test)]` の 3 行の method(`query.rs:220-222`)。
@@ -302,7 +302,7 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 信号ごとの変化を書く。
 
 - **`unit_churn`**:系譜で入った 6 件のうち 4 件は `問題なし` だった。`build_definitions`(データの表)、`run_session`(すでに分解された後の組み立ての場所)、`Workspace` と `Connection` の impl(入れ子の和と、移動の前の履歴)である。`問題あり` の 2 件は `WorkspaceShell` の型と構築で、1 回目の `spawn` と同じ 4 本の送信路を、シェルの側から指した。系譜は 1 回目の誤り(`definitions`)を消したが、代わりに入った候補の多くも、別の理由の誤報だった。
-- **`unit_fan_in_churn`**:系譜で入った 3 件は、1 回目の 2 つの型(`Event`・`Command` などの契約の型、`AgentdState`)と同じ種類だった。`ToolCallResult` は契約の型で、`AgentdState` 型は impl と同じ原因の 2 行目である。上位 10 件の中の判定の割合は 1 回目と同じ 3 / 7 だった。
+- **`unit_fan_in_churn`**:系譜で入った 3 件は、1 回目の 2 つの型(`Event`・`Command` などの契約の型、`AgentHostState`)と同じ種類だった。`ToolCallResult` は契約の型で、`AgentHostState` 型は impl と同じ原因の 2 行目である。上位 10 件の中の判定の割合は 1 回目と同じ 3 / 7 だった。
 - **`clone_change_consistency`**:系譜で入った 3 件のうち 2 件で、断片を読むと写しの費用が見えた(テスト用の描画の写し違い、テストの補助関数の修正の食い違い)。ただし、どちらも片側の数とは関係が無く、片側の数は囲む unit のほかの変更だった。1 回目と同じく、クローンが本物かどうかと、片側の数の大きさは別のことだった。
 - **`cochange_without_reference`**:系譜で入った 7 件はすべて `問題なし` で、2 件はテストの unit、5 件はモデルの移動と分割で一緒に動いた unit だった(N1)。1 回目に `問題なし` だった `KeyEventKind` の 2 組は、系譜でマウスの型の古い履歴が加わり、結合が下がって外れた。系譜は、wire の一律の方針変更という 1 回目の誤報を 1 つ消し、移動を共有コミットにする誤報を持ち込んだ。
 - **`module_cycles`**:変わらない。
@@ -315,7 +315,7 @@ jscpd は exact が 270 組、normalized が 1,232 組で、1 回目と同じだ
 
 1. **`TerminalSession.spawn` と `WorkspaceShell` の 4 本の送信路**(`src/terminal/session.rs:206-214`、`src/workspace/mod.rs:383-402`、421-424、450-453、465-468):今回は `unit_churn` の 9・10 番(`WorkspaceShell.new` と型)と `clone_change_consistency` の 1 番の、3 行が指した。`spawn` 自体は 18 位に下がった。
 2. **`WorkspaceShell.reconcile` の中のビューの構築**(`src/workspace/session_lifecycle.rs:313-416`):`reconcile` は 12 位に下がったが、`session_lifecycle.rs` の impl(`unit_churn` 5 番)が同じ原因を指している。
-3. **`AgentdState` の 2 つの lock**(`horizon-agentd/src/session/state.rs:42`、46、183-193、`session/run.rs:79-112`):今回は型と impl の 2 行(`unit_fan_in_churn` 3・5 番)が指した。
+3. **`AgentHostState` の 2 つの lock**(`horizon-agentd/src/session/state.rs:42`、46、183-193、`session/run.rs:79-112`):今回は型と impl の 2 行(`unit_fan_in_churn` 3・5 番)が指した。
 4. **`RigAgentConfig` の 3 種類の値**(`horizon-agent/src/config.rs:519-610`):`unit_fan_in_churn` 10 番。
 5. **`src/workspace/commands.rs` の中のボードのセッションの処理**(`commands.rs:136-448`):`unit_churn` 7 番。
 6. **`AgentdHandle` と `TerminaldHandle` の同じ操作**(`src/runtime/mod.rs:472-486` と 659-673、335-341 と 569-575):`clone_change_consistency` 3 番。

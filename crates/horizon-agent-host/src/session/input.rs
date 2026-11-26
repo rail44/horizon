@@ -6,10 +6,10 @@ use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::Settled;
 
 use super::events::persist_and_send_session_event;
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 
 pub(super) fn send_input(
-    state: &AgentdState,
+    state: &AgentHostState,
     live_state: &LiveState,
     session_id: SessionId,
     recipient: SessionId,
@@ -33,7 +33,7 @@ pub(super) fn send_input(
 
 /// Returns whether the accepted input may now be forwarded to the provider.
 pub(super) fn accept_input(
-    state: &AgentdState,
+    state: &AgentHostState,
     live_state: &LiveState,
     session_id: SessionId,
     input: &SessionInput,
@@ -59,7 +59,7 @@ pub(super) fn accept_input(
 /// the session's history ends with. A fork from the cursor before that
 /// message finds it among the records of the same settled stretch.
 pub(super) fn checkpoint_a_settled_position(
-    state: &AgentdState,
+    state: &AgentHostState,
     live_state: &LiveState,
     session_id: SessionId,
 ) {
@@ -94,7 +94,7 @@ pub(super) fn checkpoint_a_settled_position(
 }
 
 pub(super) fn acknowledge_delivery(
-    state: &AgentdState,
+    state: &AgentHostState,
     live_state: &LiveState,
     session_id: SessionId,
     delivery_id: String,

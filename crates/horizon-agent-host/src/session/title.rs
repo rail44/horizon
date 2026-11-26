@@ -12,7 +12,7 @@ use horizon_agent::live::LiveState;
 use horizon_agent::summarize::summarize_session_title;
 
 use super::events::persist_and_send_session_event;
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 
 /// The title recorded last in `history`.
 fn title_in(history: &[Event]) -> Option<&str> {
@@ -23,7 +23,7 @@ fn title_in(history: &[Event]) -> Option<&str> {
 }
 
 /// Gives the session's entry the title its history has.
-pub(super) fn restore(state: &AgentdState, session_id: SessionId, history: &[Event]) {
+pub(super) fn restore(state: &AgentHostState, session_id: SessionId, history: &[Event]) {
     let Some(title) = title_in(history) else {
         return;
     };
@@ -37,7 +37,7 @@ pub(super) fn restore(state: &AgentdState, session_id: SessionId, history: &[Eve
 /// `text` when the session has had none before it. The answer comes back to
 /// the session as [`Command::TitleSession`].
 pub(super) fn ask(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     session_id: SessionId,
     text: &str,
@@ -79,7 +79,7 @@ pub(super) fn ask(
 
 /// Records the title, unless the session has one already.
 pub(super) fn record(
-    state: &AgentdState,
+    state: &AgentHostState,
     live_state: &LiveState,
     session_id: SessionId,
     title: String,

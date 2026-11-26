@@ -12,7 +12,7 @@ use horizon_agent::hosting::AgentWireEvent;
 
 use super::events::send_session_event;
 use super::spawn::spawn_session_thread;
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 
 /// `horizon-agent`'s `task` seam (`docs/agent-explore-design.md`),
 /// implemented against this host's own session hosting: spawn a peer
@@ -26,8 +26,8 @@ use super::state::{AgentdState, lock_unpoisoned};
 /// requester's exact working tree -- including a worktree the requester
 /// entered, whose uncommitted state is precisely the view mid-task
 /// exploration needs -- and records no derivation edge.
-pub(super) struct AgentdExplorationHost {
-    pub(super) state: Arc<AgentdState>,
+pub(super) struct AgentHostExplorationHost {
+    pub(super) state: Arc<AgentHostState>,
     /// The session this host was installed on -- every task it launches is
     /// reported back to *this* session's attached client.
     pub(super) requester_id: SessionId,
@@ -46,7 +46,7 @@ pub(super) struct AgentdExplorationHost {
     pub(super) forwarded: Mutex<HashMap<SessionId, Vec<OccurrenceId>>>,
 }
 
-impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
+impl horizon_agent::tools::ExplorationHost for AgentHostExplorationHost {
     fn start(
         &self,
         start: horizon_agent::tools::TaskStart,
@@ -211,7 +211,7 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
     }
 }
 
-impl AgentdExplorationHost {
+impl AgentHostExplorationHost {
     fn settle(&self, child: SessionId, occurrence_id: OccurrenceId) {
         send_session_event(
             &self.state,
@@ -227,7 +227,7 @@ impl AgentdExplorationHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::host_tools::AgentdHostTools;
+    use crate::session::host_tools::AgentHostHostTools;
     use crate::session::test_support::test_state;
     use crossbeam_channel::unbounded;
     use horizon_agent::config::AgentToolsConfig;
@@ -265,7 +265,7 @@ mod tests {
         std::fs::write(&outside_file, "not yours\n").unwrap();
 
         let state = crate::session::test_support::state_with_rig_config(false, "m-fallback");
-        let host = AgentdExplorationHost {
+        let host = AgentHostExplorationHost {
             state: state.clone(),
             requester_id: SessionId::new(),
             provider_id: lock_unpoisoned(&state.providers).default_provider_id(),
@@ -353,7 +353,7 @@ mod tests {
     }
 
     fn call(
-        state: &Arc<crate::session::AgentdState>,
+        state: &Arc<crate::session::AgentHostState>,
         tool_state: &ToolSessionState,
         requester_id: SessionId,
         call_id: &str,
@@ -361,7 +361,7 @@ mod tests {
         input: serde_json::Value,
     ) -> serde_json::Value {
         let execution = execute_agent_tool(
-            &AgentdHostTools {
+            &AgentHostHostTools {
                 state: state.clone(),
             },
             tool_state,
@@ -458,7 +458,7 @@ mod tests {
         let requester_id = SessionId::new();
         let (results_tx, _results) = unbounded::<ToolCompletion>();
         let host: Arc<dyn horizon_agent::tools::ExplorationHost> =
-            Arc::new(AgentdExplorationHost {
+            Arc::new(AgentHostExplorationHost {
                 state: state.clone(),
                 requester_id,
                 provider_id: ProviderId("builtin.agent.mock".to_string()),
@@ -558,7 +558,7 @@ mod tests {
         let requester_id = SessionId::new();
         let (results_tx, results_rx) = unbounded::<ToolCompletion>();
         let host: Arc<dyn horizon_agent::tools::ExplorationHost> =
-            Arc::new(AgentdExplorationHost {
+            Arc::new(AgentHostExplorationHost {
                 state: state.clone(),
                 requester_id,
                 provider_id: ProviderId("builtin.agent.mock".to_string()),
@@ -700,7 +700,7 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         };
         struct ChildHost {
-            state: Arc<AgentdState>,
+            state: Arc<AgentHostState>,
             events: Mutex<Option<crossbeam_channel::Sender<Event>>>,
             lock_was_free: AtomicBool,
         }
@@ -756,7 +756,7 @@ mod tests {
             serde_json::json!({ "description": "child", "prompt": "wait" }),
         );
         assert_eq!(launched["status"], "started");
-        let host = AgentdExplorationHost {
+        let host = AgentHostExplorationHost {
             state: state.clone(),
             requester_id: SessionId::new(),
             provider_id: ProviderId("builtin.agent.mock".into()),

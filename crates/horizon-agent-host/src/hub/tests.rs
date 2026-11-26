@@ -4,7 +4,7 @@ use agent_client_protocol::ConnectionTo;
 /// Serves `state` over an in-process pipe and hands back a client
 /// connection without the protocol-version guard, so a test can send
 /// anything in any order.
-async fn connect(state: Arc<AgentdState>) -> ConnectionTo<Agent> {
+async fn connect(state: Arc<AgentHostState>) -> ConnectionTo<Agent> {
     let (daemon_side, client_side) = tokio::io::duplex(1 << 16);
     let (daemon_read, daemon_write) = tokio::io::split(daemon_side);
     tokio::spawn(serve(daemon_read, daemon_write, state));
@@ -28,7 +28,7 @@ fn initialize_request() -> v2::InitializeRequest {
     )
 }
 
-fn ready_state() -> Arc<AgentdState> {
+fn ready_state() -> Arc<AgentHostState> {
     let state = crate::session::test_support::test_state();
     // Nothing here runs the startup resume, so open the readiness gate the
     // session methods wait on.

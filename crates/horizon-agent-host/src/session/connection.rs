@@ -11,25 +11,25 @@ use horizon_agent::hosting::{ModelSelection, ReasoningSelection, SessionNew, Ses
 use horizon_agent::persistence::event_log::{Appender, PersistedSessionContext};
 
 use super::spawn::spawn_session_thread;
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 use crate::worktree::WorktreeInfo;
 
 /// A resumed session may still be waiting for its DuckDB projection.
 /// Timeout is an explicit failure, never a successful empty history.
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// One connection's view onto the process-lifetime [`AgentdState`] — thin by
-/// design (step 4): every map that used to live here moved to `AgentdState`
+/// One connection's view onto the process-lifetime [`AgentHostState`] — thin by
+/// design (step 4): every map that used to live here moved to `AgentHostState`
 /// so sessions survive a reconnect, leaving `Connection` as just the `Arc`
 /// handle plus the methods that make sense scoped to "the current
 /// connection" (installing/clearing `outgoing`).
 #[derive(Clone)]
 pub struct Connection {
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
 }
 
 impl Connection {
-    pub fn new(state: Arc<AgentdState>) -> Self {
+    pub fn new(state: Arc<AgentHostState>) -> Self {
         Self { state }
     }
 
@@ -296,7 +296,7 @@ impl Connection {
         Ok(session_id)
     }
 
-    /// Delegates to [`AgentdState::wait_until_resume_ready`] -- see `main`'s
+    /// Delegates to [`AgentHostState::wait_until_resume_ready`] -- see `main`'s
     /// bind-first startup fix: `Control::SessionList`/`Control::SessionLoad`
     /// must block on this before answering, so a client that connects while
     /// `resume_persisted_sessions` is still running doesn't see an
@@ -644,7 +644,7 @@ mod tests {
     /// real env reads): one openai-compatible entry with its key present,
     /// one anthropic entry with its key unset — the two-provider
     /// completion condition's state-level shape.
-    fn two_provider_state() -> (Arc<AgentdState>, Vec<NamedProviderConfig>) {
+    fn two_provider_state() -> (Arc<AgentHostState>, Vec<NamedProviderConfig>) {
         let entries = vec![
             NamedProviderConfig {
                 name: "openai".to_string(),
@@ -685,7 +685,7 @@ mod tests {
             },
             tools: horizon_agent::config::AgentToolsConfig::default(),
         };
-        let state = Arc::new(AgentdState::new(
+        let state = Arc::new(AgentHostState::new(
             ProviderRegistry::builtin_with_config(agent_config.clone()),
             agent_config,
             None,

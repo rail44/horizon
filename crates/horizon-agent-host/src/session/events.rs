@@ -7,13 +7,13 @@ use horizon_agent::contract::{Event, SessionId};
 use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 
 /// Publish a new event to internal observers and the current attachment.
 /// Ephemeral progress is retained for the next snapshot. A full live mailbox
 /// revokes that attachment; it never blocks session work or skips silently.
 pub(super) fn send_session_event(
-    state: &AgentdState,
+    state: &AgentHostState,
     session_id: SessionId,
     event: AgentWireEvent,
 ) {
@@ -29,7 +29,7 @@ pub(super) fn send_session_event(
 /// The sole publication boundary for newly produced conversation batches.
 /// Disabled in-memory stores support coordinator tests; production always logs.
 pub(super) fn apply_and_send_session_events(
-    state: &AgentdState,
+    state: &AgentHostState,
     live: &LiveState,
     session_id: SessionId,
     events: Vec<horizon_agent::contract::ProviderEvent>,
@@ -51,7 +51,7 @@ pub(super) fn apply_and_send_session_events(
 }
 
 pub(super) fn execution_available(
-    state: &AgentdState,
+    state: &AgentHostState,
     live: &LiveState,
     session_id: SessionId,
 ) -> bool {
@@ -63,7 +63,7 @@ pub(super) fn execution_available(
 }
 
 pub(super) fn report_persistence_failure(
-    state: &AgentdState,
+    state: &AgentHostState,
     live: &LiveState,
     session_id: SessionId,
     message: String,
@@ -80,7 +80,7 @@ pub(super) fn report_persistence_failure(
 
 /// Publishes a durable event only after the writer has flushed its queued record.
 pub(super) fn persist_and_send_session_event(
-    state: &AgentdState,
+    state: &AgentHostState,
     live_state: &LiveState,
     session_id: SessionId,
     event: Event,

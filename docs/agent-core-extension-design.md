@@ -84,7 +84,7 @@ horizon-agent-host と horizon-agent の側の frame(`frame::AgentFrame`)は、�
 ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_session_cursors`・`unstable_session_fork`)では、agent が会話の位置を cursor として告げ(`cursor_update`)、client はその cursor を `session/fork` に渡して新しいセッションを作る。cursor を受け取るメソッドは `session/fork` だけで、同じセッションの位置を戻す操作は ACP に無い。
 
 - **新しいセッションを付ける**: `session/fork` で行う。`horizon-agent-host` は `session.fork` を広告し、決着した位置の後に最初に来る user メッセージの直前に cursor を置く(anchor は `user_message`・`before`)。`cursorId` を省くと、ターンの間にあるセッション全体を写す。
-- **葉を移す**: ACP に当たる操作が無いので、同じ cursor を受け取る拡張の `_horizon/rewind_session` で行う。セッションがターンの間にあるときだけ受け付ける。セッションのスレッドは suspend と同じく worktree と記録を残して終わり、移り先の位置の record を親とする `Event::Rewound` の record から新しい枝が始まり、スレッドはその枝の履歴で立ち直る。client は resume して新しい履歴を受け取る。`Rewound` は枝ごとに新しい印を持ち、それ以降のメッセージと cursor の ID にはその印が付くので、捨てた枝の ID と重ならない。
+- **葉を移す**: ACP に当たる操作が無い。拡張の `_horizon/rewind_session` で行っていたが、Horizon の拡張とともになくなった(`docs/agent-stdio-child-design.md`、board #114)ので、いまは操作が無い。それで書かれた `Event::Rewound` の record は、移り先の位置の record を親として新しい枝を始めるものとして読まれる。`Rewound` は枝ごとに新しい印を持ち、それ以降のメッセージと cursor の ID にはその印が付くので、捨てた枝の ID と重ならない。
 
 ### 分岐できる位置
 

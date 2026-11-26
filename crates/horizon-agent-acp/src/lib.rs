@@ -14,7 +14,7 @@ use std::sync::Arc;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent_host::extension::Extensions;
 use horizon_agent_host::hub::{self, flush_event_log_before_exit};
-use horizon_agent_host::session::AgentdState;
+use horizon_agent_host::session::AgentHostState;
 use horizon_agent_host::startup::{StartupHooks, spawn_resume_task};
 use horizon_agent_host::{outbox, providers};
 use horizon_board_flow::{BoardFlow, BoardPlaces};
@@ -112,7 +112,7 @@ pub fn extensions(start_dir: Option<PathBuf>, places: &Places) -> Extensions {
 /// The agent composed and started: its sessions are read and resumed on a
 /// background task, and the outbox delivers its answers.
 pub struct Agent {
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     _config_watch: Option<horizon_agent_host::config_watch::RecommendedWatcher>,
 }
 
@@ -144,7 +144,7 @@ impl Agent {
         if let Some(hold) = hold_mock_streams {
             providers.hold_mock_streams(hold);
         }
-        let mut state = AgentdState::new(
+        let mut state = AgentHostState::new(
             providers,
             agent_config.clone(),
             None,
@@ -193,7 +193,7 @@ impl Agent {
     }
 
     /// The agent's state, for what a test reads of it directly.
-    pub fn state(&self) -> &Arc<AgentdState> {
+    pub fn state(&self) -> &Arc<AgentHostState> {
         &self.state
     }
 }
@@ -203,7 +203,7 @@ impl Agent {
 pub async fn serve_until<R, W>(
     read: R,
     write: W,
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     stop: impl std::future::Future<Output = ()>,
 ) where
     R: AsyncRead + Send + 'static,

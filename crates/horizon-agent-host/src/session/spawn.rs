@@ -19,7 +19,7 @@ use super::panic::{
     SessionLoopPhase, SessionPanic, catch_session_panic, record_uncaught_session_panic,
 };
 use super::run::run_session;
-use super::state::{AgentdState, SessionEntry, lock_unpoisoned};
+use super::state::{AgentHostState, SessionEntry, lock_unpoisoned};
 use crate::worktree::{self, WorktreeInfo};
 
 /// Resolves this session's model (pure and synchronous -- see
@@ -38,7 +38,7 @@ use crate::worktree::{self, WorktreeInfo};
 /// handler. See `docs/agent-output-ui-amendment.md`'s dated model-chip
 /// addendum.
 fn resolve_and_announce_session_model(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     session_id: SessionId,
     provider_id: &ProviderId,
     role_id: Option<&RoleId>,
@@ -73,7 +73,7 @@ fn resolve_and_announce_session_model(
 /// plus the model the session runs. `None` for an id with no config entry (e.g.
 /// the mock provider), where the chip falls back to the resolved model id.
 fn selection_for_provider_id(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     provider_id: &ProviderId,
     model: &str,
 ) -> Option<horizon_agent::hosting::ModelSelection> {
@@ -110,7 +110,7 @@ fn selection_for_provider_id(
 /// through environment activation (`worktree_enter`, board #65).
 #[expect(clippy::too_many_arguments)]
 pub fn spawn_session_thread(
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,
@@ -135,7 +135,7 @@ pub fn spawn_session_thread(
 
 #[expect(clippy::too_many_arguments)]
 pub(super) fn spawn_session_thread_with_context(
-    state: Arc<AgentdState>,
+    state: Arc<AgentHostState>,
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,

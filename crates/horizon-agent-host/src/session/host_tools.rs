@@ -8,7 +8,7 @@ use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::tools::HostTools;
 use horizon_control::contract::EnvelopeBody;
 
-use super::state::AgentdState;
+use super::state::AgentHostState;
 
 /// How long `workspace_snapshot` waits on the control plane: a shell that
 /// never answers must not hang a session.
@@ -16,14 +16,14 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The host's side of a session's tools. `workspace_snapshot` asks the
 /// control plane of the shell that started this process
-/// (`AgentdState::control_socket`, `HORIZON_SOCKET`); everything else
+/// (`AgentHostState::control_socket`, `HORIZON_SOCKET`); everything else
 /// falls through to `None`, letting `execute_agent_tool` try the crate's
 /// own auto tools next.
-pub(super) struct AgentdHostTools {
-    pub(super) state: Arc<AgentdState>,
+pub(super) struct AgentHostHostTools {
+    pub(super) state: Arc<AgentHostState>,
 }
 
-impl HostTools for AgentdHostTools {
+impl HostTools for AgentHostHostTools {
     fn execute_auto(&self, tool_id: &str, _input: &serde_json::Value) -> Option<serde_json::Value> {
         if tool_id != "workspace_snapshot" {
             return None;
@@ -87,14 +87,14 @@ mod tests {
 
     /// Runs one `worktree_enter` call through the tool executor, returning
     /// the recorded result's outcome flag and JSON body.
-    fn enter(state: &Arc<AgentdState>, session: SessionId) -> (bool, serde_json::Value) {
+    fn enter(state: &Arc<AgentHostState>, session: SessionId) -> (bool, serde_json::Value) {
         let tool_state = ToolSessionBuilder::for_current_dir(
             AgentToolsConfig::default(),
             RecallContext::default(),
         )
         .build();
         let execution = execute_agent_tool(
-            &AgentdHostTools {
+            &AgentHostHostTools {
                 state: state.clone(),
             },
             &tool_state,
@@ -155,7 +155,7 @@ mod tests {
     }
 
     fn insert_session(
-        state: &AgentdState,
+        state: &AgentHostState,
         root: &Path,
         worktree: Option<crate::worktree::WorktreeInfo>,
     ) -> (SessionId, crossbeam_channel::Receiver<Command>) {

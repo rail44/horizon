@@ -2,15 +2,19 @@
 
 use horizon_agent::contract::{Command, ProviderEvent, SessionId};
 
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 
-pub(super) fn resolve(state: &AgentdState, provider: &str, model: &str) -> Result<Command, String> {
+pub(super) fn resolve(
+    state: &AgentHostState,
+    provider: &str,
+    model: &str,
+) -> Result<Command, String> {
     let config = lock_unpoisoned(&state.agent_config);
     horizon_agent::config::resolve_model_selection(&config.providers, provider, model)
         .map(|selection| Command::ApplySessionModel(Box::new(selection)))
 }
 
-pub(super) fn record_applied(state: &AgentdState, session_id: SessionId, event: &ProviderEvent) {
+pub(super) fn record_applied(state: &AgentHostState, session_id: SessionId, event: &ProviderEvent) {
     if !matches!(
         event,
         ProviderEvent::SessionModel(_)
@@ -57,7 +61,7 @@ pub(super) fn selections_in(history: &[horizon_agent::contract::Event]) -> Selec
 /// chosen on its branch, without recording the choice a second time. A
 /// model the configuration no longer has is said on stderr and left.
 pub(super) fn restore(
-    state: &AgentdState,
+    state: &AgentHostState,
     session_id: SessionId,
     commands_tx: &crossbeam_channel::Sender<Command>,
     selections: Selections,

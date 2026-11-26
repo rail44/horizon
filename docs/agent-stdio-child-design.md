@@ -48,7 +48,7 @@ horizon-agent-acp (one per window)
 beyond its socket is unreachable from another crate. That code moves
 into a library crate, `horizon-agent-host`:
 
-- the host state (`AgentdState`, renamed), session spawn and the session
+- the host state (`AgentHostState`, renamed), session spawn and the session
   thread (`spawn.rs`, `run.rs`, `setup.rs`, `environment.rs`, `events.rs`,
   `input.rs`, `model_selection.rs`, `subscription.rs`, `panic.rs`);
 - the session's attachment stream and its lease (`session/attachment.rs`);
@@ -158,7 +158,7 @@ and its panes fail.
 - **A flush when stdin closes**, as agentd flushes on drain and SIGTERM.
 - **Config reload.** The child reads the config file again when it
   changes: `[providers]`, `[sandbox]`, `[grants]` and trusted projects
-  (`AgentdState::reload_provider_config` rebuilds the providers today;
+  (`AgentHostState::reload_provider_config` rebuilds the providers today;
   nothing calls it). `config.example.toml` already says provider
   settings reload live, which this makes true.
 - **Startup off the UI thread.** The shell starts the child and

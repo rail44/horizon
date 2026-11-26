@@ -8,7 +8,7 @@ use std::sync::Arc;
 use horizon_agent::config::AgentToolsConfig;
 use horizon_agent::tools::{RecallContext, ToolSessionBuilder};
 
-use super::state::AgentdState;
+use super::state::AgentHostState;
 use crate::worktree;
 
 /// Builds a session's file-tool confinement root (`tools::state::
@@ -46,7 +46,7 @@ pub(super) fn tool_session_builder_for(
 /// directory that has since been deleted, replaced, or become over-broad
 /// never reaches a sandbox policy.
 pub(super) fn configured_filesystem_grants(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     workspace_root: Option<&Path>,
 ) -> Vec<horizon_sandbox::FilesystemGrant> {
     let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
@@ -67,7 +67,7 @@ pub(super) fn configured_filesystem_grants(
 /// direct connects to them alongside the session proxy (e.g. sccache on
 /// `127.0.0.1:4226`).
 pub(super) fn configured_loopback_connect(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     workspace_root: Option<&Path>,
 ) -> Vec<std::net::SocketAddr> {
     let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
@@ -86,7 +86,7 @@ pub(super) fn configured_loopback_connect(
 /// the session's network proxy; the runtime grant flow (approve-on-denial)
 /// still applies on top for anything not listed here.
 pub(super) fn configured_domains(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     workspace_root: Option<&Path>,
 ) -> Vec<String> {
     let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
@@ -103,7 +103,7 @@ pub(super) fn configured_domains(
 /// Same exact-root matching as [`configured_domains`]; validation happened
 /// at config resolution (`horizon_config::grants::resolve`).
 pub(super) fn configured_mach_services(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     workspace_root: Option<&Path>,
 ) -> Vec<String> {
     let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
@@ -119,7 +119,10 @@ pub(super) fn configured_mach_services(
 /// toplevel, so an isolated worktree session inherits its parent's trust)
 /// -> exact-match against `state.trusted_projects`. `false` for a session
 /// with no workspace root, no repository, or no matching entry -- fail-closed.
-pub(super) fn project_is_trusted(state: &Arc<AgentdState>, workspace_root: Option<&Path>) -> bool {
+pub(super) fn project_is_trusted(
+    state: &Arc<AgentHostState>,
+    workspace_root: Option<&Path>,
+) -> bool {
     let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
         return false;
     };

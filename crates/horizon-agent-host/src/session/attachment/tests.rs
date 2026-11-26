@@ -10,13 +10,13 @@ fn message(index: usize) -> Event {
     })
 }
 
-fn snapshot(state: &Arc<AgentdState>, session: SessionId, live: &LiveState) -> Bootstrap {
+fn snapshot(state: &Arc<AgentHostState>, session: SessionId, live: &LiveState) -> Bootstrap {
     let (reply, mut receive) = oneshot::channel();
     capture(state, session, live, reply);
     receive.try_recv().unwrap()
 }
 
-fn publish(state: &AgentdState, session: SessionId, live: &LiveState, event: Event) {
+fn publish(state: &AgentHostState, session: SessionId, live: &LiveState, event: Event) {
     live.extend_provider_events([event.clone().into()]).unwrap();
     send_session_event(state, session, AgentWireEvent::Event(event));
 }

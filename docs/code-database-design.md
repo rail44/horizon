@@ -295,7 +295,7 @@ signals never flagged a preserved unit no longer holds.
 Reading check: the sources are identical between rounds, so every change
 in the top candidates comes from lineage (6/3/3/7 of 10 entered per
 signal; cycles unchanged). Entrants judged: 3 with the same causes as
-round 1 (`WorkspaceShell` channels, `AgentdState` locks), 2 small
+round 1 (`WorkspaceShell` channels, `AgentHostState` locks), 2 small
 test-only defects found by reading clone pairs (a match-arm paste in the
 test renderer; a `GIT_CONFIG_*` reset inside a conditional loop), 13
 benign. Totals 13 / 31 / 1 (round 1: 12 / 32 / 1). The mechanism table
@@ -366,7 +366,7 @@ comments) and modules 874 → 420; doc-only changes now credit the item
 they document, so innermost is no longer a subset of `all`. Seven more of
 the 45 round-2 candidates left the top lists (none of the 19 returned),
 among them both true positives the previous round had kept: the
-`AgentdState` impl (its type, the same cause, stays 2nd by fan-in ×
+`AgentHostState` impl (its type, the same cause, stays 2nd by fan-in ×
 churn) and the `AgentdHandle`/`TerminaldHandle` clone pair, whose
 fragments span several methods and therefore resolve to the impls (the
 clone-side resolution, M4, is the remaining open mechanism). Retrospective
@@ -464,7 +464,7 @@ three have no enclosing unit or no changes under their earlier names —
 and 30 units reconnected with 65 commits, more than the pre-check
 because the full relative name reaches through several nesting levels
 and a reconnected method then follows its own earlier links. 44 further
-units with some history gained commits (`AgentdState.new` 2 → 15), 74 in
+units with some history gained commits (`AgentHostState.new` 2 → 15), 74 in
 all. The churn and fan-in × churn top 10 are unchanged; the clone query
 under the restored `contain` default changed 4 of 1,502 rows;
 retrospective P@k moved by at most 0.04 (clone P@50 0.72 → 0.76,
@@ -555,7 +555,7 @@ applied four times (1c27f1ab) — reached by churn and by the clone signal,
 though the lines lie outside the jscpd fragment. Co-change's top 10 (all
 replaced by N1/M5) are all 問題なし. **Tracking** the 13 known 問題あり:
 7 are in a top 10 now; 5 return under `attribution := 'all'` (the
-`session_lifecycle.rs` and `commands.rs` impls, the `AgentdState` impl,
+`session_lifecycle.rs` and `commands.rs` impls, the `AgentHostState` impl,
 the `AgentdHandle`/`TerminaldHandle` pair, `tests.real_git`) and 1 under
 `include_tests`; `overlap` alone does not restore the clone pair. By
 signal, churn and fan-in × churn reach causes inside one large unit or

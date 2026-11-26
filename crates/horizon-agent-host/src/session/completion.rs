@@ -12,7 +12,7 @@ use horizon_agent::live::LiveState;
 use horizon_agent::tools::{ToolCompletion, ToolUpdate};
 
 use super::events::send_session_event;
-use super::state::AgentdState;
+use super::state::AgentHostState;
 
 mod retry;
 use retry::fold_domain_grant_required;
@@ -21,7 +21,7 @@ use retry::fold_domain_grant_required;
 /// frame; retry handlers receive the accepted request and cannot reselect an
 /// occurrence by its provider call ID.
 pub(super) fn fold_tool_completion(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -51,7 +51,7 @@ pub(super) fn fold_tool_completion(
 }
 
 fn fold_approval_judgment(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -64,7 +64,7 @@ fn fold_approval_judgment(
 
 #[cfg(test)]
 fn fold_bash_completion(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -77,7 +77,7 @@ fn fold_bash_completion(
 /// publication order. The update was applied to LiveState before a worker was started or
 /// before this provider result became deliverable.
 pub(super) fn publish_tool_update(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
     update: Result<ToolUpdate, String>,

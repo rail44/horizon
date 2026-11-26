@@ -23,7 +23,7 @@ use horizon_agent::persistence::event_log::{
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
 
-use super::state::{AgentdState, lock_unpoisoned};
+use super::state::{AgentHostState, lock_unpoisoned};
 use crate::worktree;
 
 /// `docs/agent-runtime-split-design.md` step 4, "agentd start": for each
@@ -52,7 +52,7 @@ use crate::worktree;
 /// Each session's latest records (`session_summary`) decide whether it is
 /// dead without reading the rest of its log; only the others are read, as
 /// their branch (reaching into the session a fork was forked from).
-pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>) {
+pub(crate) fn resume_persisted_sessions(state: &Arc<AgentHostState>) {
     let Some(writer) = state.writer() else {
         return;
     };
@@ -194,7 +194,7 @@ impl ResumeTally {
 /// environment restoration, then either the orphaned-exploration
 /// termination or the interrupted-turn fixup followed by the spawn.
 fn resume_one_session(
-    state: &Arc<AgentdState>,
+    state: &Arc<AgentHostState>,
     writer: &WriterHandle,
     session_id: SessionId,
     session_records: Vec<Record>,
@@ -453,7 +453,7 @@ fn cancel_unfinished_tool_calls(frame: &AgentFrame) -> Vec<Event> {
 /// Explicit owner-triggered restoration of exactly one historical session.
 /// Reads acknowledged event-log records, retaining every termination record.
 /// Concurrent resume calls serialize through the lifecycle gate.
-pub fn resume_session(state: &Arc<AgentdState>, session_id: SessionId) -> Result<(), String> {
+pub fn resume_session(state: &Arc<AgentHostState>, session_id: SessionId) -> Result<(), String> {
     let mut lifecycle = lock_unpoisoned(&state.lifecycle);
     let writer = state.writer().ok_or("Session persistence is unavailable")?;
     writer.flush().map_err(|error| error.to_string())?;
@@ -615,7 +615,7 @@ pub(super) fn interrupted_input_outcomes(events: &[Event]) -> Vec<Event> {
     })]
 }
 
-impl AgentdState {
+impl AgentHostState {
     /// One session's branch (`event_log::read_branch`), for a caller that
     /// has just flushed the writer.
     pub fn flushed_session_records(&self, session_id: SessionId) -> Result<Vec<Record>, String> {
@@ -1346,11 +1346,11 @@ mod resume_tests {
         writer.flush().unwrap();
     }
 
-    fn live_sessions(state: &Arc<AgentdState>) -> HashSet<SessionId> {
+    fn live_sessions(state: &Arc<AgentHostState>) -> HashSet<SessionId> {
         state.sessions.lock().unwrap().keys().copied().collect()
     }
 
-    fn shut_down_sessions(state: &Arc<AgentdState>) {
+    fn shut_down_sessions(state: &Arc<AgentHostState>) {
         for session_id in live_sessions(state) {
             state.send_command(session_id, horizon_agent::contract::Command::Shutdown);
         }

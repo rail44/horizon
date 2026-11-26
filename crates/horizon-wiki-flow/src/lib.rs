@@ -27,7 +27,7 @@ use uuid::Uuid;
 use horizon_agent_host::extension::Extension;
 
 use horizon_agent_host::outbox::{BoxFuture, Context, Reply, ReplySink, TriggerSource};
-use horizon_agent_host::session::{AgentdState, resume_session, spawn_session_thread};
+use horizon_agent_host::session::{AgentHostState, resume_session, spawn_session_thread};
 
 const KIND: &str = "wiki";
 
@@ -277,7 +277,11 @@ impl WikiSource {
 
     /// Starts `session` with the thread role, or resumes it when it has
     /// answered before.
-    fn ensure_started(&self, state: &Arc<AgentdState>, session: SessionId) -> Result<(), String> {
+    fn ensure_started(
+        &self,
+        state: &Arc<AgentHostState>,
+        session: SessionId,
+    ) -> Result<(), String> {
         if state.session_exists(session) {
             return Ok(());
         }
@@ -348,7 +352,7 @@ impl ReplySink for WikiSink {
 
 /// Suspends `session` when its thread ends with this session's reply, so
 /// nothing is left for it to answer.
-fn suspend_if_answered(state: &Arc<AgentdState>, store: &Store, page: Uuid, session: SessionId) {
+fn suspend_if_answered(state: &Arc<AgentHostState>, store: &Store, page: Uuid, session: SessionId) {
     let Ok(threads) = store.threads(page) else {
         return;
     };

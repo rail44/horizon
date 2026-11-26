@@ -1,6 +1,6 @@
 # Agent history format
 
-The current event-log format is v5; the agent wire is v27. A v5 record names
+The current event-log format is v5; the agent speaks standard ACP v2 (`docs/agent-stdio-child-design.md`). A v5 record names
 the record before it on its branch of the conversation (`parent_id`), so a
 conversation is a tree: a session's history is the chain walked back from
 its latest record (`docs/agent-core-extension-design.md`, "会話"). Records

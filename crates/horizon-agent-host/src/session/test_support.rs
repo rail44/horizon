@@ -12,7 +12,7 @@ use horizon_agent::registry::ProviderRegistry;
 #[cfg(test)]
 use horizon_agent::tools::ApprovalCandidate;
 
-use super::state::AgentdState;
+use super::state::AgentHostState;
 
 /// In-memory session configuration, independent of the developer's environment.
 /// Persistence tests install their own writer and paths explicitly.
@@ -51,8 +51,8 @@ pub fn test_config() -> AgentConfig {
 pub fn state_from_config(
     config: AgentConfig,
     trusted: Vec<std::path::PathBuf>,
-) -> Arc<AgentdState> {
-    Arc::new(AgentdState::new(
+) -> Arc<AgentHostState> {
+    Arc::new(AgentHostState::new(
         ProviderRegistry::builtin_with_config(config.clone()),
         config,
         None,
@@ -62,7 +62,7 @@ pub fn state_from_config(
     ))
 }
 
-pub fn test_state() -> Arc<AgentdState> {
+pub fn test_state() -> Arc<AgentHostState> {
     state_from_config(test_config(), Vec::new())
 }
 
@@ -99,7 +99,7 @@ pub(super) fn drain_events(
 }
 
 /// Override only the provider properties relevant to the scenario.
-pub fn state_with_rig_config(api_key_present: bool, model: &str) -> Arc<AgentdState> {
+pub fn state_with_rig_config(api_key_present: bool, model: &str) -> Arc<AgentHostState> {
     state_from_config(rig_config(api_key_present, model), Vec::new())
 }
 
@@ -121,13 +121,13 @@ pub fn state_with_packages(
     api_key_present: bool,
     model: &str,
     packages: horizon_agent::packages::Packages,
-) -> Arc<AgentdState> {
+) -> Arc<AgentHostState> {
     let mut config = rig_config(api_key_present, model);
     config.rig.packages = packages;
     state_from_config(config, Vec::new())
 }
 
-pub fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> Arc<AgentdState> {
+pub fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> Arc<AgentHostState> {
     state_from_config(test_config(), trusted)
 }
 

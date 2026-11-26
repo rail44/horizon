@@ -17,7 +17,7 @@ use horizon_agent::persistence::event_log::{
     UnsupportedEventLogFormat, WriterHandle, session_ids, split_legacy_log,
 };
 
-use crate::session::{self, AgentdState};
+use crate::session::{self, AgentHostState};
 
 /// What the caller of [`spawn_resume_task`] decides around startup.
 pub struct StartupHooks {
@@ -30,7 +30,11 @@ pub struct StartupHooks {
 
 /// Takes the session logs, resumes their sessions and marks `state` ready,
 /// on a blocking task that races the caller's accept loop.
-pub fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig, hooks: StartupHooks) {
+pub fn spawn_resume_task(
+    state: Arc<AgentHostState>,
+    agent_config: AgentConfig,
+    hooks: StartupHooks,
+) {
     let StartupHooks {
         before_resume,
         refused,
@@ -56,7 +60,7 @@ pub fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig, hoo
 /// new projection format: minutes over a long history) is not waited out
 /// by a recall. A recall meanwhile waits for the file, then reports it
 /// unavailable.
-fn catch_up_projection(state: &AgentdState) {
+fn catch_up_projection(state: &AgentHostState) {
     let Some(projection) = state.projection() else {
         return;
     };
@@ -72,7 +76,7 @@ fn catch_up_projection(state: &AgentdState) {
 
 /// Takes the session logs' directory, splits a shared log into it, and
 /// starts the writer.
-fn open_persistence(state: &AgentdState, agent_config: &AgentConfig) -> Result<()> {
+fn open_persistence(state: &AgentHostState, agent_config: &AgentConfig) -> Result<()> {
     let persistence = &agent_config.persistence;
     let dir = &persistence.sessions_dir;
     state.hold_host_lock(lock_sessions(dir)?);

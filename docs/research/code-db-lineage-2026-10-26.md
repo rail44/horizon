@@ -119,11 +119,11 @@
 | ---: | --- | --- |
 | 1 | `contract.rs` `Event`(89、21) | `contract.rs` `Event`(89、24) |
 | 2 | `tools/state.rs` `ToolSessionState` impl(31、37) | `tools/state.rs` `ToolSessionState` impl(31、39) |
-| 3 | `contract.rs` `Command`(41、15) | `session/state.rs` `AgentdState` 型(30、25) |
+| 3 | `contract.rs` `Command`(41、15) | `session/state.rs` `AgentHostState` 型(30、25) |
 | 4 | `live.rs` `LiveState` impl(34、17) | `live.rs` `LiveState` impl(34、22) |
-| 5 | `config.rs` `RigAgentConfig`(25、18) | `session/state.rs` `AgentdState` impl(21、34) |
+| 5 | `config.rs` `RigAgentConfig`(25、18) | `session/state.rs` `AgentHostState` impl(21、34) |
 | 6 | `contract.rs` `ToolCallRequest`(64、6) | `contract.rs` `Command`(41、17) |
-| 7 | `session/state.rs` `AgentdState` impl(21、17) | `contract/tool_result.rs` `ToolCallResult`(59、11) |
+| 7 | `session/state.rs` `AgentHostState` impl(21、17) | `contract/tool_result.rs` `ToolCallResult`(59、11) |
 | 8 | `session_lifecycle.rs` `WorkspaceShell` impl(8、44) | `horizon-workspace/src/operations.rs` `Workspace` impl(14、43) |
 | 9 | `event_log/writer.rs` `WriterHandle` impl(27、13) | `event_log/writer.rs` `WriterHandle` impl(27、22) |
 | 10 | `tools/catalog.rs` `definitions`(8、42) | `config.rs` `RigAgentConfig`(25、23) |

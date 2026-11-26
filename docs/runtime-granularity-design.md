@@ -69,7 +69,7 @@ exact pain the terminald split removed. Flagged at the v18 decision
    discipline, tmux precedent; agent wire: still evolving fast).
 3. **Decided 2026-07-31**: sessions are attachment records; the
    "sessiond" vocabulary is swept in phase 3 (`src/sessiond/` →
-   `src/runtime/`, `SessiondState` → `AgentdState`).
+   `src/runtime/`, `SessiondState` → `AgentHostState`).
    `horizon-control`'s versioning story explicitly stays as-is
    (a shell-local socket, not a runtime hub). Process composition is
    unchanged.

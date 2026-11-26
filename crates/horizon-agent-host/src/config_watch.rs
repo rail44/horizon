@@ -10,7 +10,7 @@ pub use notify::RecommendedWatcher;
 use notify::event::{EventKind, ModifyKind};
 use notify::{RecursiveMode, Watcher as _};
 
-use crate::session::AgentdState;
+use crate::session::AgentHostState;
 
 /// How long the file must sit still before it is read again: an editor's
 /// save is several events, and a file half written is not worth reading.
@@ -19,7 +19,7 @@ const SETTLE: Duration = Duration::from_millis(300);
 /// Reads the providers again from the state's configuration file whenever
 /// it changes. `None` when there is no file to watch or the watch cannot
 /// be made; the watch lasts as long as what is returned is kept.
-pub fn watch_config(state: Arc<AgentdState>) -> Option<RecommendedWatcher> {
+pub fn watch_config(state: Arc<AgentHostState>) -> Option<RecommendedWatcher> {
     let path = state.config_path()?.to_path_buf();
     watch_file(&path, move || {
         if let Err(error) = state.reload_provider_config() {
@@ -112,7 +112,7 @@ mod tests {
         );
         let providers =
             horizon_agent::registry::ProviderRegistry::builtin_with_config(agent_config.clone());
-        let state = Arc::new(AgentdState::new(
+        let state = Arc::new(AgentHostState::new(
             providers,
             agent_config,
             None,
@@ -120,7 +120,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         ));
-        let model = |state: &AgentdState| {
+        let model = |state: &AgentHostState| {
             let providers = state.providers.lock().unwrap();
             providers.resolved_model(&providers.default_provider_id(), None)
         };

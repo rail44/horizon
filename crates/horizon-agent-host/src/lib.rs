@@ -2,7 +2,7 @@
 //! from the event log, approvals, worktrees and checkpoints, what starts
 //! sessions on its own (the outbox), and the ACP agent side every client
 //! speaks to (`docs/agent-stdio-child-design.md`). A process hosts them by
-//! building an [`AgentdState`](session::AgentdState) with the
+//! building an [`AgentHostState`](session::AgentHostState) with the
 //! [`Extensions`](extension::Extensions) it is composed with, starting
 //! [`startup::spawn_resume_task`] and the outbox, and serving connections
 //! with [`hub::serve`].
