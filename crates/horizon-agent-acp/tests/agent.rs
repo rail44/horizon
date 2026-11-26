@@ -680,3 +680,97 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
     );
     let _ = std::fs::remove_file(&gate);
 }
+
+/// A session opened with the test MCP server (`support/mcp_server.py`),
+/// whose `note` tool writes to `note`.
+fn session_with_mcp(note: &Path) -> v2::NewSessionRequest {
+    let python = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3"))
+        .find(|path| path.is_file())
+        .expect("python3 on PATH");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/mcp_server.py");
+    session_new().mcp_servers(vec![v2::McpServer::Stdio(
+        v2::McpServerStdio::new("test", python)
+            .args(vec![script.display().to_string()])
+            .env(vec![v2::EnvVariable::new(
+                "NOTE_FILE",
+                note.display().to_string(),
+            )]),
+    )])
+}
+
+/// A tool an MCP server the client names offers, and says only reads, runs
+/// without asking, and its answer is the call's result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_only_tool_of_a_named_mcp_server_runs_without_asking() {
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
+    let dir = tempfile::tempdir().unwrap();
+    let session_id = open_session(&client, session_with_mcp(&dir.path().join("note"))).await;
+    prompt(
+        &client,
+        session_id,
+        r#"call tool mcp__test__echo {"text":"hello from the server"}"#,
+    )
+    .await;
+    let collected = collect_until(&mut client, |inbound| finished_tool(inbound).is_some()).await;
+    assert!(
+        !collected
+            .iter()
+            .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+        "{collected:?}"
+    );
+    let call = collected.iter().rev().find_map(finished_tool).unwrap();
+    let output = call.raw_output.as_opt_ref().flatten().unwrap();
+    assert!(
+        output.to_string().contains("hello from the server"),
+        "{output}"
+    );
+}
+
+/// Any other tool of such a server asks first, and runs once approved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_tool_of_a_named_mcp_server_asks_and_runs_once_approved() {
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
+    let dir = tempfile::tempdir().unwrap();
+    let note = dir.path().join("note");
+    let (_, _approval, collected) = approve_and_finish_in(
+        &mut client,
+        session_with_mcp(&note),
+        r#"call tool mcp__test__note {"text":"approved"}"#,
+    )
+    .await;
+    let call = collected.iter().rev().find_map(finished_tool).unwrap();
+    let output = call.raw_output.as_opt_ref().flatten().unwrap();
+    assert!(output.to_string().contains("noted"), "{output}");
+    assert!(
+        std::fs::read_to_string(&note)
+            .unwrap()
+            .starts_with("approved\n")
+    );
+}
+
+/// A session's MCP servers stop when the session ends, while the agent
+/// goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_sessions_mcp_servers_stop() {
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
+    let dir = tempfile::tempdir().unwrap();
+    let note = dir.path().join("note");
+    let session_id = open_session(&client, session_with_mcp(&note)).await;
+    client.send_ordered(v2::CloseSessionRequest::new(acp_id(session_id)));
+    collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::Replied(_))
+    })
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::fs::read_to_string(&note).unwrap_or_default() != "ended\n" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the server did not stop with its session"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

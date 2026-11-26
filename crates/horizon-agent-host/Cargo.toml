@@ -8,6 +8,7 @@ edition = "2024"
 test-support = []
 
 [dependencies]
+rmcp = { version = "3.9.0", default-features = false, features = ["client", "transport-child-process"] }
 agent-client-protocol = { workspace = true }
 anyhow = "1.0"
 crossbeam-channel = "0.5"

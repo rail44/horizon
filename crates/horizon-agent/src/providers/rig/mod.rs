@@ -63,7 +63,10 @@ impl AgentProvider for Provider {
     /// a8839fc1).
     fn start_session(&self, request: StartSession) -> SessionHandle {
         let role = (request.role_id.as_ref()).and_then(|id| self.config.packages.resolve_role(id));
-        let config = role_adjusted_config(&self.config, role);
+        let mut config = role_adjusted_config(&self.config, role);
+        if let Some(packages) = &request.packages {
+            config.packages = packages.clone();
+        }
         spawn_rig_session(request, config, role)
     }
 

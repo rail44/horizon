@@ -1,7 +1,7 @@
 # Board and wiki as ACP clients, and sessions hosted on demand
 
-Status: designed. Board item #117 holds the decisions this design
-follows.
+Status: designed; stage 1 implemented. Board item #117 holds the
+decisions this design follows.
 
 ## Goal
 
@@ -88,11 +88,21 @@ has no way to reach an agent at all. The agent never reads
   unless something other than the board and the wiki turns out to need
   them (to be checked: whether the rig session's input queue serves a
   plain `session/prompt`).
-- **An MCP client.** At `session/new` (and `session/resume`), the agent
-  connects to the MCP servers the client names and offers their tools
-  beside its own, under the same approval policy as any tool. It
-  advertises the transports it takes (`session.mcp.stdio`, and `http`
-  if taken) in `initialize`. The Rust MCP SDK (`rmcp`) is the candidate.
+- **An MCP client** (`horizon-agent-host/src/mcp.rs`, on `rmcp`). At
+  `session/new`, and at `session/resume` of a session not running, the
+  agent starts the stdio servers the client names, for the session's
+  life, and offers their tools to that session alone
+  (`horizon_agent::tools::SessionTool`, carried in the session's
+  packages). It advertises `session.mcp.stdio` in `initialize`.
+  - A tool is named `mcp__<server>__<tool>`, the form other agents use.
+  - A tool its server marks `readOnlyHint` runs without asking; any
+    other call is asked first, as a call past the containment is, so a
+    person or the judge decides.
+  - A server is the client's program and runs as the agent's child,
+    outside the sandbox; it stops when the session ends.
+  - A session already running when a `session/resume` names servers
+    keeps the ones it started with; with sessions hosted on demand
+    (stage 6), a resumed session is not running already.
 - What the roles' `unattended` did, refusing instead of asking when no
   one can approve, is the client's: a client with no person behind it
   answers `session/request_permission` itself.

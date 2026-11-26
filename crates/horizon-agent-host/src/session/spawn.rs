@@ -281,6 +281,7 @@ pub(super) fn spawn_session_thread_with_context(
         {
             eprintln!("horizon-agent: could not remove the checkpoints of {session_id:?}: {error}");
         }
+        thread_state.drop_mcp(session_id);
         // Last: the session's attachments end with their subscription, and a
         // `session/close` is answered when they have, so a client that ends
         // the agent on that answer leaves nothing of the session behind.

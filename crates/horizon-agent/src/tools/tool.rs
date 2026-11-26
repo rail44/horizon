@@ -52,13 +52,15 @@ pub(crate) trait Tool: Send + Sync {
     }
 }
 
-/// The tool `tool_id` names: a built-in, then a registered one.
+/// The tool `tool_id` names: a built-in, then a registered one, then one
+/// the session's client handed it.
 pub(crate) fn find(packages: &crate::packages::Packages, tool_id: &str) -> Option<Arc<dyn Tool>> {
     builtins()
         .iter()
         .find(|tool| tool.definition().id == tool_id)
         .cloned()
         .or_else(|| super::external::find(packages, tool_id))
+        .or_else(|| super::session_tool::find(packages, tool_id))
 }
 
 fn builtins() -> &'static [Arc<dyn Tool>] {

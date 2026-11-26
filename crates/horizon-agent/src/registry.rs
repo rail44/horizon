@@ -40,6 +40,9 @@ pub struct NewSession {
     /// The session's modules (`modules::Modules::compose`); `None` has the
     /// provider compose the default ones.
     pub modules: Option<crate::modules::Modules>,
+    /// The session's packages with the tools its client handed it; `None`
+    /// has the provider use its own.
+    pub packages: Option<crate::packages::Packages>,
 }
 
 pub(crate) trait Provider: Send + Sync {
@@ -220,6 +223,7 @@ impl ProviderRegistry {
                 history: session.history,
                 trusted_project: session.trusted_project,
                 modules: session.modules,
+                packages: session.packages,
             })
         })
     }

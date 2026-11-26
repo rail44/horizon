@@ -10,7 +10,11 @@ use crate::roles::{RoleDefinition, RoleId};
 use crate::tools::ExternalTool;
 
 #[derive(Clone, Default)]
-pub struct Packages(Arc<Inner>);
+pub struct Packages(Arc<Inner>, SessionTools);
+
+/// The tools one session's client handed it (`Packages::with_session_tools`).
+#[derive(Clone, Default)]
+struct SessionTools(Arc<[crate::tools::SessionTool]>);
 
 #[derive(Default)]
 struct Inner {
@@ -23,9 +27,11 @@ struct Inner {
 /// Two `Packages` are equal when they are the same composition.
 impl PartialEq for Packages {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.0, &other.0) && Arc::ptr_eq(&self.1.0, &other.1.0)
     }
 }
+
+impl Eq for Packages {}
 
 impl std::fmt::Debug for Packages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -120,7 +126,7 @@ impl PackagesBuilder {
     }
 
     pub fn build(self) -> Packages {
-        Packages(Arc::new(self.inner))
+        Packages(Arc::new(self.inner), SessionTools::default())
     }
 }
 
@@ -163,5 +169,18 @@ impl Packages {
 
     pub(crate) fn sections(&self) -> &[Arc<dyn crate::prompt::PromptSection>] {
         &self.0.sections
+    }
+
+    /// These packages for one session, with the tools its client handed it.
+    /// Unchanged when there are none.
+    pub fn with_session_tools(&self, tools: Vec<crate::tools::SessionTool>) -> Self {
+        if tools.is_empty() {
+            return self.clone();
+        }
+        Self(self.0.clone(), SessionTools(tools.into()))
+    }
+
+    pub(crate) fn session_tools(&self) -> &[crate::tools::SessionTool] {
+        &self.1.0
     }
 }

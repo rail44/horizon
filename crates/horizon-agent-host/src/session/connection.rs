@@ -33,6 +33,16 @@ impl Connection {
         Self { state }
     }
 
+    /// Keeps the MCP servers a client named for `session_id`.
+    pub(crate) fn hand_mcp(&self, session_id: SessionId, servers: crate::mcp::McpServers) {
+        self.state.hand_mcp(session_id, servers);
+    }
+
+    /// Whether `session_id`'s thread is running in this process.
+    pub(crate) fn is_running(&self, session_id: SessionId) -> bool {
+        self.state.session_exists(session_id)
+    }
+
     /// Sends a client's answer to an approval `requester` showed for one of
     /// its `task` children (`docs/agent-subagent-design.md` decision 4) to
     /// that child -- only while the approval is still pending there, which

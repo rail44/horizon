@@ -71,6 +71,9 @@ pub struct AgentHostState {
     /// connection holds (`crates/horizon-agent-acp/src/main.rs`).
     writer: Mutex<Option<WriterHandle>>,
     pub(super) sessions: Mutex<HashMap<SessionId, SessionEntry>>,
+    /// The MCP servers each session's client named for it, kept running
+    /// for the session's life (`crate::mcp`).
+    mcp: Mutex<HashMap<SessionId, Arc<crate::mcp::McpServers>>>,
     pub(super) agent_subscribers: super::attachment::Streams,
     /// In-process observers of a session's `contract::Event` stream,
     /// installed alongside (never instead of) the client-facing
@@ -155,6 +158,7 @@ impl AgentHostState {
             agent_config: Mutex::new(agent_config),
             writer: Mutex::new(writer),
             sessions: Mutex::new(HashMap::new()),
+            mcp: Mutex::new(HashMap::new()),
             agent_subscribers: Mutex::new(HashMap::new()),
             task_seeds: Mutex::new(HashMap::new()),
             session_subscriptions: Mutex::new(HashMap::new()),
@@ -168,6 +172,44 @@ impl AgentHostState {
             project_grants,
             trusted_projects,
         }
+    }
+
+    /// Keeps the MCP servers `session_id`'s client named for it, for the
+    /// session to be handed their tools when it starts.
+    pub fn hand_mcp(&self, session_id: SessionId, servers: crate::mcp::McpServers) {
+        lock_unpoisoned(&self.mcp).insert(session_id, Arc::new(servers));
+    }
+
+    /// Whether `session_id` has MCP servers its client named.
+    pub fn has_mcp(&self, session_id: SessionId) -> bool {
+        lock_unpoisoned(&self.mcp).contains_key(&session_id)
+    }
+
+    /// The tools `session_id`'s MCP servers offer.
+    pub(crate) fn session_tools(
+        &self,
+        session_id: SessionId,
+    ) -> Vec<horizon_agent::tools::SessionTool> {
+        lock_unpoisoned(&self.mcp)
+            .get(&session_id)
+            .map(|servers| servers.tools())
+            .unwrap_or_default()
+    }
+
+    /// Stops `session_id`'s MCP servers, as its session ends.
+    pub(crate) fn drop_mcp(&self, session_id: SessionId) {
+        let servers = lock_unpoisoned(&self.mcp).remove(&session_id);
+        drop(servers);
+    }
+
+    /// The packages a session runs with: these, with the tools its MCP
+    /// servers offer.
+    pub(crate) fn session_packages(
+        &self,
+        session_id: SessionId,
+    ) -> horizon_agent::packages::Packages {
+        self.packages()
+            .with_session_tools(self.session_tools(session_id))
     }
 
     /// Ends `session_id`'s thread without ending the session

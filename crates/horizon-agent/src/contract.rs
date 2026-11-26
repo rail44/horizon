@@ -120,6 +120,11 @@ pub(crate) struct StartSession {
     /// serialized.
     #[serde(skip)]
     pub modules: Option<crate::modules::Modules>,
+    /// The session's packages, with the tools its client handed it
+    /// (`Packages::with_session_tools`); `None` has the provider use its
+    /// own. Code, not data: never serialized.
+    #[serde(skip)]
+    pub packages: Option<crate::packages::Packages>,
 }
 
 /// Retained Git environment identity; base is the resolved commit, never an

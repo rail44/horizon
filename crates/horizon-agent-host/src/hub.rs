@@ -256,7 +256,8 @@ impl Shared {
                 v2::AgentCapabilities::new().session(
                     v2::SessionCapabilities::new()
                         .fork(v2::SessionForkCapabilities::new())
-                        .options(v2::SessionOptionsCapabilities::new()),
+                        .options(v2::SessionOptionsCapabilities::new())
+                        .mcp(v2::McpCapabilities::new().stdio(v2::McpStdioCapabilities::new())),
                 ),
             ),
         )
@@ -287,6 +288,7 @@ impl Shared {
                 Err(error) => return responder.respond_with_error(call_error(error)),
             },
         };
+        let servers = request.mcp_servers;
         let new = SessionNew {
             // The agent names its sessions.
             session_id: SessionId::new(),
@@ -301,6 +303,15 @@ impl Shared {
             // spawn, and a spawn racing `set_writer` would run without it.
             this.connection.wait_until_resume_ready().await;
             let session_id = new.session_id;
+            if !servers.is_empty() {
+                match crate::mcp::connect(servers).await {
+                    Ok(connected) => this.connection.hand_mcp(session_id, connected),
+                    Err(message) => {
+                        let _ = responder.respond_with_error(call_error(message));
+                        return;
+                    }
+                }
+            }
             let connection = this.connection.clone();
             let started = tokio::task::spawn_blocking(move || connection.handle_session_new(new))
                 .await
@@ -391,9 +402,20 @@ impl Shared {
                 request.session_id
             )));
         };
+        let servers = request.mcp_servers;
         let this = self.clone();
         tokio::spawn(async move {
             this.connection.wait_until_resume_ready().await;
+            // A session already running keeps the servers it started with.
+            if !servers.is_empty() && !this.connection.is_running(session_id) {
+                match crate::mcp::connect(servers).await {
+                    Ok(connected) => this.connection.hand_mcp(session_id, connected),
+                    Err(message) => {
+                        let _ = responder.respond_with_error(call_error(message));
+                        return;
+                    }
+                }
+            }
             this.open_attachment(session_id, Opening::Resume(responder), cx)
                 .await;
         });

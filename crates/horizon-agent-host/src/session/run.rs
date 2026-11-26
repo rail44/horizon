@@ -99,6 +99,9 @@ pub(super) fn run_session(
                 history: history.clone(),
                 trusted_project: trusted,
                 modules: Some(modules.clone()),
+                packages: state
+                    .has_mcp(session_id)
+                    .then(|| state.session_packages(session_id)),
             },
         )
     };

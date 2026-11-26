@@ -99,7 +99,7 @@ impl SessionEnvironment<'_> {
                 .into_iter()
                 .chain(seed.domains),
         );
-        let packages = state.packages();
+        let packages = state.session_packages(session_id);
 
         // `task`'s host capability (`docs/agent-explore-design.md`).
         // Withheld from an exploration session itself: its role allowlist

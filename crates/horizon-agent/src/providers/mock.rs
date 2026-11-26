@@ -297,6 +297,19 @@ fn respond_to_user_message(
         );
         return ControlFlow::Continue(());
     }
+    // `call tool <id> <json>`: a call to any tool the session has, such as
+    // one its client handed it.
+    if let Some(rest) = text.strip_prefix("call tool ") {
+        let (tool_id, input) = rest.split_once(' ').unwrap_or((rest, "{}"));
+        request_tool(
+            events_tx,
+            pending_tool_call,
+            "mock-call-tool-1",
+            tool_id,
+            serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({})),
+        );
+        return ControlFlow::Continue(());
+    }
     if let Some(path) = text.strip_prefix("write file ") {
         request_tool(
             events_tx,
@@ -600,6 +613,7 @@ mod tests {
                 history: Vec::new(),
                 trusted_project: true,
                 modules: None,
+                packages: None,
             });
             let commands = handle.sender();
             let events = handle.events();
@@ -651,6 +665,7 @@ mod tests {
             history: Vec::new(),
             trusted_project: true,
             modules: None,
+            packages: None,
         });
         handle.sender().send(Command::Suspend).unwrap();
         let events = handle.events();

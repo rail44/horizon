@@ -36,6 +36,7 @@ fn mock_agent_emits_initial_session_events() {
             history: Vec::new(),
             trusted_project: true,
             modules: None,
+            packages: None,
         },
     );
 
@@ -85,6 +86,7 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
             history: events.clone(),
             trusted_project: true,
             modules: None,
+            packages: None,
         });
         let rx = handle.events();
         // Created, initialization message, then input readiness.
@@ -588,6 +590,7 @@ fn mock_agent_accepts_tool_call_result_command() {
             history: Vec::new(),
             trusted_project: true,
             modules: None,
+            packages: None,
         },
     );
     let tx = handle.sender();
@@ -631,6 +634,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
             history: Vec::new(),
             trusted_project: true,
             modules: None,
+            packages: None,
         },
     );
     let tx = handle.sender();
@@ -724,6 +728,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
             history: Vec::new(),
             trusted_project: true,
             modules: None,
+            packages: None,
         },
     );
     let tx = handle.sender();
@@ -780,6 +785,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
             history: Vec::new(),
             trusted_project: true,
             modules: None,
+            packages: None,
         },
     );
     let tx = handle.sender();
@@ -1121,6 +1127,7 @@ fn provider_registry_starts_builtin_provider() {
                 history: Vec::new(),
                 trusted_project: true,
                 modules: None,
+                packages: None,
             },
         )
         .expect("builtin provider");

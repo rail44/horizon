@@ -14,10 +14,12 @@ pub(crate) struct Definition {
 }
 
 /// The built-in tools, then any registered from outside
-/// ([`super::external`]).
+/// ([`super::external`]), then the ones the session's client handed it
+/// ([`super::session_tool`]).
 pub(crate) fn definitions(packages: &crate::packages::Packages) -> Vec<Definition> {
     let mut definitions = catalog().to_vec();
     definitions.extend(super::external::definitions(packages));
+    definitions.extend(super::session_tool::definitions(packages));
     definitions
 }
 

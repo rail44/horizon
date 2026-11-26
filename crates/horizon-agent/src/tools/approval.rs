@@ -225,8 +225,41 @@ fn dispatch_approval(
     match request.tool_id.as_str() {
         "bash" => resolve_bash(session_id, runtime, request, decision, kind, source),
         "web_fetch" => resolve_web_fetch(session_id, runtime, request, decision, kind),
+        tool_id
+            if crate::tools::session_tool::is_session_tool(
+                runtime.tool_state.packages(),
+                tool_id,
+            ) =>
+        {
+            resolve_session_tool(session_id, runtime, request, decision)
+        }
         _ => resolve_synchronous_tool(runtime, request, decision),
     }
+}
+
+/// A tool the session's client handed it: a deny answers at once; an
+/// approve starts the call, whose result comes later as an automatic one's
+/// does.
+fn resolve_session_tool(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &PreparedCall<'_>,
+    decision: &ApprovalDecision,
+) -> ApprovalOutcome {
+    if matches!(decision, ApprovalDecision::Deny { .. }) {
+        return declined_result(runtime, &request.call_id, denied_output(decision));
+    }
+    let outcome = begin_execution(runtime, request, None);
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
+    }
+    crate::tools::session_tool::spawn_approved(
+        session_id,
+        runtime.tool_state.packages(),
+        request,
+        runtime.async_results.clone(),
+    );
+    outcome
 }
 
 fn resolve_web_fetch(
