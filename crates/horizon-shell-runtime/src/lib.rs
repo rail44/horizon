@@ -6,17 +6,11 @@
 //! connection, op queue, and `RuntimeControl`
 //! (`docs/terminald-split-design.md`).
 //!
-//! That separation is the whole point: reloading one runtime drains and
-//! respawns exactly one daemon and leaves the other's sessions — and, for
-//! terminals, the interactive processes running inside them — untouched. It
-//! also means a failure is domain-scoped: a dead agent runtime fans errors
-//! only into agent transcripts, because the two connections keep separate
-//! route tables (`routing::AgentRoutes` / `routing::TerminalRoutes`).
+//! Reloads and connection failures leave the other runtime's sessions and
+//! processes untouched. The two connections have separate route tables.
 //!
-//! Both handles keep the shape the JSONL era established: a sync API,
-//! started eagerly and non-blocking, backed by one dedicated current-thread
-//! tokio runtime on a background OS thread. The sync-world ⇄ tokio boundary
-//! did not move.
+//! Each handle exposes a synchronous API and starts without blocking, with
+//! a dedicated current-thread Tokio runtime on a background OS thread.
 //!
 //! [`notify`] is this layer's view-facing half that no UI framework
 //! shapes: the decision of when a burst of updates is worth a repaint. The

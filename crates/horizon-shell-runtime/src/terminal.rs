@@ -1,26 +1,10 @@
 //! The `horizon-terminald` client connection: connect, negotiate, dispatch
 //! terminal ops (`docs/terminald-split-design.md`).
 //!
-//! Structurally the twin of [`super::agent`], with two deliberate
-//! differences that follow from what this daemon *is*:
-//!
-//! 1. **A stale daemon hands over before it is drained.** `horizon-terminald`
-//!    was born at wire v17, so a stale terminald is always a remoc peer and
-//!    the recovery goes over the version-stable rtc surface. It is first
-//!    asked to `hand_over` its terminals to its next image, the build on
-//!    disk; only one that still cannot be talked to after that is drained,
-//!    which kills every PTY and whatever runs inside them. All three
-//!    mismatch shapes funnel through the once-per-runtime budget in
-//!    [`recover_stale_terminald`].
-//! 2. **Below-schema skew insurance** (design decision 6, the mechanized
-//!    tmux 3.6 lesson). This daemon is deliberately long-lived, so the
-//!    binary it is running may predate the client by many rebuilds — and
-//!    version negotiation only covers the *schema*, never the transport
-//!    beneath it (chmux framing, the Postbag codec). After `hello` the
-//!    client therefore issues one cheap probe call and, if it fails while
-//!    the connection is still up, refuses cleanly with a message naming the
-//!    peer's `binary_id` and `Reload Terminal Runtime` instead of carrying
-//!    on with a peer it cannot actually talk to. See [`establish`].
+//! Stale-daemon recovery uses version-stable remoc calls and tries handover
+//! before draining: a drain kills every PTY and the processes it hosts.
+//! Schema negotiation does not cover transport framing or codec changes;
+//! [`establish`] probes the connection after `hello`.
 
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -192,11 +176,6 @@ pub(super) fn spawn(
                             break;
                         }
                     }
-                    // Garbage and an explicit range rejection get the same
-                    // recovery here: there is no older
-                    // envelope generation to probe downward through, so the
-                    // one honest move for either is the version-stable rtc
-                    // drain followed by a respawn.
                     StreamEnd::GenerationMismatch { message }
                     | StreamEnd::VersionRejected { message } => {
                         consecutive_silences = 0;
@@ -392,28 +371,11 @@ where
 type EstablishedParts = (TerminalHubClient<WireCodec>, ConnTask, bool);
 
 /// Runs the shared connect prelude ([`connect_hub`]), then this hub's own
-/// `hello` and the decision-6 skew probe — the `hello` bounded by the one
-/// establish deadline the prelude opened.
-///
-/// **The probe and what it does / does not catch.** After a successful
-/// `hello` the client calls `list_terminals` once — the cheapest reply-
-/// bearing method on the hub — and treats a failure *while the connection
-/// is still up* as evidence that this peer's serialization does not match
-/// ours below the negotiated schema. That is the honest reading: the only
-/// errors `list_terminals` can return are transport-shaped, and a peer that
-/// answered `hello` has already proved it is alive and speaking chmux.
-///
-/// It **catches**: a peer whose reply encoding for a small structured value
-/// diverges from ours (a codec change, a chmux/rch framing change under a
-/// terminald binary older than the client), and any post-`hello` refusal a
-/// stale binary produces. It **does not catch**: skew confined to types the
-/// probe never exercises (frames, commands, the attachment channels
-/// themselves), nor a change that leaves both `hello` and an empty
-/// `list_terminals` reply byte-compatible. Per-item decode failures on the
-/// live attachment channels stay *tolerant* (skipped and rate-limit
-/// logged, adoption condition 2) rather than escalating here: one poisoned
-/// frame must not kill every running shell, which is precisely the outcome
-/// this whole split exists to prevent.
+/// Runs `hello` under the establishment deadline, then probes with `list_terminals`.
+/// A failed probe on a live connection signals skew below the wire schema;
+/// the error names the peer build and suggests `Reload Terminal Runtime`.
+/// The probe cannot detect skew confined to other message types. Live attachment
+/// channels skip individual decode failures and rate-limit their logs.
 async fn establish<S>(stream: S, timeout: Duration) -> Result<EstablishedParts, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,

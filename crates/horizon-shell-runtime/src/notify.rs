@@ -1,24 +1,9 @@
-//! Repaint coalescing for a session entity's event pump — an *optional*
-//! companion to [`super::link`], offered to any view kind whose runtime
-//! delivers ungated events.
-//!
-//! Whether a view kind needs it depends on where its coalescing already
-//! happens, so this is deliberately not built into `RuntimeLink`: the agent
-//! pane uses it because the agent streams provider tokens as they
-//! arrive, while the terminal pane deliberately does **not** — its frames
-//! reach the shell pre-coalesced, the daemon's session loop having already
-//! applied the same ~60Hz window (`COALESCE_WINDOW` in
-//! `horizon-terminal-core/src/session_loop.rs`). Adding a second window there
-//! would only add latency. The asymmetry is the design, not an oversight.
+//! Repaint coalescing for streams that deliver updates as they arrive.
+//! Terminal frames already arrive coalesced by the daemon's session loop.
 
 use std::time::{Duration, Instant};
 
-/// The client-side ceiling, deliberately the same ~60Hz as the terminal
-/// session loop's frame coalescing, per docs/terminal-protocol-goals.md's
-/// derived near-term work. An independent constant rather than a re-export
-/// because the terminal's window is private to the daemon's session loop by
-/// design ("must not leak into the UI layer"); this one gates `cx.notify()`
-/// on the GUI side instead.
+/// The repaint window is independent of the terminal daemon's private frame window.
 const NOTIFY_COALESCE_WINDOW: Duration = Duration::from_millis(16);
 
 /// What [`NotifyCoalescer::on_event`] wants done for the event just folded.

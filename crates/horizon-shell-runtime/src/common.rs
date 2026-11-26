@@ -3,16 +3,8 @@
 //! drained-daemon probe; plus the remoc connect prelude and per-call
 //! deadline wrapper the terminald client uses.
 //!
-//! Since the terminald split (`docs/terminald-split-design.md`) Horizon runs
-//! *two* of these runtimes — one per daemon, each with its own connection,
-//! op queue, and [`RuntimeControl`] — so that draining one leaves the other
-//! untouched. Everything in this module is deliberately domain-free: the
-//! agent-specific and terminal-specific halves live in [`super::agent`]
-//! and [`super::terminal`] respectively, because their protocols (ACP v2
-//! over the stdio of the `horizon-agent-acp` child, a remoc hub for
-//! terminald) and their handshakes differ, and only terminald is drained
-//! (a drain kills every PTY, which is also why only terminald carries the
-//! below-schema skew insurance).
+//! Each runtime has its own connection, op queue, and [`RuntimeControl`].
+//! Protocol-specific code lives in [`super::agent`] and [`super::terminal`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -55,23 +47,14 @@ impl Default for Timeouts {
     }
 }
 
-/// How many *consecutive* silent establish timeouts equal "a stale daemon
-/// generation holds the socket" (`docs/remoc-adoption-design.md` §6's
-/// bounded-timeout detection). One timeout is not evidence — a healthy
-/// daemon can be transiently unresponsive (its one-at-a-time accept loop
-/// busy, host under load) and the once-per-runtime recovery budget must not
-/// be burned on that — but a *v9 daemon is silent every time* (measured:
-/// its pre-hello `read_line` never completes on chmux bytes), so
-/// persistence is the signal.
+/// Consecutive silent establishment timeouts that trigger mismatch recovery.
+/// A healthy daemon can be briefly unresponsive, so one timeout is not evidence
+/// of a mismatch and does not spend the once-per-runtime recovery budget.
+/// A v9 JSONL daemon waits for a newline that the chmux handshake never sends.
 pub(super) const SILENCE_MISMATCH_THRESHOLD: u32 = 3;
 
-/// Deadline for one established-phase call (terminald's `list_terminals`,
-/// `attach_terminal`; the agent's `session/list`, `session/new` and
-/// `session/resume`). Not tight on purpose: the agent's session calls
-/// legitimately block on its resume-readiness gate (a large event log takes
-/// real seconds to resume), so a short deadline would misreport a healthy
-/// startup as a failure. A timeout fails only that op — the runtime and
-/// connection survive.
+/// Deadline for one established call; a timeout leaves the connection live.
+/// Agent session calls can wait seconds for the agent to replay its event log.
 pub(super) const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Per-probe budget for a drained daemon's process to actually exit,
@@ -85,13 +68,8 @@ const DRAIN_POLL: Duration = Duration::from_millis(50);
 /// state. Created per runtime instance and replaced wholesale when that
 /// runtime is reloaded, so a reload simply reads the fresh control.
 ///
-/// The negotiated version number is deliberately *not* kept here. Under
-/// lockstep versioning it carries no information a client decision could
-/// use — whatever this build negotiates with speaks this build's wire — so
-/// the last reader of it went with the structured-input check
-/// (`docs/runtime-crate-alignment-design.md` phase 3). A dead connection is
-/// surfaced through reachability (the per-pane `RuntimeReachability`, plus
-/// the pane dropping its window when the channels close).
+/// Wire versions are lockstep: a successful negotiation uses this build's version.
+/// Panes observe lost connections through reachability and channel closure.
 pub(super) struct RuntimeControl {
     timeouts: Timeouts,
     cancelled: AtomicBool,
@@ -166,10 +144,8 @@ pub(super) enum EstablishError {
 pub(super) enum StreamEnd {
     /// A transient pre-hello failure — connection drop, IO error, base
     /// channel EOF, or the `hello` call's own transport failure
-    /// (`HubError::Call`). Retried with backoff, exactly like the JSONL
-    /// era's `PreHelloTransport`; **never** consumes the once-per-runtime
-    /// mismatch-recovery budget (a daemon crash or a busy host must not
-    /// eat the one automatic drain-and-restart this runtime gets).
+    /// (`HubError::Call`). Retries with backoff without consuming the
+    /// once-per-runtime mismatch-recovery budget.
     PreHelloTransport {
         message: String,
     },
