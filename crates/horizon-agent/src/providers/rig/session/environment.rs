@@ -37,12 +37,21 @@ impl SessionLoopState {
                             self.role,
                             trusted_project,
                         );
-                        let changes = prefix_changes(&self.resolved, &resolved);
+                        let changes =
+                            super::super::session_prompt::prefix_changes(&self.told, &resolved);
                         self.config = config;
                         self.inputs
                             .note_environment_ready(&workspace_root, &branch, &base);
                         if let Some(changes) = changes {
                             self.inputs.note_prefix_changes(changes);
+                            self.told = resolved.told();
+                            let _ = self.events_tx.send(
+                                Event::PromptChangesTold {
+                                    sections: self.told.sections.clone(),
+                                    tools: self.told.tools.clone(),
+                                }
+                                .into(),
+                            );
                         }
                         break;
                     }
@@ -62,47 +71,6 @@ impl SessionLoopState {
             }
         }
     }
-}
-
-/// What `now` changes in the prefix a session sent (`sent`), told in words:
-/// the sections that now apply in full, the ones that no longer apply by
-/// their first line, and the tools no longer to be used. `None` when
-/// nothing changed.
-fn prefix_changes(
-    sent: &super::super::session_prompt::Resolved,
-    now: &super::super::session_prompt::Resolved,
-) -> Option<String> {
-    let added: Vec<&String> = (now.sections.iter())
-        .filter(|section| !sent.sections.contains(section))
-        .collect();
-    let gone: Vec<&str> = (sent.sections.iter())
-        .filter(|section| !now.sections.contains(section))
-        .map(|section| section.lines().next().unwrap_or_default())
-        .collect();
-    let withdrawn: Vec<String> = (sent.tools.iter())
-        .filter(|tool| !now.tools.iter().any(|now| now.name == tool.name))
-        .map(|tool| format!("`{}`", tool.name))
-        .collect();
-    if added.is_empty() && gone.is_empty() && withdrawn.is_empty() {
-        return None;
-    }
-    let mut text = String::from(
-        "What applies to this session changed with its environment; the system prompt still \
-         shows what applied at its start.",
-    );
-    for section in added {
-        text.push_str("\n\n");
-        text.push_str(section);
-    }
-    if !gone.is_empty() {
-        text.push_str("\n\nNo longer applies here: ");
-        text.push_str(&gone.join("; "));
-    }
-    if !withdrawn.is_empty() {
-        text.push_str("\n\nNo longer to be used here: ");
-        text.push_str(&withdrawn.join(", "));
-    }
-    Some(text)
 }
 
 #[cfg(test)]
@@ -185,6 +153,7 @@ mod tests {
             ..Default::default()
         };
         state.resolved.sections = vec!["Old instructions\nfrom the first root.".into()];
+        state.told = state.resolved.told();
         state.activation.push_back("base".into());
         commands
             .send(Command::EnvironmentPrepared {
@@ -202,6 +171,14 @@ mod tests {
         assert!(
             note.contains("No longer applies here: Old instructions"),
             "{note}"
+        );
+        // Told once: the next change is told from what applies now.
+        assert!(
+            !state
+                .told
+                .sections
+                .iter()
+                .any(|section| section.starts_with("Old"))
         );
     }
 

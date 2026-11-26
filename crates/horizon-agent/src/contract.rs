@@ -315,6 +315,17 @@ pub enum Event {
     SessionTitled {
         title: String,
     },
+    /// The prefix the session's requests begin with, fixed when it first
+    /// started. A session started again sends it unchanged, so a provider's
+    /// prompt cache still holds for it (board #106).
+    PromptPrefixFixed(PromptPrefix),
+    /// What applies to the session changed and the model was told so:
+    /// the `sections` and the `tools` (by name) as they are since, which
+    /// the next change is told from.
+    PromptChangesTold {
+        sections: Vec<String>,
+        tools: Vec<String>,
+    },
 
     InputOutcome(SessionInputOutcome),
     DeliveryAcknowledged(String),
@@ -478,6 +489,8 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ModelSelected { .. } => "model_selected",
         Event::ReasoningSelected { .. } => "reasoning_selected",
         Event::SessionTitled { .. } => "session_titled",
+        Event::PromptPrefixFixed(_) => "prompt_prefix_fixed",
+        Event::PromptChangesTold { .. } => "prompt_changes_told",
         Event::InputOutcome(_) => "input_outcome",
         Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
         Event::ConversationRecorded(_) => "conversation_recorded",
@@ -646,6 +659,20 @@ impl MessageRole {
 pub struct MessageDelta {
     pub role: MessageRole,
     pub text: String,
+}
+
+/// [`Event::PromptPrefixFixed`]'s payload: the environment the system
+/// prompt names and the `sections` it is built from (`prompt::system_prompt`),
+/// and the tools offered, as the provider's tool definitions.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct PromptPrefix {
+    pub cwd: String,
+    pub os: String,
+    pub git_repo: bool,
+    pub date: String,
+    pub git_branch: Option<String>,
+    pub sections: Vec<String>,
+    pub tools: JsonValue,
 }
 
 /// An arbitrary JSON payload on a wire vocabulary — a tool call's

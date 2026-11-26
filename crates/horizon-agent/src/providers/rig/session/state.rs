@@ -65,7 +65,10 @@ pub(crate) struct SessionLoopState {
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
     pub(crate) environment: SessionEnvironment,
+    /// The prefix's sections and tools, sent as they were at the start.
     pub(crate) resolved: super::super::session_prompt::Resolved,
+    /// What the model was last told applies to the session.
+    pub(crate) told: super::super::session_prompt::Told,
     pub(crate) role: Option<&'static RoleDefinition>,
     pub(crate) events_tx: Sender<ProviderEvent>,
 }
@@ -92,6 +95,7 @@ impl Default for SessionLoopState {
             config: RigAgentConfig::default(),
             environment: SessionEnvironment::for_workspace_root(None),
             resolved: Default::default(),
+            told: Default::default(),
             role: None,
             events_tx,
         }
@@ -140,6 +144,7 @@ impl SessionLoopState {
             modules,
             config,
             environment,
+            told: resolved.told(),
             resolved,
             role,
             events_tx,

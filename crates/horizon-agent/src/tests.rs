@@ -5,12 +5,18 @@ use crate::{contract as agent, frame::*, tools::test_support::policy_events};
 
 /// The next conversation event, past the ephemeral ones (the session's
 /// reasoning selection and the like) a provider sends beside them.
+/// The next conversation event, past the prompt prefix a session records
+/// beside its conversation.
 fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::Event {
     loop {
         if let Some(event) = rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("expected a provider event within timeout")
             .into_event()
+            && !matches!(
+                event,
+                agent::Event::PromptPrefixFixed(_) | agent::Event::PromptChangesTold { .. }
+            )
         {
             return event;
         }
@@ -867,7 +873,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
 fn system_prompt_reports_environment_facts() {
     let environment = SessionEnvironment {
         cwd: std::path::PathBuf::from("/home/user/project"),
-        os: "linux",
+        os: "linux".into(),
         git_repo: true,
         date: "2026-11-26".into(),
         git_branch: None,
@@ -884,7 +890,7 @@ fn system_prompt_reports_environment_facts() {
 fn system_prompt_reports_non_git_directory() {
     let environment = SessionEnvironment {
         cwd: std::path::PathBuf::from("/tmp"),
-        os: "macos",
+        os: "macos".into(),
         git_repo: false,
         date: "2026-11-26".into(),
         git_branch: None,
@@ -902,7 +908,7 @@ fn system_prompt_stays_within_line_budget() {
     const LINE_BUDGET: usize = 30;
     let environment = SessionEnvironment {
         cwd: std::path::PathBuf::from("/home/user/project"),
-        os: "linux",
+        os: "linux".into(),
         git_repo: true,
         date: "2026-11-26".into(),
         git_branch: None,
@@ -938,7 +944,7 @@ fn system_prompt_says_the_date_and_the_branch() {
     let prompt = system_prompt(
         &SessionEnvironment {
             cwd: std::path::PathBuf::from("/repo"),
-            os: "linux",
+            os: "linux".into(),
             git_repo: true,
             date: "2026-11-26".into(),
             git_branch: Some("main".into()),
@@ -962,7 +968,7 @@ fn the_core_prompt_is_a_name_and_the_environment() {
     let prompt = system_prompt(
         &SessionEnvironment {
             cwd: std::path::PathBuf::from("/repo"),
-            os: "linux",
+            os: "linux".into(),
             git_repo: true,
             date: "2026-11-26".into(),
             git_branch: None,
@@ -988,7 +994,7 @@ fn base_prompt_carries_no_delegation_routing() {
     let prompt = system_prompt(
         &SessionEnvironment {
             cwd: std::path::PathBuf::from("/repo"),
-            os: "linux",
+            os: "linux".into(),
             git_repo: true,
             date: "2026-11-26".into(),
             git_branch: None,
@@ -1036,7 +1042,7 @@ fn delegation_routing_section_tells_the_two_modes_apart() {
 fn system_prompt_with_no_extra_sections_matches_the_base_prompt_exactly() {
     let environment = SessionEnvironment {
         cwd: std::path::PathBuf::from("/repo"),
-        os: "linux",
+        os: "linux".into(),
         git_repo: true,
         date: "2026-11-26".into(),
         git_branch: None,
@@ -1056,7 +1062,7 @@ fn system_prompt_with_no_extra_sections_matches_the_base_prompt_exactly() {
 fn system_prompt_appends_extra_sections_after_the_base_prompt() {
     let environment = SessionEnvironment {
         cwd: std::path::PathBuf::from("/repo"),
-        os: "linux",
+        os: "linux".into(),
         git_repo: true,
         date: "2026-11-26".into(),
         git_branch: None,

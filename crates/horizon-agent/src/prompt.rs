@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionEnvironment {
     pub cwd: PathBuf,
-    pub os: &'static str,
+    pub os: String,
     pub git_repo: bool,
     /// The date the session started, `YYYY-MM-DD` in UTC.
     pub date: String,
@@ -57,7 +57,7 @@ impl SessionEnvironment {
         let git_branch = git_repo.then(|| current_branch(&cwd)).flatten();
         Self {
             cwd,
-            os: std::env::consts::OS,
+            os: std::env::consts::OS.to_string(),
             git_repo,
             date: utc_date(std::time::SystemTime::now()),
             git_branch,

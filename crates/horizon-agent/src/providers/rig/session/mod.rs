@@ -100,11 +100,18 @@ pub(super) fn spawn_rig_session(
             };
             let rig_history = persisted.messages;
             let cleared_occurrence_ids = persisted.cleared_occurrence_ids;
+            let (recorded_prefix, last_told) = (persisted.prefix, persisted.told);
             let modules = match composed {
                 Some(modules) => modules.as_slice().to_vec(),
                 None => crate::modules::builtin(&config, role),
             };
-            let resolved = resolve(&modules, &environment, &config, role, trusted_project);
+            let now = resolve(&modules, &environment, &config, role, trusted_project);
+            let settled = super::session_prompt::settle(
+                recorded_prefix.as_ref(),
+                last_told,
+                environment,
+                now,
+            );
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -137,6 +144,10 @@ pub(super) fn spawn_rig_session(
             let _ = events_tx.send(crate::contract::ProviderEvent::SessionReasoning(
                 super::reasoning_selection(&config),
             ));
+            // Recorded beside the conversation, once the session is there.
+            if let Some(record) = settled.record {
+                let _ = events_tx.send(record.into());
+            }
 
             runtime.block_on(async {
                 let mut state = state::SessionLoopState::new(
@@ -144,8 +155,8 @@ pub(super) fn spawn_rig_session(
                     commands_rx,
                     events_tx,
                     config,
-                    environment,
-                    resolved,
+                    settled.environment,
+                    settled.prefix,
                     modules,
                     role,
                     rig_history,
@@ -153,6 +164,10 @@ pub(super) fn spawn_rig_session(
                 )
                 .await;
                 state.inputs = restored_inputs;
+                state.told = settled.told;
+                if let Some(changes) = settled.changes {
+                    state.inputs.note_prefix_changes(changes);
+                }
                 state.run().await;
             });
         });

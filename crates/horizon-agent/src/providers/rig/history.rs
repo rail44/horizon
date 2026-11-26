@@ -1,6 +1,6 @@
 use super::conversation::ConversationHistory;
 
-use crate::contract::{Event, OccurrenceId};
+use crate::contract::{Event, OccurrenceId, PromptPrefix};
 
 use super::clearing::cleared_occurrence_ids_from_events;
 
@@ -14,6 +14,10 @@ use super::clearing::cleared_occurrence_ids_from_events;
 pub(super) struct RigSessionHistory {
     pub(super) messages: ConversationHistory,
     pub(super) cleared_occurrence_ids: Vec<OccurrenceId>,
+    /// The prefix fixed when the session first started (board #106).
+    pub(super) prefix: Option<PromptPrefix>,
+    /// What the model was last told applies, when it was told a change.
+    pub(super) told: Option<super::session_prompt::Told>,
 }
 
 /// Rebuilds a session's prior history from the events the host hands it in
@@ -25,5 +29,16 @@ pub(super) fn load_rig_session_history(events: &[Event]) -> Result<RigSessionHis
     Ok(RigSessionHistory {
         messages: ConversationHistory::from_events(events)?,
         cleared_occurrence_ids: cleared_occurrence_ids_from_events(events),
+        prefix: events.iter().find_map(|event| match event {
+            Event::PromptPrefixFixed(prefix) => Some(prefix.clone()),
+            _ => None,
+        }),
+        told: events.iter().rev().find_map(|event| match event {
+            Event::PromptChangesTold { sections, tools } => Some(super::session_prompt::Told {
+                sections: sections.clone(),
+                tools: tools.clone(),
+            }),
+            _ => None,
+        }),
     })
 }

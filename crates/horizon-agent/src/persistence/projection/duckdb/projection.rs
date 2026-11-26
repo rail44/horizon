@@ -128,7 +128,7 @@ impl Store {
             | Event::Error(_)
             | Event::ProviderRateLimited(_)
             | Event::Exited(_) => Ok(()),
-            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::Rewound { .. } | Event::ModelSelected { .. } | Event::ReasoningSelected { .. } | Event::SessionTitled { .. } | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::ConversationRecorded(_) => Ok(()),
+            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::Rewound { .. } | Event::ModelSelected { .. } | Event::ReasoningSelected { .. } | Event::SessionTitled { .. } | Event::PromptPrefixFixed(_) | Event::PromptChangesTold { .. } | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::ConversationRecorded(_) => Ok(()),
         }
     }
 

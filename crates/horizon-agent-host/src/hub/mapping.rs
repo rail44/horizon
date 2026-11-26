@@ -535,7 +535,10 @@ impl Mapper {
             }
             // What the session now runs reaches the client as the applied
             // selection the provider announces.
-            Event::ModelSelected { .. } | Event::ReasoningSelected { .. } => Vec::new(),
+            Event::ModelSelected { .. }
+            | Event::ReasoningSelected { .. }
+            | Event::PromptPrefixFixed(_)
+            | Event::PromptChangesTold { .. } => Vec::new(),
             Event::SessionTitled { title } => {
                 vec![Outgoing::update(v2::SessionUpdate::SessionInfoUpdate(
                     v2::SessionInfoUpdate::new().title(title.clone()),

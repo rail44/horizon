@@ -856,7 +856,7 @@ fn fold_until_terminal(
                     | Event::ContinuationVerdict(_)
                     // Provider rate-limit pacing is not terminal.
                     | Event::ProviderRateLimited(_)
-                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::Rewound { .. } | Event::ModelSelected { .. } | Event::ReasoningSelected { .. } | Event::SessionTitled { .. } | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::ConversationRecorded(_) => {}
+                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::Rewound { .. } | Event::ModelSelected { .. } | Event::ReasoningSelected { .. } | Event::SessionTitled { .. } | Event::PromptPrefixFixed(_) | Event::PromptChangesTold { .. } | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::ConversationRecorded(_) => {}
                 }
                 if emitted != Some(state) {
                     on_state(state);

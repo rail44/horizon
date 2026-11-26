@@ -124,6 +124,8 @@ pub(crate) fn apply_agent_event_to_frame(
         | Event::Rewound { .. }
         | Event::ModelSelected { .. }
         | Event::SessionTitled { .. }
+        | Event::PromptPrefixFixed(_)
+        | Event::PromptChangesTold { .. }
         | Event::ReasoningSelected { .. }
         | Event::InputQueuePaused(_)
         | Event::InputStarted(_)

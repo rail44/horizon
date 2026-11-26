@@ -36,16 +36,29 @@ use rig_core::completion::{
     message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
 };
 
-/// The next provider event, past the reasoning announcements a session
-/// makes beside its conversation (`ProviderEvent::SessionReasoning`).
+/// The next provider event, past what a session records and announces
+/// beside its conversation: its reasoning (`ProviderEvent::SessionReasoning`)
+/// and its prompt prefix (`Event::PromptPrefixFixed`,
+/// `Event::PromptChangesTold`).
 fn recv_provider(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
     loop {
         let event = rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("expected a provider event within timeout");
-        if !matches!(event, ProviderEvent::SessionReasoning(_)) {
+        if !beside_the_conversation(&event) {
             return event;
         }
+    }
+}
+
+fn beside_the_conversation(event: &ProviderEvent) -> bool {
+    match event {
+        ProviderEvent::SessionReasoning(_) => true,
+        ProviderEvent::Event { event, .. } => matches!(
+            **event,
+            Event::PromptPrefixFixed(_) | Event::PromptChangesTold { .. }
+        ),
+        _ => false,
     }
 }
 
@@ -1773,7 +1786,7 @@ fn start_fallback_rig_session_with_history(
                 &event,
                 ProviderEvent::Event { event, .. }
                     if matches!(**event, Event::ConversationRecorded(_))
-            ) || matches!(event, ProviderEvent::SessionReasoning(_))
+            ) || beside_the_conversation(&event)
             {
                 // These tests assert coordinator/UI events. Journal replay
                 // and the reasoning announcements are tested separately.
@@ -2402,7 +2415,7 @@ fn git_repo_with_agents_md(label: &str) -> std::path::PathBuf {
 fn test_environment(cwd: std::path::PathBuf) -> crate::prompt::SessionEnvironment {
     crate::prompt::SessionEnvironment {
         cwd,
-        os: "linux",
+        os: "linux".into(),
         git_repo: true,
         date: "2026-11-26".into(),
         git_branch: None,
