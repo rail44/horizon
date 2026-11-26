@@ -153,8 +153,9 @@ fn build_definitions() -> Vec<Definition> {
             title: "Run Shell Command".to_string(),
             description: legend_after(
                 "Run a shell command via `bash -c` in a fresh subprocess -- not a persistent \
-                shell. The working directory carries forward between calls, but only when the \
-                wrapper's report reached the result: a `cwd` field means that call moved there. \
+                shell. The first call runs in the session's workspace root (after \
+                `worktree_enter`, the worktree). A `cd` carries forward to later calls: a `cwd` \
+                field in a result means that call moved there, and the next call starts there. \
                 Runs in a sandbox: it writes only the workspace (not its `.git/hooks` or \
                 `.git/config`) and its $TMPDIR, kept for the session, and reaches only the \
                 session's allowed hosts. A blocked write fails with \"Read-only file system\"; \

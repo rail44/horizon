@@ -1282,7 +1282,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     assert_eq!(Some(next_projected), next_turn.turn_id);
 }
 
-/// A daemon restart must preserve the authoritative root and tier-1
+/// A restart of the agent must preserve the authoritative root and tier-1
 /// eligibility of a session that entered a worktree. The regression this
 /// pins down downgraded every resumed session to the daemon cwd with
 /// `isolated=false`, so later bash calls escaped the per-command sandbox and
@@ -1384,7 +1384,7 @@ fn fixture_git_output(dir: &Path, args: &[&str]) -> String {
 
 /// `worktree_enter` end to end: a shared session asks for a worktree, the
 /// activation lands at the turn boundary, the client learns the new root
-/// live, later writes are confined to it, and a daemon restart resumes the
+/// live, later writes are confined to it, and the agent's restart resumes the
 /// session in the same worktree.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
@@ -1650,7 +1650,7 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
 }
 
 /// A crash between durable announcement and dispatch still leaves a valid
-/// conversation after restoration, including another full daemon restart.
+/// conversation after restoration, including another full restart of the agent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_restart() {
     use horizon_agent::contract::{
@@ -1902,7 +1902,7 @@ fn cursor_before_message(collected: &[Inbound], text: &str) -> v2::CursorId {
 /// A session forked at the cursor before its second message holds the first
 /// exchange and the files as they were then, in a worktree of its own; it
 /// goes on by itself while the source keeps its own, and comes back with
-/// that branch and worktree after the daemon restarts.
+/// that branch and worktree after the agent restarts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart() {
     let (_outer, repo) = nested_session_fixture();

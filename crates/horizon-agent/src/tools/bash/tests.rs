@@ -264,6 +264,41 @@ fn a_contained_call_reports_the_directory_it_moved_to() {
     );
 }
 
+/// Git's automatic housekeeping is off in a contained call: it would write
+/// the repository's shared metadata, which the call may not.
+#[test]
+fn a_contained_call_runs_git_without_its_automatic_housekeeping() {
+    if let Err(unavailable) = crate::tools::sandbox::availability() {
+        eprintln!("skipping: no sandbox runtime here ({unavailable})");
+        return;
+    }
+    let base = scratch_dir("git-housekeeping-contained");
+    let cwd = cwd_handle(base.clone());
+    let call_id = ToolCallId("git-contained".into());
+    let identity = crate::test_support::tool_identity(&call_id);
+
+    let output = super::exec::run(
+        &super::registry::Registration::for_execution(SessionId::new(), identity),
+        &serde_json::from_value(json!({
+            "command": "git config --get gc.auto; git config --get maintenance.auto"
+        }))
+        .unwrap(),
+        &cwd,
+        &config(),
+        &super::exec::Execution::Contained {
+            runtime: crate::tools::sandbox::current(),
+            containment: horizon_sandbox::runtime::Containment {
+                writable: vec![base.clone()],
+                ..Default::default()
+            },
+        },
+    )
+    .to_json();
+
+    assert_eq!(output["exit_code"], 0, "{output}");
+    assert_eq!(output["output"].as_str(), Some("0\nfalse\n"), "{output}");
+}
+
 // --- timeout ----------------------------------------------------------
 
 #[test]

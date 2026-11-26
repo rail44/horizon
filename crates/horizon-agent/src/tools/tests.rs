@@ -2326,8 +2326,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     // permanently returned `AlreadyResolved` for a call nobody had ever
     // acted on -- no tool ran, no result reached the provider, the turn
     // wedged forever with no way to recover (the host-side half of the
-    // "session stuck, no working Approve" report; the UI-side half is
-    // `src/agent/turns.rs`'s `build_tool_call_views`/`tool_call_body`).
+    // "session stuck, no working Approve" report).
     let root = temp_workspace("approval-reused-call-id");
     let target_a = root.join("a.txt");
     let target_b = root.join("b.txt");

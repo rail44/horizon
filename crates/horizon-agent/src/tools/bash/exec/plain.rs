@@ -54,6 +54,9 @@ pub(super) async fn run_async(
         },
     };
     prepare_command(&mut cmd, cwd);
+    if matches!(execution, Execution::Contained { .. }) {
+        contain_git_housekeeping(&mut cmd);
+    }
     let child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) if matches!(execution, Execution::Contained { .. }) => {
@@ -121,6 +124,21 @@ fn contained_failure(reason: &str, config: &BashToolConfig) -> Response {
     );
     annotate_sandboxed(&mut output, true);
     output
+}
+
+/// Git's automatic housekeeping, which a commit can start (`gc --auto`,
+/// `maintenance run --auto`), writes the repository's shared metadata such
+/// as `packed-refs`, which a contained call may not write: it is turned off
+/// for a contained call rather than left to fail part-way in it.
+fn contain_git_housekeeping(cmd: &mut TokioCommand) {
+    for (index, (key, value)) in [("gc.auto", "0"), ("maintenance.auto", "false")]
+        .into_iter()
+        .enumerate()
+    {
+        cmd.env(format!("GIT_CONFIG_KEY_{index}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
+    }
+    cmd.env("GIT_CONFIG_COUNT", "2");
 }
 
 fn prepare_command(cmd: &mut TokioCommand, cwd: &Path) {

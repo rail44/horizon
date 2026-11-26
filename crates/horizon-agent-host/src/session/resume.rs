@@ -122,7 +122,7 @@ enum ResumeOutcome {
     Spawned,
 }
 
-/// What a write child's requester is told after a daemon restart ended the
+/// What a write child's requester is told after the agent's restart ended the
 /// child (`docs/agent-subagent-design.md` decision 11).
 struct RestartNotice {
     requester: SessionId,
@@ -406,7 +406,7 @@ fn terminate_orphaned_exploration(
 ) -> anyhow::Result<()> {
     let mut closing = cancel_unfinished_tool_calls(frame);
     closing.push(Event::Error(AgentError {
-        message: "Exploration session terminated on daemon restart: the `task` call \
+        message: "Exploration session terminated when the agent restarted: the `task` call \
                   waiting on it did not survive."
             .to_string(),
     }));
