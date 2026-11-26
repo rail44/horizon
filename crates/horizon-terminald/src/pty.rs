@@ -40,7 +40,9 @@ impl Pty {
     /// Opens a PTY of `size` and starts `program` in it, as the leader of
     /// a session of its own with the PTY as its controlling terminal.
     /// Returns the PTY and the program's process id; the program is not
-    /// waited for, and its end is seen as the end of what the PTY reads.
+    /// waited for here, and its end is seen as the end of what the PTY
+    /// reads — where [`reap`] then waits for it, so it does not stay a
+    /// zombie child of the daemon.
     pub(crate) fn spawn(size: TerminalSize, program: Program<'_>) -> io::Result<(Self, u32)> {
         let (master, slave) = open(size)?;
         let mut command = Command::new(program.path);
@@ -136,6 +138,24 @@ impl Pty {
             master: File::from(self.master.try_clone()?),
             handed_over: self.handed_over.clone(),
         })
+    }
+}
+
+/// Waits for the program (its process id) to end and reaps it, so it does
+/// not stay a zombie child of the daemon. Called after the PTY's reading
+/// ends and `Exited` is sent: nothing downstream needs the program gone,
+/// and a program that ignores its end signal (the reading ended by an error
+/// or a shutdown, not by the program exiting) can keep the reap waiting, so
+/// it must not hold the session's teardown back. The handover is an
+/// `execve`: the daemon keeps its pid and its children, so a stopped
+/// reading's program is reaped by the image that takes the terminal over.
+pub(crate) fn reap(pid: u32) {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    // SAFETY: `waitpid` takes no pointers it keeps.
+    unsafe {
+        libc::waitpid(pid, std::ptr::null_mut(), 0);
     }
 }
 

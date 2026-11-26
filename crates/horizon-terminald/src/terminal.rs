@@ -677,7 +677,7 @@ fn start_session(
     // What the loop writes to the PTY: its answers, and a client's bytes.
     let (to_pty_tx, to_pty_rx) = crossbeam_channel::unbounded();
     let read_update_tx = update_tx.clone();
-    thread::spawn(move || read_pty(&mut reader, pty_tx, activity_tx, read_update_tx));
+    thread::spawn(move || read_pty(&mut reader, Some(pid), pty_tx, activity_tx, read_update_tx));
     let core_pty = pty.clone();
     thread::spawn(move || match start {
         Start::New { size, options } => {
@@ -729,7 +729,14 @@ fn start_session(
 
 /// Pumps the PTY master's output into the session core, emitting
 /// [`TerminalUpdate::Exited`] on every exit path so
-/// [`TerminalHost::forward_updates`] can tear the session down.
+/// [`TerminalHost::forward_updates`] can tear the session down, and reaping
+/// the program (`child`) so it does not stay a zombie child of the daemon.
+/// Every end except [`Reading::Stopped`] reaps -- a stop is the handover,
+/// where the program goes on and is reaped by the image that takes the
+/// terminal over (the handover is an `execve`, so the program stays this
+/// daemon's child across it). The reap runs *after* `Exited` (and the
+/// `Error`) is sent: a program that ignores its end signal can keep the
+/// blocking `waitpid` waiting, and the session must not wait on it.
 ///
 /// All three `read` outcomes must deliver `Exited`: the clean EOF (`Ok(0)`)
 /// and the error arm already do, and the `Ok(n > 0)` arm must too. When the
@@ -756,6 +763,7 @@ impl Source for PtyReader {
 
 fn read_pty(
     reader: &mut impl Source,
+    child: Option<u32>,
     pty_tx: Sender<Vec<u8>>,
     activity_tx: Sender<()>,
     update_tx: Sender<TerminalUpdate>,
@@ -765,6 +773,9 @@ fn read_pty(
         match reader.next(&mut buffer) {
             Ok(Reading::End) => {
                 let _ = update_tx.send(TerminalUpdate::Exited);
+                if let Some(pid) = child {
+                    pty::reap(pid);
+                }
                 return;
             }
             // Handed to the next image: the session goes on there.
@@ -775,8 +786,14 @@ fn read_pty(
                     // session is tearing down. Emit `Exited` like the EOF
                     // and error arms so `forward_updates` learns the
                     // session ended instead of waiting on a half-closed
-                    // channel forever.
+                    // channel forever. The program is being shut down, not
+                    // ended yet: the reap after it blocks the reader until
+                    // the program is gone, which is fine -- nothing after
+                    // `Exited` is left to do.
                     let _ = update_tx.send(TerminalUpdate::Exited);
+                    if let Some(pid) = child {
+                        pty::reap(pid);
+                    }
                     return;
                 }
                 let _ = activity_tx.try_send(());
@@ -784,6 +801,9 @@ fn read_pty(
             Err(error) => {
                 let _ = update_tx.send(TerminalUpdate::Error(error.to_string()));
                 let _ = update_tx.send(TerminalUpdate::Exited);
+                if let Some(pid) = child {
+                    pty::reap(pid);
+                }
                 return;
             }
         }
@@ -1102,11 +1122,49 @@ mod tests {
         }
         let mut reader = Bytes(std::io::Cursor::new(vec![b'x'; 1]));
         let (activity_tx, _activity_rx) = crossbeam_channel::bounded(1);
-        read_pty(&mut reader, pty_tx, activity_tx, update_tx);
+        read_pty(&mut reader, None, pty_tx, activity_tx, update_tx);
 
         assert_eq!(update_rx.try_recv(), Ok(TerminalUpdate::Exited));
         // Nothing else is queued, and the sender is gone.
         assert!(update_rx.try_recv().is_err());
+    }
+
+    /// A program that ends while its PTY is read leaves no zombie: the
+    /// reading's end reaps the child. A real `sh -c 'exit 0'` child (no PTY
+    /// needed — `reap` waits on a pid, whatever its parent's other handles)
+    /// is given to `read_pty` as the session's program; once the reading has
+    /// ended, the pid must be gone from `/proc`.
+    #[test]
+    #[expect(
+        clippy::zombie_processes,
+        reason = "the child is deliberately not waited on here: `read_pty`'s reap is what the test asserts"
+    )]
+    fn read_pty_reaps_the_program_when_the_reading_ends() {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("a program to end");
+        let pid = child.id();
+
+        struct Ended;
+        impl Source for Ended {
+            fn next(&mut self, _buf: &mut [u8]) -> io::Result<Reading> {
+                Ok(Reading::End)
+            }
+        }
+        let mut reader = Ended;
+        let (pty_tx, _pty_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (activity_tx, _activity_rx) = crossbeam_channel::bounded(1);
+        let (update_tx, update_rx) = crossbeam_channel::unbounded::<TerminalUpdate>();
+        read_pty(&mut reader, Some(pid), pty_tx, activity_tx, update_tx);
+
+        assert_eq!(update_rx.try_recv(), Ok(TerminalUpdate::Exited));
+        let gone = !Path::new(&format!("/proc/{pid}")).exists();
+        assert!(
+            gone,
+            "pid {pid} still has a /proc entry: the program was not reaped"
+        );
     }
 
     /// `update_rx` can close with no `Exited` ever sent (the reader arm
