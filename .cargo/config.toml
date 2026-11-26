@@ -29,8 +29,14 @@
 #   across worktrees at different paths, build-script crates included,
 #   and a member changed in one worktree did not reach another.
 #
-# It carries this history, holds no artifact-sharing setting, and is the
-# place a build knob every checkout needs goes.
+# - 2026-11-26: kache's hermetic build-script runs, below, for the one
+#   unit its seeding could not carry: libghostty-vt-sys's build script
+#   cloned Ghostty (191 MB) and built it with Zig in every new target,
+#   about 2.3 minutes and a network fetch per profile, which a sandboxed
+#   agent session had to be granted.
+#
+# It carries this history, and is the place a build knob every checkout
+# needs goes. The one sharing setting it holds is kache's, below.
 
 [env]
 # The terminal engine (libghostty-vt, built by Zig from its -sys crate's
@@ -42,3 +48,15 @@
 # (docs/terminal-stream-design.md). The cost: no stepping into the engine
 # in a debugger.
 LIBGHOSTTY_VT_SYS_OPTIMIZE = "ReleaseFast"
+
+# A build script runs with its `OUT_DIR` in kache's cache, in a directory
+# named by the run's inputs, so every target directory that builds the same
+# run links to one read-only copy instead of running it again. Without it,
+# kache keyed libghostty-vt-sys's run by its `OUT_DIR`, which Zig's output
+# names, so no other worktree could use it: each new target cloned Ghostty
+# from GitHub and built it with Zig (about 2.3 minutes per profile). With
+# it, a new target's run is a link (4 s for the crate, measured
+# 2026-11-26). The variable means nothing without kache. A target built
+# with it holds links to read-only directories: `cargo clean` before
+# building that target without kache.
+KACHE_BUILD_SCRIPT_HERMETIC = "1"

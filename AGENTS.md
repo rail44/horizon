@@ -284,7 +284,11 @@ build uses, so a long-lived `target/` keeps growing until it is cleaned.
 
 The build-sharing schemes before this — a shared build-dir, sccache, the
 reflink seed — and why each was retired are in `.cargo/config.toml`'s
-comment; that file holds no artifact-sharing setting. If phantom errors
+comment. The one sharing setting that file holds is kache's
+`KACHE_BUILD_SCRIPT_HERMETIC`: a build script's run is kept once in
+kache's cache, read-only, and each target links to it, so a new worktree
+does not clone and build the terminal engine again; a target built with
+it needs `cargo clean` before a build without kache. If phantom errors
 (E0432 on symbols that exist, a sibling's binaries running as yours)
 ever appear, build with `KACHE_DISABLED=1` to tell kache's restores
 from the code.
