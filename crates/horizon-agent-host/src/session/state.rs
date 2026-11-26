@@ -64,10 +64,11 @@ pub struct AgentdState {
     /// couldn't be opened -- sessions still run, just without persistence,
     /// the same graceful degrade the deleted in-process agent runtime had).
     /// A `Mutex` rather than a plain field
-    /// because `main` now binds the socket and starts accepting connections
-    /// *before* the event log is opened (see the bind-first fix in `main`'s
-    /// doc comment) -- this is filled in once that finishes, on whatever
-    /// thread happens to be running by then.
+    /// because the agent process starts serving its one stdio connection
+    /// *before* the event log is opened: [`crate::startup::spawn_resume_task`]
+    /// opens it afterwards, on the resume task, so this is filled in once
+    /// that finishes, after the state already exists as an `Arc` the
+    /// connection holds (`crates/horizon-agent-acp/src/main.rs`).
     writer: Mutex<Option<WriterHandle>>,
     pub(super) sessions: Mutex<HashMap<SessionId, SessionEntry>>,
     pub(super) agent_subscribers: super::attachment::Streams,
