@@ -1,11 +1,7 @@
 # The agent as a stdio ACP child of the shell
 
-Status: stages 1 to 4 implemented (the library and the two flow crates;
-one log file per session and the projection caught up on demand; the
-stdio child, with agentd gone, its crate now `horizon-agent-acp`); stage
-5 not started. The end-to-end tests still start the binary: moving the
-ones not about the process to `Channel::duplex()` is not done yet. Board item #114 holds the decisions this design
-follows.
+Status: stages 1 to 5 implemented, and the tests moved (below). Board
+item #114 holds the decisions this design follows.
 
 ## Goal
 
@@ -234,18 +230,30 @@ sessions 15-20 ms.
 
 ## Tests
 
-Most of what agentd's tests check is how the agent behaves over ACP, not
-the process boundary. Those tests create the library's agent in the
-test's own process and connect a client to it with
-`agent-client-protocol`'s `Channel::duplex()`: the same ACP messages,
-with no binary to build first and no process to spawn, so they also run
-under the `sandboxed` nextest profile. That covers most of the 32 in
-`crates/horizon-agentd/tests/e2e.rs` and the agent pane's test in
-`tests/agentd.rs`, which connects the shell's own client.
+Most of what the agent's tests check is how the agent behaves over ACP,
+not the process boundary. Those tests (`crates/horizon-agent-acp/tests/
+agent.rs`) compose the agent in the test's own process
+(`horizon_agent_acp::Agent`) and connect a client to it over an
+in-memory byte stream (`tokio::io::duplex`), through the same
+`hub::serve` the binary's standard input and output go through: the same
+ACP messages, with no binary to build first and no process to spawn, so
+they also run under the `sandboxed` nextest profile (but for the three
+that bind a socket or run `bash` outside the sandbox). What the agent
+keeps or reaches is given to the composition rather than read from the
+environment (`Composition`, `Places`): the data home its knowledge,
+board and wiki stores are under, the session logs, the projection, the
+log daemon's socket, the shell's control socket, and the holds a test
+puts on its startup or on a streaming turn.
 
-The tests about the binary itself start it: it answers `initialize`
-over stdio, it flushes and ends when stdin closes, a second process is
-refused a locked session.
+The tests about the binary itself start it (`tests/e2e.rs`): where it
+is found, a restart and what survives it (a turn in flight, a fork, a
+worktree, an effort), what a corrupt log says on its standard error.
+They and the sessions that write through Git keep the binary's hermetic
+environment, Git's configuration among it, which a test's own process
+cannot give a library. The agent pane's test (`tests/agentd.rs`) also
+still starts the binary: it ends the child to see the shell start it
+again, and its provider is a stand-in on a loopback port, which the
+sandbox refuses either way.
 
 ## ACP and its extensions
 

@@ -1,6 +1,6 @@
 # エージェントのコアと拡張の境界、会話とセッション
 
-Status: 設計(未実装)。調査は
+Status: 進める順序の 1〜6 は実装済み。未決は下の UI のみ。調査は
 `docs/research/agent-frameworks-core-and-extension-2026-11-23.md`(pi・Mastra・
 eve・Flue の部品ごとの実装と、Horizon との対照)。
 
