@@ -27,7 +27,7 @@ pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, 
 }
 
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
-/// every connection `horizon-agentd` ever serves, and by every session
+/// every connection the agent process ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
 /// A copy of a requester's grants for a `task` child it is about to spawn.
 #[derive(Default)]
@@ -120,7 +120,7 @@ pub struct AgentdState {
     /// project root is not in this list gets embedded skills only and no
     /// `AGENTS.md`/`CLAUDE.md` instructions; behavioral defense (sandbox,
     /// approval) is unaffected. Same lifecycle as `project_grants`:
-    /// startup-only, refreshed on `Reload Agent Runtime` (daemon respawn),
+    /// startup-only, refreshed on `Reload Agent Runtime` (agent-process respawn),
     /// not live-reloadable. Empty at every test construction site.
     pub(super) trusted_projects: Vec<std::path::PathBuf>,
     /// What a `task` child starts with of its requester's authority, left
@@ -130,7 +130,7 @@ pub struct AgentdState {
     pub(crate) task_seeds: Mutex<HashMap<SessionId, TaskSeed>>,
     /// Whether sessions' files are recorded at settled positions and a fork
     /// gets a worktree of its own from them (`crate::checkpoint`). Off
-    /// unless [`Self::with_checkpoints`] turns it on: only the daemon's own
+    /// unless [`Self::with_checkpoints`] turns it on: only the agent process's own
     /// startup does, so a test's sessions leave the repository it runs in
     /// alone.
     checkpoints: bool,
@@ -266,7 +266,7 @@ impl AgentdState {
 
     /// Re-reads `[[providers]]` from the config file at [`Self::config_path`] and
     /// rebuilds both the provider registry and the agent config in place, so
-    /// a `Reload Config` can push a model/base-URL change to a running daemon
+    /// a `Reload Config` can push a model/base-URL change to the running agent process
     /// without a `Reload Agent Runtime` (which exists for agent-code reloads
     /// -- see `docs/terminald-split-design.md` decision 2). A read/parse error
     /// leaves the previous registry untouched and is returned to the caller;
@@ -376,7 +376,7 @@ impl AgentdState {
         }
     }
 
-    /// Returns whether `session_id` is currently live in this daemon's
+    /// Returns whether `session_id` is currently live in this host's
     /// registry. Used by the wake subscriber's actions to detect when a keeper
     /// session has finished (the entry is removed from `sessions` when the
     /// session thread exits).
@@ -498,7 +498,7 @@ mod tests {
     use crate::session::test_support::state_with_rig_config;
     use crossbeam_channel::unbounded;
 
-    /// An id agentd has never hosted (or has already ended) reports no
+    /// An id this host has never hosted (or has already ended) reports no
     /// directory.
     #[test]
     fn session_directory_is_none_for_an_unknown_session() {

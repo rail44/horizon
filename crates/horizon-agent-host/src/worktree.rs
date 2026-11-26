@@ -138,7 +138,7 @@ fn repo_root_from_common_dir(common_dir: &Path) -> Result<PathBuf, String> {
 /// Best-effort: makes sure `.horizon` won't show up as untracked clutter in
 /// the target repository's own `git status`, mirroring this repo's own
 /// `/.horizon` `.gitignore` entry -- but via `.git/info/exclude` rather than
-/// editing the target repo's tracked `.gitignore`, since agentd has no
+/// editing the target repo's tracked `.gitignore`, since the host has no
 /// business committing a change to a file the repo's own history owns.
 /// Never fails the worktree creation itself: an ignore-file write is a
 /// nicety, not a correctness requirement.
@@ -516,7 +516,7 @@ mod tests {
         // system git config (a global core.hooksPath was observed turning
         // fixture commits into >60s toolchain invocations under full-suite
         // parallelism); production run_git deliberately is not -- the
-        // daemon operates on the owner's real repository, where the
+        // host operates on the owner's real repository, where the
         // owner's config is intent, and the repo-local hooksPath governs.
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
         cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");

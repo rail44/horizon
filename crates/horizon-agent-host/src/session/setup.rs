@@ -128,7 +128,7 @@ pub(super) fn project_is_trusted(state: &Arc<AgentdState>, workspace_root: Optio
 
 /// The pure half of [`configured_filesystem_grants`], split out so the
 /// config-entry-to-sandbox-grant mapping is testable without a session,
-/// a daemon, or a config file.
+/// a running host, or a config file.
 fn grants_for_project(
     project_grants: &[horizon_config::ProjectGrant],
     project_root: &Path,
@@ -158,7 +158,7 @@ fn grants_for_project(
 /// Returns the directory repository-local skills must be discovered from.
 /// This deliberately mirrors `SessionEnvironment::for_workspace_root`: an
 /// explicit, host-resolved session root wins, otherwise both the prompt and
-/// `skill_read` fall back to the daemon's current directory (and finally
+/// `skill_read` fall back to the agent process's current directory (and finally
 /// `/`). Keeping the fallback in a named helper makes the two production
 /// skill registries' common root directly testable.
 pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
@@ -206,7 +206,7 @@ mod tests {
     }
 
     /// The tool-side skill registry must prefer the session's resolved root
-    /// over the daemon cwd, matching the provider's prompt-side registry.
+    /// over the agent process's cwd, matching the provider's prompt-side registry.
     #[test]
     fn skill_discovery_root_uses_the_session_workspace_when_present() {
         let session_root = PathBuf::from("/session-specific-workspace");

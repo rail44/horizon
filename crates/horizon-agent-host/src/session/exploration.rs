@@ -1,5 +1,5 @@
 //! `horizon-agent`'s `task` seam, implemented against this
-//! daemon's own session hosting.
+//! host's own session hosting.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use super::spawn::spawn_session_thread;
 use super::state::{AgentdState, lock_unpoisoned};
 
 /// `horizon-agent`'s `task` seam (`docs/agent-explore-design.md`),
-/// implemented against this daemon's own session hosting: spawn a peer
+/// implemented against this host's own session hosting: spawn a peer
 /// session, subscribe to its events, terminate it. One is built per
 /// requesting session in [`super::run::run_session`] and installed on its
 /// `ToolSessionState`, carrying that session's provider and resolved
@@ -36,7 +36,7 @@ pub(super) struct AgentdExplorationHost {
     pub(super) provider_id: ProviderId,
     /// The requesting session's own resolved root -- a requester that entered
     /// a worktree has its exploration read that worktree and not the
-    /// daemon's cwd.
+    /// agent process's cwd.
     pub(super) workspace_root: Option<PathBuf>,
     /// Whether the requesting session is one nobody watches: its children's
     /// approvals then have nobody to be shown to.
@@ -390,7 +390,7 @@ mod tests {
             .expect("a ToolCallFinished event")
     }
 
-    /// The whole `task` seam against the *real* daemon implementation
+    /// The whole `task` seam against the *real* host implementation
     /// rather than a stub: a `task` call spawns a genuine peer session
     /// here, its user message reaches that session's provider, its events
     /// come back through the [`crate::session::subscription`] seam, and the
@@ -419,7 +419,7 @@ mod tests {
     }
 
     /// `docs/agent-subagent-design.md` decisions 1, 3 and 11 against the
-    /// real daemon: a write task is refused while the requester has changes
+    /// real host: a write task is refused while the requester has changes
     /// not committed; once committed, the child runs in a worktree made for
     /// it from the requester's `HEAD`, on its own branch, records the
     /// requester as its parent, and its report names the branch.
@@ -721,7 +721,7 @@ mod tests {
                 unreachable!()
             }
             fn terminate(&self, _: SessionId) {
-                // A real daemon host reacquires this lock in send_command.
+                // A real host reacquires this lock in send_command.
                 // Observe it without hanging the regression on the old code.
                 self.lock_was_free
                     .store(self.state.sessions.try_lock().is_ok(), Ordering::SeqCst);

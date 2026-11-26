@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     /// `docs/agent-explore-design.md` decision 8: an exploration session
-    /// whose `task` waiter died with the previous daemon process is
+    /// whose `task` waiter died with the previous agent process is
     /// committed as terminated rather than resumed -- while an ordinary
     /// session left mid-turn in exactly the same shape still resumes.
     #[test]

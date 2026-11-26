@@ -22,7 +22,7 @@ use super::state::AgentdState;
 /// What the dedicated session thread was doing when an unwind crossed its
 /// runtime boundary. Provider events retain their exact contract kind so a
 /// persisted panic report can identify the event whose handling failed
-/// without relying on agentd's transient stderr.
+/// without relying on the agent process's transient stderr.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SessionLoopPhase {
     Starting,

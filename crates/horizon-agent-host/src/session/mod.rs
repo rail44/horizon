@@ -37,7 +37,7 @@
 //! [`approval`] and [`completion`] own the approval seam and the
 //! asynchronous tool folds, [`subscription`] is the "observe another
 //! session's stop/blocking events" seam, [`exploration`] implements the
-//! `task` tool's daemon seam on top of it, and [`panic`] is the session
+//! `task` tool's host seam on top of it, and [`panic`] is the session
 //! thread's panic boundary.
 
 mod approval;

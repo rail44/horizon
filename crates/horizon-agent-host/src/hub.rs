@@ -656,7 +656,7 @@ where
     served
 }
 
-/// Flush queued log work on graceful daemon exit. Session publication already
+/// Flush queued log work on graceful agent-process exit. Session publication already
 /// waits for its own commit; the exit barrier also covers non-session appends.
 pub fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     if let Some(writer) = writer

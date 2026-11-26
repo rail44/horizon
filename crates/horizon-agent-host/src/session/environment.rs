@@ -85,7 +85,7 @@ impl SessionEnvironment<'_> {
         // Use the same resolved root as the provider's prompt-side skill
         // listing. Otherwise an isolated session can be told that a repository
         // skill exists and then have `skill_read` look for its body in the
-        // daemon's checkout instead of the session's worktree (backlog 58).
+        // agent process's checkout instead of the session's worktree (backlog 58).
         let skill_root = skill_discovery_root(workspace_root.as_deref());
         // The session's domains: the project's `[grants]` `network` names,
         // plus what a `web_fetch` approval adds for the session.
@@ -101,7 +101,7 @@ impl SessionEnvironment<'_> {
         );
         let packages = state.packages();
 
-        // `task`'s daemon capability (`docs/agent-explore-design.md`).
+        // `task`'s host capability (`docs/agent-explore-design.md`).
         // Withheld from an exploration session itself: its role allowlist
         // already omits `task` (decision 4), and withholding the host
         // too means a recursion is impossible rather than merely unadvertised.

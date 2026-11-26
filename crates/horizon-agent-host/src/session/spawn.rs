@@ -32,7 +32,7 @@ use crate::worktree::{self, WorktreeInfo};
 /// A fresh `Control::SessionNew` caller is already listening
 /// (`AgentdHandle::start_session` registers the session's route before
 /// sending `SessionNew`), so it sees this immediately; a resumed session
-/// spawned at daemon startup usually has no connection yet
+/// spawned at process startup usually has no connection yet
 /// ([`send_session_event`] silently drops it then) -- [`super::attachment::capture`]
 /// re-announces the same value for that case, from `Control::SessionLoad`'s
 /// handler. See `docs/agent-output-ui-amendment.md`'s dated model-chip
@@ -245,7 +245,7 @@ pub(super) fn spawn_session_thread_with_context(
         // Decision 5: a session that owned a worktree gets it
         // cleaned up (if clean) exactly when its own thread ends -- which
         // only happens on a genuine `Command::Shutdown`/provider exit (the
-        // daemon-side "terminate" signal), never on a mere close/detach
+        // host-side "terminate" signal), never on a mere close/detach
         // (those leave the thread, and this session, running -- see the
         // module doc's "sessions are scoped to the process" note).
         let work_settled =

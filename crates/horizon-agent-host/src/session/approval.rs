@@ -1,4 +1,4 @@
-//! The approval seam on the daemon side: gating a policy-generated prompt
+//! The approval seam on the host side: gating a policy-generated prompt
 //! behind the judge, emitting the human prompt when one is owed, and
 //! resolving an inbound approve/deny into provider commands.
 
@@ -231,7 +231,7 @@ pub(super) fn forward_approval_outcome(
         // repeated-approval OOM incident) from re-executing anything: every
         // one after the first lands here and is dropped, logged rather than
         // silently swallowed so a runaway burst like that incident's is
-        // visible in agentd's own stderr.
+        // visible in the agent process's own stderr.
         ApprovalOutcome::AlreadyResolved => {
             eprintln!(
                 "horizon-agent: dropped duplicate approve/deny for session {session_id:?}, \
