@@ -21,7 +21,7 @@
 //! is refused with a warning suggesting a domain name instead. Everything
 //! that does NOT parse as a `SocketAddr` is treated as a domain name and
 //! pre-seeded into the session's `SessionDomainPolicy` at spawn
-//! (`horizon-agentd`'s `session::setup::configured_domains` /
+//! (`horizon-agent-host`'s `session::setup::configured_domains` /
 //! `session::run::run_session`), so a project-trusted domain never needs a
 //! judge/approval round trip through the session's network proxy -- the
 //! runtime approve-on-denial flow still applies on top for anything not
@@ -88,7 +88,7 @@ pub struct RawGrantsConfig {
 pub struct RawProjectGrant {
     /// The project's main-repository toplevel. A session working in a
     /// derived worktree of this repository resolves back to this root --
-    /// see `horizon-agentd`'s `worktree::project_root`.
+    /// see `horizon-agent-host`'s `worktree::project_root`.
     pub root: String,
     /// Directories granted read-write, as whole trees, to every session of
     /// this project.
@@ -150,7 +150,7 @@ pub fn loopback_connect_for_project(
 /// dispatched from `mach_services` entries. Same exact-root matching as
 /// [`trees_for_project`]/[`loopback_connect_for_project`]/
 /// [`domains_for_project`]; several entries naming the same root
-/// contribute all of their services. `horizon-agentd`'s
+/// contribute all of their services. `horizon-agent-host`'s
 /// `session::setup::configured_mach_services` calls this at session spawn
 /// to pre-record the session's mach-service grant set.
 pub fn mach_services_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<String> {
@@ -162,7 +162,7 @@ pub fn mach_services_for_project(entries: &[ProjectGrant], project_root: &Path) 
 /// an `ip:port` endpoint. Same exact-root matching as
 /// [`trees_for_project`]/[`loopback_connect_for_project`]; several entries
 /// naming the same root contribute all of their domains.
-/// `horizon-agentd`'s `session::setup::configured_domains` calls this at
+/// `horizon-agent-host`'s `session::setup::configured_domains` calls this at
 /// session spawn to pre-seed the session's `SessionDomainPolicy`.
 pub fn domains_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<String> {
     collect_for_project(entries, project_root, |entry| &entry.domains)

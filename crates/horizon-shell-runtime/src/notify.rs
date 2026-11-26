@@ -4,7 +4,7 @@
 //!
 //! Whether a view kind needs it depends on where its coalescing already
 //! happens, so this is deliberately not built into `RuntimeLink`: the agent
-//! pane uses it because `horizon-agentd` streams provider tokens as they
+//! pane uses it because the agent streams provider tokens as they
 //! arrive, while the terminal pane deliberately does **not** — its frames
 //! reach the shell pre-coalesced, the daemon's session loop having already
 //! applied the same ~60Hz window (`COALESCE_WINDOW` in

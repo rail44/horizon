@@ -1,33 +1,32 @@
-//! Shared test support for driving Horizon's daemon binaries
-//! (`horizon-agentd`, `horizon-terminald`) as real child processes from an
+//! Shared test support for driving Horizon's binaries
+//! (`horizon-agent-acp`, `horizon-terminald`) as real child processes from an
 //! integration test.
 //!
-//! It exists because a `tests/*.rs` file is its own binary crate and
-//! `horizon-agentd` is bin-only (no `src/lib.rs`), so the three suites that
-//! spawn daemons -- `crates/horizon-agentd/tests/e2e.rs`,
+//! It exists because a `tests/*.rs` file is its own binary crate, so the
+//! suites that spawn these binaries -- `crates/horizon-agent-acp/tests/e2e.rs`,
 //! `crates/horizon-terminald/tests/e2e.rs`, and that crate's
-//! `tests/latency_probe.rs` -- had no way to share code at all. They each
-//! grew their own copy of binary resolution, spawn-with-retry,
-//! connect-with-retry and wait-for-exit; worse, terminald's suite (which
-//! spawns a real `horizon-agentd` for the split's acceptance test) grew a
-//! hand-maintained copy of *agentd's hermeticity contract*, which could rot
-//! silently: a new required env var on agentd's side would leave that copy
-//! green while it tested a less hermetic daemon.
+//! `tests/latency_probe.rs` -- have no other way to share code: binary
+//! resolution, spawn-with-retry, connect-with-retry, wait-for-exit, and
+//! `horizon-agent-acp`'s hermeticity contract, which terminald's suite
+//! needs too (it spawns a real `horizon-agent-acp` for the split's
+//! acceptance test). A copy of that contract could rot silently: a new
+//! required env var would leave the copy green while it tested a less
+//! hermetic process.
 //!
 //! The seam this crate draws is deliberately narrow. It owns process-level
 //! concerns -- finding a binary, spawning it, cleaning up after it, and
-//! opening a connection to its socket (remoc for the remoc hubs, ACP for
-//! `horizon-agentd` in [`acp`]) -- plus [`agentd`]'s one definition of how
-//! `horizon-agentd` must be spawned in a test.
+//! opening a connection to it (remoc for the remoc hubs, ACP over stdio
+//! for `horizon-agent-acp` in [`acp`]) -- plus [`agent_acp`]'s one
+//! definition of how `horizon-agent-acp` must be spawned in a test.
 
 pub mod acp;
-pub mod agentd;
+pub mod agent_acp;
 pub mod binary;
 pub mod hub;
 pub mod process;
 
 pub use acp::{AcpClient, Inbound, connect_acp, connect_initialized, initialize_request};
-pub use agentd::{AgentdPaths, AgentdProcess, AgentdSpawn, agentd_hermetic_command};
+pub use agent_acp::{AgentAcpPaths, AgentAcpProcess, AgentAcpSpawn, agent_acp_hermetic_command};
 pub use binary::{
     TRANSIENT_LINK_RETRY_DELAY, cargo_bin_exe_var, resolve_daemon_binary, sibling_daemon_binary,
     spawn_with_link_retry,

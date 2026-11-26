@@ -3,8 +3,8 @@ name = "horizon-shell-runtime"
 version = "0.1.0"
 edition = "2024"
 
-# The shell's side of the two daemons, apart from any UI framework: the
-# eager clients of `horizon-agentd` and `horizon-terminald`, their route
+# The shell's side of the two runtimes, apart from any UI framework: the
+# eager clients of `horizon-agent-acp` and `horizon-terminald`, their route
 # tables, and the agent session model the agent routes carry. A shell
 # bridges an attachment's channels into its own framework's tasks.
 [dependencies]

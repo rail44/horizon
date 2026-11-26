@@ -1,9 +1,8 @@
 //! One control-plane connection: the hello handshake, then a strictly
 //! synchronous request/response loop -- v1 has no server-initiated pushes
 //! (`docs/cli-control-plane-design.md`'s "v1 operation shapes" decision
-//! defers subscriptions to v2), so, unlike `horizon-agentd`'s split reader/
-//! writer tasks, one thread reading and writing the same stream in turn is
-//! enough.
+//! defers subscriptions to v2), so one thread reading and writing the same
+//! stream in turn is enough.
 //!
 //! Every protocol decision here routes through [`ControlExecutor`], so this
 //! module's own tests exercise the full handshake/request/response logic
@@ -19,9 +18,8 @@ use crate::wire::{self, WireError};
 
 use super::executor::{ControlExecutor, ControlRequest};
 
-/// Reported in this build's `hello_ack` reply's `binary_id` -- same
-/// convention as `horizon-agentd`'s own `BINARY_ID` (the crate version, not
-/// the semantic `control_version`, which travels separately).
+/// Reported in this build's `hello_ack` reply's `binary_id`: the crate
+/// version, not the semantic `control_version`, which travels separately.
 const BINARY_ID: &str = env!("CARGO_PKG_VERSION");
 
 /// Handles one accepted connection end to end: hello handshake, then answers

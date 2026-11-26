@@ -7,7 +7,7 @@ use horizon_workspace::{
 };
 
 use crate::agent::plugin::AgentPlugin;
-use crate::agentd::Agentd;
+use crate::agent_acp::AgentAcp;
 use crate::plugin::SessionPlugin;
 use crate::terminal::Session;
 use crate::terminal::plugin::TerminalPlugin;
@@ -78,7 +78,7 @@ fn kept(store: &mut WorkspaceStateStore) -> Kept {
 pub fn opening(
     mut store: WorkspaceStateStore,
     terminald: &Terminald,
-    agentd: Option<&Agentd>,
+    agent_acp: Option<&AgentAcp>,
 ) -> Opening {
     let save = |mut store: WorkspaceStateStore| -> Option<Save> {
         Some(Box::new(move |model| {
@@ -112,7 +112,7 @@ pub fn opening(
         Ok(running) => running,
         Err(error) => return failed(error),
     };
-    let agents = match agentd.map(AgentPlugin::running) {
+    let agents = match agent_acp.map(AgentPlugin::running) {
         Some(Ok(agents)) => agents,
         Some(Err(error)) => return failed(error),
         None => Vec::new(),
@@ -131,9 +131,9 @@ pub fn opening(
             .map(|session| session.id)
             .collect()
     };
-    let agent_sessions = match agentd {
-        Some(agentd) => (of_kind(&model, SessionKind::Agent).into_iter())
-            .map(|session| (session, agentd.attach(session)))
+    let agent_sessions = match agent_acp {
+        Some(agent_acp) => (of_kind(&model, SessionKind::Agent).into_iter())
+            .map(|session| (session, agent_acp.attach(session)))
             .collect(),
         None => Vec::new(),
     };

@@ -3,7 +3,7 @@
 //! Second revision's "Fixed well-known socket path" item. Modeled on
 //! `horizon_wire::socket`'s stale-socket handling and default-path shape,
 //! without sharing code with it: that module holds the *runtime daemons'*
-//! socket conventions (agentd, terminald), whereas this is the control
+//! socket conventions (terminald, logd), whereas this is the control
 //! plane's own socket -- a different lifecycle with a different override
 //! variable. (Until `docs/runtime-crate-alignment-design.md` phase 1 those
 //! conventions lived in `horizon_agent::socket`, and the argument against
@@ -25,7 +25,7 @@
 //! copy (deduplicated 2026-07-18); the one deliberate duplication that
 //! remains is the `horizon_wire::socket` relationship described above.
 //! `HORIZON_SOCKET` remains the
-//! override on both sides and is still injected into panes/agentd, which
+//! override on both sides and is still injected into panes and the agent, which
 //! is what keeps a nested dev instance addressable (see the design doc).
 use std::path::PathBuf;
 
@@ -33,7 +33,7 @@ use std::path::PathBuf;
 /// `/tmp/horizon-control-<uid>.sock` when `XDG_RUNTIME_DIR` is unset or
 /// empty. Pure and deterministic within one process run (only reads the env
 /// var and this process's own uid), so every call site -- the listener's
-/// bind, and every terminal/agentd spawn site that injects `HORIZON_SOCKET`
+/// bind, and every terminal/agent spawn site that injects `HORIZON_SOCKET`
 /// -- can call this independently and always agree, with no shared mutable
 /// state required.
 pub fn default_socket_path() -> PathBuf {

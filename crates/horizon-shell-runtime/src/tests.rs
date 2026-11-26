@@ -1,7 +1,7 @@
 //! Client-runtime tests against in-process fake daemons, each served over
 //! the transport production uses: a fake remoc `TerminalHub` for
 //! `horizon-terminald` here (`Connect::io` + the rtc `*ServerShared`,
-//! Postbag codec), and a fake ACP v2 agent for `horizon-agentd` in
+//! Postbag codec), and a fake ACP v2 agent for `horizon-agent-acp` in
 //! [`agent`]. Each fake records every call, so tests drive updates and
 //! observe commands. The tests that matter most for the terminald split
 //! run *both* runtimes at once and prove they are independent — routing
@@ -345,7 +345,7 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
         terminal_event_rx
             .recv_timeout(Duration::from_millis(100))
             .is_err(),
-        "a agentd failure must not reach terminal panes"
+        "a agent_acp failure must not reach terminal panes"
     );
 
     // And a terminal registered *after* the agent failure is still clean --
@@ -604,7 +604,7 @@ async fn a_terminald_that_fails_the_call_after_hello_is_refused_by_name() {
 }
 
 fn stub_socket_paths(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    // Keep well under SUN_LEN, same as the agentd e2e tests.
+    // Keep well under SUN_LEN.
     let short_id = &Uuid::new_v4().simple().to_string()[..8];
     (
         std::env::temp_dir().join(format!("hzn-{tag}-{short_id}.sock")),

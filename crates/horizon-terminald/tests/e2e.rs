@@ -7,7 +7,7 @@
 //! Moved here (with the daemon) from `horizon-agentd`'s e2e suite by the
 //! v17 terminald split (`docs/terminald-split-design.md`), plus the split's
 //! **acceptance test**:
-//! [`an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable`]
+//! [`an_agent_acp_restart_leaves_a_live_terminald_session_attachable`]
 //! spawns *both* daemons and proves that the whole agent restart
 //! sequence — graceful drain, process exit, respawn — leaves a terminald
 //! session attachable with its retained frame and a live shell. That is the
@@ -22,9 +22,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use horizon_daemon_testkit::{
-    AgentdPaths, AgentdProcess, AgentdSpawn, DaemonProcess, connect_hub_client, connect_with_retry,
-    drain_with_timeout, resolve_daemon_binary, scratch_socket, sibling_daemon_binary,
-    wait_for_exit,
+    AgentAcpPaths, AgentAcpProcess, AgentAcpSpawn, DaemonProcess, connect_hub_client,
+    connect_with_retry, drain_with_timeout, resolve_daemon_binary, scratch_socket,
+    sibling_daemon_binary, wait_for_exit,
 };
 use horizon_terminal_core::wire::TerminalAttachment;
 use horizon_terminal_core::wire::{
@@ -61,20 +61,18 @@ fn spawn_terminald() -> DaemonProcess {
     DaemonProcess::spawn(&mut command, socket_path)
 }
 
-/// The acceptance test's `horizon-agentd`, spawned through the testkit's
-/// definition of that daemon's hermetic contract -- the same one agentd's
-/// own suite spawns through, so this suite cannot silently fall behind it
-/// (it used to keep a hand-written copy, which could go stale while staying
-/// green against a *less* isolated daemon).
+/// The acceptance test's `horizon-agent-acp`, spawned through the testkit's
+/// definition of its hermetic contract -- the same one the agent's own
+/// suite spawns through, so this suite cannot silently fall behind it.
 ///
 /// The binary is resolved as a *sibling* of the terminald one:
 /// `CARGO_BIN_EXE_<name>` is only injected for binaries of the package a
 /// test belongs to, and every workspace binary is uplifted into the same
 /// target directory.
-fn spawn_agentd() -> AgentdProcess {
-    AgentdSpawn::new(
+fn spawn_agent_acp() -> AgentAcpProcess {
+    AgentAcpSpawn::new(
         sibling_daemon_binary(&resolve_terminald_binary(), "horizon-agent-acp"),
-        AgentdPaths::scratch("agentd-td-e2e"),
+        AgentAcpPaths::scratch("agent-acp-td-e2e"),
     )
     .spawn()
 }
@@ -538,9 +536,9 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
 /// `src/runtime/tests.rs`
 /// (`draining_the_agent_runtime_leaves_the_terminal_runtime_untouched`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable() {
+async fn an_agent_acp_restart_leaves_a_live_terminald_session_attachable() {
     let terminald = spawn_terminald();
-    let mut agentd = spawn_agentd();
+    let mut agent_acp = spawn_agent_acp();
 
     // A live terminal session with recognizable output.
     let session_id = uuid::Uuid::new_v4();
@@ -560,17 +558,17 @@ async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable(
     // The agent's restart, faithfully: close the agent runtime's
     // connection, confirm the process is gone, then start a fresh one on the
     // same session logs.
-    drop(agentd.connect().await);
-    let status = wait_for_exit(&mut agentd.child).await;
+    drop(agent_acp.connect().await);
+    let status = wait_for_exit(&mut agent_acp.child).await;
     assert_eq!(
         status.code(),
         Some(0),
         "the agent runtime should exit 0 once its client closes, got {status:?}"
     );
-    let mut agentd = agentd.respawn_at_same_paths();
+    let mut agent_acp = agent_acp.respawn_at_same_paths();
     // The replacement really answers, so the reload sequence is complete,
     // not merely started.
-    drop(agentd.connect().await);
+    drop(agent_acp.connect().await);
 
     // The terminal daemon never noticed. Its session is still listed...
     assert_eq!(

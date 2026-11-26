@@ -10,7 +10,7 @@
 //! **No session semantics, no domain types, ever.** Nothing here knows what
 //! an agent or a terminal is; each runtime's hub trait and vocabulary live
 //! with that runtime's own crate. That is what lets `horizon-terminald` and
-//! `horizon-agentd` share one handshake, one codec, and one set of caps
+//! `horizon-logd` share one handshake, one codec, and one set of caps
 //! without either linking the other's graph. (A few size caps are *named*
 //! after the channel class they bound — `FRAME_…`, `TERMINAL_EVENT_…` —
 //! but they are plain byte counts; no vocabulary crosses this boundary.)

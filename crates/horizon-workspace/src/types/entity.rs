@@ -39,7 +39,7 @@ pub struct WorkspaceSession {
     /// records one via [`Workspace::set_session_directory`]: an agent
     /// session gets one right before `SessionNew` is sent
     /// (`WorkspaceShell::reconcile` in `src/workspace/session_lifecycle.rs`)
-    /// and again whenever agentd reports a resolved root; a terminal session
+    /// and again whenever the agent reports a resolved root; a terminal session
     /// gets the cwd `horizon-terminald` publishes for it, updated as it
     /// changes. Not persisted across a restart/reload: a resumed agent
     /// session's `directory` goes back to `None` until recreated, and a

@@ -3,7 +3,7 @@
 //! See `AGENTS.md`'s "Configuration" section for the user-facing summary
 //! and `config.example.toml` at the repo root for every knob with its
 //! default. This module owns locating and parsing the TOML file into a
-//! [`RawConfig`]; `horizon-agentd`'s `config` module and the shell
+//! [`RawConfig`]; `horizon-agent`'s `config` module and the shell
 //! crate's `keymap`/`theme`/`terminal` modules each read the section
 //! relevant to them and apply their own env-var precedence and built-in
 //! defaults on top (env var > this file > built-in default).
@@ -124,7 +124,7 @@ impl RawConfig {
 }
 
 /// `[sandbox]`: the runtime the agent's `bash` calls are contained by
-/// (`docs/sandbox-runtime-design.md`). Read when `horizon-agentd` starts.
+/// (`docs/sandbox-runtime-design.md`). Read when `horizon-agent-acp` starts.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawAgentConfig {
@@ -252,7 +252,7 @@ pub struct ResolvedDecisionModel {
 
 /// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
 /// entry defaults applied and
-/// nameless entries dropped. This is the shape `horizon-agentd` hands to
+/// nameless entries dropped. This is the shape `horizon-agent-acp` hands to
 /// `horizon_agent::config`, which reads keys from the named variable. The
 /// file's URLs are used as written; no environment variable overrides them.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -664,7 +664,7 @@ fn home_dir() -> Option<PathBuf> {
     horizon_sandbox::home_dir()
 }
 
-/// Every validated `[[grants.project]]` entry -- what `horizon-agentd`
+/// Every validated `[[grants.project]]` entry -- what `horizon-agent-host`
 /// consults at session spawn to decide which trees this session's project
 /// may write to (`grants::trees_for_project`). Entries this crate refused
 /// (over-broad, unexpandable) are already dropped, having warned on stderr
@@ -673,7 +673,7 @@ pub fn project_grants(config: &RawConfig) -> Vec<ProjectGrant> {
     grants::resolve(&config.grants.project, home_dir().as_deref()).0
 }
 
-/// Every validated `trusted_projects` entry — what `horizon-agentd`
+/// Every validated `trusted_projects` entry — what `horizon-agent-host`
 /// consults at session spawn to decide whether repository skills and
 /// `AGENTS.md`/`CLAUDE.md` instructions may be loaded into the prompt. Each
 /// entry is expanded the same way `[[grants.project]]` `root` is (a leading

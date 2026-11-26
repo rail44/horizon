@@ -33,8 +33,8 @@ pub fn scratch_file(tag: &str, extension: &str) -> PathBuf {
 /// across test runs.
 ///
 /// This is the *plain* case: a daemon whose only scratch state is its
-/// socket. `horizon-agentd` has persistence paths too and gets its own
-/// handle, [`crate::AgentdProcess`].
+/// socket. `horizon-agent-acp` has persistence paths and gets its own
+/// handle, [`crate::AgentAcpProcess`].
 pub struct DaemonProcess {
     pub child: Child,
     pub socket_path: PathBuf,

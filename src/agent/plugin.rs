@@ -9,7 +9,7 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callable, Callback};
 
 use super::{Agent, AgentSession, live};
-use crate::agentd::Agentd;
+use crate::agent_acp::AgentAcp;
 use crate::plugin::{Command, Enabled, Mounted, Plugin, Running, SessionPlugin};
 
 pub struct AgentPlugin {
@@ -146,7 +146,7 @@ impl Plugin for AgentPlugin {
 impl SessionPlugin for AgentPlugin {
     const KIND: horizon_workspace::SessionKind = horizon_workspace::SessionKind::Agent;
     type Session = AgentSession;
-    type Runtime = Agentd;
+    type Runtime = AgentAcp;
 
     /// What it is told first (`--prompt`).
     fn begin(mut given: crate::plugin::Given) -> Result<crate::plugin::Begins, String> {
@@ -155,7 +155,7 @@ impl SessionPlugin for AgentPlugin {
         Ok(crate::plugin::Begins { prompt })
     }
 
-    fn running(runtime: &Agentd) -> Result<Vec<Running>, String> {
+    fn running(runtime: &AgentAcp) -> Result<Vec<Running>, String> {
         runtime.running()
     }
 

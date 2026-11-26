@@ -1,4 +1,4 @@
-//! What both daemon client runtimes share: the per-runtime control handle,
+//! What both runtime clients share: the per-runtime control handle,
 //! the establishment deadlines and their classification, and the
 //! drained-daemon probe; plus the remoc connect prelude and per-call
 //! deadline wrapper the terminald client uses.
@@ -9,10 +9,10 @@
 //! untouched. Everything in this module is deliberately domain-free: the
 //! agent-specific and terminal-specific halves live in [`super::agent`]
 //! and [`super::terminal`] respectively, because their protocols (ACP v2
-//! for agentd, a remoc hub for terminald), their handshakes, and what a
-//! drain costs genuinely differ (agentd's
-//! drain kills nothing; terminald's kills every PTY, which is also why only
-//! terminald carries the below-schema skew insurance).
+//! over the stdio of the `horizon-agent-acp` child, a remoc hub for
+//! terminald) and their handshakes differ, and only terminald is drained
+//! (a drain kills every PTY, which is also why only terminald carries the
+//! below-schema skew insurance).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -26,8 +26,8 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 /// The bound on the whole establishment sequence — for terminald the chmux
-/// handshake, base-channel handover, and the `hello` rtc call; for agentd
-/// the ACP `initialize`. A healthy daemon completes it in milliseconds;
+/// handshake, base-channel handover, and the `hello` rtc call; for the
+/// agent the ACP `initialize`. A healthy daemon completes it in milliseconds;
 /// what this bounds is the *cross-generation* case
 /// (`docs/remoc-adoption-design.md` §6): a still-running JSONL daemon
 /// blocks in `read_line` waiting for a newline our chmux hello never
@@ -39,7 +39,7 @@ const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a runtime waits on its daemon: to answer while a connection
 /// is established ([`ESTABLISH_TIMEOUT`]), and to go away once drained
 /// ([`DRAIN_EXIT_TIMEOUT`]). A test passes shorter ones
-/// (`AgentdHandle::start_within`).
+/// (`AgentAcpHandle::start_within`).
 #[derive(Clone, Copy, Debug)]
 pub struct Timeouts {
     pub establish: Duration,
@@ -66,10 +66,9 @@ impl Default for Timeouts {
 pub(super) const SILENCE_MISMATCH_THRESHOLD: u32 = 3;
 
 /// Deadline for one established-phase call (terminald's `list_terminals`,
-/// `attach_terminal`; agentd's `session/list`, `session/new`,
-/// `session/resume`, and `_horizon/*` requests). Not tight on purpose:
-/// agentd's session calls legitimately block on the daemon's
-/// resume-readiness gate (a large event log takes
+/// `attach_terminal`; the agent's `session/list`, `session/new` and
+/// `session/resume`). Not tight on purpose: the agent's session calls
+/// legitimately block on its resume-readiness gate (a large event log takes
 /// real seconds to resume), so a short deadline would misreport a healthy
 /// startup as a failure. A timeout fails only that op — the runtime and
 /// connection survive.
@@ -194,8 +193,8 @@ pub(super) enum StreamEnd {
         message: String,
     },
     /// The daemon answered the handshake with an explicit version mismatch
-    /// (terminald's `hello` range rejection, agentd's `initialize`
-    /// extension-version mismatch). Recoverable via a `drain`; consumes
+    /// (terminald's `hello` range rejection, the agent's `initialize`
+    /// protocol-version mismatch). Recoverable via a `drain`; consumes
     /// the recovery budget.
     VersionRejected {
         message: String,

@@ -193,7 +193,7 @@ pub(super) fn spawn(
                         }
                     }
                     // Garbage and an explicit range rejection get the same
-                    // recovery here: unlike agentd there is no older
+                    // recovery here: there is no older
                     // envelope generation to probe downward through, so the
                     // one honest move for either is the version-stable rtc
                     // drain followed by a respawn.

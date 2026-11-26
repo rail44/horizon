@@ -3,12 +3,13 @@
 //!
 //! Two suites spawn this daemon: its own (`crates/horizon-agent-acp/tests/e2e.rs`)
 //! and terminald's (`crates/horizon-terminald/tests/e2e.rs`, whose acceptance
-//! test drains a real agentd to prove the terminal daemon survives it).
+//! test restarts a real `horizon-agent-acp` to prove the terminal daemon
+//! survives it).
 //! Before this module they each described the hermeticity contract in their
 //! own words, and only one of them could ever be right after a change: the
 //! failure mode of the stale copy is not a red test but a *green* one
 //! against a less isolated daemon, up to and including reading a real
-//! developer's event log. [`agentd_hermetic_command`] is now the single
+//! developer's event log. [`agent_acp_hermetic_command`] is now the single
 //! definition both call.
 
 use std::ffi::{OsStr, OsString};
@@ -27,14 +28,14 @@ use crate::process::{scratch_file, scratch_socket};
 /// storage that must also stay away from real user data, and the log
 /// daemon's socket it would reach.
 #[derive(Clone, Debug)]
-pub struct AgentdPaths {
+pub struct AgentAcpPaths {
     pub logd_socket: PathBuf,
     pub sessions_dir: PathBuf,
     pub state_db_path: PathBuf,
     pub data_home: PathBuf,
 }
 
-impl AgentdPaths {
+impl AgentAcpPaths {
     /// A fresh, throwaway set -- what almost every test wants. `tag` names
     /// the suite in the scratch file names, so a leftover file after a hard
     /// failure says which suite left it.
@@ -83,25 +84,25 @@ impl AgentdPaths {
 ///   comment): unset resolves to a real default path
 ///   (`$XDG_DATA_HOME/horizon/agent-state.duckdb`), which would make every
 ///   test process fight over the *same* real file.
-/// * `XDG_DATA_HOME` at a scratch directory. Agentd watches the board for
+/// * `XDG_DATA_HOME` at a scratch directory. AgentAcp watches the board for
 ///   its startup cwd; a linked worktree still resolves to the main project.
 ///   Isolating only the agent event log and DuckDB file leaves that watcher
 ///   consuming the developer's real board. Knowledge storage uses this
 ///   same data home. `HORIZON_LOGD_SOCKET` is separate too, so any board
 ///   writes cannot connect to the running user's log daemon.
 /// * `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` at `/dev/null`, so the git
-///   invocations agentd makes (worktree setup, session setup) see none of
+///   invocations the agent makes (worktree setup, session setup) see none of
 ///   the running user's git configuration.
 ///
-/// The env var *names* are agentd's own, resolved inside `horizon-agent`'s
+/// The env var *names* are the agent's own, resolved inside `horizon-agent`'s
 /// `config` module (`SESSIONS_DIR_VAR`, `STATE_DB_PATH_VAR`) and
 /// `horizon-config`'s `CONFIG_PATH_VAR`; they are spelled out here because
-/// those constants are crate-private. If one of them changes -- or agentd
+/// those constants are crate-private. If one of them changes -- or the agent
 /// grows another environment input that reaches outside the test's scratch
 /// dir -- this function is the one place to update, and both suites follow.
-pub fn agentd_hermetic_command(binary: &Path, paths: &AgentdPaths) -> Command {
+pub fn agent_acp_hermetic_command(binary: &Path, paths: &AgentAcpPaths) -> Command {
     // Never created; its only job is to exist as a path that does not.
-    let missing_config_path = scratch_file("agentd-no-such-config", "toml");
+    let missing_config_path = scratch_file("agent-acp-no-such-config", "toml");
     let mut command = Command::new(binary);
     command
         .stdin(Stdio::piped())
@@ -124,20 +125,20 @@ pub fn agentd_hermetic_command(binary: &Path, paths: &AgentdPaths) -> Command {
 }
 
 /// A recipe for one `horizon-agent-acp` spawn: the hermetic contract above,
-/// plus whatever a single suite needs on top of it (agentd's own test-hook
-/// env vars, stderr capture). Kept by the spawned [`AgentdProcess`] so it
+/// plus whatever a single suite needs on top of it (its own suite's test-hook
+/// env vars, stderr capture). Kept by the spawned [`AgentAcpProcess`] so it
 /// can bring an identical process back up at the same paths.
 #[derive(Clone, Debug)]
-pub struct AgentdSpawn {
+pub struct AgentAcpSpawn {
     binary: PathBuf,
-    paths: AgentdPaths,
+    paths: AgentAcpPaths,
     /// Applied in order after the hermetic env; `None` means `env_remove`.
     extra_env: Vec<(OsString, Option<OsString>)>,
     capture_stderr: bool,
 }
 
-impl AgentdSpawn {
-    pub fn new(binary: PathBuf, paths: AgentdPaths) -> Self {
+impl AgentAcpSpawn {
+    pub fn new(binary: PathBuf, paths: AgentAcpPaths) -> Self {
         Self {
             binary,
             paths,
@@ -165,15 +166,15 @@ impl AgentdSpawn {
 
     /// Pipes the daemon's stderr and drains it continuously into memory, so
     /// a test can observe a line *while the process is still alive* (see
-    /// [`AgentdProcess::wait_for_stderr_line`]). Without this the process
+    /// [`AgentAcpProcess::wait_for_stderr_line`]). Without this the process
     /// inherits the test harness's stderr.
     pub fn capture_stderr(mut self) -> Self {
         self.capture_stderr = true;
         self
     }
 
-    pub fn spawn(self) -> AgentdProcess {
-        let mut command = agentd_hermetic_command(&self.binary, &self.paths);
+    pub fn spawn(self) -> AgentAcpProcess {
+        let mut command = agent_acp_hermetic_command(&self.binary, &self.paths);
         for (key, value) in &self.extra_env {
             match value {
                 Some(value) => command.env(key, value),
@@ -198,7 +199,7 @@ impl AgentdSpawn {
             lines
         });
 
-        AgentdProcess {
+        AgentAcpProcess {
             child,
             sessions_dir: self.paths.sessions_dir.clone(),
             state_db_path: self.paths.state_db_path.clone(),
@@ -211,20 +212,20 @@ impl AgentdSpawn {
 /// Owns a spawned `horizon-agent-acp` child and the paths it was pointed at;
 /// kills the child and removes all of them on drop so a failing assertion
 /// doesn't leak either across test runs.
-pub struct AgentdProcess {
+pub struct AgentAcpProcess {
     pub child: Child,
     pub sessions_dir: PathBuf,
     pub state_db_path: PathBuf,
     /// The recipe that produced this process, kept for
     /// [`Self::respawn_at_same_paths`].
-    spawn: AgentdSpawn,
+    spawn: AgentAcpSpawn,
     /// Lines seen so far on this process's stderr, continuously drained by a
     /// background thread -- `Some` only when the spawn asked for
-    /// [`AgentdSpawn::capture_stderr`].
+    /// [`AgentAcpSpawn::capture_stderr`].
     stderr_lines: Option<Arc<Mutex<Vec<String>>>>,
 }
 
-impl AgentdProcess {
+impl AgentAcpProcess {
     /// The process's standard output and input, as the one client it
     /// serves reads and writes them. Panics on a second call.
     pub fn streams(&mut self) -> (tokio::process::ChildStdout, tokio::process::ChildStdin) {
@@ -267,14 +268,14 @@ impl AgentdProcess {
     }
 
     /// Polls this process's continuously drained stderr (see
-    /// [`AgentdSpawn::capture_stderr`]) until a line containing `needle`
+    /// [`AgentAcpSpawn::capture_stderr`]) until a line containing `needle`
     /// appears, or panics after a generous timeout. Panics immediately if
     /// this process wasn't spawned with stderr capture enabled.
     pub async fn wait_for_stderr_line(&self, needle: &str) -> String {
         let lines = self
             .stderr_lines
             .as_ref()
-            .expect("stderr capture must be enabled via AgentdSpawn::capture_stderr");
+            .expect("stderr capture must be enabled via AgentAcpSpawn::capture_stderr");
         for _ in 0..500 {
             if let Some(line) = lines
                 .lock()
@@ -325,7 +326,7 @@ impl AgentdProcess {
     }
 }
 
-impl Drop for AgentdProcess {
+impl Drop for AgentAcpProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -340,13 +341,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agentd_fixture_overrides_board_storage_and_logd_discovery() {
-        let first = AgentdPaths::scratch("board-isolation");
-        let second = AgentdPaths::scratch("board-isolation");
+    fn agent_acp_fixture_overrides_board_storage_and_logd_discovery() {
+        let first = AgentAcpPaths::scratch("board-isolation");
+        let second = AgentAcpPaths::scratch("board-isolation");
         assert_ne!(first.data_home, second.data_home);
         assert!(!first.data_home.exists());
 
-        let command = agentd_hermetic_command(Path::new("horizon-agent-acp"), &first);
+        let command = agent_acp_hermetic_command(Path::new("horizon-agent-acp"), &first);
         let environment: std::collections::HashMap<_, _> = command.get_envs().collect();
         // Explicit overrides are required: removing these keys would make
         // the child fall back to the real user's data home and log daemon.

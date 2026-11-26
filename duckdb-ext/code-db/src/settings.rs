@@ -173,12 +173,12 @@ extra_attributes = [ { name = "my_test", reason = "the project's test macro" } ]
 
 [[layers]]
 name = "board"
-modules = ["crates/horizon-agentd/src/board_flow/**"]
+modules = ["crates/horizon-agent_acp/src/board_flow/**"]
 reason = "the board's operations"
 
 [[layers]]
 name = "session"
-modules = ["crates/horizon-agentd/src/session/**"]
+modules = ["crates/horizon-agent_acp/src/session/**"]
 may_depend_on = ["board"]
 reason = "sessions call into the board"
 "#;
@@ -194,11 +194,11 @@ reason = "sessions call into the board"
             [
                 (
                     "board".to_owned(),
-                    "crates/horizon-agentd/src/board_flow/**".to_owned()
+                    "crates/horizon-agent_acp/src/board_flow/**".to_owned()
                 ),
                 (
                     "session".to_owned(),
-                    "crates/horizon-agentd/src/session/**".to_owned()
+                    "crates/horizon-agent_acp/src/session/**".to_owned()
                 ),
             ]
         );

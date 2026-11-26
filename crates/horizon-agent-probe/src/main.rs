@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use horizon_shell_runtime::agent_model::{
     AgentEvent, AgentFrameItem, AgentModel, Permission, ToolCall,
 };
-use horizon_shell_runtime::{AgentCommand, AgentUpdate, AgentdHandle, AttachmentState};
+use horizon_shell_runtime::{AgentAcpHandle, AgentCommand, AgentUpdate, AttachmentState};
 use horizon_wire::SessionId;
 use serde_json::{Value, json};
 
@@ -133,19 +133,19 @@ fn run(args: Args) -> Result<(), String> {
         "sessions": data.join("horizon/sessions"),
     }));
 
-    let (agentd, _roots) = AgentdHandle::start(
+    let (agent_acp, _roots) = AgentAcpHandle::start(
         horizon_shell_runtime::AgentProgram::horizon(),
         &control,
         &home.join("agent.log"),
     );
-    let outcome = drive(&agentd, &dir, &args);
-    agentd.stop_and_wait();
+    let outcome = drive(&agent_acp, &dir, &args);
+    agent_acp.stop_and_wait();
     outcome
 }
 
-fn drive(agentd: &AgentdHandle, dir: &Path, args: &Args) -> Result<(), String> {
+fn drive(agent_acp: &AgentAcpHandle, dir: &Path, args: &Args) -> Result<(), String> {
     let session_id = SessionId::new();
-    let mut session = agentd.start_session(session_id, Some(dir.to_path_buf()));
+    let mut session = agent_acp.start_session(session_id, Some(dir.to_path_buf()));
     let commands = session.sender();
     let mut updates = session.take_events();
     let mut model = AgentModel::default();

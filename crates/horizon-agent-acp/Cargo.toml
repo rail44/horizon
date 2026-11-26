@@ -34,7 +34,7 @@ duckdb = "1"
 # `termwiz` left with that generator -- nothing else here used them.
 tempfile = "3"
 # Enables the `mock_approval_required` / `mock_boundary_crossing` test
-# fixtures in `horizon-agent`'s tool catalog so agentd's own unit tests
+# fixtures in `horizon-agent`'s tool catalog so this crate's tests
 # and the e2e integration suite can exercise approval/boundary-crossing
 # paths without those tools ever being advertised to a real provider.
 horizon-agent = { path = "../horizon-agent", features = ["test-fixtures"] }

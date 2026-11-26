@@ -90,7 +90,7 @@ impl Drop for AgentRoute {
     }
 }
 
-/// The `horizon-agentd` connection's routes: per-agent-session channels
+/// The `horizon-agent-acp` connection's routes: per-agent-session channels
 /// plus the two process-wide channels its connection-global traffic feeds.
 pub(super) struct AgentRoutes {
     state: Mutex<AgentRouteState>,

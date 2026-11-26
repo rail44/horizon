@@ -2,7 +2,7 @@
 //! binary and the tests share.
 
 pub mod agent;
-pub mod agentd;
+pub mod agent_acp;
 pub mod application;
 pub mod background;
 pub mod board;

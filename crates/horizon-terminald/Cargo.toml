@@ -27,8 +27,8 @@ uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
 # The shared daemon-process helpers both test binaries here use. Crucially it
-# also owns `horizon-agentd`'s hermetic-spawn contract, so the acceptance
-# test's agentd is spawned by the same definition agentd's own suite uses
+# also owns `horizon-agent-acp`'s hermetic-spawn contract, so the acceptance
+# test's agent is spawned by the same definition the agent's own suite uses
 # rather than a copy that can silently fall behind it.
 horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
 termwiz = { version = "0.23.3", features = ["use_serde"] }

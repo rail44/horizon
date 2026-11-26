@@ -1,8 +1,8 @@
 //! Horizon's eager clients for the per-view-kind runtimes, **two of
-//! them**: [`AgentdHandle`] speaks ACP v2 to `horizon-agentd` (the agent
-//! runtime, `docs/acp-agentd-design.md`) and [`TerminaldHandle`] remoc to
-//! `horizon-terminald` (the terminal runtime,
-//! `docs/remoc-adoption-design.md` §2), each over its own socket,
+//! them**: [`AgentAcpHandle`] speaks ACP v2 to `horizon-agent-acp`, its
+//! child, over stdio (the agent runtime, `docs/agent-stdio-child-design.md`)
+//! and [`TerminaldHandle`] remoc to `horizon-terminald` over its socket (the
+//! terminal runtime, `docs/remoc-adoption-design.md` §2), each with its own
 //! connection, op queue, and `RuntimeControl`
 //! (`docs/terminald-split-design.md`).
 //!
@@ -93,7 +93,7 @@ impl AgentProgram {
 /// The client of the agent runtime (`horizon-agent-acp`, this process's
 /// child): agent sessions and the connection-global host-tool exchange.
 #[derive(Clone)]
-pub struct AgentdHandle {
+pub struct AgentAcpHandle {
     ops: tokio::sync::mpsc::UnboundedSender<agent::Op>,
     routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
@@ -214,7 +214,7 @@ impl Drop for TerminalSessionHandle {
     }
 }
 
-impl AgentdHandle {
+impl AgentAcpHandle {
     pub fn same_runtime(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.routes, &other.routes)
     }
@@ -411,7 +411,7 @@ impl TerminaldHandle {
     }
 
     /// Starts the terminal-runtime connection. Same eager, non-blocking
-    /// contract as [`AgentdHandle::start`] — a `create_terminal` queued
+    /// contract as [`AgentAcpHandle::start`] — a `create_terminal` queued
     /// before the daemon is even up is dispatched once it is.
     pub fn start(socket_path: &Path, control_socket: &Path) -> Self {
         let (handle, ops) = Self::parts();
@@ -467,7 +467,7 @@ impl TerminaldHandle {
         handle
     }
 
-    /// The terminal twin of [`AgentdHandle::register_agent`]. The bridge's
+    /// The terminal twin of [`AgentAcpHandle::register_agent`]. The bridge's
     /// sending half is also registered with [`TerminalRoutes`] so a
     /// broadcast ([`Self::broadcast_terminal_color_scheme`]) can inject
     /// commands without a pane's handle.
@@ -581,7 +581,7 @@ impl TerminaldHandle {
         let _ = self.ops.send(terminal::Op::Drain);
     }
 
-    /// Drains the daemon — see [`AgentdHandle::begin_reload`] for the
+    /// Drains the daemon — see [`AgentAcpHandle::begin_reload`] for the
     /// return contract. Draining terminald kills every PTY it hosts, so
     /// `Reload Terminal Runtime` calls this only for a daemon that cannot
     /// [`hand_over`](Self::hand_over).

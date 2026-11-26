@@ -24,30 +24,30 @@ use horizon_agent::contract::{
 use horizon_agent::persistence::event_log::{Appender, WriterHandle};
 use horizon_agent_host::options as acp;
 use horizon_daemon_testkit::{
-    AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound, cargo_bin_exe_var,
+    AcpClient, AgentAcpPaths, AgentAcpProcess, AgentAcpSpawn, Inbound, cargo_bin_exe_var,
     resolve_daemon_binary, wait_for_exit,
 };
 
 mod support;
 use support::*;
 
-/// The env var `horizon-agentd`'s `main` reads to hold its
+/// The env var `horizon-agent-acp`'s `main` reads to hold its
 /// event-log-read-plus-resume phase until a file is there -- see that
 /// binary's own doc comment on the constant of the same name. Test-only;
 /// never set outside this file.
 const TEST_RESUME_GATE_VAR: &str = "HORIZON_AGENT_TEST_RESUME_GATE";
 
-/// The env var `horizon-agentd`'s `main` reads to have the mock provider's
+/// The env var `horizon-agent-acp`'s `main` reads to have the mock provider's
 /// slow turns wait, once their first word is out, until a file is there.
 /// Test-only; never set outside this file.
 const TEST_MOCK_STREAM_GATE_VAR: &str = "HORIZON_AGENT_TEST_MOCK_STREAM_GATE";
 
-/// Resolves the `horizon-agentd` binary to spawn. Only the `env!()` bake
+/// Resolves the `horizon-agent-acp` binary to spawn. Only the `env!()` bake
 /// has to be produced here (that macro expands only inside the package that
 /// owns the `[[bin]]` target); the resolution rule itself, and the write-up
 /// of why the runtime env var is preferred over that bake, live in
 /// `horizon_daemon_testkit::binary`.
-fn resolve_agentd_binary() -> PathBuf {
+fn resolve_agent_acp_binary() -> PathBuf {
     resolve_daemon_binary("horizon-agent-acp", env!("CARGO_BIN_EXE_horizon-agent-acp"))
 }
 
@@ -56,43 +56,43 @@ fn resolve_agentd_binary() -> PathBuf {
 /// nonexistent config file, neutralized git config) plus this suite's own
 /// test hooks explicitly cleared, so a hook set for one spawn can never
 /// leak into the next.
-fn agentd_spawn(paths: AgentdPaths) -> AgentdSpawn {
-    AgentdSpawn::new(resolve_agentd_binary(), paths)
+fn agent_acp_spawn(paths: AgentAcpPaths) -> AgentAcpSpawn {
+    AgentAcpSpawn::new(resolve_agent_acp_binary(), paths)
         .env_remove(TEST_RESUME_GATE_VAR)
         .env_remove(TEST_MOCK_STREAM_GATE_VAR)
 }
 
-/// Spawns `horizon-agentd` at fresh throwaway paths -- what almost every
+/// Spawns `horizon-agent-acp` at fresh throwaway paths -- what almost every
 /// test below wants.
-fn spawn_agentd() -> AgentdProcess {
-    agentd_spawn(AgentdPaths::scratch("agentd-e2e")).spawn()
+fn spawn_agent_acp() -> AgentAcpProcess {
+    agent_acp_spawn(AgentAcpPaths::scratch("agent-acp-e2e")).spawn()
 }
 
-/// Same as [`spawn_agentd`], but pointed at caller-chosen paths -- the seam
+/// Same as [`spawn_agent_acp`], but pointed at caller-chosen paths -- the seam
 /// step 4's "kill -9 mid-session, respawn" tests use to bring a *second*
-/// process up against the *first* process's own socket/event-log paths,
+/// process up against the *first* process's own event-log paths,
 /// simulating a real restart.
-fn spawn_agentd_at(sessions_dir: PathBuf) -> AgentdProcess {
-    agentd_spawn(AgentdPaths::scratch_at("agentd-e2e", sessions_dir)).spawn()
+fn spawn_agent_acp_at(sessions_dir: PathBuf) -> AgentAcpProcess {
+    agent_acp_spawn(AgentAcpPaths::scratch_at("agent-acp-e2e", sessions_dir)).spawn()
 }
 
-/// Connects to the real socket and completes `initialize` at this build's
-/// extension version -- every session-hosting test's entry point.
-async fn connect(agentd: &mut AgentdProcess) -> AcpClient {
-    agentd.connect().await
+/// Connects over the child's stdio and completes `initialize` -- every
+/// session-hosting test's entry point.
+async fn connect(agent_acp: &mut AgentAcpProcess) -> AcpClient {
+    agent_acp.connect().await
 }
 
 // --- tests -----------------------------------------------------------------
 
-/// Proves the runtime resolution [`resolve_agentd_binary`] prefers
+/// Proves the runtime resolution [`resolve_agent_acp_binary`] prefers
 /// actually finds an existing binary, and that it's the same binary the
 /// compile-time `env!()` bake would have named -- the mechanism backlog
-/// #40's fix relies on: both are cargo's own idea of "the `horizon-agentd`
+/// #40's fix relies on: both are cargo's own idea of "the `horizon-agent-acp`
 /// binary for this test run", differing only in *when* the value is
 /// computed (build time vs. this exact invocation), not *what* it points
 /// at, for a normal (non-stale-cache) run like this one.
 #[test]
-fn resolve_agentd_binary_finds_an_existing_binary_via_the_runtime_env_var() {
+fn resolve_agent_acp_binary_finds_an_existing_binary_via_the_runtime_env_var() {
     let var = cargo_bin_exe_var("horizon-agent-acp");
     let runtime_var = std::env::var(&var)
         .expect("cargo/cargo-nextest must set CARGO_BIN_EXE_horizon-agent-acp at test runtime");
@@ -102,10 +102,10 @@ fn resolve_agentd_binary_finds_an_existing_binary_via_the_runtime_env_var() {
         "runtime env var {var} = {runtime_var} does not point at an existing file"
     );
 
-    let resolved = resolve_agentd_binary();
+    let resolved = resolve_agent_acp_binary();
     assert_eq!(
         resolved, runtime_path,
-        "resolve_agentd_binary must prefer the runtime env var over the compile-time bake"
+        "resolve_agent_acp_binary must prefer the runtime env var over the compile-time bake"
     );
 
     // Deliberately NOT asserted: `resolved == env!("CARGO_BIN_EXE_...")`.
@@ -163,11 +163,11 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
 "#,
     )
     .unwrap();
-    let mut agentd = agentd_spawn(AgentdPaths::scratch("agentd-effort"))
+    let mut agent_acp = agent_acp_spawn(AgentAcpPaths::scratch("agent-acp-effort"))
         .env("HORIZON_CONFIG", &config_path)
         .env_remove("HORIZON_EFFORT_TEST_KEY")
         .spawn();
-    let mut client = connect(&mut agentd).await;
+    let mut client = connect(&mut agent_acp).await;
     let session_id = open_session(
         &client,
         new_session_request(
@@ -199,10 +199,10 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
     // The choice is kept on the session's branch: after a restart the
     // session runs at it again.
     drop(client);
-    let status = wait_for_exit(&mut agentd.child).await;
+    let status = wait_for_exit(&mut agent_acp.child).await;
     assert!(status.success(), "the drained daemon ended with {status:?}");
-    let mut agentd = agentd.respawn_at_same_paths();
-    let mut client = connect(&mut agentd).await;
+    let mut agent_acp = agent_acp.respawn_at_same_paths();
+    let mut client = connect(&mut agent_acp).await;
     let replay = resume(&mut client, session_id).await.unwrap();
     if !replay
         .iter()
@@ -215,7 +215,7 @@ api_key_env = "HORIZON_EFFORT_TEST_KEY"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrupt_event_log_lines_are_reported_in_the_agents_log() {
     let sessions_dir = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-sessions-{}-{}",
+        "horizon-agent-acp-e2e-sessions-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -236,11 +236,11 @@ async fn corrupt_event_log_lines_are_reported_in_the_agents_log() {
             .expect("write corrupt line and a tail split inside UTF-8");
     }
 
-    let mut agentd = agentd_spawn(AgentdPaths::scratch_at("agentd-e2e", sessions_dir))
+    let mut agent_acp = agent_acp_spawn(AgentAcpPaths::scratch_at("agent-acp-e2e", sessions_dir))
         .capture_stderr()
         .spawn();
-    let _client = connect(&mut agentd).await;
-    agentd
+    let _client = connect(&mut agent_acp).await;
+    agent_acp
         .wait_for_stderr_line(
             "skipped 1 corrupt line and a torn trailing line while reading the session logs",
         )
@@ -248,12 +248,13 @@ async fn corrupt_event_log_lines_are_reported_in_the_agents_log() {
 
     // The ignored tail must not join the first record the resumed session
     // writes.
-    wait_for_persisted_event(&agentd.sessions_dir, damaged, |event| {
+    wait_for_persisted_event(&agent_acp.sessions_dir, damaged, |event| {
         matches!(event, Event::StateChanged(SessionState::Created))
     })
     .await;
     let report =
-        horizon_agent::persistence::event_log::read_session(&agentd.sessions_dir, damaged).unwrap();
+        horizon_agent::persistence::event_log::read_session(&agent_acp.sessions_dir, damaged)
+            .unwrap();
     assert_eq!(
         report.corrupt_line_count, 1,
         "only the original corrupt line remains"
@@ -267,10 +268,10 @@ async fn corrupt_event_log_lines_are_reported_in_the_agents_log() {
 /// log, and confirm replay: transcript survives, the interrupted turn is
 /// committed as cancelled, the session is immediately usable again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled() {
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let mut client = connect(&mut agentd).await;
+async fn a_killed_agent_acp_starts_again_and_replays_transcript_with_open_turn_cancelled() {
+    let mut agent_acp = spawn_agent_acp();
+    let sessions_dir = agent_acp.sessions_dir.clone();
+    let mut client = connect(&mut agent_acp).await;
 
     let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "please run a tool").await;
@@ -295,11 +296,11 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         .expect("approval belongs to the original turn");
 
     drop(client);
-    agentd.kill_and_wait();
+    agent_acp.kill_and_wait();
 
     // Fresh projection path, so this start rebuilds; stderr is captured to
     // wait for that rebuild below.
-    let mut respawned = agentd_spawn(AgentdPaths::scratch_at("agentd-e2e", sessions_dir))
+    let mut respawned = agent_acp_spawn(AgentAcpPaths::scratch_at("agent-acp-e2e", sessions_dir))
         .capture_stderr()
         .spawn();
     let mut client = connect(&mut respawned).await;
@@ -426,9 +427,9 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     let repo = isolated_session_fixture();
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let mut client = connect(&mut agentd).await;
+    let mut agent_acp = spawn_agent_acp();
+    let sessions_dir = agent_acp.sessions_dir.clone();
+    let mut client = connect(&mut agent_acp).await;
     let session_id = open_session(&client, shared_session_in(repo.path().to_path_buf())).await;
 
     prompt(&client, session_id, "please enter a worktree").await;
@@ -460,9 +461,9 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     }));
 
     drop(client);
-    agentd.kill_and_wait();
+    agent_acp.kill_and_wait();
 
-    let mut respawned = spawn_agentd_at(sessions_dir);
+    let mut respawned = spawn_agent_acp_at(sessions_dir);
     let mut client = connect(&mut respawned).await;
     let resumed = list_sessions(&client)
         .await
@@ -504,9 +505,9 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
 async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     let repo = isolated_session_fixture();
     let head = fixture_git_output(repo.path(), &["rev-parse", "HEAD"]);
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let mut client = connect(&mut agentd).await;
+    let mut agent_acp = spawn_agent_acp();
+    let sessions_dir = agent_acp.sessions_dir.clone();
+    let mut client = connect(&mut agent_acp).await;
     let session_id = open_session(&client, shared_session_in(repo.path().to_path_buf())).await;
 
     prompt(&client, session_id, "please enter a worktree").await;
@@ -598,9 +599,9 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     )
     .await;
     drop(client);
-    agentd.kill_and_wait();
+    agent_acp.kill_and_wait();
 
-    let mut respawned = spawn_agentd_at(sessions_dir);
+    let mut respawned = spawn_agent_acp_at(sessions_dir);
     let mut client = connect(&mut respawned).await;
     let resumed = list_sessions(&client)
         .await
@@ -629,10 +630,10 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
 /// session gracefully (not a crash), respawn against the same paths, and
 /// confirm the session survives with its transcript intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn drained_agentd_respawns_and_preserves_a_completed_session() {
-    let mut agentd = spawn_agentd();
-    let sessions_dir = agentd.sessions_dir.clone();
-    let mut client = connect(&mut agentd).await;
+async fn an_ended_agent_acp_starts_again_and_keeps_a_completed_session() {
+    let mut agent_acp = spawn_agent_acp();
+    let sessions_dir = agent_acp.sessions_dir.clone();
+    let mut client = connect(&mut agent_acp).await;
 
     let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "hello").await;
@@ -642,10 +643,10 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
     .await;
 
     drop(client);
-    let status = wait_for_exit(&mut agentd.child).await;
+    let status = wait_for_exit(&mut agent_acp.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 
-    let mut respawned = spawn_agentd_at(sessions_dir);
+    let mut respawned = spawn_agent_acp_at(sessions_dir);
     let mut client = connect(&mut respawned).await;
     assert_listed(&list_sessions(&client).await, session_id, Some(test_cwd()));
 
@@ -673,7 +674,7 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         ConversationInputKind, ConversationRecord, OccurrenceId, ToolCallId, ToolCallIdentity,
         ToolOutcome,
     };
-    let paths = AgentdPaths::scratch("rig-history-restart");
+    let paths = AgentAcpPaths::scratch("rig-history-restart");
     let session = SessionId::new();
     let identity = ToolCallIdentity {
         call_id: ToolCallId("pending".into()),
@@ -699,7 +700,7 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
     writer.flush().unwrap();
     drop(appender);
     drop(writer);
-    let mut daemon = agentd_spawn(paths)
+    let mut daemon = agent_acp_spawn(paths)
         .env_remove("OPENAI_API_KEY")
         .env_remove("ANTHROPIC_API_KEY")
         .spawn();
@@ -775,8 +776,8 @@ async fn large_history_survives_abandoned_replay_and_daemon_restart() {
                 .collect(),
         )],
     );
-    let mut agentd = spawn_agentd_at(log.clone());
-    let mut abandoned = connect(&mut agentd).await;
+    let mut agent_acp = spawn_agent_acp_at(log.clone());
+    let mut abandoned = connect(&mut agent_acp).await;
     abandoned.send_ordered(
         v2::ResumeSessionRequest::new(acp_id(session), test_cwd())
             .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new())),
@@ -784,13 +785,13 @@ async fn large_history_survives_abandoned_replay_and_daemon_restart() {
     let _first = abandoned.next(Duration::from_secs(120)).await;
     // Closing the connection mid-replay ends the process.
     drop(abandoned);
-    let mut agentd = agentd.respawn_at_same_paths();
-    let mut client = connect(&mut agentd).await;
+    let mut agent_acp = agent_acp.respawn_at_same_paths();
+    let mut client = connect(&mut agent_acp).await;
     let replay = resume(&mut client, session).await.unwrap();
     assert_eq!(user_texts(&replay), history);
     drop(client);
-    agentd.kill_and_wait();
-    let mut restarted = spawn_agentd_at(log);
+    agent_acp.kill_and_wait();
+    let mut restarted = spawn_agent_acp_at(log);
     let mut client = connect(&mut restarted).await;
     let restored = resume(&mut client, session).await.unwrap();
     assert_eq!(user_texts(&restored), history);
@@ -803,7 +804,7 @@ async fn large_history_survives_abandoned_replay_and_daemon_restart() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart() {
     let (_outer, repo) = nested_session_fixture();
-    let mut daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+    let mut daemon = agent_acp_spawn(AgentAcpPaths::scratch("agent-acp-e2e"))
         .env_remove("HORIZON_AGENT_TEST_NO_CHECKPOINTS")
         .spawn();
     let log = daemon.sessions_dir.clone();
@@ -892,7 +893,7 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_closed_session_is_cleaned_up_before_the_close_is_answered() {
     let (_outer, repo) = nested_session_fixture();
-    let mut daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+    let mut daemon = agent_acp_spawn(AgentAcpPaths::scratch("agent-acp-e2e"))
         .env_remove("HORIZON_AGENT_TEST_NO_CHECKPOINTS")
         .spawn();
     let mut client = connect(&mut daemon).await;

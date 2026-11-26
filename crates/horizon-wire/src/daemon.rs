@@ -8,10 +8,9 @@
 //! it serves is a type parameter, and the two places the runtimes genuinely
 //! differ are explicit hooks rather than branches --
 //!
-//! - **what SIGTERM must do first** ([`run`]'s `on_sigterm`): agentd flushes
-//!   its event log, terminald kills every PTY. That difference *is* the
-//!   terminald split (`docs/terminald-split-design.md`) and must never be
-//!   unified into a shared "shutdown";
+//! - **what SIGTERM must do first** ([`run`]'s `on_sigterm`): terminald
+//!   kills every PTY (`docs/terminald-split-design.md`), which is not
+//!   another daemon's shutdown;
 //! - **what a lost connection must clean up** ([`serve_connection`]'s
 //!   `on_disconnect`): the sessions themselves are process-scoped in both
 //!   daemons and keep running -- only their bridges to the departed client
@@ -94,7 +93,7 @@ pub fn socket_path_from_args<I: Iterator<Item = String>>(mut args: I) -> Option<
 /// `on_sigterm` and unlink the socket.
 ///
 /// `serve` receives the accepted stream itself: a remoc hub passes it to
-/// [`serve_connection`], `horizon-agentd` speaks ACP on it directly.
+/// [`serve_connection`].
 ///
 /// `on_sigterm` is the one thing that is genuinely per-daemon here (see the
 /// module doc) and it runs *before* the socket is unlinked, so a client that

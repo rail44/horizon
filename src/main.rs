@@ -2,14 +2,14 @@
 //! client (`horizon <subcommand>`, `horizon_cli::run`).
 //!
 //! The window is the workspace over this machine's two runtimes,
-//! `horizon-terminald` and `horizon-agentd`, each started if it is not
-//! running, in this machine's theme, with the workspace kept between runs.
+//! `horizon-terminald`, started if it is not running, and
+//! `horizon-agent-acp`, started as the window's child, in this machine's theme, with the workspace kept between runs.
 
 use std::cell::Cell;
 use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
 
-use horizon::agentd::{Agentd, RuntimeModels};
+use horizon::agent_acp::{AgentAcp, RuntimeModels};
 use horizon::terminal::Session;
 use horizon::terminald::Terminald;
 use horizon::{application, control, desktop_notify, restore, window, workspace};
@@ -73,7 +73,7 @@ fn run_window() {
     let program = (horizon_config::load().agent.program())
         .map(|(program, args)| horizon_shell_runtime::AgentProgram { program, args })
         .unwrap_or_else(horizon_shell_runtime::AgentProgram::horizon);
-    let agentd = Agentd::start(
+    let agent_acp = AgentAcp::start(
         program,
         &control_socket,
         &control_socket.with_file_name("agent.log"),
@@ -88,12 +88,12 @@ fn run_window() {
         config: horizon_config::load().clone(),
         reload: Some(Box::new(horizon_config::reload)),
         extensions: horizon::extension::own(),
-        agents: Some(agentd.spawn()),
+        agents: Some(agent_acp.spawn()),
         open_url: Some(std::rc::Rc::new(open_url)),
-        models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),
-        agent_runtime: Some(agentd.runtime()),
+        models: Some(std::sync::Arc::new(RuntimeModels(agent_acp.clone()))),
+        agent_runtime: Some(agent_acp.runtime()),
         reload_terminals: Some(terminald.reload()),
-        ..restore::opening(store, &terminald, Some(&agentd))
+        ..restore::opening(store, &terminald, Some(&agent_acp))
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
@@ -134,7 +134,7 @@ fn run_window() {
             shell.reveal_session(session);
         }
         requests.answer(waker, &shell);
-        agentd.answer(waker, &shell);
+        agent_acp.answer(waker, &shell);
     });
 
     // The daemons and their sessions outlive the window.

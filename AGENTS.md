@@ -153,7 +153,7 @@ so a filter by crate does not see them: the extensions (`plugins/*`) are
 tested by the root package's tests that load them (`tests/extension.rs`,
 `tests/wiki.rs`, ...), and the processes (`horizon-agent-acp`,
 `horizon-terminald`, `horizon-logd`) by the root package's tests that
-spawn them (`tests/agentd.rs`, `tests/terminald.rs`, `tests/board_logd.rs`).
+spawn them (`tests/agent_acp.rs`, `tests/terminald.rs`, `tests/board_logd.rs`).
 A change to `Cargo.lock`, `.cargo/` or `.config/nextest.toml` reaches
 everything.
 
@@ -337,8 +337,8 @@ The display's scale matters to what is drawn: a test about pixels at a
 scale other than one sets the document's viewport to it and paints at it
 (`block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale`).
 
-`tests/terminald.rs`, `tests/agentd.rs` and `tests/board_logd.rs` run the
-shell over real daemons, each started for the test on sockets and a data
+`tests/terminald.rs`, `tests/agent_acp.rs` and `tests/board_logd.rs` run the
+shell over the real runtimes, each started for the test with a data
 home of its own (the agent's provider is the local mock
 `scripts/mock-openai-provider.py`): a session created and typed into, the
 workspace coming back after the shell is closed, a runtime reloaded.
@@ -409,8 +409,8 @@ their wiring:
   the workspace's tree, panes, session attachments, mode state, the pure
   command model, the `workspace_snapshot` payload — is
   `crates/horizon-workspace`.
-- `terminald.rs` / `agentd.rs` — the two runtimes as the shell holds them:
-  a handle that a reload replaces. The clients themselves are
+- `terminald.rs` / `agent_acp.rs` — the two runtimes as the shell holds them:
+  a handle that a reload replaces (terminald's), and the agent's child. The clients themselves are
   `crates/horizon-shell-runtime`, with no UI framework in them (see
   `docs/terminald-split-design.md` for why reloading one must not disturb
   the other).

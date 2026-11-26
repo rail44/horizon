@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-use horizon::agentd::{Agentd, RuntimeModels};
+use horizon::agent_acp::{AgentAcp, RuntimeModels};
 use horizon::workspace::{self, Modal, Opening};
 use horizon_control::contract::{EnvelopeBody, Invoke, Query};
 use horizon_control::host::executor::ControlRequest;
@@ -105,7 +105,7 @@ fn press(app: &App, key: Key, modifiers: Modifiers) {
 }
 
 #[test]
-fn a_message_typed_into_an_agent_pane_is_answered_by_a_real_agentd() {
+fn a_message_typed_into_an_agent_pane_is_answered_by_a_real_agent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
     let binary = |name: &str| {
         let binary = root.join("target/debug").join(name);
@@ -213,7 +213,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     }
     std::fs::create_dir_all(directory.join("run")).unwrap();
 
-    let agentd = Agentd::start(
+    let agent_acp = AgentAcp::start(
         horizon_shell_runtime::AgentProgram {
             program: binary("horizon-agent-acp"),
             args: Vec::new(),
@@ -225,9 +225,9 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     let app = App::new(1200, 800, "Test", workspace::css(), || {
         let spawn: workspace::Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let opening = Opening {
-            agents: Some(agentd.spawn()),
-            models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),
-            agent_runtime: Some(agentd.runtime()),
+            agents: Some(agent_acp.spawn()),
+            models: Some(std::sync::Arc::new(RuntimeModels(agent_acp.clone()))),
+            agent_runtime: Some(agent_acp.runtime()),
             ..Opening::default()
         };
         let (root, built) = workspace::view(spawn, opening);
@@ -249,7 +249,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
                 text()
             );
             std::thread::sleep(Duration::from_millis(10));
-            agentd.answer(std::task::Waker::noop(), &shell);
+            agent_acp.answer(std::task::Waker::noop(), &shell);
             app.resolve();
         }
     };
@@ -474,7 +474,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // A task's session this workspace does not have: one the daemon
     // runs is taken in and shown; one it does not run is said so.
     let started = horizon_workspace::SessionId::new();
-    let spawned = (agentd.spawn())(workspace::Starting {
+    let spawned = (agent_acp.spawn())(workspace::Starting {
         session: started,
         from: None,
         directory: Some(directory.join("project")),
@@ -482,7 +482,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // (Under the name the agent gives it.)
     until("the daemon to have it", &|| {
         let named = spawned.session_id();
-        let running = agentd.running().expect("the daemon's sessions");
+        let running = agent_acp.running().expect("the daemon's sessions");
         named != started && running.iter().any(|agent| agent.session == named)
     });
     let elsewhere = spawned.session_id();
@@ -508,14 +508,14 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // in), and one nobody runs.
     use horizon::board::activity::BoardSessionActivity;
     let started = horizon_workspace::SessionId::new();
-    let running = (agentd.spawn())(workspace::Starting {
+    let running = (agent_acp.spawn())(workspace::Starting {
         session: started,
         from: None,
         directory: Some(directory.join("project")),
     });
     until("the daemon to have it", &|| {
         let named = running.session_id();
-        let running = agentd.running().expect("the daemon's sessions");
+        let running = agent_acp.running().expect("the daemon's sessions");
         named != started && running.iter().any(|agent| agent.session == named)
     });
     let only_the_daemon_s = running.session_id();
@@ -586,10 +586,10 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     };
     let named = horizon_workspace::SessionId::from_uuid(named.parse().unwrap());
     assert!(agents().contains(&named));
-    let running = agentd.running().expect("the daemon's sessions");
+    let running = agent_acp.running().expect("the daemon's sessions");
     assert!(running.iter().any(|agent| agent.session == named));
 
     // The agent runtime ends with the test.
     drop(app);
-    agentd.handle().stop_and_wait();
+    agent_acp.handle().stop_and_wait();
 }

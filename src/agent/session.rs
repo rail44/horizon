@@ -73,7 +73,7 @@ pub struct Standing {
 }
 
 impl AgentSession {
-    /// A session of `horizon-agentd`'s, through the runtime client.
+    /// A session of `horizon-agent-acp`'s, through the runtime client.
     pub fn attached(mut handle: AgentSessionHandle) -> Self {
         let (folded, waker) = (Arc::<Mutex<Folded>>::default(), Wake::default());
         let (folding, woken) = (Arc::clone(&folded), Arc::clone(&waker));

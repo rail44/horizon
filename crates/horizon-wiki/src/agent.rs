@@ -1,5 +1,5 @@
 //! What the wiki gives agents, as plain data and functions a composition
-//! root wraps (`horizon-agentd` registers them with `horizon-agent`): the
+//! root wraps (`horizon-wiki-flow` registers them with `horizon-agent`): the
 //! page tools, the role a thread's session runs with, the input that hands a
 //! comment to it, and the derived ids that tie a thread to its session.
 

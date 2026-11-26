@@ -30,7 +30,7 @@ use crate::worktree::{self, WorktreeInfo};
 /// whole session thread -- same reason [`super::setup::tool_session_state_for`] was.
 ///
 /// A fresh `Control::SessionNew` caller is already listening
-/// (`AgentdHandle::start_session` registers the session's route before
+/// (`AgentAcpHandle::start_session` registers the session's route before
 /// sending `SessionNew`), so it sees this immediately; a resumed session
 /// spawned at process startup usually has no connection yet
 /// ([`send_session_event`] silently drops it then) -- [`super::attachment::capture`]

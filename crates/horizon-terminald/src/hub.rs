@@ -1,18 +1,16 @@
-//! The daemon's [`TerminalHub`] implementation — the terminal half of what
-//! `horizon-agentd`'s hub used to serve, moved here verbatim by the v17
-//! split (`docs/terminald-split-design.md`). One [`Hub`] is built per
+//! The daemon's [`TerminalHub`] implementation
+//! (`docs/terminald-split-design.md`). One [`Hub`] is built per
 //! accepted connection and served via `TerminalHubServerShared` with
 //! per-call task spawning, so a slow call (a PTY spawn) never blocks the
 //! others; the process-lifetime state stays in [`TerminalHost`].
 //!
-//! Bridging pattern, unchanged from the agentd era: the PTY side of the
+//! Bridging pattern: the PTY side of the
 //! daemon is synchronous (std threads, crossbeam channels), so each remote
 //! channel gets a local unbounded tokio channel as its sync-sendable half,
 //! and a small async pump task that drains it into the remote `rch` sender.
 //! The receive side is not written here at all — it is
-//! [`horizon_wire::receive_pump`], the same loop agentd drives its inbound
-//! channels with, so adoption condition 2's skip-vs-fatal boundary has one
-//! definition rather than one per runtime. The *send* pumps stay local:
+//! [`horizon_wire::receive_pump`], so adoption condition 2's skip-vs-fatal
+//! boundary has one definition. The *send* pumps stay local:
 //! their break conditions genuinely differ (a latching mpsc send error, a
 //! watch whose send fails only once every receiver is gone).
 
@@ -38,8 +36,7 @@ pub(crate) struct Hub {
     binary_id: &'static str,
     /// Whether this connection's `hello` has completed successfully — the
     /// enforcement half of "`hello` is the first call on every connection"
-    /// (`docs/remoc-adoption-design.md` §3), shared with `horizon-agentd`'s
-    /// hub so the invariant has one definition.
+    /// (`docs/remoc-adoption-design.md` §3).
     hello: HelloGate,
     next: Arc<NextImage>,
 }
@@ -110,9 +107,7 @@ impl Hub {
 }
 
 impl TerminalHub for Hub {
-    /// The §3 range negotiation. Channel-free, unlike agentd's `hello`:
-    /// every connection-global channel belongs to the agent domain, so this
-    /// reply is just the negotiated version plus this binary's id (the skew
+    /// The §3 range negotiation. Channel-free: this reply is just the negotiated version plus this binary's id (the skew
     /// insurance the client records — see [`TerminalHubHello`]).
     async fn hello(&self, client: ClientHello) -> Result<TerminalHubHello, HubError> {
         let negotiated =

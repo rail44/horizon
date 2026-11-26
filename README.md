@@ -30,15 +30,16 @@ cargo test
 cargo run
 ```
 
-`cargo run` alone only rebuilds the root `horizon` binary; terminal and agent
-sessions run in `horizon-agentd` (`crates/horizon-agentd`), a separate
-workspace member Horizon spawns on demand. Run `cargo build --workspace` at least once (and
+`cargo run` alone only rebuilds the root `horizon` binary; terminal sessions
+run in `horizon-terminald` (`crates/horizon-terminald`), which Horizon spawns
+on demand, and agent sessions in `horizon-agent-acp`
+(`crates/horizon-agent-acp`), which Horizon starts as its child. Run `cargo build --workspace` at least once (and
 again after touching the runtime crates) or panes will fail to find a runtime
 to spawn. The Markdown view, the wiki and the theme settings are extensions, wasm
 components the second build command above makes (`rustup target add
 wasm32-wasip2` once); without them Horizon starts and has none of the three. `just dev` builds the whole
 workspace and launches the freshly built binary directly (bypassing `cargo
-run`'s environment leakage into Horizon and agentd); pass CLI subcommand
+run`'s environment leakage into Horizon and its runtimes); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.
 
 Agent provider access reads `OPENAI_API_KEY` from the environment. The
@@ -96,9 +97,10 @@ manual smoke checks:
 - `manage sessions`: opens the list of sessions over the workspace (see
   below). It is a command of the sessions extension, and is not there
   when the extension is not built.
-- `reload session runtime`: restarts `horizon-agentd`, closes terminal
-  sessions, and reconnects persisted agent sessions — use after rebuilding
-  the session runtime crates, or to recover from a lost connection.
+- `reload terminal runtime`: hands every terminal to a rebuilt
+  `horizon-terminald`; the terminal sessions, and what runs in them, go
+  on. The agent's child, `horizon-agent-acp`, is started again whenever it
+  ends, from the binary as it is then.
 
 Running the `manage sessions` command opens the list of sessions over
 the workspace; `horizon new sessions` (or the view chooser) puts the same

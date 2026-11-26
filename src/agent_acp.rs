@@ -8,7 +8,7 @@ use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_shell_runtime::AgentProgram;
-use horizon_shell_runtime::{AgentdHandle, RuntimeNews};
+use horizon_shell_runtime::{AgentAcpHandle, RuntimeNews};
 use horizon_ui::reactive_graph::traits::Update;
 use horizon_workspace::SessionId;
 
@@ -24,13 +24,13 @@ type Wake = Arc<Mutex<Option<Waker>>>;
 /// The agent runtime: `horizon-agent-acp`, the shell's child, for as long
 /// as the window lives.
 #[derive(Clone)]
-pub struct Agentd {
-    handle: AgentdHandle,
+pub struct AgentAcp {
+    handle: AgentAcpHandle,
     told: Receiver<Told>,
     waker: Wake,
 }
 
-impl Agentd {
+impl AgentAcp {
     /// Starts the runtime. Its sessions' commands reach this shell
     /// through `control_socket`; its diagnostics are appended to `log`.
     pub fn start(program: AgentProgram, control_socket: &Path, log: &Path) -> Self {
@@ -50,8 +50,8 @@ impl Agentd {
         log: &Path,
         tell: &Sender<Told>,
         waker: &Wake,
-    ) -> AgentdHandle {
-        let (handle, news) = AgentdHandle::start(program, control_socket, log);
+    ) -> AgentAcpHandle {
+        let (handle, news) = AgentAcpHandle::start(program, control_socket, log);
         // The runtime's stream is passed on to the UI thread, which is woken
         // to take it in.
         fn pass_on<T: Send + 'static>(
@@ -75,7 +75,7 @@ impl Agentd {
         handle
     }
 
-    pub fn handle(&self) -> AgentdHandle {
+    pub fn handle(&self) -> AgentAcpHandle {
         self.handle.clone()
     }
 
@@ -141,7 +141,7 @@ impl Agentd {
 }
 
 /// The model picker's switch, through the runtime.
-pub struct RuntimeModels(pub Agentd);
+pub struct RuntimeModels(pub AgentAcp);
 
 impl Models for RuntimeModels {
     fn set_option(&self, session: SessionId, config_id: &str, value: &str) -> Result<(), String> {

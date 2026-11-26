@@ -72,7 +72,7 @@ impl std::fmt::Debug for AgentCall {
     }
 }
 
-struct FakeAgentd {
+struct FakeAgentAcp {
     calls: UnboundedReceiver<AgentCall>,
     connection: V2ConnectionTo<Client>,
     task: JoinHandle<()>,
@@ -86,10 +86,10 @@ fn session_uuid(id: &v2::SessionId) -> SessionId {
     SessionId::from_uuid(uuid::Uuid::parse_str(&id.0).unwrap())
 }
 
-async fn serve_fake_agentd(
+async fn serve_fake_agent_acp(
     stream: tokio::net::UnixStream,
     behavior: FakeAgentBehavior,
-) -> FakeAgentd {
+) -> FakeAgentAcp {
     type Calls = tokio::sync::mpsc::UnboundedSender<AgentCall>;
     let (calls_tx, calls) = tokio::sync::mpsc::unbounded_channel::<AgentCall>();
     let held_initialize: Arc<Mutex<Vec<Responder<v2::InitializeResponse>>>> = Arc::default();
@@ -109,7 +109,7 @@ async fn serve_fake_agentd(
     );
     let builder = Agent
         .v2()
-        .name("fake-agentd")
+        .name("fake-agent_acp")
         .on_receive_request(
             async move |_request: v2::InitializeRequest,
                         responder: Responder<v2::InitializeResponse>,
@@ -124,7 +124,7 @@ async fn serve_fake_agentd(
                 record(&c1, AgentCall::Initialize);
                 let response = v2::InitializeResponse::new(
                     ProtocolVersion::V2,
-                    v2::Implementation::new("fake-agentd", "0.0.0"),
+                    v2::Implementation::new("fake-agent_acp", "0.0.0"),
                 )
                 .capabilities(v2::AgentCapabilities::new().session(v2::SessionCapabilities::new()));
                 responder.respond(response)
@@ -259,20 +259,20 @@ async fn serve_fake_agentd(
             )
             .await;
     });
-    let connection = connection_rx.await.expect("the fake agentd connected");
-    FakeAgentd {
+    let connection = connection_rx.await.expect("the fake agent_acp connected");
+    FakeAgentAcp {
         calls,
         connection,
         task,
     }
 }
 
-impl FakeAgentd {
+impl FakeAgentAcp {
     async fn next_call(&mut self) -> AgentCall {
         tokio::time::timeout(Duration::from_secs(5), self.calls.recv())
             .await
-            .expect("timed out waiting for an agentd call")
-            .expect("fake agentd stopped recording calls")
+            .expect("timed out waiting for an agent_acp call")
+            .expect("fake agent_acp stopped recording calls")
     }
 
     fn update(&self, session_id: SessionId, update: v2::SessionUpdate) {
@@ -366,8 +366,8 @@ fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
     tokio::net::UnixStream::pair().unwrap()
 }
 
-fn start_mock_session(agentd: &AgentdHandle, session_id: SessionId) -> AgentSessionHandle {
-    agentd.start_session(session_id, Some(PathBuf::from("/work/project")))
+fn start_mock_session(agent_acp: &AgentAcpHandle, session_id: SessionId) -> AgentSessionHandle {
+    agent_acp.start_session(session_id, Some(PathBuf::from("/work/project")))
 }
 
 fn is_idle_update(event: &AgentEvent) -> bool {
@@ -381,20 +381,20 @@ fn is_idle_update(event: &AgentEvent) -> bool {
 /// Routing per call site: terminal ops reach the terminal daemon and agent
 /// ops the agent daemon, with neither seeing the other's traffic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
+async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agent_acp() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = pair();
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
+    let (agent_acp, _workspace_roots) = AgentAcpHandle::start_on_stream(agent_client);
 
     let terminal_id = uuid::Uuid::new_v4();
     let terminal = terminald.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();
-    let mut agent = start_mock_session(&agentd, agent_id);
+    let mut agent = start_mock_session(&agent_acp, agent_id);
 
     let (mut terminal_calls, _tconn, _tserve) =
         serve_fake_terminal_hub(terminal_server, FakeBehavior::default()).await;
-    let mut fake = serve_fake_agentd(agent_server, FakeAgentBehavior::default()).await;
+    let mut fake = serve_fake_agent_acp(agent_server, FakeAgentBehavior::default()).await;
 
     expect_terminald_handshake(&mut terminal_calls).await;
     let TerminalCall::CreateTerminal {
@@ -407,7 +407,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
 
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::NewSession { cwd, .. } = fake.next_call().await else {
-        panic!("the agent spawn must land on agentd");
+        panic!("the agent spawn must land on agent_acp");
     };
     assert_eq!(cwd, PathBuf::from("/work/project"));
 
@@ -442,12 +442,12 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = pair();
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
+    let (agent_acp, _workspace_roots) = AgentAcpHandle::start_on_stream(agent_client);
 
     let terminal = terminald.start_terminal(uuid::Uuid::new_v4(), spec());
     let (mut terminal_calls, _tconn, _tserve) =
         serve_fake_terminal_hub(terminal_server, FakeBehavior::default()).await;
-    let mut fake = serve_fake_agentd(agent_server, FakeAgentBehavior::default()).await;
+    let mut fake = serve_fake_agent_acp(agent_server, FakeAgentBehavior::default()).await;
     expect_terminald_handshake(&mut terminal_calls).await;
     let TerminalCall::CreateTerminal { peer, .. } = next_terminal_call(&mut terminal_calls).await
     else {
@@ -456,12 +456,12 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     // A full round trip proves the runtime is established.
-    let list_handle = agentd.clone();
+    let list_handle = agent_acp.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
     assert_eq!(listed.unwrap(), Ok(Vec::new()));
     std::assert_matches!(fake.next_call().await, AgentCall::List);
 
-    let stopping = agentd.clone();
+    let stopping = agent_acp.clone();
     tokio::task::spawn_blocking(move || stopping.stop_and_wait())
         .await
         .unwrap();
@@ -481,11 +481,11 @@ async fn stopping_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_root_updates_reach_their_own_channel() {
     let (client, server) = pair();
-    let (handle, news) = AgentdHandle::start_on_stream(client);
+    let (handle, news) = AgentAcpHandle::start_on_stream(client);
     let started = SessionId::new();
     let mut agent = start_mock_session(&handle, started);
 
-    let mut fake = serve_fake_agentd(
+    let mut fake = serve_fake_agent_acp(
         server,
         FakeAgentBehavior {
             listed: Some("/tmp/repo/.horizon/worktrees/abcd1234"),
@@ -526,7 +526,7 @@ async fn workspace_root_updates_reach_their_own_channel() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
     let (client, _server) = pair();
-    let (handle, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (handle, _workspace_roots) = AgentAcpHandle::start_on_stream(client);
     let stopped = std::thread::spawn(move || handle.stop_and_wait());
     tokio::task::spawn_blocking(move || stopped.join().unwrap())
         .await
@@ -538,11 +538,11 @@ async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn established_disconnect_reports_errors_without_reconnecting() {
     let (client, server) = pair();
-    let (handle, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (handle, _workspace_roots) = AgentAcpHandle::start_on_stream(client);
     let mut ready = start_mock_session(&handle, SessionId::new());
     let mut restoring = handle.attach_session(SessionId::new());
 
-    let mut fake = serve_fake_agentd(
+    let mut fake = serve_fake_agent_acp(
         server,
         FakeAgentBehavior {
             manual_bootstrap: true,
@@ -590,8 +590,8 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
     let (client, server) = pair();
-    let (handle, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let _fake = serve_fake_agentd(
+    let (handle, _workspace_roots) = AgentAcpHandle::start_on_stream(client);
+    let _fake = serve_fake_agent_acp(
         server,
         FakeAgentBehavior {
             reject_initialize: true,
@@ -620,13 +620,13 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let (agent_acp, _roots) = AgentAcpHandle::start_on_stream(client);
     let id = SessionId::new();
-    let old = agentd.attach_session(id);
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    let old = agent_acp.attach_session(id);
+    let mut fake = serve_fake_agent_acp(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     std::assert_matches!(fake.next_call().await, AgentCall::Resume { .. });
-    let mut current = agentd.attach_session(id);
+    let mut current = agent_acp.attach_session(id);
     let AgentCall::Resume { session_id, .. } = fake.next_call().await else {
         panic!("expected the replacement attachment");
     };
@@ -644,10 +644,10 @@ async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let (agent_acp, _roots) = AgentAcpHandle::start_on_stream(client);
     let id = SessionId::new();
-    let mut handle = agentd.attach_session(id);
-    let mut fake = serve_fake_agentd(
+    let mut handle = agent_acp.attach_session(id);
+    let mut fake = serve_fake_agent_acp(
         server,
         FakeAgentBehavior {
             manual_bootstrap: true,
@@ -682,7 +682,7 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
     };
     assert_eq!(text, "queued");
 
-    let mut failing = agentd.attach_session(SessionId::new());
+    let mut failing = agent_acp.attach_session(SessionId::new());
     let AgentCall::Resume { responder, .. } = fake.next_call().await else {
         panic!("resume");
     };
@@ -701,10 +701,10 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_a_pane_sent_before_it_went_are_still_sent() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let (agent_acp, _roots) = AgentAcpHandle::start_on_stream(client);
     let id = SessionId::new();
-    let handle = agentd.attach_session(id);
-    let mut fake = serve_fake_agentd(
+    let handle = agent_acp.attach_session(id);
+    let mut fake = serve_fake_agent_acp(
         server,
         FakeAgentBehavior {
             manual_bootstrap: true,
@@ -741,9 +741,9 @@ async fn commands_a_pane_sent_before_it_went_are_still_sent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_session_the_agent_no_longer_lists_after_an_error_has_ended() {
     let (client, server) = pair();
-    let (agentd, _news) = AgentdHandle::start_on_stream(client);
-    let mut handle = start_mock_session(&agentd, SessionId::new());
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    let (agent_acp, _news) = AgentAcpHandle::start_on_stream(client);
+    let mut handle = start_mock_session(&agent_acp, SessionId::new());
+    let mut fake = serve_fake_agent_acp(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::NewSession { named: id, .. } = fake.next_call().await else {
         panic!("a new session");
@@ -778,10 +778,10 @@ async fn a_session_the_agent_no_longer_lists_after_an_error_has_ended() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permission_requests_are_answered_from_the_panes_decisions() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let (agent_acp, _roots) = AgentAcpHandle::start_on_stream(client);
     let id = SessionId::new();
-    let mut handle = start_mock_session(&agentd, id);
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    let mut handle = start_mock_session(&agent_acp, id);
+    let mut fake = serve_fake_agent_acp(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::NewSession { named: id, .. } = fake.next_call().await else {
         panic!("a new session");
@@ -868,10 +868,10 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let (agent_acp, _roots) = AgentAcpHandle::start_on_stream(client);
     let id = SessionId::new();
-    let mut handle = start_mock_session(&agentd, id);
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    let mut handle = start_mock_session(&agent_acp, id);
+    let mut fake = serve_fake_agent_acp(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::NewSession { .. } = fake.next_call().await else {
         panic!("a new session");
@@ -906,10 +906,10 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_subagents_permission_request_is_shown_where_its_parent_is() {
     let (client, server) = pair();
-    let (agentd, _roots) = AgentdHandle::start_on_stream(client);
+    let (agent_acp, _roots) = AgentAcpHandle::start_on_stream(client);
     let parent = SessionId::new();
-    let mut handle = start_mock_session(&agentd, parent);
-    let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
+    let mut handle = start_mock_session(&agent_acp, parent);
+    let mut fake = serve_fake_agent_acp(server, FakeAgentBehavior::default()).await;
     std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::NewSession { named: parent, .. } = fake.next_call().await else {
         panic!("a new session");

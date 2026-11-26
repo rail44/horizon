@@ -12,7 +12,7 @@ use horizon_agent::contract::{
 use horizon_agent::persistence::event_log::{Appender, WriterHandle};
 use horizon_agent_host::options as acp;
 use horizon_daemon_testkit::{
-    AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound, cargo_bin_exe_var,
+    AcpClient, AgentAcpPaths, AgentAcpProcess, AgentAcpSpawn, Inbound, cargo_bin_exe_var,
     resolve_daemon_binary, wait_for_exit,
 };
 use std::path::{Path, PathBuf};
@@ -378,7 +378,7 @@ pub fn fixture_repository(repo: &Path) {
 /// Writes a fixture event log directly at `path`, one session per
 /// `(SessionId, Vec<Event>)` pair, via the same `WriterHandle`/`Appender`
 /// machinery `horizon-agent`'s own event-log tests use -- for tests below
-/// that need a specific pre-existing log *before* `horizon-agentd` itself
+/// that need a specific pre-existing log *before* the agent itself
 /// ever runs. Every record gets [`mock_provider_id`] as its provider id.
 pub fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<Event>)>) {
     let writer = WriterHandle::open(path);
@@ -394,7 +394,7 @@ pub fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, V
 
 /// Polls `path`'s on-disk event log until a record for `session_id`
 /// matching `predicate` appears, or panics after a generous timeout. See
-/// the JSONL-era note preserved on `killed_agentd...`: a client can
+/// the JSONL-era note preserved on `killed_agent_acp...`: a client can
 /// observe an event over the wire before it is durable, so kill-based tests
 /// must wait for the disk write.
 pub async fn wait_for_persisted_event(
@@ -453,7 +453,7 @@ pub fn serve_workspace_once(
 
 /// Approval round trip: the approval goes out as
 /// `session/request_permission`, the approving answer comes back, and
-/// agentd runs the call and reports it as ordinary tool-call updates.
+/// the agent runs the call and reports it as ordinary tool-call updates.
 pub async fn approve_and_finish(
     client: &mut AcpClient,
     text: &str,

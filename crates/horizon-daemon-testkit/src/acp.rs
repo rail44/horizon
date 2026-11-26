@@ -1,5 +1,5 @@
-//! An ACP v2 client for `horizon-agentd`'s socket: everything the daemon
-//! sends arrives, in order, on one inbox.
+//! An ACP v2 client for a `horizon-agent-acp` child's stdio: everything the
+//! agent sends arrives, in order, on one inbox.
 
 use std::time::Duration;
 

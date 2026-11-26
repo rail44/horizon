@@ -1,8 +1,7 @@
 //! `horizon-logd`: the log daemon (`docs/logd-design.md`). Owns board writes
 //! (the exclusive-flock append that used to live in `horizon-board`'s `Store`)
 //! and serves them over its own unix socket as the `LogHub` rtc trait — a
-//! sibling of, and completely independent from, `horizon-agentd` and
-//! `horizon-terminald`.
+//! sibling of, and completely independent from, `horizon-terminald`.
 //!
 //! **No persistence, no readiness gate.** Like terminald, this daemon owns no
 //! event log of its own: bind, accept, serve. The board events.jsonl is

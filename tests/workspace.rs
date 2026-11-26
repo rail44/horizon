@@ -1199,7 +1199,7 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
 
 /// `set-model` and `set-effort` name an entry of the session's own config
 /// options: for a session this shell has not attached to, there is none,
-/// and the runtime is not asked. (Over a real agent: `tests/agentd.rs`.)
+/// and the runtime is not asked. (Over a real agent: `tests/agent_acp.rs`.)
 #[test]
 fn the_control_plane_sets_no_option_of_a_session_it_has_not_attached() {
     use std::sync::{Arc, Mutex, mpsc};

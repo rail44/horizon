@@ -341,7 +341,7 @@ fn respond_to_user_message(
                 call_id,
                 tool_id: "bash".to_string(),
                 input: serde_json::json!({
-                    "command": "echo probe > ../horizon-mock-probe && echo agentd-bash-ok",
+                    "command": "echo probe > ../horizon-mock-probe && echo agent-acp-bash-ok",
                     "outside_sandbox": true
                 })
                 .into(),
@@ -368,7 +368,7 @@ fn respond_to_user_message(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
                 tool_id: "bash".to_string(),
-                input: serde_json::json!({ "command": "echo agentd-bash-ok" }).into(),
+                input: serde_json::json!({ "command": "echo agent-acp-bash-ok" }).into(),
                 occurrence_id,
             })
             .into(),

@@ -25,9 +25,9 @@
 # what removes self-contention as a variable.
 [[profile.default.overrides]]
 # The shell's own tests over real daemons (`tests/terminald.rs`,
-# `tests/agentd.rs`, `tests/board_logd.rs`) are in the group for the same
+# `tests/agent_acp.rs`, `tests/board_logd.rs`) are in the group for the same
 # reason: each starts a daemon and waits on it against a wall clock.
-filter = 'binary_id(horizon-agent-acp::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e) + binary_id(horizon::terminald) + binary_id(horizon::agentd) + binary_id(horizon::board_logd)'
+filter = 'binary_id(horizon-agent-acp::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e) + binary_id(horizon::terminald) + binary_id(horizon::agent_acp) + binary_id(horizon::board_logd)'
 test-group = 'daemon-e2e'
 
 # Three at once, not one (2026-11-19): one at a time, the group's 53 tests
@@ -79,8 +79,8 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # full gate (`profile.default`) runs them (`docs/issues/010`).
 #
 # `binary_id(horizon-terminald::e2e)` joins that list for the same reason as
-# agentd's: it binds real sockets under /tmp and spawns real daemon
-# processes (its acceptance test spawns both daemons and drains one), none of
+# the agent's: it binds real sockets under /tmp and spawns real
+# processes (its acceptance test spawns terminald and the agent and restarts the agent), none of
 # which a contained session can do.
 #
 # Filed from session aa95e066 (2026-07-28), which spent 92 rounds -- 21.6%
@@ -157,8 +157,8 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # and stay in.
 #
 # The shell's tests over real daemons -- `binary_id(horizon::terminald)`,
-# `binary_id(horizon::agentd)`, `binary_id(horizon::board_logd)`. Each binds
-# sockets under /tmp and spawns a real daemon (and `agentd` a loopback mock
+# `binary_id(horizon::agent_acp)`, `binary_id(horizon::board_logd)`. Each binds
+# sockets under /tmp and spawns a real daemon (and `agent_acp` a loopback mock
 # provider), as the daemons' own `e2e` binaries do.
 #
 # `horizon-shell-runtime`'s `tests::` -- the runtime clients' tests bind
@@ -205,7 +205,7 @@ default-filter = '''
         + binary_id(horizon-terminald::e2e)
         + binary_id(horizon-logd::e2e)
         + binary_id(horizon::terminald)
-        + binary_id(horizon::agentd)
+        + binary_id(horizon::agent_acp)
         + binary_id(horizon::board_logd)
         + (binary_id(horizon-shell-runtime) & test(/^tests::/))
         + test(/^tools::tests::bash_auto_executes_sandboxed/)

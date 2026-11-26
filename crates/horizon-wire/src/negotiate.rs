@@ -7,8 +7,8 @@
 //! the version constants belong to the hub being spoken, so the "range this
 //! build advertises" constructor lives beside them (e.g.
 //! `horizon_terminal_core::wire::terminal_version_range`), one pair per hub.
-//! `horizon-agentd` speaks ACP and negotiates through `initialize` instead
-//! (`docs/acp-agentd-design.md`).
+//! `horizon-agent-acp` speaks ACP and negotiates through `initialize` instead
+//! (`docs/agent-stdio-child-design.md`).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

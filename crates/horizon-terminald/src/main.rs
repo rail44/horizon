@@ -1,8 +1,7 @@
 //! `horizon-terminald`: the terminal daemon
 //! (`docs/terminald-split-design.md`). Owns every PTY and the terminal
 //! emulation loops (`horizon-terminal-core`), served over its own unix
-//! socket as the [`TerminalHub`] rtc trait — a sibling of, and completely
-//! independent from, `horizon-agentd`'s agent hub.
+//! socket as the [`TerminalHub`] rtc trait, independent of the agent.
 //!
 //! **Why this is a separate process.** The agent's process is restarted
 //! constantly (an agent-side rebuild, a `[provider]` change);
@@ -22,7 +21,7 @@
 //! naming `Reload Terminal Runtime` — never silent misbehavior (the tmux 3.6
 //! lesson; decision 6, implemented client-side in `src/runtime/`).
 //!
-//! **No persistence, no readiness gate.** Unlike agentd, this daemon owns
+//! **No persistence, no readiness gate.** This daemon owns
 //! no event log and no DuckDB projection, so there is nothing to resume at
 //! startup and nothing to flush on drain: bind, accept, serve. A terminal
 //! session's whole state lives in its PTY and its emulator, and the
@@ -38,8 +37,8 @@
 //! `TerminalHub` itself out of the union protocol crate and into
 //! `horizon_terminal_core::wire`, dissolving the last transitive edge.
 //! (`tests/e2e.rs` alone dev-depends on `horizon-agent`: the split's
-//! acceptance property is that draining a *real* agentd leaves this
-//! daemon's PTYs alive.)
+//! acceptance property is that restarting a *real* `horizon-agent-acp`
+//! leaves this daemon's PTYs alive.)
 
 mod handover;
 mod hub;
@@ -114,11 +113,9 @@ async fn main() -> anyhow::Result<()> {
         listener: listener.as_raw_fd(),
         again: cfg!(target_os = "linux").then(|| "/proc/self/exe".into()),
     });
-    // The accept loop is `horizon-wire`'s ("bind, accept, serve, unlink" is
-    // the same in both daemons); the SIGTERM hook is not, and this is the
-    // destructive half of the terminald split: stopping this process means
-    // every PTY it owns dies with it, whereas agentd's hook flushes an event
-    // log and kills nothing. That asymmetry must stay an explicit hook.
+    // The accept loop is `horizon-wire`'s ("bind, accept, serve, unlink");
+    // the SIGTERM hook is this daemon's: stopping this process means every
+    // PTY it owns dies with it.
     daemon::run(
         listener,
         &socket_path,

@@ -166,8 +166,8 @@ name = "initial"
 api_key_env = "HORIZON_SWITCH_TEST_KEY"
 "#;
     std::fs::write(&config_path, initial).unwrap();
-    let agentd = InProcess::with(Setup::configured(&config_path));
-    let mut client = agentd.connect().await;
+    let agent_acp = InProcess::with(Setup::configured(&config_path));
+    let mut client = agent_acp.connect().await;
     let session_id = open_session(
         &client,
         new_session_request(
@@ -228,8 +228,8 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
 /// the order the mock provider produced them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_agent_then_user_message_streams_events_in_order() {
-    let agentd = InProcess::start();
-    let mut client = agentd.connect().await;
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
 
     let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "hello").await;
@@ -252,8 +252,8 @@ async fn new_agent_then_user_message_streams_events_in_order() {
 /// of it follows the answer, and the agent no longer lists it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_closed_session_sends_nothing_after_the_answer() {
-    let agentd = InProcess::start();
-    let mut client = agentd.connect().await;
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
     let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "slow word word word").await;
     collect_until(&mut client, |inbound| update(inbound).is_some()).await;
@@ -290,8 +290,8 @@ async fn a_closed_session_sends_nothing_after_the_answer() {
 /// connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_agents_reflects_live_sessions_after_new_agent() {
-    let agentd = InProcess::start();
-    let client = agentd.connect().await;
+    let agent_acp = InProcess::start();
+    let client = agent_acp.connect().await;
 
     let session_id = open_session(&client, session_new()).await;
 
@@ -307,11 +307,11 @@ async fn list_agents_reflects_live_sessions_after_new_agent() {
 async fn workspace_snapshot_asks_the_shells_control_plane() {
     let socket = horizon_daemon_testkit::scratch_socket("agent-e2e-control");
     let control = serve_workspace_once(&socket, serde_json::json!({ "tab_count": 1 }));
-    let agentd = InProcess::with(Setup {
+    let agent_acp = InProcess::with(Setup {
         control_socket: Some(socket.clone()),
         ..Setup::default()
     });
-    let mut client = agentd.connect().await;
+    let mut client = agent_acp.connect().await;
 
     let session_id = open_session(&client, session_new()).await;
     prompt(&client, session_id, "please take a snapshot").await;
@@ -338,8 +338,8 @@ async fn workspace_snapshot_asks_the_shells_control_plane() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_round_trip_request_out_approve_in_result_event_out() {
-    let agentd = InProcess::start();
-    let mut client = agentd.connect().await;
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
     let (session_id, approval, collected) =
         approve_and_finish(&mut client, "please run a tool").await;
     let finished = collected.iter().rev().find_map(finished_tool).unwrap();
@@ -355,14 +355,14 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     assert_eq!(*replayed.tool_call_id.0, *approval.occurrence_id);
 }
 
-/// `bash` runs agentd-side: approving a real `bash` tool call (a write
+/// `bash` runs in the agent: approving a real `bash` tool call (a write
 /// beside the workspace, asked for outside the sandbox) spawns an actual
-/// subprocess in agentd, and the result arrives back as the call's final
+/// subprocess there, and the result arrives back as the call's final
 /// update.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
-    let agentd = InProcess::start();
-    let mut client = agentd.connect().await;
+async fn bash_runs_in_the_agent_and_reports_its_result_over_the_wire() {
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
     let (_outer, repo) = nested_session_fixture();
     let (_, approval, collected) = approve_and_finish_in(
         &mut client,
@@ -374,7 +374,7 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     assert_eq!(*call.tool_call_id.0, *approval.occurrence_id);
     let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(output["exit_code"], 0);
-    assert_eq!(output["output"], "agentd-bash-ok\n");
+    assert_eq!(output["output"], "agent-acp-bash-ok\n");
 }
 
 /// Regression test for the 2026-07 repeated-approval OOM incident: a call
@@ -417,8 +417,8 @@ async fn resume_approving(client: &mut AcpClient, session_id: SessionId) -> Vec<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
-    let agentd = InProcess::start();
-    let mut client = agentd.connect().await;
+    let agent_acp = InProcess::start();
+    let mut client = agent_acp.connect().await;
 
     let (_outer, repo) = nested_session_fixture();
     let session_id = open_session(&client, shared_session_in(repo)).await;
@@ -489,7 +489,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 
     let mut report = None;
     for _ in 0..100 {
-        let candidate = horizon_agent::persistence::event_log::read_all(&agentd.sessions_dir)
+        let candidate = horizon_agent::persistence::event_log::read_all(&agent_acp.sessions_dir)
             .expect("the on-disk event log should parse cleanly");
         if candidate.records.iter().any(|record| {
             matches!(&record.event, Event::ToolCallFinished(result) if result.occurrence_id.0 == occurrence)
@@ -519,7 +519,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
     let sessions_dir = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-agent-acp-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -559,11 +559,11 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         ],
     );
 
-    let agentd = InProcess::with(Setup {
+    let agent_acp = InProcess::with(Setup {
         sessions_dir: Some(sessions_dir),
         ..Setup::default()
     });
-    let client = agentd.connect().await;
+    let client = agent_acp.connect().await;
     assert_listed(&list_sessions(&client).await, live_session, None);
 }
 
@@ -572,7 +572,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resume() {
     let sessions_dir = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-agent-acp-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -590,14 +590,14 @@ async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resu
     );
 
     let gate = gate_path("resume");
-    let agentd = InProcess::with(Setup {
+    let agent_acp = InProcess::with(Setup {
         sessions_dir: Some(sessions_dir),
         before_resume: Some(waiting_on(&gate)),
         ..Setup::default()
     });
 
     // `initialize` answers while the resume is held...
-    let client = tokio::time::timeout(NEVER, agentd.connect())
+    let client = tokio::time::timeout(NEVER, agent_acp.connect())
         .await
         .expect("initialize answers while the resume is held");
     // ...and `session/list` does not: it answers once the resume is let go,
@@ -633,11 +633,11 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
     // but the last is made while it is surely streaming, and the last one
     // takes in the rest live once it is let go.
     let gate = gate_path("mock-stream");
-    let agentd = InProcess::with(Setup {
+    let agent_acp = InProcess::with(Setup {
         hold_mock_streams: Some(holding_on(&gate)),
         ..Setup::default()
     });
-    let mut client = agentd.connect().await;
+    let mut client = agent_acp.connect().await;
     let session = open_session(&client, session_new()).await;
     prompt(&client, session, "slow word word word").await;
     collect_until(&mut client, is_chunk).await;

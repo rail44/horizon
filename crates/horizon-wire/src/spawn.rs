@@ -27,13 +27,9 @@ use tokio::task::JoinHandle;
 use crate::codec::WireCodec;
 
 /// Starting delay for the connect retry loop's exponential backoff
-/// (doubling, capped at 1s -- see [`connect_or_spawn_daemon`]). Verified
-/// still generous after `horizon-agentd`'s bind-first startup fix (it binds
-/// the socket as its first action, before reading its event log or resuming
-/// any session -- see that binary's `main` module doc): a freshly spawned
-/// agentd's `connect` now succeeds within milliseconds of process start
-/// regardless of event-log size, since nothing before the bind touches the
-/// log.
+/// (doubling, capped at 1s -- see [`connect_or_spawn_daemon`]). A daemon
+/// binds its socket as its first action, so a freshly spawned one accepts
+/// a `connect` within milliseconds.
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// The binary name `horizon-terminald` is spawned as/looked up as -- see
@@ -110,7 +106,7 @@ fn spawn_daemon(
 
 /// Builds the `<daemon> --socket <path>` command [`spawn_daemon`] spawns,
 /// injecting `HORIZON_SOCKET` into its environment so the daemon's own
-/// children (agentd's `bash` tool, terminald's PTY shells, and anything
+/// children (terminald's PTY shells, and anything
 /// else they shell out to) default to targeting *this* Horizon instance's
 /// control socket -- `docs/cli-control-plane-design.md`'s "Discovery"
 /// decision. Split out from `spawn_daemon` so the env injection is directly
@@ -129,8 +125,8 @@ fn daemon_command(
 }
 
 /// Where a daemon listening on `socket_path` writes its stdout and stderr:
-/// beside the socket, with the extension `log` (`agentd.sock` ->
-/// `agentd.log`).
+/// beside the socket, with the extension `log` (`terminald.sock` ->
+/// `terminald.log`).
 fn daemon_log_path(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("log")
 }
@@ -205,7 +201,7 @@ pub async fn connect_hub_client<T: RemoteSend>(
 /// developer who's put it there themselves). The dev-flow gotcha the
 /// next-to-exe rule exists for: `cargo run` alone only rebuilds the
 /// `horizon` binary, and `target/debug` is not on `PATH` by default, so a
-/// bare `Command::new("horizon-agentd")` would reliably fail to find a
+/// bare `Command::new("horizon-terminald")` would reliably fail to find a
 /// workspace build even though one exists two directories away -- see
 /// [`spawn_daemon`]'s error message for the resulting actionable hint when
 /// none of the locations has it.
@@ -213,7 +209,7 @@ pub async fn connect_hub_client<T: RemoteSend>(
 /// The env-var override is `HORIZON_<NAME>_BINARY` where `<NAME>` is
 /// `binary_name` with its `horizon-` prefix stripped, `-` → `_`, and
 /// uppercased — e.g. `horizon-logd` → `HORIZON_LOGD_BINARY`,
-/// `horizon-agentd` → `HORIZON_AGENTD_BINARY`. Stripping the prefix avoids
+/// `horizon-agent-acp` → `HORIZON_AGENT_ACP_BINARY`. Stripping the prefix avoids
 /// a doubled `HORIZON_HORIZON_*` key. This lets a test pin the exact
 /// binary (via `CARGO_BIN_EXE`, which cargo guarantees for the test's own
 /// package) without changing production's resolution when the env var is

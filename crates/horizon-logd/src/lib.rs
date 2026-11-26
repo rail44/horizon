@@ -2,8 +2,8 @@
 //!
 //! Owns board WRITES (the exclusive-flock append + id/rank computation that
 //! used to live in `horizon-board`'s `Store`) and serves them over its own
-//! unix socket as the [`LogHub`] rtc trait — a third daemon beside
-//! `horizon-agentd` and `horizon-terminald`, spawn-on-demand by any client.
+//! unix socket as the [`LogHub`] rtc trait — a daemon beside
+//! `horizon-terminald`, spawn-on-demand by any client.
 //!
 //! **Stage A (this crate):** `ingest` only. Board reads stay file folds in
 //! the library; **stage B adds the subscribe stream** (raw NDJSON pokes,
