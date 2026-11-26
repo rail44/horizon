@@ -1,7 +1,7 @@
 # Board and wiki as ACP clients, and sessions hosted on demand
 
-Status: proposed. Board item #117 holds the decisions this design
-follows; the open questions at the end are not decided.
+Status: designed. Board item #117 holds the decisions this design
+follows.
 
 ## Goal
 
@@ -19,6 +19,13 @@ own lock hosts it, and a process runs one session.
 
 Order (#117): the board and the wiki move to the client side first; the
 process per session follows.
+
+The board's mechanism is to be made smaller later, after the shape of
+other agents' tasks (#117). What is built for it now is what that will
+stand on: a board view that starts a task's session, prompts it and
+writes the answer back, and the board's tools as an MCP server. The
+board's own operations beyond that are taken out of the agent and not
+rebuilt.
 
 ## What the agent holds for them today
 
@@ -92,25 +99,27 @@ has no way to reach an agent at all. The agent never reads
 
 ### The board
 
-- **Tools as an MCP server.** `horizon mcp board` (a subcommand of the
-  `horizon` CLI, which already reads and writes the board through logd)
-  serves `board_read`, `board_comment`, `board_update` over stdio. A
-  client that wants a session to have the board names it in
-  `session/new`'s `mcpServers`.
+- **Tools as an MCP server.** `horizon mcp board`, a subcommand of the
+  `horizon` CLI (which already reads and writes the board through logd),
+  serves `board_read`, `board_comment`, `board_update` over stdio; the
+  agent starts it for a session that names it in `session/new`'s
+  `mcpServers` (#117).
 - **Sessions the board starts.** The board's code in the shell becomes a
   client of the agent runtime: it starts a task's session, prompts it,
-  takes the final answer of the turn from the session's updates, and
-  posts it to the task's thread itself. What `board_session` did when a
-  model called it (`consult`, `review`, `send`) is asked of the shell
-  over its control socket by the MCP server, and done by the board's
-  client code there. `implement` is the task session entering its own
-  worktree, which `worktree_enter` already does.
-- **A reviewer** works on a detached worktree at the task's tip. Who
-  makes that worktree, now that the agent does not, is open (below).
+  takes the final answer of the turn, and posts it to the task's thread
+  itself. The thread's "Send Board Message", which today writes the
+  owner's comment and delivers it nowhere, does this.
+- **Not rebuilt:** `board_session` (`consult`, `implement`, `review`,
+  `send`), the `board-task` and `board-reviewer` roles and their skills,
+  the reviewer's worktree and session, and the board's reply sink. They
+  leave the agent; what the remade board needs in their place is
+  decided then, on the base above. Where it needs a reviewer's detached
+  worktree, the board makes it with git and names it as `cwd`
+  (#117).
 
 ### The wiki
 
-- **Tools as an MCP server**, `horizon mcp wiki`: `wiki_list`,
+- **Tools as an MCP server**, `horizon mcp wiki` over stdio: `wiki_list`,
   `wiki_read`, `wiki_write`, `wiki_edit` over the project's wiki store.
 - **The view prompts the thread's session.** The wiki extension already
   watches its thread logs; on an owner's comment it starts or resumes the
@@ -126,9 +135,15 @@ has no way to reach an agent at all. The agent never reads
 ### Roles
 
 A role's prompt section and its skill pointers become text the client
-sends first. What else a role set has no standard carrier: the wiki
-thread's tool allowlist, the board roles' `InOwnWorktree` write rule.
-These are open (below).
+sends first. What else a role set has no standard carrier, and becomes a
+session config option the agent advertises, ACP's form for per-session
+settings (#117):
+
+- which of the agent's own tools a session has (the wiki thread is
+  given only the wiki's MCP server, and the agent's builtin tools are
+  narrowed by this option);
+- writing nothing until the session is in its own worktree (what
+  `RoleWrites::InOwnWorktree` did for the board's task sessions).
 
 ### Sessions on demand (after the move)
 
@@ -151,9 +166,9 @@ Each ends with the gate clean.
 1. **The MCP client** in the agent, with a test MCP server.
 2. **The board's tools** as `horizon mcp board`; the shell names it at
    `session/new`. The builtin board tools go.
-3. **The board's sessions** driven by the board's client code in the
-   shell; `board_session` through the control socket; the board flow
-   crate, its roles and its sink go.
+3. **The board's sessions**: the board view starts and prompts a task's
+   session and writes the answer to its thread. `board_session`, the
+   board flow crate, its roles, skills and sink go.
 4. **The wiki**: `horizon mcp wiki`, the `agent` interface in
    `plugin.wit`, the wiki extension prompting its threads; the wiki
    flow crate, its trigger and sink go.
@@ -162,25 +177,10 @@ Each ends with the gate clean.
 6. **Sessions on demand**: per-session locks, no startup resume, one
    process per session.
 
-## Open questions
+## To settle in stage 3
 
-1. **Where MCP servers run.** Recommended: stdio subcommands of the
-   `horizon` binary, which the agent starts per session. Alternatives:
-   HTTP servers in the shell; or ACP's "MCP over ACP" (`McpServer::Acp`,
-   the client serving MCP on the ACP connection itself), which is behind
-   the schema crate's `unstable_mcp_over_acp` and not in the spec.
-2. **The wiki thread's tool allowlist** (it may not edit files outside
-   the wiki, among other limits). Recommended: the session is started
-   with only the wiki MCP server, and the restriction of the agent's own
-   builtin tools is carried as a session config option the agent
-   advertises (ACP's own form for per-session settings).
-3. **`InOwnWorktree`** (a board task session writes nothing until it is
-   in its own worktree). Recommended: the same config option mechanism.
-4. **Who makes a reviewer's detached worktree.** Recommended: the board's
-   client code, with git, before `session/new` names it as `cwd`; the
-   agent's worktree cleanup then applies only to worktrees it made.
-5. **How a client knows a turn's final answer.** `session/prompt` is
-   answered at once today (`hub.rs:474-492`), so a client reads the last
-   agent message before the session goes idle. Recommended: keep that,
-   or answer `session/prompt` when the turn ends with its stop reason,
-   which ACP describes; to be decided with the ACP reading in hand.
+How a client knows a turn's final answer. `session/prompt` is answered
+at once today (`hub.rs:474-492`), so a client would read the last agent
+message before the session goes idle. Whether v2's `session/prompt`
+should be answered when the turn ends, with its stop reason, is read in
+the ACP specification first and then decided (#117).
