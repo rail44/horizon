@@ -7,7 +7,7 @@ use horizon_ui::{Callback, Component, El, el};
 
 use super::{
     AlertDialog, Button, ButtonKind, ButtonSize, Chip, Field, Icon, MenuButton, MenuItem,
-    MenuLabel, Prompt, Tone,
+    MenuLabel, Notice, Prompt, Tone, link,
 };
 
 mod styles {
@@ -310,7 +310,25 @@ pub fn gallery() -> El {
         .child(buttons())
         .child(menus())
         .child(alerts())
-        .child(fields());
+        .child(fields())
+        .child(entry(
+            "notice",
+            vec![
+                ("muted", vec![Notice::Muted.view().text("Session ended")]),
+                (
+                    "warning",
+                    vec![Notice::Warning.view().text("Context is nearly full")],
+                ),
+                (
+                    "danger",
+                    vec![Notice::Danger.view().text("Session is unreachable")],
+                ),
+            ],
+        ))
+        .child(entry(
+            "link",
+            vec![("underlined on hover", vec![link(|| {}).text("Read more")])],
+        ));
     gallery.child(markdown());
     gallery
 }

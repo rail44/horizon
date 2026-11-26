@@ -30,11 +30,11 @@ horizon_ui::css_module! {"
                      flex-direction: column; gap: var(--u8); }
     .heading { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
     .fields { display: flex; flex-wrap: wrap; gap: var(--u4); }
-    .state, .notice { flex: none; padding: var(--u24) var(--u16) 0 var(--u16);
-                      font-size: var(--meta-size); line-height: var(--meta-line);
-                      color: var(--text-muted); }
+    .state { flex: none; padding: var(--u24) var(--u16) 0 var(--u16);
+             font-size: var(--meta-size); line-height: var(--meta-line);
+             color: var(--text-muted); }
     .state.error { color: var(--danger); }
-    .notice { padding-top: var(--u8); }
+    .notice { flex: none; padding: var(--u8) var(--u16) 0 var(--u16); }
     .scroll { flex: 1; min-height: 0; overflow-y: scroll; display: flex;
               flex-direction: column; gap: var(--u8);
               padding: var(--u24) var(--u16) var(--u32) var(--u16); }
@@ -64,7 +64,6 @@ horizon_ui::css_module! {"
     .block blockquote { padding-left: var(--u12); border-left: var(--line-strong) solid var(--border);
                         color: var(--text-muted); }
     .block td { padding: var(--u2) var(--u8); border: var(--line) solid var(--border); }
-    .link { color: var(--accent); cursor: pointer; }
     .mark { background: var(--selection); }
     .mark.focused { background: var(--surface-selected); }
     .thread, .new { display: flex; flex-direction: column; gap: var(--u4);

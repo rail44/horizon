@@ -20,7 +20,9 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::windowed::{follow_tail, windowed};
 use horizon_ui::{Callback, Component, El, dispatched, el, prevent_default, stop_propagation};
 
-use horizon_components::{self as components, Button, ButtonKind, ButtonSize, Chip, Field, Prompt};
+use horizon_components::{
+    self as components, Button, ButtonKind, ButtonSize, Chip, Field, Notice as NoticeView, Prompt,
+};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_shell_runtime::agent_display::chrome;
@@ -55,11 +57,10 @@ pub(crate) mod styles {
                 border: var(--line) solid var(--border); border-radius: var(--radius); }
         .bar { position: absolute; left: 0; top: 0; bottom: 0; width: var(--line-strong);
                background: var(--accent); }
-        .notice, .task { padding: 0 var(--u16); font-size: var(--meta-size);
-                         line-height: var(--meta-line); color: var(--text-muted); }
+        .notice { padding: 0 var(--u16); }
+        .task { padding: 0 var(--u16); font-size: var(--meta-size);
+                line-height: var(--meta-line); color: var(--text-muted); }
         .footer { display: flex; flex-direction: column; gap: var(--u8); }
-        .warning { color: var(--warning); }
-        .danger { color: var(--danger); }
         .line { display: flex; align-items: center; gap: var(--u8); }
         .spacer { flex: 1; min-width: 0; }
         .receipt { display: flex; flex-direction: column; gap: var(--u4); }
@@ -439,16 +440,12 @@ fn session_end(status: Status) -> Option<Notice> {
 }
 
 fn notice_line(notice: &Notice) -> El {
-    el("div")
-        .class((
-            styles::NOTICE,
-            match notice.tone {
-                Tone::Muted => None,
-                Tone::Warning => Some(styles::WARNING),
-                Tone::Danger => Some(styles::DANGER),
-            },
-        ))
-        .text(&notice.text)
+    let view = match notice.tone {
+        Tone::Muted => NoticeView::Muted,
+        Tone::Warning => NoticeView::Warning,
+        Tone::Danger => NoticeView::Danger,
+    };
+    view.view().class(styles::NOTICE).text(&notice.text)
 }
 
 /// The running session's state, following it.
@@ -761,6 +758,6 @@ fn call_body(body: &CallBody) -> El {
             }
             block
         }
-        CallBody::Text(text) => el("div").class(styles::NOTICE).text(text),
+        CallBody::Text(text) => NoticeView::Muted.view().class(styles::NOTICE).text(text),
     }
 }

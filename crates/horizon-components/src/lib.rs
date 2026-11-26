@@ -22,8 +22,10 @@ mod color;
 mod field;
 mod gallery;
 mod icon;
+mod link;
 pub mod markdown;
 mod menu;
+mod notice;
 mod select;
 mod slider;
 
@@ -34,7 +36,9 @@ pub use color::{ColorPicker, hex, parse_hex};
 pub use field::{Field, Prompt};
 pub use gallery::gallery;
 pub use icon::Icon;
+pub use link::link;
 pub use menu::{MenuButton, MenuItem, MenuLabel};
+pub use notice::Notice;
 pub use select::Select;
 pub use slider::{Range, Slider};
 

@@ -18,7 +18,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::{Callable, Callback, Component, El, dispatched, el};
 
 use horizon_components::markdown::{Headings, render};
-use horizon_components::{Chip, Tone};
+use horizon_components::{Chip, Notice, Tone};
 use horizon_markdown::{LinkTarget, parse, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
@@ -41,9 +41,9 @@ mod styles {
         .back:hover { background: var(--surface-raised); }
         .title { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
         .chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u4); }
-        .notice, .empty, .error { flex: none; padding: var(--u8) var(--u16) 0 var(--u16);
-                                  font-size: var(--meta-size); line-height: var(--meta-line);
-                                  color: var(--text-muted); }
+        .notice, .empty, .error { flex: none; padding: var(--u8) var(--u16) 0 var(--u16); }
+        .empty, .error { font-size: var(--meta-size); line-height: var(--meta-line);
+                         color: var(--text-muted); }
         .error { color: var(--danger); }
         .scroll { flex: 1; min-height: 0; overflow-y: scroll;
                   padding: var(--u24) var(--u16) var(--u32) var(--u16); }
@@ -289,7 +289,8 @@ fn build(given: Markdown) -> (El, Controls) {
     .when(
         move || state.notice.get().is_some(),
         move || {
-            el("div")
+            Notice::Muted
+                .view()
                 .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },

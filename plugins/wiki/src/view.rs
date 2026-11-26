@@ -42,7 +42,7 @@ use horizon_ui::{
     stop_propagation,
 };
 
-use horizon_components::{Button, Chip, Press, Tone};
+use horizon_components::{Button, Chip, Notice, Press, Tone};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
 use keyboard_types::{Key, NamedKey};
 
@@ -584,7 +584,8 @@ pub fn build(given: Wiki) -> (El, State) {
     .when(
         move || state.notice.with(Option::is_some),
         move || {
-            el("div")
+            Notice::Muted
+                .view()
                 .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },

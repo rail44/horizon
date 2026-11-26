@@ -30,7 +30,7 @@ use keyboard_types::{Key, NamedKey};
 use super::{Activity, Job, Sessions, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use horizon_components::markdown::{Headings, render};
-use horizon_components::{Button, ButtonKind, Chip, Field, Prompt, Tone};
+use horizon_components::{Button, ButtonKind, Chip, Field, Notice, Prompt, Tone};
 
 /// How many cells wide a post is taken to be when deciding whether to
 /// fold it: an owner's is narrower by its indent.
@@ -73,9 +73,7 @@ mod styles {
         .spacer { flex: 1; min-width: 0; }
         .status { flex: none; width: calc(var(--u28) * 4);
                   font-size: var(--meta-size); line-height: var(--meta-line); }
-        .notice { flex: none; padding: var(--u4) var(--u24) 0 var(--u24);
-                  font-size: var(--meta-size); line-height: var(--meta-line);
-                  color: var(--danger); }
+        .notice { flex: none; padding: var(--u4) var(--u24) 0 var(--u24); }
         .column { flex: 1; min-height: 0; overflow-y: scroll; display: flex;
                   flex-direction: column; gap: var(--u8);
                   padding: var(--u24) var(--u24) var(--u32) var(--u24); }
@@ -855,7 +853,8 @@ pub fn view(
     .when(
         move || found() && state.notice.with(Option::is_some),
         move || {
-            el("div")
+            Notice::Danger
+                .view()
                 .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },

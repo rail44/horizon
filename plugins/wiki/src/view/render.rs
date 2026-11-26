@@ -119,9 +119,7 @@ impl Drawing<'_> {
                 }
                 Node::Link(link) => {
                     let (target, on_link) = (link.url.clone(), self.on_link.clone());
-                    let element = el("span")
-                        .class(styles::LINK)
-                        .on("click", move |_| on_link(&target));
+                    let element = horizon_components::link(move || on_link(&target));
                     into.child(element);
                     self.inlines(child, element, root);
                 }

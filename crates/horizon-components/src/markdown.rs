@@ -32,8 +32,6 @@ mod styles {
         .body.plain-headings h1 { font-size: var(--body-size); line-height: var(--body-line); }
         .language { margin: -11px 0 var(--u2) 0; text-align: right; font-size: var(--meta-size);
                     color: var(--text-muted); }
-        .link { color: var(--accent); cursor: pointer; }
-        .link:hover { text-decoration: underline; }
     "}
 }
 
@@ -91,9 +89,7 @@ pub fn render(source: &str, headings: Headings, on_link: Rc<dyn Fn(&str)>) -> El
                     Tag::Strikethrough => el("s"),
                     Tag::Link { dest_url, .. } => {
                         let (target, on_link) = (dest_url.to_string(), on_link.clone());
-                        el("span")
-                            .class(styles::LINK)
-                            .on("click", move |_| on_link(&target))
+                        crate::link(move || on_link(&target))
                     }
                     Tag::Table(_) => el("table"),
                     Tag::TableHead | Tag::TableRow => el("tr"),

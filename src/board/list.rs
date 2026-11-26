@@ -29,7 +29,7 @@ use keyboard_types::{Key, NamedKey};
 use super::follow;
 use super::{Activity, Job, Sessions, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
-use horizon_components::{Chip, Field, Prompt, Tone};
+use horizon_components::{Chip, Field, Notice, Prompt, Tone};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).
@@ -40,9 +40,9 @@ mod styles {
                   background: var(--background); color: var(--text);
                   font-family: var(--font-family); font-size: var(--body-size);
                   line-height: var(--body-line);
-        .head, .band, .notice { flex: none; padding: var(--u4) var(--u16);
-                                font-size: var(--meta-size); line-height: var(--meta-line);
-                                color: var(--text-muted); }
+        .head, .band, .notice { flex: none; padding: var(--u4) var(--u16); }
+        .head, .band { font-size: var(--meta-size); line-height: var(--meta-line);
+                       color: var(--text-muted); }
         .head { border-bottom: var(--line) solid var(--border); }
         .rows { flex: 1; min-height: 0; overflow-y: scroll; }
         .row { position: relative; display: flex; align-items: center; flex: none;
@@ -706,7 +706,8 @@ pub fn view(
         .when(
             move || state.notice.with(Option::is_some),
             move || {
-                el("div")
+                Notice::Muted
+                    .view()
                     .class(styles::NOTICE)
                     .text_dyn(move || state.notice.get().unwrap_or_default())
             },
