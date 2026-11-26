@@ -42,7 +42,7 @@ max-threads = 3
 
 # The shell's tests with wasm guests in them -- the extensions it comes with
 # (`tests/extension.rs`, `tests/sessions.rs`, `tests/wiki.rs`,
-# `tests/status_bar.rs`) and the
+# `tests/status_bar.rs`, `tests/image.rs`) and the
 # preview's fixture (`tests/preview.rs`) -- each run 30 to 60 threads of
 # their own: wasmtime compiles a component on a rayon pool, and
 # wasmtime-wasi runs a tokio runtime of its own, each one thread per core.
@@ -51,7 +51,7 @@ max-threads = 3
 # run, against its 20 s wait for the extensions, and the tests beside it
 # slow down with it. The group lets only a few run at once.
 [[profile.default.overrides]]
-filter = 'binary_id(horizon::extension) + binary_id(horizon::sessions) + binary_id(horizon::wiki) + binary_id(horizon::preview) + binary_id(horizon::status_bar)'
+filter = 'binary_id(horizon::extension) + binary_id(horizon::sessions) + binary_id(horizon::wiki) + binary_id(horizon::preview) + binary_id(horizon::status_bar) + binary_id(horizon::image)'
 test-group = 'wasm-guests'
 
 [test-groups.wasm-guests]
