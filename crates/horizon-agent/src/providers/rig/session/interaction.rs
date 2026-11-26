@@ -8,17 +8,13 @@ use crate::contract::ConversationInputKind;
 impl SessionLoopState {
     pub(super) async fn handle_user_message(&mut self, text: String) {
         self.pause_inputs(false);
-        // A user message starts a new interaction rather than
-        // joining the previous turn's tool batch. This command can
-        // arrive while any kind of tool is still running or
-        // awaiting approval, so retire the whole old batch before
-        // asking the provider to handle the new message. Otherwise
-        // those old call ids remain in the pending batch and a
-        // result from the new turn is mistaken for a non-final
-        // member of the old batch, leaving the session waiting
-        // forever.
-        if self.cancel_outstanding_tool_calls().await {
-            self.emit_cancelled_turn();
+        // While a tool batch is out, the message steers the turn: it goes
+        // into the history before the next round, once the calls in flight
+        // have answered (`inject_task_notification`). Nothing is cancelled
+        // for it; Stop cancels.
+        if self.execution.has_pending_tools() {
+            self.steering.push(text);
+            return;
         }
         if !self.begin_interaction(&text) {
             return;

@@ -1888,8 +1888,12 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     );
 }
 
+/// A user message that comes while a tool batch is out steers the turn
+/// (ACP's "Prompts during active work", board #105): nothing is cancelled
+/// for it, and it goes into the history before the turn's next round, once
+/// the batch has answered.
 #[test]
-fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
+fn a_user_message_during_a_tool_batch_steers_the_turn_after_the_batch() {
     let (tx, rx) = start_fallback_rig_session();
 
     let _ = tx.send(Command::UserMessage {
@@ -1904,37 +1908,30 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
         })
     );
 
-    let mut old_call_ids = HashSet::new();
+    let mut old_call_ids = Vec::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
         match recv(&rx) {
-            Event::ToolCallRequested(request) => {
-                old_call_ids.insert(request.call_id);
-            }
-            other => panic!("expected an old tool call request, got {other:?}"),
+            Event::ToolCallRequested(request) => old_call_ids.push(request.call_id),
+            other => panic!("expected a tool call request, got {other:?}"),
         }
     }
 
-    // Reproduce the dogfood failure: submit a fresh instruction while the
-    // previous turn's tool calls are still outstanding, then have that new
-    // turn request a tool of its own.
     let _ = tx.send(Command::UserMessage {
         text: "snapshot please".to_string(),
     });
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "the message cancels nothing and waits for the batch"
+    );
 
-    let mut cancelled_call_ids = HashSet::new();
-    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx) {
-            Event::ToolCallFinished(result) => {
-                assert_eq!(result.output["cancelled"], true);
-                cancelled_call_ids.insert(result.call_id);
-            }
-            other => panic!("expected an old call cancellation, got {other:?}"),
-        }
+    for call_id in old_call_ids {
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id.clone(),
+            crate::contract::OccurrenceId(call_id.0.clone()),
+            serde_json::json!({ "ok": true }),
+        )));
     }
-    assert_eq!(cancelled_call_ids, old_call_ids);
-    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Cancelled));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Cancelled));
-    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     std::assert_matches!(
         recv(&rx),
@@ -1944,24 +1941,8 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
         }) if text == "snapshot please");
     let new_call_id = match recv(&rx) {
         Event::ToolCallRequested(request) => request.call_id,
-        other => panic!("expected the new turn's tool call, got {other:?}"),
+        other => panic!("expected the steered round's tool call, got {other:?}"),
     };
-    assert!(!old_call_ids.contains(&new_call_id));
-
-    // Every tool implementation can finish late. Those old results must be
-    // ignored rather than rejoining the new turn's normalized batch.
-    for call_id in old_call_ids {
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call_id.clone(),
-            crate::contract::OccurrenceId(call_id.0.clone()),
-            serde_json::json!({ "late": true }),
-        )));
-    }
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_millis(200))
-            .is_err(),
-        "late results from the retired turn must be silent"
-    );
 
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         new_call_id.clone(),
@@ -1978,6 +1959,39 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
     );
     assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
+}
+
+/// A cancel drops a message held for the next round: it was not inserted.
+#[test]
+fn a_cancel_drops_a_message_held_for_the_next_round() {
+    let (tx, rx) = start_fallback_rig_session();
+    let _ = tx.send(Command::UserMessage {
+        text: "multi tool please".to_string(),
+    });
+    let mut requested = 0;
+    while requested < MULTI_TOOL_TEST_BATCH_SIZE {
+        if let Event::ToolCallRequested(_) = recv(&rx) {
+            requested += 1;
+        }
+    }
+    let _ = tx.send(Command::UserMessage {
+        text: "held".to_string(),
+    });
+    let _ = tx.send(Command::Cancel { request_id: None });
+    loop {
+        match recv(&rx) {
+            Event::MessageCommitted(AgentMessage { text, .. }) if text == "held" => {
+                panic!("a cancelled message was inserted")
+            }
+            Event::StateChanged(SessionState::WaitingForUser) => break,
+            _ => {}
+        }
+    }
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "nothing more comes of the held message"
+    );
 }
 
 #[test]

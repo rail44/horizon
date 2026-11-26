@@ -47,6 +47,10 @@ pub(crate) struct SessionLoopState {
     pub(crate) task_wake: UnboundedReceiver<()>,
     /// Commands observed mid-turn and queued for replay after the turn.
     pub(crate) inbox: VecDeque<Command>,
+    /// User messages that came while a tool batch was out: each goes into
+    /// the history before the turn's next round, so it steers the turn
+    /// rather than ending it (ACP's "Prompts during active work").
+    pub(crate) steering: Vec<String>,
     pub(crate) execution: super::progress::Execution,
     /// The token budget and the truncation-continue bound.
     pub(crate) guard: TurnLoopGuard,
@@ -79,6 +83,7 @@ impl Default for SessionLoopState {
             commands,
             task_wake,
             inbox: VecDeque::new(),
+            steering: Vec::new(),
             execution: Default::default(),
             guard: TurnLoopGuard::new(None),
             continuation: Default::default(),
@@ -126,6 +131,7 @@ impl SessionLoopState {
             commands: super::bridge_commands(commands_rx),
             task_wake: crate::tools::register_wake(session_id),
             inbox: VecDeque::new(),
+            steering: Vec::new(),
             rig_history,
             clearing,
             execution: Default::default(),
@@ -226,6 +232,8 @@ impl SessionLoopState {
                     self.handle_tool_result(result).await;
                 }
                 crate::contract::Command::Cancel { .. } => {
+                    // A cancel drops the messages not inserted yet.
+                    self.steering.clear();
                     self.pause_inputs(true);
                     if !self.cancel_outstanding_tool_calls().await {
                         // Admission remains paused even without a tool batch;

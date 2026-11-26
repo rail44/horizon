@@ -32,6 +32,11 @@ impl SessionLoopState {
         // rounds so far have spent the token budget.
         if self.guard.exhausted() {
             self.halt_turn_loop(&result, tool_id).await;
+            // A message held for the next round starts a turn of its own.
+            for text in std::mem::take(&mut self.steering) {
+                self.inbox
+                    .push_back(crate::contract::Command::UserMessage { text });
+            }
             return;
         }
 

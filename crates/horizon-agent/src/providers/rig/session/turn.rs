@@ -127,21 +127,39 @@ impl SessionLoopState {
             additions.push(notification.text);
             failures = notification.failures;
         }
-        let Some(text) = (!additions.is_empty()).then(|| additions.join("\n\n")) else {
+        let steering = std::mem::take(&mut self.steering);
+        if additions.is_empty() && steering.is_empty() {
             return (prompt, None);
-        };
+        }
         if !self.retain_prompt(prompt) {
             return (Prompt::Current, None);
         }
-        self.retain_prompt(Prompt::input(
-            ConversationInputKind::Notification,
-            text.clone(),
-        ));
-        let _ = self
-            .events_tx
-            .send(crate::tools::notification_event(text.clone()).into());
-        self.report_task_failures(failures);
-        (Prompt::Current, Some(text))
+        let mut injected = None;
+        if !additions.is_empty() {
+            let text = additions.join("\n\n");
+            self.retain_prompt(Prompt::input(
+                ConversationInputKind::Notification,
+                text.clone(),
+            ));
+            let _ = self
+                .events_tx
+                .send(crate::tools::notification_event(text.clone()).into());
+            self.report_task_failures(failures);
+            injected = Some(text);
+        }
+        // The user's messages that came while the batch was out, after it.
+        for text in steering {
+            self.retain_prompt(Prompt::input(ConversationInputKind::User, text.clone()));
+            let _ = self.events_tx.send(
+                Event::MessageCommitted(crate::contract::Message {
+                    role: crate::contract::MessageRole::User,
+                    text: text.clone(),
+                })
+                .into(),
+            );
+            injected = Some(text);
+        }
+        (Prompt::Current, injected)
     }
 
     /// Records each child that did not finish as an error item in the
