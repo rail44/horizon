@@ -264,16 +264,18 @@ fn session_branch(slug: &str) -> String {
     format!("horizon/{slug}/work")
 }
 
-/// What a session in its own worktree may write of that worktree's Git
+/// What a session in its own worktree may write of the repository's Git
 /// metadata without asking (`docs/agent-subagent-design.md` decision 10):
-/// its gitdir, its branch's ref and reflog directories, and the object
-/// store. The gitdir's `config.worktree`, `commondir` and `gitdir` stay
-/// unwritable -- the first can set `core.hooksPath`, the other two point
-/// Git elsewhere -- as do the repository's `hooks` and `config`, which no
-/// grant here covers. A sandbox keeps a path read-only by mounting over it,
-/// so an absent `config.worktree` is created empty first: an empty one sets
-/// nothing. Empty for a worktree made before its branch had a directory of
-/// its own, or one whose layout does not check out.
+/// the shared `.git`, but what would have Git run something outside the
+/// sandbox -- the repository's `hooks` and `config`, each worktree's
+/// `config.worktree` (which can set `core.hooksPath`), `commondir` and
+/// `gitdir` (which point Git elsewhere), and the submodules' gitdirs
+/// (`modules`, each with hooks and a config of its own). A sandbox keeps a
+/// path read-only by mounting over it, so an absent `hooks` or
+/// `config.worktree` of the session's own is made empty first: empty, it
+/// runs and sets nothing. Empty for a worktree that is not one made for the
+/// session (its branch `horizon/<slug>/work`), or whose layout does not
+/// check out.
 pub fn own_metadata_grants(
     worktree: &Path,
     session_id: Uuid,
@@ -298,30 +300,41 @@ fn own_metadata_grants_checked(
         return None;
     }
     let slug = short_slug(session_id);
-    let refs = common.join("refs/heads/horizon").join(&slug);
-    if !refs.join("work").is_file() {
+    if !common
+        .join("refs/heads/horizon")
+        .join(&slug)
+        .join("work")
+        .is_file()
+    {
         return None;
     }
-    let reflog = common.join("logs/refs/heads/horizon").join(&slug);
-    std::fs::create_dir_all(&reflog).ok()?;
+    std::fs::create_dir_all(common.join("hooks")).ok()?;
     let config_worktree = gitdir.join("config.worktree");
     if !config_worktree.exists() {
         std::fs::write(&config_worktree, "").ok()?;
     }
-    let tree = |path: PathBuf, excluded: &[&str]| {
-        Some(FilesystemGrant {
-            path: std::fs::canonicalize(path).ok()?,
-            access: FilesystemGrantAccess::ReadWrite,
-            scope: FilesystemGrantScope::DirectoryTree,
-            excluded_subpaths: excluded.iter().map(PathBuf::from).collect(),
-        })
-    };
-    Some(vec![
-        tree(gitdir, &["config.worktree", "commondir", "gitdir"])?,
-        tree(refs, &[])?,
-        tree(reflog, &[])?,
-        tree(common.join("objects"), &[])?,
-    ])
+    let mut excluded: Vec<PathBuf> = vec!["hooks".into(), "config".into()];
+    if common.join("modules").exists() {
+        excluded.push("modules".into());
+    }
+    for entry in std::fs::read_dir(common.join("worktrees")).ok()?.flatten() {
+        for name in ["config.worktree", "commondir", "gitdir"] {
+            let path = entry.path().join(name);
+            if path.exists() {
+                excluded.push(
+                    PathBuf::from("worktrees")
+                        .join(entry.file_name())
+                        .join(name),
+                );
+            }
+        }
+    }
+    Some(vec![FilesystemGrant {
+        path: common,
+        access: FilesystemGrantAccess::ReadWrite,
+        scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: excluded,
+    }])
 }
 
 /// Re-adopts the existing worktree owned by a resumed session without
@@ -1061,24 +1074,22 @@ mod tests {
 
     /// `docs/agent-subagent-design.md` decision 10, through the real
     /// sandbox: a session in its own worktree commits there without asking,
-    /// and still cannot move another branch, rewrite `config.worktree`, or
-    /// touch another session's branch. Runs the real sandbox, so the
-    /// `sandboxed` nextest profile skips it.
+    /// with nothing refused on the way (board #113), and still cannot
+    /// write what would have Git run something outside the sandbox: the
+    /// repository's hooks and config, or its worktree's `config.worktree`.
+    /// Runs the real sandbox, so the `sandboxed` nextest profile skips it.
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_session_commits_in_its_own_worktree_and_reaches_no_other_branch() {
+    fn a_session_commits_in_its_own_worktree_and_reaches_no_hook_or_config() {
         let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         let session_id = Uuid::new_v4();
-        let other = create_isolated_worktree(repo.path(), Uuid::new_v4()).unwrap();
         let info = create_isolated_worktree(repo.path(), session_id).unwrap();
         let grants = own_metadata_grants(&info.path, session_id);
-        assert_eq!(grants.len(), 4, "{grants:?}");
+        assert_eq!(grants.len(), 1, "{grants:?}");
 
         let common = info.repo_root.join(".git");
         let gitdir = common.join("worktrees").join(short_slug(session_id));
-        let main_before = run_git(&info.repo_root, &["rev-parse", "HEAD"]).unwrap();
-        let other_before = run_git(&info.repo_root, &["rev-parse", &other.branch]).unwrap();
         let fence = horizon_sandbox::runtime::FenceRuntime::new(
             horizon_agent::tools::sandbox::fence_on_path(),
         );
@@ -1107,17 +1118,18 @@ mod tests {
             )
             .expect("contain the command");
             scrub_git_env(&mut contained.command);
-            contained
-                .command
-                .current_dir(&info.path)
-                .status()
-                .unwrap()
-                .success()
+            let output = contained.command.current_dir(&info.path).output().unwrap();
+            (
+                output.status.success(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            )
         };
 
-        assert!(run("echo changed > README.md && git add README.md && \
+        let (committed, said) = run("echo changed > README.md && git add README.md && \
              git -c user.name=Test -c user.email=test@example.com commit -q -m change"
-            .into()));
+            .into());
+        assert!(committed, "{said}");
+        assert!(!said.contains("packed-refs.lock"), "{said}");
         assert_ne!(
             run_git(&info.repo_root, &["rev-parse", &info.branch]).unwrap(),
             info.base,
@@ -1126,24 +1138,18 @@ mod tests {
 
         // What the command sees of a path outside its writable ones may
         // not be the host's (Fence gives it a private `/tmp`, where this
-        // fixture lives), so what is asserted is that nothing of the
-        // repository's own changed, not how each attempt failed.
+        // fixture lives), so what is asserted is that nothing of these
+        // changed, not how each attempt failed.
         let common_config_before = std::fs::read_to_string(common.join("config")).unwrap();
-        run("git update-ref refs/heads/main HEAD".into());
-        run(format!("git update-ref refs/heads/{} HEAD", other.branch));
         run(format!(
             "echo '[core]' >> {}",
             gitdir.join("config.worktree").display()
         ));
         run(format!("echo x >> {}", common.join("config").display()));
-        assert_eq!(
-            run_git(&info.repo_root, &["rev-parse", "HEAD"]).unwrap(),
-            main_before
-        );
-        assert_eq!(
-            run_git(&info.repo_root, &["rev-parse", &other.branch]).unwrap(),
-            other_before
-        );
+        run(format!(
+            "printf '#!/bin/sh\\nexit 1\\n' > {}",
+            common.join("hooks/pre-commit").display()
+        ));
         assert_eq!(
             std::fs::read_to_string(gitdir.join("config.worktree")).unwrap(),
             ""
@@ -1152,6 +1158,7 @@ mod tests {
             std::fs::read_to_string(common.join("config")).unwrap(),
             common_config_before
         );
+        assert!(!common.join("hooks/pre-commit").exists());
     }
 
     /// A worktree made before its branch had a directory of its own is

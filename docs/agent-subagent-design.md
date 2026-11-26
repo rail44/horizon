@@ -152,6 +152,18 @@ and the main session merged a worker's branch 19 times.
     own (「1でよいです」); a worktree made before keeps its
     `horizon/<slug>` branch and gets no grant.
 
+    **Widened 2026-11-26 (board #113)** to Claude Code's range: the whole
+    shared `.git`, except what would have Git run something outside the
+    sandbox -- `hooks/`, `config`, each worktree's `config.worktree`,
+    `commondir` and `gitdir`, and `modules/`. The narrower range made
+    every commit print a refusal: Git takes `.git/packed-refs.lock` to
+    delete a ref, and `git commit` deletes `AUTO_MERGE` at its end; a lock
+    file new in `.git/` can be allowed only by letting `.git/` itself be
+    written. The owner judged another branch's ref not worth guarding
+    (「.gitについてはサンドボックスの保護から外してしまっていいような印象」,
+    then the recommendation keeping `hooks/` and `config`). A session in
+    the primary checkout is asked as before.
+
 11. **A daemon restart ends a write child and keeps its work.** 「iで」.
     The child is terminated rather than resumed, as an exploration child
     is (`docs/agent-explore-design.md` decision 8); its worktree and
