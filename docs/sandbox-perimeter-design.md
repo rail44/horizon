@@ -163,7 +163,7 @@ What follows the root on activation:
 | `ToolSessionState` root (`tools/state.rs`) | replaced by the prepared environment |
 | sandbox `writable_roots` | derived per call from the root |
 | where `bash` starts | the new root, in the replacement tool state |
-| system prompt environment section | rebuilt by the provider on `EnvironmentPrepared` |
+| system prompt environment section | kept as it was on `EnvironmentPrepared`: the provider tells the model of the new root, and of what the prompt sections built there would change, in the conversation (`note_environment_ready`, `note_prefix_changes`); the prefix is built from the worktree when the session is set up again (resume) |
 | shell-facing root (`WorkspaceRootResolved`) | sent on activation, as at setup and attachment replay; the shell maps it to `session_info_update` and records it as the session's `directory` |
 | persisted `session_context` | `workspace_root` is the worktree and `isolated_worktree` is true from `EnvironmentActivated` onward |
 | session entry `worktree`, terminate cleanup (`git worktree remove`) | recorded on activation; cleanup unchanged |
