@@ -286,6 +286,11 @@ lands:
   `docs/image-viewer-design.md`): a `file://` link to an image clicked in
   a terminal opens it over the workspace, through the extensions' own
   `horizon:ui/opener`. Git diff is not started.
+- **Board and wiki as ACP clients, sessions hosted on demand — proposed
+  2026-11-27** (board #117, `docs/agent-sessions-on-demand-design.md`):
+  the agent loses its board and wiki knowledge, the views start and
+  prompt sessions as ACP clients and hand tools in as MCP servers, and a
+  session is hosted, one process each, only while something needs it.
 - **The agent as a stdio ACP child of the shell — implemented
   2026-11-26** (board #114, `docs/agent-stdio-child-design.md`): the
   agent is a library that is an ACP agent, composed from what it is
