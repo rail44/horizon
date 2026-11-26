@@ -86,6 +86,27 @@ fn every_advertised_builtin_uses_its_typed_schema_and_rejects_unknown_fields() {
     );
 }
 
+/// No tool's schema holds an integer beyond what JSON carries exactly
+/// (2^53 - 1): a provider may refuse the whole request over one.
+#[test]
+fn no_tool_schema_holds_an_integer_json_cannot_carry() {
+    fn check(id: &str, value: &Value) {
+        match value {
+            Value::Number(number) => {
+                if let Some(integer) = number.as_u64() {
+                    assert!(integer < (1 << 53), "{id}: {integer}");
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| check(id, item)),
+            Value::Object(fields) => fields.values().for_each(|field| check(id, field)),
+            _ => {}
+        }
+    }
+    for (id, _) in samples() {
+        check(id, &schema(id).unwrap());
+    }
+}
+
 #[test]
 fn numeric_defaults_and_bounds_match_the_advertisement() {
     for (id, field, default, maximum) in [
@@ -110,7 +131,11 @@ fn numeric_defaults_and_bounds_match_the_advertisement() {
         assert_eq!(property["type"], "integer", "{id}.{field}");
         assert_eq!(property["default"], default, "{id}.{field}");
         assert_eq!(property["minimum"], 1, "{id}.{field}");
-        assert_eq!(property["maximum"], maximum, "{id}.{field}");
+        if maximum == u64::MAX {
+            assert!(property.get("maximum").is_none(), "{id}.{field}");
+        } else {
+            assert_eq!(property["maximum"], maximum, "{id}.{field}");
+        }
         assert_eq!(
             ToolInput::parse(id, &sample).unwrap().as_json()[field],
             default,

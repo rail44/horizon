@@ -65,8 +65,16 @@ impl<const MIN: u64, const MAX: u64, const DEFAULT: u64> JsonSchema for Number<M
     fn schema_name() -> Cow<'static, str> {
         format!("Number_{MIN}_{MAX}_{DEFAULT}").into()
     }
+    /// `u64::MAX` as the upper bound means none, and is left out: some
+    /// providers refuse a schema holding an integer no 64-bit signed (or
+    /// JSON-safe) integer can carry (deepinfra answered 400 for Kimi K3 and
+    /// 500 for gpt-oss-120b).
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        schemars::json_schema!({"type": "integer", "minimum": MIN, "maximum": MAX})
+        if MAX == u64::MAX {
+            schemars::json_schema!({"type": "integer", "minimum": MIN})
+        } else {
+            schemars::json_schema!({"type": "integer", "minimum": MIN, "maximum": MAX})
+        }
     }
 }
 
