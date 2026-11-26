@@ -14,8 +14,8 @@ use super::mapping::{
     rig_workspace_snapshot_call, rig_workspace_snapshot_call_with_provider_metadata,
 };
 use super::retry::{
-    Attempt, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF, Retried, retry_backoff,
-    retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry,
+    Attempt, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_AFTER_MAX, PROVIDER_RETRY_MAX_BACKOFF,
+    Retried, retry_backoff, retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry,
 };
 use super::session::SessionLoopState;
 use super::session_prompt::{session_environment, session_extra_sections};
@@ -263,14 +263,23 @@ fn rejections_that_could_duplicate_or_repeat_are_not_retried() {
         "429 never exhausts the attempt budget"
     );
 
+    let timeout = |before_output| {
+        anyhow::Error::new(super::completion::ProviderTimeout {
+            phase: "response stream",
+            timeout: Duration::from_secs(120),
+            before_output,
+        })
+    };
     assert!(
-        retryable_rejection(
-            1,
-            false,
-            &anyhow::anyhow!("provider response stream timed out after 120s")
-        )
-        .is_none(),
-        "a stream timeout may already have generated tokens"
+        retryable_rejection(1, false, &timeout(false)).is_none(),
+        "a response that had begun may have been generated in part"
+    );
+    let unanswered = retryable_rejection(1, false, &timeout(true))
+        .expect("a request nothing came of is sent again");
+    assert!(unanswered.timed_out);
+    assert!(
+        retryable_rejection(PROVIDER_REQUEST_MAX_ATTEMPTS, false, &timeout(true)).is_none(),
+        "under the attempt budget"
     );
 }
 
@@ -325,8 +334,13 @@ fn a_named_retry_after_is_read_out_of_the_rejection() {
     assert_eq!(rejection.retry_after, Some(Duration::from_secs(7)));
     assert_eq!(
         retry_backoff(1, rejection.retry_after, 0),
-        Duration::from_secs(3) + Duration::from_millis(500),
-        "the provider's own window replaces the exponential term"
+        Duration::from_secs(7),
+        "the provider's wait is the least that is waited"
+    );
+    assert_eq!(
+        retry_backoff(1, rejection.retry_after, 1_000),
+        Duration::from_millis(7_700),
+        "with a tenth of it again as jitter"
     );
 }
 
@@ -339,10 +353,11 @@ fn retry_backoff_grows_per_attempt_and_stays_bounded() {
     assert_eq!(retry_backoff(2, None, 0), Duration::from_secs(1));
     assert_eq!(retry_backoff(3, None, 0), Duration::from_secs(2));
     assert_eq!(
-        retry_backoff(1, Some(Duration::from_secs(600)), 1_000),
-        PROVIDER_RETRY_MAX_BACKOFF,
-        "a provider asking for ten minutes is still clamped"
+        retry_backoff(1, Some(Duration::from_secs(600)), 0),
+        PROVIDER_RETRY_AFTER_MAX,
+        "a provider asking for ten minutes is followed for five"
     );
+    assert!(retry_backoff(10, None, 1_000) <= PROVIDER_RETRY_MAX_BACKOFF);
 }
 
 /// The loop itself, with a scripted attempt standing in for the provider: a

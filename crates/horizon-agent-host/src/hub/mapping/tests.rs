@@ -645,6 +645,8 @@ fn rate_limits_are_live_notices_and_clearing_is_a_compaction() {
             status: Some(429),
             attempt: 2,
             backoff_ms: 1500,
+            retry_after_ms: None,
+            timed_out: false,
         }),
         Event::HistoryCleared(horizon_agent::contract::HistoryCleared {
             cleared_occurrence_ids: vec![OccurrenceId("a".into()), OccurrenceId("b".into())],

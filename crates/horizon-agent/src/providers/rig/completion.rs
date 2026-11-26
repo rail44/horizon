@@ -74,6 +74,28 @@ pub(super) enum ProviderWait<T> {
     Cancelled,
 }
 
+/// A provider phase that passed its deadline.
+#[derive(Debug)]
+pub(super) struct ProviderTimeout {
+    pub(super) phase: &'static str,
+    pub(super) timeout: Duration,
+    /// Nothing had come of the request yet: sending it again repeats
+    /// nothing.
+    pub(super) before_output: bool,
+}
+
+impl std::fmt::Display for ProviderTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "provider {} timed out after {:?}",
+            self.phase, self.timeout
+        )
+    }
+}
+
+impl std::error::Error for ProviderTimeout {}
+
 /// Waits for one provider phase while keeping both cancellation and a
 /// wall-clock bound active. Keeping this generic lets establishment and each
 /// streamed chunk share exactly the same stop semantics.
@@ -88,9 +110,11 @@ pub(super) async fn await_provider_phase<T>(
         result = tokio::time::timeout(timeout, future) => {
             result
                 .map(ProviderWait::Ready)
-                .map_err(|_| anyhow::anyhow!(
-                    "provider {phase} timed out after {timeout:?}"
-                ))
+                .map_err(|_| anyhow::Error::new(ProviderTimeout {
+                    phase,
+                    timeout,
+                    before_output: true,
+                }))
         }
     }
 }
@@ -376,6 +400,8 @@ async fn rig_provider_turn_with_retry(
                     status: rejection.status,
                     attempt: number,
                     backoff_ms: backoff.as_millis() as u64,
+                    retry_after_ms: rejection.retry_after.map(|wait| wait.as_millis() as u64),
+                    timed_out: rejection.timed_out,
                 })
                 .into(),
             );
@@ -454,13 +480,24 @@ async fn run_provider_stream(
         Ok(ProviderWait::Ready(Err(error))) => return attempt.close(Err(error.into()), None, None),
         Err(error) => return attempt.close(Err(error), None, None),
     };
+    let mut answered = false;
     let end = loop {
         match await_provider_phase(stream.next(), token, deadlines.idle, "response stream").await {
             Ok(ProviderWait::Cancelled) => break Ok(ResponseEnd::Cancelled),
             Ok(ProviderWait::Ready(None)) => break Ok(ResponseEnd::Finished),
-            Ok(ProviderWait::Ready(Some(Ok(chunk)))) => attempt.push(chunk),
+            Ok(ProviderWait::Ready(Some(Ok(chunk)))) => {
+                answered = true;
+                attempt.push(chunk);
+            }
             Ok(ProviderWait::Ready(Some(Err(error)))) => break Err(error.into()),
-            Err(error) => break Err(error),
+            Err(mut error) => {
+                // A response that had begun may have been generated, and
+                // billed, in part.
+                if answered && let Some(timeout) = error.downcast_mut::<ProviderTimeout>() {
+                    timeout.before_output = false;
+                }
+                break Err(error);
+            }
         }
     };
     // The stream carries events only; the fold's own response (finish reason,

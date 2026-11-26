@@ -20,6 +20,9 @@ const PROVIDER_RETRY_BASE_BACKOFF: Duration = Duration::from_secs(1);
 /// Ceiling on any single backoff, including one the provider asked for.
 pub(super) const PROVIDER_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
+/// The longest wait a provider's `Retry-After` is followed for.
+pub(super) const PROVIDER_RETRY_AFTER_MAX: Duration = Duration::from_secs(300);
+
 /// Statuses with which a provider says "not now" rather than "not ever":
 /// rate limiting, the three gateway-level failures, and a bare 500. Every
 /// other 4xx describes the request itself and would fail identically on a
@@ -48,12 +51,15 @@ pub(super) struct TransientRejection {
     /// than request setup. Only meaningful
     /// when `status` is `None`; always `false` for status-based rejections.
     pub(super) mid_stream: bool,
+    /// The request was not answered at all before its deadline.
+    pub(super) timed_out: bool,
 }
 
 impl TransientRejection {
     fn describe(&self) -> String {
         match self.status {
             Some(status) => format!("HTTP {status}"),
+            None if self.timed_out => "no answer before the deadline".to_string(),
             None if self.mid_stream => "transport failure (mid-stream decode)".to_string(),
             None => "transport failure (request setup)".to_string(),
         }
@@ -99,6 +105,19 @@ pub(super) fn retryable_rejection(
     if durable_output_emitted {
         return None;
     }
+    // A request nothing came of before its deadline is sent again, under
+    // the same budget as a transport failure; one that had begun to answer
+    // may have been generated in part, and is not.
+    if let Some(timeout) = error.downcast_ref::<super::completion::ProviderTimeout>() {
+        return (timeout.before_output && attempt < PROVIDER_REQUEST_MAX_ATTEMPTS).then_some(
+            TransientRejection {
+                status: None,
+                retry_after: None,
+                mid_stream: false,
+                timed_out: true,
+            },
+        );
+    }
     let message = format!("{error:#}");
     let failure = classify_failure(error, &message);
     if let Some(status) = failure.status {
@@ -114,6 +133,7 @@ pub(super) fn retryable_rejection(
             status: Some(status),
             retry_after: failure.retry_after,
             mid_stream: false,
+            timed_out: false,
         });
     }
     // Transport-level failure (no status came back): bounded by the attempt
@@ -125,6 +145,7 @@ pub(super) fn retryable_rejection(
         status: None,
         retry_after: None,
         mid_stream: failure.mid_stream,
+        timed_out: false,
     })
 }
 
@@ -235,26 +256,30 @@ fn named_retry_after(message: &str) -> Option<Duration> {
     seconds.parse().ok().map(Duration::from_secs)
 }
 
-/// Exponential backoff with equal jitter: the wait is drawn from the upper
-/// half of a window that doubles per attempt, so sessions rejected at the
-/// same instant do not all come back at the same instant either. A
-/// provider-supplied `Retry-After` replaces the exponential term -- the
-/// provider knows its own window better than this does -- and both are
-/// clamped to [`PROVIDER_RETRY_MAX_BACKOFF`].
+/// How long to wait before attempt `attempt + 1`. A provider's
+/// `Retry-After` is the least that is waited -- sooner would only be refused
+/// again -- with a tenth of it again as jitter, up to
+/// [`PROVIDER_RETRY_AFTER_MAX`]. Without one, exponential backoff with equal
+/// jitter: the wait is drawn from the upper half of a window that doubles
+/// per attempt, clamped to [`PROVIDER_RETRY_MAX_BACKOFF`], so sessions
+/// rejected at the same instant do not all come back at the same instant
+/// either.
 pub(super) fn retry_backoff(
     attempt: u32,
     retry_after: Option<Duration>,
     jitter_permille: u32,
 ) -> Duration {
-    let window = retry_after
-        .unwrap_or_else(|| {
-            PROVIDER_RETRY_BASE_BACKOFF
-                .checked_mul(1u32 << attempt.saturating_sub(1).min(16))
-                .unwrap_or(PROVIDER_RETRY_MAX_BACKOFF)
-        })
+    let jitter = jitter_permille.min(1000);
+    if let Some(asked) = retry_after {
+        let asked = asked.min(PROVIDER_RETRY_AFTER_MAX);
+        return asked + asked / 10 * jitter / 1000;
+    }
+    let window = PROVIDER_RETRY_BASE_BACKOFF
+        .checked_mul(1u32 << attempt.saturating_sub(1).min(16))
+        .unwrap_or(PROVIDER_RETRY_MAX_BACKOFF)
         .min(PROVIDER_RETRY_MAX_BACKOFF);
     let half = window / 2;
-    half + half * jitter_permille.min(1000) / 1000
+    half + half * jitter / 1000
 }
 
 /// Jitter from the wall clock's sub-second component: enough to break

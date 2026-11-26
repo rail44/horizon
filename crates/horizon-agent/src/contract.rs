@@ -879,6 +879,14 @@ pub struct ProviderRateLimited {
     pub attempt: u32,
     /// How long the turn will wait before retrying, in milliseconds.
     pub backoff_ms: u64,
+    /// The wait the provider asked for (`Retry-After`), when it named one,
+    /// in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
+    /// The request was not answered at all before its deadline: nothing came
+    /// of it, so it is sent again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
 }
 
 /// Exact usage reported by a provider for one completion request. The fields

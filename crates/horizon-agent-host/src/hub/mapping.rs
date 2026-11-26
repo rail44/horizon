@@ -546,15 +546,22 @@ impl Mapper {
                 if self.replaying {
                     return Vec::new();
                 }
-                let title = match limited.status {
-                    Some(status) => format!("Provider rate limited (HTTP {status})"),
-                    None => "Provider rate limited".to_string(),
+                let title = match (limited.timed_out, limited.status) {
+                    (true, _) => "Provider did not answer in time".to_string(),
+                    (false, Some(status)) => format!("Provider rate limited (HTTP {status})"),
+                    (false, None) => "Provider rate limited".to_string(),
                 };
-                let description = format!(
+                let mut description = format!(
                     "attempt {}, retrying in {}s",
                     limited.attempt,
                     limited.backoff_ms.div_ceil(1000)
                 );
+                if let Some(asked) = limited.retry_after_ms {
+                    description.push_str(&format!(
+                        ", as the provider asked ({}s)",
+                        asked.div_ceil(1000)
+                    ));
+                }
                 vec![Outgoing::update(v2::SessionUpdate::Notice(
                     v2::Notice::new(v2::NoticeSeverity::Warning, title).description(description),
                 ))]
