@@ -114,7 +114,7 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 #
 # The sandbox runtime -- `binary_id(horizon-sandbox::fence)`,
 # `test(/^tools::tests::bash_auto_executes_sandboxed/)` and
-# `test(/^tools::bash::tests::a_contained_call_reports_the_directory_it_moved_to$/)`
+# `test(/^tools::bash::tests::a_contained_call_(starts_in_its_directory_each_time|runs_git_without_its_automatic_housekeeping)$/)`
 # start the real `fence` binary, whose bubblewrap cannot create its
 # namespaces inside another sandbox.
 #
@@ -222,7 +222,7 @@ default-filter = '''
         + test(/^host::listener::tests::/)
         + (binary_id(horizon-control) & test(/^client::tests::/))
         + binary_id(horizon-sandbox::fence)
-        + test(/^tools::bash::tests::a_contained_call_reports_the_directory_it_moved_to$/)
+        + test(/^tools::bash::tests::a_contained_call_(starts_in_its_directory_each_time|runs_git_without_its_automatic_housekeeping)$/)
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
         + test(/^providers::rig::completion::tests::provider_wire_/)
         + test(/^decision::client::tests::loopback_/)
