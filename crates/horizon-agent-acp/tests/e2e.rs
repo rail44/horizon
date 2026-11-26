@@ -885,3 +885,43 @@ async fn a_session_forked_at_a_cursor_goes_on_from_there_and_survives_a_restart(
     assert_eq!(branch_user_messages(&log, fork), ["one", "three", "four"]);
     assert_eq!(branch_user_messages(&log, source), ["one", "two"]);
 }
+
+/// A session closed is cleaned up before the close is answered: a client
+/// that ends the agent right after the answer finds the session's
+/// checkpoints gone (board #111).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_session_is_cleaned_up_before_the_close_is_answered() {
+    let (_outer, repo) = nested_session_fixture();
+    let mut daemon = agentd_spawn(AgentdPaths::scratch("agentd-e2e"))
+        .env_remove("HORIZON_AGENT_TEST_NO_CHECKPOINTS")
+        .spawn();
+    let mut client = connect(&mut daemon).await;
+    let session = open_session(
+        &client,
+        new_session_request(&mock_provider_id().0, repo.clone()),
+    )
+    .await;
+    prompt_and_settle(&mut client, session, "one").await;
+    std::fs::write(repo.join("notes.txt"), "after one\n").unwrap();
+    prompt_and_settle(&mut client, session, "two").await;
+    let refs = || {
+        fixture_git_output(
+            &repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)",
+                &format!("refs/horizon/checkpoints/{}/", session.as_uuid()),
+            ],
+        )
+    };
+    assert!(
+        !refs().trim().is_empty(),
+        "the session recorded checkpoints"
+    );
+
+    client
+        .request(v2::CloseSessionRequest::new(acp_id(session)))
+        .await
+        .expect("session/close is answered");
+    assert_eq!(refs().trim(), "", "the checkpoints went before the answer");
+}

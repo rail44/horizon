@@ -254,7 +254,6 @@ pub(super) fn spawn_session_thread_with_context(
             horizon_agent::tools::drain_session_work(session_id, std::time::Duration::from_secs(5));
         let _lifecycle = lock_unpoisoned(&thread_state.lifecycle);
         let entry = lock_unpoisoned(&thread_state.sessions).remove(&session_id);
-        lock_unpoisoned(&thread_state.agent_subscribers).remove(&session_id);
         // A suspended session resumes into the worktree it owns.
         let suspended = thread_state.take_suspending(session_id);
         // The session's checkpoints go with it: with the worktree it owns,
@@ -282,6 +281,10 @@ pub(super) fn spawn_session_thread_with_context(
         {
             eprintln!("horizon-agent: could not remove the checkpoints of {session_id:?}: {error}");
         }
+        // Last: the session's attachments end with their subscription, and a
+        // `session/close` is answered when they have, so a client that ends
+        // the agent on that answer leaves nothing of the session behind.
+        lock_unpoisoned(&thread_state.agent_subscribers).remove(&session_id);
     });
 }
 
