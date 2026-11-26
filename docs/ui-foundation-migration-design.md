@@ -13,7 +13,11 @@ Horizon's shell moves from GPUI to Blitz. This document describes the
 target and the route. The decision is board #75; the survey of candidates
 and the spike that backs each statement below are in
 [the research record](research/ui-foundation-candidates-2026-11-11.md)
-(addenda 1–16) and `spikes/ui-foundation/`.
+(addenda 1–16). The prototype that backed them, `spikes/ui-foundation/`,
+was removed on 2026-11-26; its files are kept in git's history up to and
+including commit a063aa9d ("Match the spike's other views to Horizon's
+own"), and are described in
+[the research record](research/ui-foundation-candidates-2026-11-11.md).
 
 ## The stack
 
