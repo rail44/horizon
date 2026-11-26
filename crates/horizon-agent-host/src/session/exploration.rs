@@ -114,12 +114,35 @@ impl horizon_agent::tools::ExplorationHost for AgentHostExplorationHost {
             worktree,
             Vec::new(),
         );
-        if !self
-            .state
-            .send_command(session_id, Command::UserMessage { text: prompt })
-        {
-            self.state.unsubscribe_from_session(session_id);
-            return Err("the task session ended before it could be asked".to_string());
+        // The model and effort the requester runs on now, one it was
+        // switched to among them (`docs/agent-subagent-design.md` decision
+        // 8), ahead of the prompt, so the first request is on them.
+        let (selection, reasoning) = lock_unpoisoned(&self.state.sessions)
+            .get(&self.requester_id)
+            .map(|entry| {
+                let level = entry
+                    .reasoning
+                    .as_ref()
+                    .and_then(|reasoning| reasoning.level);
+                (entry.selection.clone(), level)
+            })
+            .unwrap_or_default();
+        let mut asks = Vec::new();
+        if let Some(selection) = selection {
+            asks.push(Command::SetSessionModel {
+                provider: selection.provider,
+                model: selection.model,
+            });
+        }
+        if let Some(level) = reasoning {
+            asks.push(Command::SetSessionReasoning { level });
+        }
+        asks.push(Command::UserMessage { text: prompt });
+        for ask in asks {
+            if !self.state.send_command(session_id, ask) {
+                self.state.unsubscribe_from_session(session_id);
+                return Err("the task session ended before it could be asked".to_string());
+            }
         }
         Ok(horizon_agent::tools::StartedExploration {
             session_id: subscription.session_id,
@@ -350,6 +373,71 @@ mod tests {
         horizon_agent::tools::ExplorationHost::terminate(&host, started.session_id);
         std::fs::remove_dir_all(workspace).unwrap();
         std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    /// `docs/agent-subagent-design.md` decision 8: a task runs on the model
+    /// its requester runs on now, one the requester was switched to after
+    /// it started among them, from its first request.
+    #[test]
+    fn a_task_runs_on_the_model_its_requester_was_switched_to() {
+        let logs = tempfile::tempdir().unwrap();
+        let state = crate::session::test_support::state_with_rig_config(false, "m-fallback");
+        state.set_writer(Some(
+            horizon_agent::persistence::event_log::WriterHandle::open(logs.path()),
+        ));
+        let requester_id = SessionId::new();
+        let _requester = state.install_test_session(requester_id);
+        lock_unpoisoned(&state.sessions)
+            .get_mut(&requester_id)
+            .unwrap()
+            .selection = Some(horizon_agent::hosting::ModelSelection {
+            provider: "default".into(),
+            model: "m-switched".into(),
+        });
+        let host = AgentHostExplorationHost {
+            state: state.clone(),
+            requester_id,
+            provider_id: lock_unpoisoned(&state.providers).default_provider_id(),
+            workspace_root: None,
+            requester_unattended: true,
+            forwarded: Default::default(),
+        };
+        let started = horizon_agent::tools::ExplorationHost::start(
+            &host,
+            horizon_agent::tools::TaskStart {
+                prompt: "look around".into(),
+                access: horizon_agent::tools::TaskAccess::Read,
+                filesystem_grants: Vec::new(),
+                domains: Vec::new(),
+            },
+        )
+        .expect("the task starts");
+
+        let mut collected = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            let Ok(event) = started.events.recv_timeout(Duration::from_millis(500)) else {
+                continue;
+            };
+            let done = matches!(event, Event::TurnEnded(_));
+            collected.push(event);
+            if done {
+                break;
+            }
+        }
+        horizon_agent::tools::ExplorationHost::terminate(&host, started.session_id);
+
+        let selected = collected.iter().position(|event| {
+            matches!(event, Event::ModelSelected { provider, model }
+                if provider == "default" && model == "m-switched")
+        });
+        let asked = collected
+            .iter()
+            .position(|event| matches!(event, Event::ProviderRequestSent { .. }));
+        assert!(selected.is_some(), "{collected:?}");
+        if let Some(asked) = asked {
+            assert!(selected < Some(asked), "{collected:?}");
+        }
     }
 
     fn call(
