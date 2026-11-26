@@ -76,7 +76,7 @@ DeepInfra は rig の `Effort` の 6 段と `none` をそのまま受け付け�
   プロバイダで変わり、画面から読めない)。望む段はモデルを切り替えても
   変わらない。rig が送れないと判断した値はターンの失敗になる。
 - **持ち方**: rig のセッションが、開始時・モデル切り替え後・effort 切り替え後に
-  今の段と選択肢を知らせ(`ProviderEvent::SessionReasoning`)、agentd が
+  今の段と選択肢を知らせ(`ProviderEvent::SessionReasoning`)、`horizon-agent-host` が
   セッションごとに最後の知らせを持って再接続のたびに送り直す。
 - **ACP**: `session/set_config_option` の 2 つ目の設定項目、id `effort`
   (`horizon_acp::EFFORT_CONFIG_ID`、カテゴリ `thought_level`)。値は段の語、

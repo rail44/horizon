@@ -62,7 +62,7 @@ not list, checks nothing
 about them; DeepInfra was measured to take OpenAI's `reasoning_effort` that
 way (`docs/agent-reasoning-effort-design.md`). A vendor rig does not know, a
 provider rig's catalog lists but rig cannot connect to, and a vendor on a
-wire other than OpenAI's or Anthropic's are refused: agentd drops the entry
+wire other than OpenAI's or Anthropic's are refused: `horizon-agent-host` drops the entry
 and says so on stderr.
 
 ## Context windows

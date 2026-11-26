@@ -9,7 +9,7 @@ on the major dependencies. Update it when a decision here is revisited.
 > **Superseded in part.** Tier 2's "in-process today, process boundary
 > decided as the next architecture milestone" and its "future enforcement:
 > split the mechanism into its own crate" have both landed: the agent
-> mechanism runs in the separate `horizon-agentd` process, and the crate
+> mechanism runs in the separate `horizon-agent-acp` process (a child of the shell), and the crate
 > split (`crates/horizon-agent`) is done — see
 > `docs/agent-runtime-split-design.md`.
 

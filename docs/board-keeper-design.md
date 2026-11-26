@@ -1,5 +1,11 @@
 # Board Keeper — Package Design
 
+> The keeper and its wake path were replaced by the board redesign
+> (`docs/board-redesign-design.md`), and `horizon-agentd` is gone
+> (2026-11-26, `docs/agent-stdio-child-design.md`): the composition root
+> is `horizon-agent-acp`, with the board in `horizon-board-flow`. What
+> follows is the record.
+
 **Status:** v2 (automatic wake-up). The keeper wakes automatically when
 `horizon-logd`'s board-event watch fires — a subscriber task inside
 `horizon-agentd` applies the wake policy and spawns a keeper session when

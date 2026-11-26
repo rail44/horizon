@@ -561,7 +561,7 @@ The decisions and who made them are on board #76. What they come to:
   `Plugin`: a name, a state type, the commands, `mount`). Every view is
   one, the terminal and the agent included: they are built in and run in
   the shell's process, while their sessions stay in `horizon-terminald`
-  and `horizon-agentd`. A pane is a plugin and, for those two, the
+  and the `horizon-agent-acp` child. A pane is a plugin and, for those two, the
   session it shows; the session is the host's and is given to the plugin
   apart from its state. What the host needs of a kind of session -- the
   sessions its runtime runs, and how one ends -- the plugin provides

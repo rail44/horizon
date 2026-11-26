@@ -4,7 +4,7 @@ This document records the initial product and architecture decisions for the
 Horizon Agent pane. It builds on `docs/ux-principles.md`.
 
 > **Superseded in part.** "Execution Boundary"'s stdio-JSON-RPC bridge was
-> replaced by the Unix-socket/JSONL-envelope `horizon-agentd` runtime — see
+> replaced by the Unix-socket/JSONL-envelope `horizon-agentd` runtime, and that on 2026-11-26 by the stdio ACP child `horizon-agent-acp` (`docs/agent-stdio-child-design.md`) — see
 > `docs/agent-runtime-split-design.md`. The tool boundary's "deferred"
 > operations (process execution, file writes) have since shipped with
 > approval gates — see `docs/agent-tools-design.md` for the actual tool set.

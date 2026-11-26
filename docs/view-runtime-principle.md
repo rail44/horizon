@@ -11,7 +11,7 @@ Horizon は当初「セッションの daemon」（`horizon-sessiond`）を 1 �
 **「ビュー種別ごとに runtime プロセスがあり、それぞれ独立に更新・
 再起動される」**構造に変わった。`Reload Session Runtime` は今や
 セッション一般ではなく *エージェントというビュー種別* の runtime だけ
-を再起動し、agent runtime のホスト（当時 `horizon-sessiond`、現在の
+を再起動し、agent runtime のホスト（当時 `horizon-sessiond`、のちの
 `horizon-agentd`）はその 1 種別を持つに過ぎない。
 
 つまり実体が先に動き、名前と概念が遅れている。本 doc はその概念を

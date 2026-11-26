@@ -209,7 +209,7 @@ plus 1 distilled = 12 active.
 - Implementation: `crates/horizon-agent/src/knowledge/`, tools in
   `crates/horizon-agent/src/tools/knowledge/`, index assembly in
   `providers/rig/session_prompt.rs`, trust in `crates/horizon-config`
-  (`trusted_projects`) and `crates/horizon-agentd/src/session/setup.rs`.
+  (`trusted_projects`) and `crates/horizon-agent-host/src/session/setup.rs`.
 - Survey: `docs/research/letta.md` (esp. §1, §14, §15, §16 and the
   cross-cutting section (b)).
 - Prior art in-repo: `docs/agent-feedback-design.md` (2026-07-07

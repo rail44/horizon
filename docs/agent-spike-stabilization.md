@@ -7,7 +7,7 @@ Date: 2026-06-30
 > turn-level persistence granularity) were adopted — see
 > `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" section for the
 > shipped shape. The runtime they describe has since moved out of the
-> Horizon process entirely: `horizon-agentd` now owns the event log and the
+> Horizon process entirely: `horizon-agent-host` (in the `horizon-agent-acp` child) now owns the event log and the
 > DuckDB projection — see `docs/agent-runtime-split-design.md`.
 
 This note records the stabilization pass after the first Agent pane, Rig, and

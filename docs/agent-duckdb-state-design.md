@@ -11,7 +11,7 @@ Design date: 2026-06-29
 
 > **Superseded in part.** The "Runtime Boundary" section describes the JSONL
 > writer and DuckDB rebuild running inside the Horizon process. That
-> ownership has since moved: `horizon-agentd`, not Horizon, now owns the
+> ownership has since moved: `horizon-agent-host` (in the `horizon-agent-acp` child), not Horizon, now owns the
 > event log and the DuckDB projection — see `docs/agent-runtime-split-design.md`
 > (steps 3-4 and the readiness addendum). The store shape and JSONL-as-source-
 > of-truth decisions below are otherwise unchanged.

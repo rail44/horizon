@@ -7,7 +7,7 @@ its latest record (`docs/agent-core-extension-design.md`, "会話"). Records
 written beside the conversation, such as the judge's verdicts, have no
 parent and are not on any branch.
 
-`horizon-agentd` does not convert an older log: it moves the log and the
+`horizon-agent-host` does not convert an older log: it moves the log and the
 DuckDB projection built from it aside under a `.pre-<time>` name and starts
 a fresh one, and the old sessions are not resumed. The v3 to v4 converter
 remains only as the builder of test fixtures

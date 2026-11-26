@@ -132,7 +132,7 @@ own term; `workspace.*` is taken by the shell's tab/pane structure.
   `board_read`: a fixed, validated operation performed by the daemon, not
   an arbitrary command.
 - **Execution**: the `HostTools::enter_worktree` boundary
-  (`tools/execution.rs`), implemented by `horizon-agentd`'s
+  (`tools/execution.rs`), implemented by `horizon-agent-host`'s
   `session/host_tools.rs`. It refuses a session whose entry already owns a
   worktree, resolves the session root's `HEAD` to a commit, and sends
   `Command::ActivateWorktree { base }` to the calling session: the same
@@ -187,7 +187,7 @@ There is no `isolate` knob: the ACP `_meta.horizon` session request
 (`SessionNewMeta`, `crates/horizon-acp/src/meta.rs`), the CLI
 (`new agent`), the control-plane dispatcher (`src/control_plane.rs`),
 `PendingAgentSpawn` (`src/workspace/session_creation.rs`), and the view
-chooser (`src/view_chooser.rs`) carry none, and `horizon-agentd` creates
+chooser (`src/view_chooser.rs`) carry none, and `horizon-agent-host` creates
 no worktree at spawn. The remaining spawn-time knob is the directory to
 start in (decision 3's *directory source*): the spawn-source
 session's recorded directory, else the Horizon process's cwd. Dropping the ACP field was a

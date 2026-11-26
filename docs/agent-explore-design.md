@@ -346,7 +346,7 @@ lever, kept because it costs nothing.
 
 The internal role id stays `"explore"` (`roles::EXPLORE_ROLE_ID`). It is a
 persistence and cleanup identity: it is written into the event log, it is
-what makes `horizon-agentd` refuse to resume an orphaned exploration at
+what makes `horizon-agent-host` refuse to resume an orphaned exploration at
 startup, and it is what filters exploration sessions out of the
 client-visible session list. Renaming it would touch resume paths and
 already-persisted records for no model-visible benefit.

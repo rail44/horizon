@@ -36,7 +36,7 @@ MCP は範囲外とする。ツールの口(下の「ツール」)が、後か�
 | 可否 | tool call ごと | 許可 / 拒否(理由つき)/ 人に回す(`verdict`)。人に回す前に引き受けて後で答える(`review`) | `TierPolicy`・`JudgeModule`、門は `tools::gate` |
 | 継続 | ラウンドがツール呼び出しなしで終わったとき | 終える / 続ける(追記するメッセージつき) | `SessionModule::after_round`(`DecisionContinuation`) |
 
-モジュールの一覧は、セッションを始めるときに agentd が一度だけ組み立て(`modules::Modules::compose`)、provider とツールの状態の両方に渡す。
+モジュールの一覧は、セッションを始めるときに `horizon-agent-host` が一度だけ組み立て(`modules::Modules::compose`)、provider とツールの状態の両方に渡す。
 
 観測の段(イベントごとに副作用だけを持つ段)は置いていない。イベントの記録と ACP への写しはコアの持ち物で、モジュールとして差し替える必要が無い。イベントを見たいモジュールが現れたときに足す。
 
@@ -66,11 +66,11 @@ board のツールが `BoardHost` という別の口で入っている形もこ�
 会話は entry の木である。
 
 - **entry の識別**: 各 entry は `id` と `parent_id` を持つ。
-- **entry の種類**: 入力、応答、ツールの告知と結果、clearing、枝の移動(`Rewound`)、モデルと reasoning effort の変更(`ModelSelected`・`ReasoningSelected`)を entry として持つ。モデルと effort は利用者が選んだときに記録され、セッションを立て直したときは、枝の上の最後の選択を agentd が解決し直して provider に渡す(記録はし直さない)。
+- **entry の種類**: 入力、応答、ツールの告知と結果、clearing、枝の移動(`Rewound`)、モデルと reasoning effort の変更(`ModelSelected`・`ReasoningSelected`)を entry として持つ。モデルと effort は利用者が選んだときに記録され、セッションを立て直したときは、枝の上の最後の選択を `horizon-agent-host` が解決し直して provider に渡す(記録はし直さない)。
 - **組み立て**: 一つの葉から根へたどった列が、その枝の会話である。プロバイダに送る履歴は、この列から組み立てる。
 - **保存**: 記録は今と同じ JSONL に追記する。entry が親を指すので、event log の版は上がる(v5)。親が無い record(judge の verdict)と、親が読めなかった record(読み飛ばした行を指すもの)は、同じセッションの sequence で一つ前の record に続くものとして読む。DuckDB の projection も親を持ち(projection の schema 3)、incremental resume は projection から同じ枝をたどる。
 
-agentd と horizon-agent の側の frame(`frame::AgentFrame`)は、確定したもの(メッセージ、tool call、承認、状態)だけを持つ。streaming の delta は記録には残るが、frame の item にはしない。delta を並べて画面に描くのは、shell の fold と ACP の mapper がそれぞれ event から行う。
+horizon-agent-host と horizon-agent の側の frame(`frame::AgentFrame`)は、確定したもの(メッセージ、tool call、承認、状態)だけを持つ。streaming の delta は記録には残るが、frame の item にはしない。delta を並べて画面に描くのは、shell の fold と ACP の mapper がそれぞれ event から行う。
 
 ### セッション
 
@@ -83,7 +83,7 @@ agentd と horizon-agent の側の frame(`frame::AgentFrame`)は、確定した�
 
 ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_session_cursors`・`unstable_session_fork`)では、agent が会話の位置を cursor として告げ(`cursor_update`)、client はその cursor を `session/fork` に渡して新しいセッションを作る。cursor を受け取るメソッドは `session/fork` だけで、同じセッションの位置を戻す操作は ACP に無い。
 
-- **新しいセッションを付ける**: `session/fork` で行う。agentd は `session.fork` を広告し、決着した位置の後に最初に来る user メッセージの直前に cursor を置く(anchor は `user_message`・`before`)。`cursorId` を省くと、ターンの間にあるセッション全体を写す。
+- **新しいセッションを付ける**: `session/fork` で行う。`horizon-agent-host` は `session.fork` を広告し、決着した位置の後に最初に来る user メッセージの直前に cursor を置く(anchor は `user_message`・`before`)。`cursorId` を省くと、ターンの間にあるセッション全体を写す。
 - **葉を移す**: ACP に当たる操作が無いので、同じ cursor を受け取る拡張の `_horizon/rewind_session` で行う。セッションがターンの間にあるときだけ受け付ける。セッションのスレッドは suspend と同じく worktree と記録を残して終わり、移り先の位置の record を親とする `Event::Rewound` の record から新しい枝が始まり、スレッドはその枝の履歴で立ち直る。client は resume して新しい履歴を受け取る。`Rewound` は枝ごとに新しい印を持ち、それ以降のメッセージと cursor の ID にはその印が付くので、捨てた枝の ID と重ならない。
 
 ### 分岐できる位置
@@ -94,7 +94,7 @@ ACP(v2、`agent-client-protocol-schema` 1.19.0 の unstable feature `unstable_se
 
 ### ファイル
 
-決着した位置を離れるときに、セッションの作業場所の状態を git に記録する(`horizon-agentd` の `checkpoint`)。
+決着した位置を離れるときに、セッションの作業場所の状態を git に記録する(`horizon-agent-host` の `checkpoint`)。
 
 - **記録の時機**: 決着した位置にいるセッションが、入力か user メッセージを受け取ったとき。その時点で履歴の末尾にある record が、記録の鍵になる。その後の待ち時間に手で直したファイルも記録に入る。
 - **記録の作り方**: 一時的な index に `add -A` し、`write-tree` と `commit-tree` で commit を作る。親は記録した時点の `HEAD` である。commit は Horizon 専用の ref(`refs/horizon/checkpoints/<セッション>/<record>`)に置く。利用者のブランチ・index・作業中のファイルには触れない。

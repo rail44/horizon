@@ -76,14 +76,14 @@ messaging need, so it is designed once, here.
      dropped any local commits past it -- Agent #67 worked from a stale
      `4b0acac` while its launcher sat at `f32f411`.)
    - *derivation edge*: recorded when a session enters a worktree.
-     agentd keeps each session's spawn source
+     `horizon-agent-host` keeps each session's spawn source
      (`SessionNew.spawn_source_session_id`) on its entry, and
      environment activation makes it the session's `parent_session_id`:
      persisted in `session_context`, announced live in
      `WorkspaceRootResolved`, and listed in `session/list`. The spawn
      source is also persisted as `session_context.spawn_source_session_id`
      on every record, and restore puts it back on the entry, so a session
-     that enters a worktree after an agentd restart still records the
+     that enters a worktree after an agent restart still records the
      edge (board #70). A session with no spawn source, or one that never
      enters a worktree, has no edge. Board review sessions take their caller as parent; edges
      persisted by sessions spawned into a worktree before board #65 are

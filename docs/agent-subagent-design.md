@@ -75,7 +75,7 @@ mechanism, with exploration as its read-only mode), then 「全て推奨通り�
 3. **A write child works in its own worktree.** 「そうですね。そうしましょう」
    (after the count of the owner's Claude Code children above). The
    worktree is created with the existing session-worktree machinery
-   (`crates/horizon-agentd/src/worktree.rs`, under
+   (`crates/horizon-agent-host/src/worktree.rs`, under
    `.horizon/worktrees/`), branched from the requester's current `HEAD`.
    A requester with uncommitted changes is told to commit before it
    launches a write child, so the child starts from what the requester

@@ -29,7 +29,7 @@ Three roles are scattered today and one is missing entirely:
 ## Shape
 
 ```
-agentd ──(send events)──┐
+agent ───(send events)──┐
 board CLI / GUI ────────┼──▶ logd: sole appender + projection owner
 future domains ─────────┘         + query servant + poke source
                                    │
@@ -38,9 +38,9 @@ future domains ─────────┘         + query servant + poke sou
                                    └─ logd socket    (ingest / query / subscribe)
 ```
 
-A third daemon beside agentd and terminald, spawn-on-demand by ANY
-client (GUI or CLI — the same discipline the shell already uses for the
-other two), with its own socket and its own lockstep protocol version
+A daemon beside terminald, spawn-on-demand by ANY
+client (GUI or CLI — the same discipline the shell already uses for
+terminald), with its own socket and its own lockstep protocol version
 pair per the terminald-split precedent.
 
 ## Decisions

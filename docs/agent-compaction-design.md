@@ -46,7 +46,7 @@ T-callid 級のタスクは有効窓 229k を使い切って死ぬ（追補 4）
   2026-10-20 のオーナー決定: OpenAI 互換面には窓を申告する標準がなく、
   Ollama の `/api/show` のような provider 固有 API を読む分岐は持たない。
   vendor については `docs/provider-configuration.md`）。
-  agentd がプロセスごとに初回必要時に取得し、写しは
+  `horizon-agent-acp` がプロセスごとに初回必要時に取得し、写しは
   `$XDG_CACHE_HOME/horizon/models-dev-api.json` に保存して取得失敗時は
   rig 自身のデータより新しければ保存済みを使う。どちらも窓を知らなければ
   **発火しない**（fallback 窓は持たない — `providers/rig/model_limits.rs`）。

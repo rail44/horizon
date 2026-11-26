@@ -1,5 +1,10 @@
 # Agent Recall Design — Live Projection and the Recall Tools
 
+> **2026-11-26:** agentd is gone and no process holds the projection open
+> (`docs/agent-stdio-child-design.md`, "The DuckDB projection"): recall
+> catches it up from the per-session logs and queries it read-only.
+> Decision A below records the design as it was; the recall tools stand.
+
 Written 2026-07-06 (roadmap item "Recall tool"; follows the Letta survey's
 "retrieval over summarization" conclusion, `docs/research/letta.md`). Records
 two decisions made with the owner: the DuckDB projection becomes **live**

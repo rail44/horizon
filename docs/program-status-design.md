@@ -11,7 +11,7 @@ reports this way whether it is working, waiting on its user, or done. The
 session stays a terminal session: nothing here sends the program input,
 answers its prompts, learns its own session id, or resumes it.
 
-An agent session of `horizon-agentd` shows in the same places, from what
+An agent session of `horizon-agent-acp` shows in the same places, from what
 its runtime says of it (§3).
 
 ## 1. Pipeline

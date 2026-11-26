@@ -122,7 +122,7 @@ when the session ends.
 
 `horizon-agent`'s `tools::sandbox` holds the runtime in use and whether it
 can contain a call (probed once, and again at each turn's start).
-`horizon-agentd` sets it at start from `[sandbox] fence` in `config.toml`,
+`horizon-agent-acp` sets it at start from `[sandbox] fence` in `config.toml`,
 else `fence` on `PATH`, and logs when it is unavailable.
 
 The `bash` tool keeps one execution path (`exec/plain.rs`: process group,
@@ -142,7 +142,7 @@ not ship it.
 
 | Session | `writable` | `read_only` |
 |---|---|---|
-| In its own worktree | the worktree, and what `agentd`'s `own_metadata_grants` grants: the worktree's gitdir, the common dir's `objects`, the session branch's ref and reflog | the worktree's `.git` file; the gitdir's `config.worktree` (created empty first), `commondir` and `gitdir` (the common dir's `hooks` and `config` are outside `writable`) |
+| In its own worktree | the worktree, and what `horizon-agent-host`'s `own_metadata_grants` grants: the worktree's gitdir, the common dir's `objects`, the session branch's ref and reflog | the worktree's `.git` file; the gitdir's `config.worktree` (created empty first), `commondir` and `gitdir` (the common dir's `hooks` and `config` are outside `writable`) |
 | In a primary checkout | nothing of the checkout until the session's primary-checkout approval (the one `fs_write`/`fs_edit` ask for there) | — |
 | Read-only (exploration children, consultation stage) | nothing | — |
 | Any of the above | plus `[[grants.project]] trees` | — |
@@ -258,7 +258,7 @@ The four points this design left open were settled as recommended (board
 - `horizon-agent`: the tier policy for `bash` (contained, `outside_sandbox`,
   `domains`), the read-only refusal, a contained call reporting its
   directory, tier-1 dispatch running contained.
-- `horizon-agentd`: a session committing in its own worktree under Fence
+- `horizon-agent-host` and `horizon-agent-acp`: a session committing in its own worktree under Fence
   and moving no other branch; the e2e approval of an outside-the-sandbox
   call.
 - Dogfooding on Linux, and the same scenarios on the owner's Mac (install

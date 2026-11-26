@@ -427,7 +427,7 @@ product-owned API. Decisions:
   rides the gated call's own record.
 - **Seam**: every candidate that would otherwise emit
   `ApprovalRequested`. Policy-generated Standard/Git candidates and
-  agentd-generated filesystem/domain retry candidates enter the same
+  `horizon-agent-host`-generated filesystem/domain retry candidates enter the same
   gate only after their typed `ApprovalKind` is fully derived.
   Auto-approve follows the existing approved execute/retry path without
   persisting a fake prompt; escalate preserves today's human flow.

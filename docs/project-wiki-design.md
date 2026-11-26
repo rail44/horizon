@@ -263,7 +263,7 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
   JSON in and out), so `horizon-wiki` implements its tools without
   depending on `horizon-agent`. A registering package declares a tool
   contained, and the core trusts that declaration — the wiki's writes are
-  confined to its store by the library. `horizon-agentd` is the
+  confined to its store by the library. `horizon-agent-acp` is the
   composition root that registers the wiki's tools, role, skill, trigger
   source and reply sink (`docs/board-keeper-design.md` §3).
 - **Since 2026-11-16 the view is an extension** (`plugins/wiki`,
@@ -439,7 +439,7 @@ owner's call.
   Esc closes it). Not yet decided between this and the margin.
 - **Only "a session is writing a reply" is shown** ("エージェントが返信を
   書こうとしている状態であることのみは見えてよい"), in English like the
-  rest of Horizon. `horizon-agentd`'s wiki flow writes
+  rest of Horizon. `horizon-wiki-flow` writes
   `threads/replying.json` each pass: comments whose input the thread's
   session accepted, with no reply yet, while that session runs. The
   shell's session list carries no status, and adopting hidden thread

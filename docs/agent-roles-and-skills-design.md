@@ -72,7 +72,7 @@ duplicates session-loop wiring per role.
 
 A session's role is persisted in the event-log `Record` envelope as
 `role_id: Option<RoleId>`, mirroring `provider_id` exactly, so resume
-after an agentd restart reconstructs the session with its role (and its
+after an agent restart reconstructs the session with its role (and its
 narrowed tools) intact. Old logs deserialize with `role_id = None`.
 
 ## The skill mechanism
@@ -331,7 +331,7 @@ cwd-derived state already has between call sites):
 
 - `providers::rig::session::session_extra_sections` builds one for the
   prompt section (below).
-- `horizon-agentd`'s `session::run_session` builds a second one for
+- `horizon-agent-host`'s `session::environment` builds a second one for
   `skill_read`'s dispatch, installed onto `tools::ToolSessionState` via a
   new builder method (`ToolSessionState::with_skills`) rather than a
   `for_current_dir` parameter — mirroring how `RecallContext` was threaded

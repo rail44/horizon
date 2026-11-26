@@ -15,10 +15,10 @@ line numbers this document cites point at code that no longer exists.
 | Package | Current code |
 | --- | --- |
 | A. Task data and migration | `crates/horizon-board/src/{model,event,store,rank}.rs`, `crates/horizon-logd/src/writer.rs`, board CLI, and the isolated `crates/horizon-board/migration/` importer. |
-| B. Inputs and results | `horizon-agent` contract and `providers/rig/session/{input,turn}.rs`; agentd persists explicit sends in the automatic event batch before the successful tool result. The dispatcher delivers from durable records and acknowledges receipts. |
-| C. Environment and resume | `providers/rig/session/environment.rs`, `horizon-agentd/src/session/{run,resume}.rs`, and `worktree.rs`. |
+| B. Inputs and results | `horizon-agent` contract and `providers/rig/session/{input,turn}.rs`; `horizon-agent-host` persists explicit sends in the automatic event batch before the successful tool result. The dispatcher delivers from durable records and acknowledges receipts. |
+| C. Environment and resume | `providers/rig/session/environment.rs`, `horizon-agent-host/src/session/{run,resume}.rs`, and `worktree.rs`. |
 | D. Common view | `src/board_pane.rs` and `src/board_pane/`, with ordinary session-history entry through workspace commands. |
-| E. Roles and routing | `horizon-board/src/agents.rs`, embedded organizer/task/reviewer skills, and `horizon-agentd/src/board_flow/`. |
+| E. Roles and routing | `horizon-board/src/agents.rs`, embedded organizer/task/reviewer skills, and `horizon-board-flow`. |
 | F. Verification and transition | `scripts/check-board-flow.py` and the migration inventory/converter. Build, full host gate, importer tests, isolated flow, native GUI, selected-record rehearsal, and live cutover passed. The original data and matching old binaries are retained locally for recovery. |
 
 Read state stores the **furthest displayed message** per reader and task;
