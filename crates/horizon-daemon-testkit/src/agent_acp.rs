@@ -90,9 +90,10 @@ impl AgentAcpPaths {
 ///   consuming the developer's real board. Knowledge storage uses this
 ///   same data home. `HORIZON_LOGD_SOCKET` is separate too, so any board
 ///   writes cannot connect to the running user's log daemon.
-/// * `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` at `/dev/null`, so the git
-///   invocations the agent makes (worktree setup, session setup) see none of
-///   the running user's git configuration.
+/// * `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` at `/dev/null`, so git run
+///   from the agent's tools (`bash`) sees none of the running user's git
+///   configuration. The agent's own git calls (worktree setup, checkpoints)
+///   clear every `GIT_` variable and read the user's configuration.
 ///
 /// The env var *names* are the agent's own, resolved inside `horizon-agent`'s
 /// `config` module (`SESSIONS_DIR_VAR`, `STATE_DB_PATH_VAR`) and
