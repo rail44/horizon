@@ -239,15 +239,16 @@ async fn corrupt_event_log_lines_are_reported_in_the_agents_log() {
     let mut agent_acp = agent_acp_spawn(AgentAcpPaths::scratch_at("agent-acp-e2e", sessions_dir))
         .capture_stderr()
         .spawn();
-    let _client = connect(&mut agent_acp).await;
+    let mut client = connect(&mut agent_acp).await;
     agent_acp
         .wait_for_stderr_line(
             "skipped 1 corrupt line and a torn trailing line while reading the session logs",
         )
         .await;
 
-    // The ignored tail must not join the first record the resumed session
-    // writes.
+    // The ignored tail must not join the first record the session writes
+    // once a client resumes it.
+    resume(&mut client, damaged).await.unwrap();
     wait_for_persisted_event(&agent_acp.sessions_dir, damaged, |event| {
         matches!(event, Event::StateChanged(SessionState::Created))
     })

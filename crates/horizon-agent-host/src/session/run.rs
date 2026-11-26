@@ -38,7 +38,7 @@ use crate::worktree::WorktreeInfo;
 /// dedicated thread -- see the module doc for why. Faithfully mirrors the
 /// deleted in-process agent runtime's shape, minus the floem signals/
 /// effects it used to fold through: register the tool/live state (seeded with
-/// `history`, see [`super::resume::resume_persisted_sessions`]), send `Initialize`, then
+/// `history`, see [`super::resume::settle_persisted_sessions`]), send `Initialize`, then
 /// fold every provider event / bash completion / inbound command / replay
 /// request as it arrives, forwarding the resulting (non-ephemeral) events to
 /// Horizon over the wire exactly as `LiveState::extend_provider_events`

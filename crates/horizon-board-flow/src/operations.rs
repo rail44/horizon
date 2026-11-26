@@ -254,8 +254,14 @@ fn ensure_started(
     if state.session_exists(id) {
         return Ok(());
     }
-    if !session_records(state, id)?.is_empty() {
-        return Err("The task session has been explicitly ended".into());
+    let records = session_records(state, id)?;
+    if !records.is_empty() {
+        let events: Vec<_> = records.into_iter().map(|record| record.event).collect();
+        if horizon_agent_host::session::session_has_ended(&events) {
+            return Err("The task session has been explicitly ended".into());
+        }
+        // Not running since the agent started again: it runs again here.
+        return horizon_agent_host::session::resume_session(state, id);
     }
     if state.writer().is_none() {
         return Err("Task sessions require event persistence".into());

@@ -26,33 +26,16 @@ use horizon_agent::tools::cancelled_tool_call_result;
 use super::state::{AgentHostState, lock_unpoisoned};
 use crate::worktree;
 
-/// `docs/agent-runtime-split-design.md` step 4, "agentd start": for each
-/// session log, resumes the session live: any turn still open at that session's
-/// tail (`AgentFrame::is_turn_in_flight`, the same "is a turn in flight"
-/// check the palette's `Cancel Agent Turn` enablement uses) is committed
-/// durably as cancelled *before* the session goes live again, per "any turn
-/// open at the log's tail is committed as cancelled" — then a fresh thread
-/// is spawned exactly as `Control::SessionNew` would, seeded with the whole
-/// history so its first frame is complete. A no-op when there's no writer
-/// (persistence disabled for this run — nothing to resume from or write a
-/// fixup to).
-///
-/// Sessions whose log already ends in a terminal state ([`session_is_dead`])
-/// are skipped entirely rather than resumed: there is no live provider
-/// process left behind a terminated/exited session, so reviving its thread
-/// would just leave it parked forever, and doing this for *every* session
-/// ever created makes startup cost (and thread count) grow without bound
-/// with history -- exactly what was observed as "every historical session
-/// comes back as a ghost" before this filter existed. How many sessions hit
-/// this skip is counted and reported as one combined summary line after the
-/// loop, not printed per session -- a real archived log can carry dozens of
-/// long-dead sessions, which used to bury the "resumed session" lines for
-/// the ones that actually matter.
+/// At startup, settles each session log left alive: a turn still open at
+/// its tail is committed as cancelled, and an exploration whose requester
+/// is gone is terminated and its requester told. No session's thread is
+/// started: a session runs when a client resumes it, or a flow it serves
+/// does (board #117), from its settled log. A no-op without a writer.
 ///
 /// Each session's latest records (`session_summary`) decide whether it is
 /// dead without reading the rest of its log; only the others are read, as
 /// their branch (reaching into the session a fork was forked from).
-pub(crate) fn resume_persisted_sessions(state: &Arc<AgentHostState>) {
+pub(crate) fn settle_persisted_sessions(state: &Arc<AgentHostState>) {
     let Some(writer) = state.writer() else {
         return;
     };
@@ -119,7 +102,7 @@ enum ResumeOutcome {
     NotResumed,
     AlreadyDead,
     ExplorationTerminated(Option<RestartNotice>),
-    Spawned,
+    Settled,
 }
 
 /// What a write child's requester is told after the agent's restart ended the
@@ -154,7 +137,7 @@ impl ResumeTally {
                 self.terminated_explorations += 1;
                 self.restart_notices.extend(notice);
             }
-            ResumeOutcome::NotResumed | ResumeOutcome::Spawned => {}
+            ResumeOutcome::NotResumed | ResumeOutcome::Settled => {}
         }
     }
 
@@ -282,23 +265,8 @@ fn resume_one_session(
         return ResumeOutcome::NotResumed;
     }
 
-    eprintln!(
-        "horizon-agent: resumed session {session_id:?} ({} event(s))",
-        events.len()
-    );
-    super::spawn::spawn_session_thread_with_context(
-        state.clone(),
-        session_id,
-        provider_id,
-        role_id,
-        restored.workspace_root,
-        restored.spawn_source_session_id,
-        restored.worktree,
-        events,
-        persisted_context,
-        appender.tip(),
-    );
-    ResumeOutcome::Spawned
+    let _ = (provider_id, restored, events);
+    ResumeOutcome::Settled
 }
 /// Commit interrupted work before a provider receives the restored history.
 /// The appender must already carry the original turn history and context.
@@ -425,8 +393,14 @@ fn terminate_orphaned_exploration(
 /// [`resume_session`]), or an `Event::Exited` item (the
 /// mock provider's shutdown path, `providers::mock`, pairs this with
 /// `Terminated`; checked independently here in case a future provider ever
-/// sends one without the other). Used by [`resume_persisted_sessions`] to
+/// sends one without the other). Used by [`settle_persisted_sessions`] to
 /// decide which sessions are worth spawning a thread for at all.
+/// Whether the session `events` tell of has ended: terminated, suspended,
+/// or exited.
+pub fn session_has_ended(events: &[Event]) -> bool {
+    session_is_dead(&agent_frame_from_events(events))
+}
+
 pub(super) fn session_is_dead(frame: &AgentFrame) -> bool {
     matches!(
         frame.state,
@@ -505,7 +479,17 @@ pub fn resume_session(state: &Arc<AgentHostState>, session_id: SessionId) -> Res
     let context = own()
         .rev()
         .find_map(|record| record.session_context.clone())
-        .ok_or("Retained session has no environment context")?;
+        // Records predating the context: no worktree, the process's
+        // directory, as `environment::restore` takes them.
+        .unwrap_or(
+            horizon_agent::persistence::event_log::PersistedSessionContext {
+                workspace_root: None,
+                isolated_worktree: false,
+                parent_session_id: None,
+                filesystem_grants: Vec::new(),
+                spawn_source_session_id: None,
+            },
+        );
     for grant in &context.filesystem_grants {
         horizon_sandbox::revalidate_grant(grant).map_err(|error| error.to_string())?;
     }
@@ -1072,7 +1056,7 @@ mod tests {
             })
             .collect();
         state.set_sessions_dir(path.clone());
-        resume_persisted_sessions(&state);
+        settle_persisted_sessions(&state);
         writer.flush().expect("flush resume fixups");
 
         for record in horizon_agent::persistence::event_log::read_all(&path)
@@ -1092,10 +1076,18 @@ mod tests {
             !live.contains(&explore_id),
             "an orphaned exploration session must never be spawned again: {live:?}"
         );
+        // An ordinary mid-turn session is settled, not started (board
+        // #117): its turn closed, and it runs when a client resumes it.
+        assert!(!live.contains(&ordinary_id), "{live:?}");
         assert!(
-            live.contains(&ordinary_id),
-            "an ordinary mid-turn session must still resume: {live:?}"
+            persisted_events(&path, ordinary_id)
+                .iter()
+                .any(|event| matches!(event, Event::TurnEnded(_))),
+            "the ordinary session's interrupted turn must be closed"
         );
+        resume_session(&state, ordinary_id).expect("a client resumes it");
+        assert!(state.session_exists(ordinary_id));
+        state.send_command(ordinary_id, horizon_agent::contract::Command::Shutdown);
 
         let explore_events = persisted_events(&path, explore_id);
         assert!(
@@ -1121,7 +1113,7 @@ mod tests {
         let fresh_state = test_state();
         fresh_state.set_writer(Some(writer.clone()));
         fresh_state.set_sessions_dir(path.clone());
-        resume_persisted_sessions(&fresh_state);
+        settle_persisted_sessions(&fresh_state);
         writer.flush().expect("flush the second resume");
         assert_eq!(
             persisted_events(&path, explore_id).len(),
@@ -1170,7 +1162,7 @@ mod tests {
             let before = records.clone();
 
             state.set_sessions_dir(path.clone());
-            resume_persisted_sessions(&state);
+            settle_persisted_sessions(&state);
             writer.flush().unwrap();
 
             assert!(!state.session_exists(session_id));
@@ -1231,7 +1223,7 @@ mod tests {
 
     /// A session parked in an ordinary live state (here, waiting for the
     /// next user message) must not be flagged as dead -- this is the
-    /// common case `resume_persisted_sessions` must keep resuming.
+    /// common case `settle_persisted_sessions` must keep resuming.
     #[test]
     fn session_is_not_dead_when_waiting_for_user() {
         let events = vec![
@@ -1244,7 +1236,7 @@ mod tests {
 
     /// A session with a turn still genuinely in flight (e.g. parked on an
     /// approval, as a `kill -9` mid-turn would leave it) is not dead either
-    /// -- `resume_persisted_sessions` handles that case by committing the
+    /// -- `settle_persisted_sessions` handles that case by committing the
     /// interrupted turn as cancelled, not by refusing to resume it.
     #[test]
     fn session_is_not_dead_when_a_turn_is_in_flight() {
@@ -1290,7 +1282,7 @@ mod tests {
                 .unwrap();
             writer.flush().unwrap();
             state.set_sessions_dir(path.clone());
-            resume_persisted_sessions(&state);
+            settle_persisted_sessions(&state);
             writer.flush().unwrap();
             let events = persisted_events(&path, session_id);
             assert_eq!(
@@ -1315,7 +1307,6 @@ mod resume_tests {
     use super::*;
     use horizon_agent::contract::{Message, MessageRole};
     use std::path::Path;
-    use std::time::Duration;
 
     fn mock_provider() -> ProviderId {
         ProviderId("builtin.agent.mock".to_string())
@@ -1350,21 +1341,10 @@ mod resume_tests {
         state.sessions.lock().unwrap().keys().copied().collect()
     }
 
-    fn shut_down_sessions(state: &Arc<AgentHostState>) {
-        for session_id in live_sessions(state) {
-            state.send_command(session_id, horizon_agent::contract::Command::Shutdown);
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !live_sessions(state).is_empty() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
     /// Startup reads each session's latest records to tell the sessions its
     /// log left alive from the ended ones, and resumes only the alive.
     #[test]
-    fn startup_resumes_the_sessions_their_logs_leave_alive() {
+    fn startup_settles_the_sessions_their_logs_leave_alive_and_starts_none() {
         let dir = tempfile::tempdir().unwrap();
         let sessions = dir.path().join("sessions");
         let (waiting, mid_turn, ended, suspended) = (
@@ -1408,9 +1388,25 @@ mod resume_tests {
             horizon_agent::persistence::event_log::WriterHandle::open(&sessions),
         ));
 
-        resume_persisted_sessions(&state);
+        settle_persisted_sessions(&state);
 
-        assert_eq!(live_sessions(&state), HashSet::from([waiting, mid_turn]));
-        shut_down_sessions(&state);
+        // None runs until a client or a flow resumes it (board #117)...
+        assert!(live_sessions(&state).is_empty());
+        // ...the turn left open is settled as cancelled meanwhile...
+        state.writer().unwrap().flush().unwrap();
+        let settled = state.flushed_session_records(mid_turn).unwrap();
+        assert!(
+            settled
+                .iter()
+                .any(|record| matches!(record.event, Event::TurnEnded(_))),
+            "{settled:?}"
+        );
+        // ...and the ones left alive are listed, the ended ones not.
+        let listed: HashSet<_> = super::super::Connection::new(state.clone())
+            .session_list()
+            .into_iter()
+            .map(|summary| summary.session_id)
+            .collect();
+        assert_eq!(listed, HashSet::from([waiting, mid_turn]));
     }
 }

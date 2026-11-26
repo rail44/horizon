@@ -102,7 +102,7 @@ fn selection_for_provider_id(
 /// Spawns the dedicated thread for one session — the shared spawn path for
 /// both a fresh `Control::SessionNew` ([`super::connection::Connection::handle_session_new`])
 /// and a session resumed from the persisted log at startup
-/// ([`super::resume::resume_persisted_sessions`]); `history` is empty for the former,
+/// ([`super::resume::settle_persisted_sessions`]); `history` is empty for the former,
 /// already-committed events for the latter. A resumed session that owns a
 /// worktree passes `restored_worktree` only after
 /// [`worktree::adopt_isolated_worktree`] recomputes and validates its

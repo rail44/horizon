@@ -49,7 +49,9 @@ pub fn spawn_resume_task(
             refused(error);
             return;
         }
-        session::resume_persisted_sessions(&state);
+        // Settled, not started: a session runs when a client or a flow
+        // resumes it (board #117).
+        session::settle_persisted_sessions(&state);
         state.mark_resume_ready();
         catch_up_projection(&state);
     });

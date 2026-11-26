@@ -1,6 +1,6 @@
 //! Session hosting: `docs/agent-runtime-split-design.md` steps 3-4. Each
 //! `Control::SessionNew` (or a resumed session found in the event log at
-//! startup, see [`resume_persisted_sessions`]) spawns a dedicated OS thread
+//! startup, see [`settle_persisted_sessions`]) spawns a dedicated OS thread
 //! that owns the real session loop (the same `providers`/`tools`/
 //! `persistence` machinery Horizon used to run in-process), and command/event
 //! envelopes are routed to/from that thread by session id.
@@ -64,7 +64,7 @@ mod title;
 pub(crate) use self::attachment::{AttachmentLease, Bootstrap};
 pub use self::connection::Connection;
 pub(crate) use self::connection::ForkError;
-pub(crate) use self::resume::resume_persisted_sessions;
-pub use self::resume::resume_session;
+pub(crate) use self::resume::settle_persisted_sessions;
+pub use self::resume::{resume_session, session_has_ended};
 pub use self::spawn::spawn_session_thread;
 pub use self::state::{AgentHostState, ModelGroup};

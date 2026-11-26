@@ -89,7 +89,7 @@ pub struct AgentHostState {
     /// Told when the configuration was read again, so the catalog is too.
     config_changed: Notify,
     /// Flips once (see [`Self::mark_resume_ready`]) after
-    /// [`super::resume::resume_persisted_sessions`] finishes populating `sessions` from the
+    /// [`super::resume::settle_persisted_sessions`] finishes populating `sessions` from the
     /// log. `session/list` and `session/resume` must not answer while
     /// this is still false -- see [`Self::wait_until_resume_ready`] -- or a
     /// (re)connecting client would see a partial (or, right after bind,
@@ -381,7 +381,7 @@ impl AgentHostState {
         *self.writer.lock().unwrap() = writer;
     }
 
-    /// Called exactly once, after [`super::resume::resume_persisted_sessions`] returns --
+    /// Called exactly once, after [`super::resume::settle_persisted_sessions`] returns --
     /// see `main`'s startup sequencing.
     pub(crate) fn mark_resume_ready(&self) {
         self.resume_ready.store(true, Ordering::SeqCst);

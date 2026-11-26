@@ -416,6 +416,20 @@ impl Shared {
                     }
                 }
             }
+            // A session not running runs again for the client.
+            if !this.connection.is_running(session_id) {
+                let state = this.connection.state();
+                let resumed = tokio::task::spawn_blocking(move || {
+                    crate::session::resume_session(&state, session_id)
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|resumed| resumed);
+                if let Err(message) = resumed {
+                    let _ = responder.respond_with_error(call_error(message));
+                    return;
+                }
+            }
             this.open_attachment(session_id, Opening::Resume(responder), cx)
                 .await;
         });

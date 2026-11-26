@@ -1,14 +1,11 @@
 //! Re-establish the persisted authority before a session can resume.
 
-use std::path::PathBuf;
-
 use horizon_agent::contract::{Event, SessionId};
 use horizon_agent::persistence::event_log::PersistedSessionContext;
 
 use crate::worktree::{self, WorktreeInfo};
 
 pub(super) struct RestoredEnvironment {
-    pub(super) workspace_root: Option<PathBuf>,
     /// Restored onto the session entry as its spawn source; activation turns
     /// it into the parent. An activated session's persisted parent, else the
     /// persisted spawn source.
@@ -25,7 +22,6 @@ pub(super) fn restore(
         // Records predating session_context retain the process-cwd,
         // no-worktree behavior; the next record stores explicit context.
         return Ok(RestoredEnvironment {
-            workspace_root: None,
             spawn_source_session_id: None,
             worktree: None,
         });
@@ -45,7 +41,6 @@ pub(super) fn restore(
     // from the persisted root instead.
     if !context.isolated_worktree {
         return Ok(RestoredEnvironment {
-            workspace_root: context.workspace_root.clone(),
             spawn_source_session_id: context.spawn_source_session_id,
             worktree: None,
         });
@@ -67,7 +62,6 @@ pub(super) fn restore(
         )
         .map_err(|error| format!("refusing to resume isolated session {session_id:?}: {error}"))?;
     Ok(RestoredEnvironment {
-        workspace_root: Some(worktree.path.clone()),
         spawn_source_session_id: context
             .parent_session_id
             .or(context.spawn_source_session_id),

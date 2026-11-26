@@ -38,6 +38,10 @@ impl Connection {
         self.state.hand_mcp(session_id, servers);
     }
 
+    pub(crate) fn state(&self) -> Arc<AgentHostState> {
+        self.state.clone()
+    }
+
     /// Whether `session_id`'s thread is running in this process.
     pub(crate) fn is_running(&self, session_id: SessionId) -> bool {
         self.state.session_exists(session_id)
@@ -309,7 +313,7 @@ impl Connection {
     /// Delegates to [`AgentHostState::wait_until_resume_ready`] -- see `main`'s
     /// bind-first startup fix: `Control::SessionList`/`Control::SessionLoad`
     /// must block on this before answering, so a client that connects while
-    /// `resume_persisted_sessions` is still running doesn't see an
+    /// `settle_persisted_sessions` is still running doesn't see an
     /// incomplete (or, right after bind, empty) session list.
     pub(crate) async fn wait_until_resume_ready(&self) {
         self.state.wait_until_resume_ready().await;
@@ -323,7 +327,54 @@ impl Connection {
     /// read-only session that is about to be terminated under them. They
     /// remain fully first-class in the event log and DuckDB projection,
     /// which is where their cost is actually measured.
+    /// The sessions running, and the ones not running whose logs leave them
+    /// alive: a session runs only while a client or a flow needs it (board
+    /// #117), and is listed either way.
     pub fn session_list(&self) -> Vec<SessionSummary> {
+        let mut list = self.running_sessions();
+        let running: std::collections::HashSet<_> =
+            list.iter().map(|summary| summary.session_id).collect();
+        list.extend(
+            self.resting_sessions()
+                .into_iter()
+                .filter(|summary| !running.contains(&summary.session_id)),
+        );
+        list
+    }
+
+    /// The sessions not running whose logs leave them alive.
+    fn resting_sessions(&self) -> Vec<SessionSummary> {
+        use horizon_agent::persistence::event_log::{session_ids, session_path, session_summary};
+        let dir = self.state.sessions_dir();
+        let Ok(ids) = session_ids(&dir) else {
+            return Vec::new();
+        };
+        ids.into_iter()
+            .filter_map(|session_id| session_summary(&session_path(&dir, session_id)).ok()?)
+            .filter(|summary| !summary.dead)
+            .filter(|summary| {
+                !summary.role_id.as_ref().is_some_and(|role| {
+                    horizon_agent::roles::is_exploration(role)
+                        || self.state.packages().resolve_role(role).is_none()
+                })
+            })
+            .map(|summary| {
+                let context = summary.session_context;
+                SessionSummary {
+                    session_id: summary.session_id,
+                    provider_id: summary.provider_id.unwrap_or_else(|| {
+                        lock_unpoisoned(&self.state.providers).default_provider_id()
+                    }),
+                    role_id: summary.role_id,
+                    parent_session_id: context.as_ref().and_then(|c| c.parent_session_id),
+                    title: None,
+                    workspace_root: context.and_then(|c| c.workspace_root),
+                }
+            })
+            .collect()
+    }
+
+    fn running_sessions(&self) -> Vec<SessionSummary> {
         self.state
             .sessions
             .lock()
