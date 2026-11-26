@@ -11,10 +11,35 @@ use std::rc::Rc;
 
 use horizon_ui::{El, el};
 
-use super::styles;
 use horizon_wiki::view_model::WikiPage;
 use markdown::ParseOptions;
 use markdown::mdast::Node;
+
+mod styles {
+    horizon_ui::css_module! {"
+        .block { white-space: pre-wrap; }
+        .block > :first-child { margin-top: 0; }
+        .block > :last-child { margin-bottom: 0; }
+        .block h1 { font-size: var(--t2-size); line-height: var(--t2-line); font-weight: 600;
+                    margin: var(--u8) 0 var(--u2) 0; }
+        .block h2, .block h3 { font-size: var(--body-size); line-height: var(--body-line);
+                               font-weight: 600; margin: var(--u8) 0 var(--u2) 0; }
+        .block p, .block ul, .block ol, .block pre, .block blockquote, .block table {
+            margin: 0 0 var(--u8) 0; }
+        .block ul, .block ol { padding-left: 18px; }
+        .block pre { padding: var(--u12); border: var(--line) solid var(--border); border-radius: var(--radius-large);
+                     background: var(--surface-panel); overflow-x: scroll;
+                     font-family: var(--font-family); }
+        .block code { font-family: var(--font-family); padding: 0 var(--u4);
+                      border-radius: var(--radius-small); font-size: var(--meta-size);
+                      background: var(--surface-panel); }
+        .block blockquote { padding-left: var(--u12); border-left: var(--line-strong) solid var(--border);
+                            color: var(--text-muted); }
+        .block td { padding: var(--u2) var(--u8); border: var(--line) solid var(--border); }
+        .mark { background: var(--selection); }
+        .mark.focused { background: var(--surface-selected); }
+    "}
+}
 
 /// One run of text as drawn.
 pub(super) struct Piece {
