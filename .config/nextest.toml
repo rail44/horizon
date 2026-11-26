@@ -195,12 +195,9 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # `horizon-control`'s `client::tests` bind a Unix socket in the system's
 # temporary directory, as `host::listener::tests` do.
 # The agent's tests in the test's own process (`horizon-agent-acp::agent`)
-# run under containment, except three: `workspace_snapshot_asks_the_
-# shells_control_plane` binds the stand-in control plane's Unix socket, and
-# the two that approve a `bash` call (`bash_runs_agentd_side_...`,
-# `repeated_rapid_approve_...`) run it outside the sandbox to write beside
-# the workspace, which containment refuses. (Not run under containment
-# yet: the list is what each test does, as the others above are.)
+# all run under containment: each passed (2026-11-26) under Fence with a
+# session's settings, the worktree and `/tmp/horizon-sandbox/<id>` (its
+# `TMPDIR`) writable and no host reachable.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -212,7 +209,6 @@ default-filter = '''
         + binary_id(horizon::board_logd)
         + (binary_id(horizon-shell-runtime) & test(/^tests::/))
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
-        + (binary_id(horizon-agent-acp::agent) & test(/^(workspace_snapshot_asks_the_shells_control_plane|bash_runs_agentd_side_and_reports_its_result_over_the_wire|repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once)$/))
         + test(/^worktree::tests::a_session_commits_in_its_own_worktree/)
         + test(/^worktree::tests::create_isolated_worktree_branches/)
         + test(/outside_a_git_repository$/)

@@ -243,8 +243,7 @@ agent.rs`) compose the agent in the test's own process
 in-memory byte stream (`tokio::io::duplex`), through the same
 `hub::serve` the binary's standard input and output go through: the same
 ACP messages, with no binary to build first and no process to spawn, so
-they also run under the `sandboxed` nextest profile (but for the three
-that bind a socket or run `bash` outside the sandbox). What the agent
+they also run under the `sandboxed` nextest profile. What the agent
 keeps or reaches is given to the composition rather than read from the
 environment (`Composition`, `Places`): the data home its knowledge,
 board and wiki stores are under, the session logs, the projection, the
