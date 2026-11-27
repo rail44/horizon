@@ -149,6 +149,11 @@ impl Drop for Watched {
 /// file cannot be watched.
 fn watch(file: &Path, told: Told) -> Option<Watched> {
     let directory = (file.parent()).filter(|parent| !parent.as_os_str().is_empty())?;
+    // Watched, and told of, by its real path: macOS's watcher names a file
+    // in its events by that path whatever path it was watched by (the
+    // temporary directory, under `/var`, is in `/private/var`).
+    let directory = (directory.canonicalize()).unwrap_or_else(|_| directory.to_path_buf());
+    let file = directory.join(file.file_name()?);
     let mut watcher = hub().watcher.lock().unwrap();
     if watcher.is_none() {
         match notify::recommended_watcher(handle) {
@@ -162,22 +167,19 @@ fn watch(file: &Path, told: Told) -> Option<Watched> {
     // (The table is let go of before the watcher is asked: see `Hub`.)
     let watched = (hub().table.lock().unwrap())
         .directories
-        .contains_key(directory);
+        .contains_key(&directory);
     if !watched {
-        let watching = (watcher.as_mut())?.watch(directory, RecursiveMode::NonRecursive);
+        let watching = (watcher.as_mut())?.watch(&directory, RecursiveMode::NonRecursive);
         if let Err(error) = watching {
             eprintln!("horizon: {} is not watched: {error}", file.display());
             return None;
         }
     }
     let mut table = hub().table.lock().unwrap();
-    *table
-        .directories
-        .entry(directory.to_path_buf())
-        .or_default() += 1;
+    *table.directories.entry(directory).or_default() += 1;
     let id = table.next;
     table.next += 1;
-    table.told.insert(id, (file.to_path_buf(), told));
+    table.told.insert(id, (file, told));
     Some(Watched(id))
 }
 
@@ -323,13 +325,36 @@ mod tests {
             std::env::temp_dir().join(format!("horizon-watch-many-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let directory = directory.canonicalize().unwrap();
-        let watches: Vec<_> = (0..300)
+        let files: Vec<_> = (0..300)
             .map(|at| {
                 let file = directory.join(format!("{at}.md"));
                 std::fs::write(&file, "one").unwrap();
-                (file.clone(), kept(file).expect("a watch"))
+                file
             })
             .collect();
+        let watches: Vec<_> = (files.into_iter())
+            .map(|file| (file.clone(), kept(file).expect("a watch")))
+            .collect();
+        // What the files' making is still told of (macOS's watcher tells
+        // of a change made just before the watch began) has arrived once a
+        // change made after it has: events come in order. Then nothing has
+        // been told.
+        let canary = directory.join("canary.md");
+        std::fs::write(&canary, "one").unwrap();
+        let heard = kept(canary.clone()).expect("a watch");
+        std::fs::write(&canary, "two").unwrap();
+        let started = Instant::now();
+        while !heard.waiting.lock().unwrap().0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "canary not told"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(heard);
+        for (_, watch) in &watches {
+            watch.waiting.lock().unwrap().0 = false;
+        }
         // A change of the last of them is told to it and to no other.
         let (file, last) = watches.last().unwrap();
         std::fs::write(file, "two").unwrap();

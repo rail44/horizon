@@ -135,7 +135,54 @@ fn plain(path: &Path) -> PathBuf {
 /// resolve it, so a linked worktree names its main checkout.
 #[cfg(target_family = "wasm")]
 pub fn project_root(dir: &Path) -> Option<PathBuf> {
-    project_root_from_files(dir)
+    project_root_from_files(dir).map(|root| resolved(&root).unwrap_or(root))
+}
+
+/// `path` with its symbolic links followed, as `std::fs::canonicalize`
+/// answers where it can be run: WASI has no call for it, and a guest that
+/// named a project by a path through a link (`/var` on macOS) would look
+/// for another project's wiki than the host's. `None` when a part cannot
+/// be read.
+#[cfg(any(target_family = "wasm", test))]
+fn resolved(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut resolved = PathBuf::new();
+    let mut pending: Vec<PathBuf> = path
+        .components()
+        .rev()
+        .map(|part| PathBuf::from(part.as_os_str()))
+        .collect();
+    let mut links = 0;
+    while let Some(part) = pending.pop() {
+        match part.components().next()? {
+            Component::Prefix(_) | Component::RootDir => resolved = part,
+            Component::CurDir => {}
+            Component::ParentDir => _ = resolved.pop(),
+            Component::Normal(_) => {
+                let at = resolved.join(&part);
+                if !std::fs::symlink_metadata(&at)
+                    .ok()?
+                    .file_type()
+                    .is_symlink()
+                {
+                    resolved = at;
+                    continue;
+                }
+                links += 1;
+                if links > 40 {
+                    return None;
+                }
+                let target = std::fs::read_link(&at).ok()?;
+                pending.extend(
+                    target
+                        .components()
+                        .rev()
+                        .map(|part| PathBuf::from(part.as_os_str())),
+                );
+            }
+        }
+    }
+    Some(resolved)
 }
 
 /// The main repository toplevel of `dir`, canonicalized: the parent of
@@ -219,6 +266,24 @@ mod tests {
         };
         let read = project_root_from_files(here).and_then(|root| root.canonicalize().ok());
         assert_eq!(read, Some(named));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_through_links_resolves_as_canonicalize_answers() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        std::fs::create_dir_all(root.join("real/deep")).unwrap();
+        std::os::unix::fs::symlink("real", root.join("relative")).unwrap();
+        std::os::unix::fs::symlink(root.join("real/deep"), root.join("absolute")).unwrap();
+        for path in [
+            root.join("relative/deep"),
+            root.join("absolute/../deep"),
+            root.join("real/./deep"),
+        ] {
+            assert_eq!(resolved(&path), path.canonicalize().ok(), "{path:?}");
+        }
+        assert_eq!(resolved(&root.join("missing")), None);
     }
 
     #[test]
