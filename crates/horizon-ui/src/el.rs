@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::rc::Rc;
 
 use blitz_dom::{BaseDocument, LocalName, NodeId, QualName, ns};
-use blitz_traits::events::DomEvent;
+use blitz_traits::events::{DomEvent, DomEventData};
 use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
@@ -253,6 +253,19 @@ impl El {
     pub fn on_paste(self, handler: impl Fn(&str) + 'static) -> Self {
         (shared().pastes.borrow_mut()).insert(self.0, Rc::new(handler));
         self
+    }
+
+    /// Runs `handler` with the element's width and height (its border
+    /// box) after the first layout it is in and after each that changed
+    /// them, before the frame is painted: a handler that changes what is
+    /// shown asks for the layout again ([`relayout`](crate::relayout)).
+    pub fn on_resize(self, handler: impl Fn(f32, f32) + 'static) -> Self {
+        with_document(|document| document.observe_resize(self.0));
+        self.on("resize", move |event| {
+            if let DomEventData::Resize(size) = &event.data {
+                handler(size.border_box_width, size.border_box_height);
+            }
+        })
     }
 
     /// Hands the element's box to the widget `make` makes, which paints

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use horizon::finder::{Finder, Source};
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
+use horizon_ui::blitz_dom::local_name;
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::{App, Callback, Component};
 use keyboard_types::{Key, Modifiers, NamedKey};
@@ -147,6 +148,29 @@ fn case_matters_once_a_capital_is_typed() {
     let opened = open(files.to_vec(), Theme::built_in, (800, 600));
     opened.type_text("README");
     opened.until("the one file", |text| text.contains("1/2"));
+}
+
+/// A row's directories that do not fit are cut at the start and the row
+/// says so; those that fit are not.
+#[test]
+fn directories_that_do_not_fit_are_cut_and_the_row_says_so() {
+    let cut = |path: &str| {
+        let opened = open(vec![path.to_string()], Theme::built_in, (900, 300));
+        let name = path.rsplit('/').next().expect("a name");
+        opened.until("the file", |text| text.contains(name));
+        let document = opened.app.document();
+        let root = document.borrow().root_element().id;
+        let marks = horizon_ui::testing::find(&opened.app, root, "cut");
+        let document = document.borrow();
+        marks.iter().any(|mark| {
+            let classes =
+                (document.get_node(*mark)).and_then(|node| node.attr(local_name!("class")));
+            classes.is_some_and(|classes| horizon_ui::testing::has_class(classes, "shown"))
+        })
+    };
+    assert!(!cut("crates/horizon-ui/src/el.rs"));
+    let deep = "crates/horizon-terminal-core/src/core/engine/observations/of/the/engine/as/it/runs/under/a/pty/of/its/own/kept.rs";
+    assert!(cut(deep));
 }
 
 /// Paints the finder over this repository's Markdown files in this

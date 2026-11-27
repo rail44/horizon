@@ -100,6 +100,10 @@ fn lay_out(shared: &Rc<Shared>, seconds: f64) {
             round_to_device_pixels(&mut document);
             after_layout(shared, &mut document);
         }
+        // What the layout queued (an element's size changed, `on_resize`),
+        // heard before the frame is painted, as blitz-shell's own
+        // `resolve_and_settle` has it.
+        flush_pending_events(shared);
         let asked = shared.relayout.take();
         if !asked && !shared.written_since_layout.get() {
             return;

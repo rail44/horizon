@@ -6,6 +6,7 @@
 //! A row is the file's path as it is written, its directories muted. A
 //! path too long for the row loses its start, so the file's name stays.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use horizon_ui::blitz_traits::events::DomEventData;
@@ -13,7 +14,7 @@ use horizon_ui::keys::Key;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Callable, Callback, Component, El, dispatched, each_layout, el, relayout};
+use horizon_ui::{Callable, Callback, Component, El, dispatched, el, relayout};
 
 use horizon_components::{Field, Prompt, ROW_SELECTED, list_row};
 
@@ -88,20 +89,30 @@ fn row(found: &Found) -> El {
         el("div")
             .class(styles::WHOLE)
             .children(marked(&characters[..name], 0, &found.hits));
-    let directory = el("div").class(styles::DIRECTORY).child(whole);
     // Whether the directories do not fit: they are then cut at the start,
-    // and the row says so.
+    // and the row says so. Asked again when either box changes width.
     let cut = RwSignal::new(false);
-    each_layout(move |page| {
-        let (Some((whole, _)), Some((room, _))) = (page.size(whole), page.size(directory)) else {
-            return;
-        };
+    let widths = Rc::new(Cell::new((0f32, 0f32)));
+    let fit = move |widths: (f32, f32)| {
+        let (whole, room) = widths;
         let now = whole > room + 0.5;
         if cut.get_untracked() != now {
             cut.set(now);
             relayout();
         }
+    };
+    let of_whole = widths.clone();
+    let whole = whole.on_resize(move |width, _| {
+        of_whole.set((width, of_whole.get().1));
+        fit(of_whole.get());
     });
+    let directory = el("div")
+        .class(styles::DIRECTORY)
+        .child(whole)
+        .on_resize(move |width, _| {
+            widths.set((widths.get().0, width));
+            fit(widths.get());
+        });
     list_row()
         .class(styles::ITEM)
         .child(
