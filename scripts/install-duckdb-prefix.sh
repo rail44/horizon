@@ -52,9 +52,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# The engine version the `duckdb` crate's version encodes: 1.20000.0 => 2.0.0.
+# The engine version the `duckdb` crate's version encodes: 1.20001.0 => 2.0.1.
 # Bump this (and the checksums below) together with that crate.
-duckdb_version="v2.0.0"
+duckdb_version="v2.0.1"
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 prefix="${DUCKDB_PREFIX:-$HOME/opt/duckdb}"
@@ -86,10 +86,10 @@ esac
 # sha256 of duckdb-shared-libs-<platform>.tar.gz for $duckdb_version, taken
 # from the release's published asset digests.
 case "$platform" in
-  linux-amd64) sha256="993ad89e7dfca66cd6da994c2cad090c2fc160ddf9f550498a098ab4bb13cfb1" ;;
-  linux-arm64) sha256="c60eecf91143ca6bbac55c4f4d40dc22520488b0ac257c86e0fe9a2b451cf2b7" ;;
-  osx-amd64) sha256="98fef9fcad856555ca0403fe4d9d6680acfd26c67e8c6f004d61a248d6bc0eff" ;;
-  osx-arm64) sha256="c35d60080b31ba5d11a3ce505a6831be784f003b4c575d32a4c2badb3b41cdf0" ;;
+  linux-amd64) sha256="e25502612fed533a243b61f23a2a574daad030e7e88906222a5f0ab30d06769e" ;;
+  linux-arm64) sha256="811e8b4d0226f5e531f583aadc798070ffb33b350e3823be563a2ebeb2c68593" ;;
+  osx-amd64) sha256="e12f174ef01575590ec6e27a5d475308680a9e15292691623d9848c0fc5a9ba8" ;;
+  osx-arm64) sha256="d71e4800350f1135bc3f80a2e5cbcc01e199ca03759edf5a376db308b514b341" ;;
   *) echo "install-duckdb: no checksum for '$platform'" >&2; exit 1 ;;
 esac
 

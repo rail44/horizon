@@ -219,7 +219,7 @@ as a *separate* static archive, and libduckdb-sys's static link pulls in only
 has those built in, and the full suite passes against it.
 
 Why not the system package: `duckdb`'s crate version encodes the engine its
-bindings target (1.20000.0 = DuckDB 2.0.0), while Void's `duckdb-devel` is
+bindings target (1.20001.0 = DuckDB 2.0.1), while Void's `duckdb-devel` is
 1.5.0. Keep `duckdb` declared `default-features = false` for the same
 reason: from 1.20000.0 the crate's defaults add libduckdb-sys's
 `download-lib`, which resolves *before* pkg-config, fetches a prebuilt
@@ -239,6 +239,12 @@ Storage compatibility, measured rather than assumed (2026-10-23): DuckDB
 2.0 write plus `CHECKPOINT`, DuckDB 1.5.0 still reads the same file. The
 upgrade is not one-way, and the projection is rebuildable from the JSONL log
 regardless.
+
+From 2.0.0 to 2.0.1 (2026-11-27), measured the same way: DuckDB 2.0.1 reads a
+file DuckDB 2.0.0 wrote, and after a 2.0.1 write plus `CHECKPOINT` 2.0.0
+still reads it. A machine moving to 2.0.1 runs
+`scripts/install-duckdb-prefix.sh` again; `~/opt/duckdb/current` then
+points at it.
 
 The extensions (`plugins/*`) build for `wasm32-wasip2`: install the
 target once with `rustup target add wasm32-wasip2`. No WASI C toolchain is
