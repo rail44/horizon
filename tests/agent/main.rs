@@ -477,11 +477,17 @@ impl Opened {
         self.app.document().borrow().get_focussed_node_id()
     }
 
-    fn ctrl_c(&self) {
+    /// The platform's copy chord, as Blitz hears it: Command+C on macOS,
+    /// Control+C elsewhere.
+    fn copy_chord(&self) {
         self.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
             key: keyboard_types::Key::Character("c".into()),
             code: keyboard_types::Code::KeyC,
-            modifiers: keyboard_types::Modifiers::CONTROL,
+            modifiers: if cfg!(target_os = "macos") {
+                keyboard_types::Modifiers::META
+            } else {
+                keyboard_types::Modifiers::CONTROL
+            },
             location: keyboard_types::Location::Standard,
             is_auto_repeating: false,
             is_composing: false,
@@ -525,7 +531,7 @@ fn text_selected_in_the_conversation_is_copied_while_the_field_had_the_focus() {
     assert_eq!(opened.focused(), Some(opened.all("agent")[0]));
     let selected = (opened.app.document().borrow().get_selected_text()).expect("a selection");
     assert!(selected.contains("番目の依頼"), "{selected}");
-    opened.ctrl_c();
+    opened.copy_chord();
     assert_eq!(*clipboard.0.lock().unwrap(), [selected]);
 }
 

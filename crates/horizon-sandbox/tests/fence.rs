@@ -41,8 +41,11 @@ fn run(containment: &Containment, cwd: &Path, script: &str) -> Run {
     }
 }
 
+// Not under the system's temporary directory: on macOS Fence always lets a
+// command write the account's own `/private/var/folders/<a>/<b>`, which holds
+// `$TMPDIR`, so a tree there is writable whatever the containment says.
 fn workspace() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let root = dir.path().canonicalize().unwrap();
     (dir, root)
 }

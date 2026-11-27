@@ -179,16 +179,18 @@ mod tests {
             keymap.bound(&character("X", chord)),
             Some(Bound::Command("no-such-command".to_string()))
         );
-        let known = ["split-down", "add-board-task", "increase-font-size"];
+        // (A terminal's copy and paste are known: macOS binds them to a
+        // second chord each.)
+        let known = [
+            "split-down",
+            "add-board-task",
+            "increase-font-size",
+            "copy-terminal-selection",
+            "paste-into-terminal",
+        ];
         assert_eq!(
             keymap.unknown(&known),
-            [
-                "no-such-command",
-                "decrease-font-size",
-                "reset-font-size",
-                "copy-terminal-selection",
-                "paste-into-terminal"
-            ]
+            ["no-such-command", "decrease-font-size", "reset-font-size"]
         );
         assert!(
             keymap

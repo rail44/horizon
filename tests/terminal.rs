@@ -228,6 +228,13 @@ fn what_is_typed_runs_and_a_chord_interrupts() {
     opened.run("cat");
     opened.run("again");
     opened.wait("cat's copy", |text| text.matches("again").count() == 2);
+    // An arrow reaches the PTY as its escape sequence, which the PTY,
+    // reading a line for `cat`, echoes as it came.
+    opened.key(
+        keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowLeft),
+        Default::default(),
+    );
+    opened.wait("the arrow's sequence", |text| text.contains("^[[D"));
     opened.key(
         keyboard_types::Key::Character("c".into()),
         keyboard_types::Modifiers::CONTROL,
@@ -237,9 +244,7 @@ fn what_is_typed_runs_and_a_chord_interrupts() {
     opened.run("echo after-$((1+1))");
     opened.done("the shell again", |text| text.contains("after-2"));
 
-    // Backspace takes out what is before the cursor. An arrow reaches the
-    // shell as its escape sequence, which this shell, having no line
-    // editing, shows as it came.
+    // Backspace takes out what is before the cursor.
     opened.type_text("echo abX");
     opened.key(
         keyboard_types::Key::Named(keyboard_types::NamedKey::Backspace),
@@ -249,11 +254,6 @@ fn what_is_typed_runs_and_a_chord_interrupts() {
     opened.wait("the edited line", |text| {
         text.lines().any(|line| line == "abcd")
     });
-    opened.key(
-        keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowLeft),
-        Default::default(),
-    );
-    opened.wait("the arrow's sequence", |text| text.contains("^[[D"));
 }
 
 #[test]
@@ -1200,10 +1200,27 @@ fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
     let started = Instant::now();
     // About 5.4 MB: past what a view may be sent and not take in (2 MB)
     // while it takes in nothing, and short enough not to hold the
-    // machine's cores from the tests beside it.
-    opened.run("yes flooding | head -n 600000; echo flood-over");
-    // The view takes nothing in for a while: it falls behind.
-    std::thread::sleep(Duration::from_millis(1500));
+    // machine's cores from the tests beside it. After it the shell asks
+    // the terminal for its status and reads the answer, which the
+    // terminal gives once it has read all that came before: only then is
+    // the marker made.
+    let marker = std::env::temp_dir().join(format!("horizon-flood-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marker);
+    opened.run(&format!(
+        "yes flooding | head -n 600000; stty -echo -icanon min 4 time 0; printf '\\033[5n'; \
+         head -c 4 >/dev/null; stty echo icanon; : >'{}'; echo flood-over",
+        marker.display()
+    ));
+    // The view takes nothing in until the terminal has read the whole
+    // flood: it falls behind, however fast the machine is.
+    while !marker.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the flood was not read"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_file(&marker);
     let text = loop {
         opened.app.resolve();
         let text = opened.terminal.text();

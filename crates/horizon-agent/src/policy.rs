@@ -618,7 +618,7 @@ mod tests {
 
         let tool_state = crate::tools::ToolSessionBuilder::new(root.path().canonicalize().unwrap())
             .with_filesystem_grants(vec![horizon_sandbox::FilesystemGrant {
-                path: outside.path().to_path_buf(),
+                path: outside.path().canonicalize().unwrap(),
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
                 excluded_subpaths: Vec::new(),

@@ -2,6 +2,7 @@
 //! come out as, and a change of them reaching a view through the one
 //! attribute.
 
+use horizon_theme::spec::DEFAULT_FONT_FAMILY;
 use horizon_theme_css::{CSS, Theme, themed};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, Set};
@@ -19,10 +20,12 @@ fn the_built_in_theme_is_the_default_scheme_and_the_scale_at_thirteen() {
         "--meta-size: 11px; --meta-line: 17px;",
         "--u8: 7px;",
         "--u24: 22px;",
-        "--font-family: \"DejaVu Sans Mono\";",
     ] {
         assert!(variables.contains(expected), "{expected} in {variables}");
     }
+    // `horizon-theme`'s default family, which is the platform's own.
+    let family = format!("--font-family: \"{DEFAULT_FONT_FAMILY}\";");
+    assert!(variables.contains(&family), "{family} in {variables}");
 }
 
 #[test]

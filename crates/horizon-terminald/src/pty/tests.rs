@@ -74,15 +74,19 @@ fn read_to_end(pty: &Pty) -> String {
 fn the_program_reads_its_size_and_its_terminal_from_the_pty() {
     let (pty, _) = spawn(
         size(7, 33),
-        &sh("stty size; test -t 0 && echo on-a-terminal; ps -o sid= -p $$; echo $$"),
+        &sh("stty size; test -t 0 && echo on-a-terminal; echo \"stat:$(ps -o stat= -p $$)\""),
         Path::new("/"),
     );
     let said = read_to_end(&pty);
     assert!(said.contains("7 33"), "{said:?}");
     assert!(said.contains("on-a-terminal"), "{said:?}");
-    // It leads a session of its own: its session id is its own pid.
-    let words: Vec<&str> = said.split_whitespace().collect();
-    assert_eq!(words[words.len() - 2], words[words.len() - 1], "{said:?}");
+    // It leads a session of its own: `s` in its state, on Linux's and
+    // the BSDs' `ps` alike (only Linux's has a `sid` column).
+    let state = said
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("stat:"))
+        .unwrap_or_default();
+    assert!(state.contains('s'), "{said:?}");
 }
 
 #[test]

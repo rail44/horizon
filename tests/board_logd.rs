@@ -28,14 +28,18 @@ struct Scratch(PathBuf);
 impl Drop for Scratch {
     fn drop(&mut self) {
         let socket = self.0.join("logd.sock");
-        // The daemon is the process started with this socket.
-        for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-            let Ok(command) = std::fs::read(entry.path().join("cmdline")) else {
+        // The daemon is the process started with this socket, as `ps`
+        // lists it (there is no `/proc` on macOS).
+        let listed = Command::new("ps")
+            .args(["-A", "-ww", "-o", "pid=", "-o", "args="])
+            .output();
+        let listed = listed.map(|listed| listed.stdout).unwrap_or_default();
+        for line in String::from_utf8_lossy(&listed).lines() {
+            let Some((pid, command)) = line.trim_start().split_once(' ') else {
                 continue;
             };
-            let command = String::from_utf8_lossy(&command);
             if command.contains("horizon-logd") && command.contains(&*socket.to_string_lossy()) {
-                let _ = Command::new("kill").arg(entry.file_name()).status();
+                let _ = Command::new("kill").arg(pid).status();
             }
         }
         let _ = std::fs::remove_dir_all(&self.0);

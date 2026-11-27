@@ -199,7 +199,12 @@ fn a_contained_call_runs_git_without_its_automatic_housekeeping() {
     .to_json();
 
     assert_eq!(output["exit_code"], 0, "{output}");
-    assert_eq!(output["output"].as_str(), Some("0\nfalse\n"), "{output}");
+    // Fence's monitor lines (`-m`) are left out: on macOS its log stream
+    // reports what git's own logging was denied, as and when it comes.
+    let printed: Vec<&str> = (output["output"].as_str().unwrap_or_default().lines())
+        .filter(|line| !line.starts_with("[fence:"))
+        .collect();
+    assert_eq!(printed, ["0", "false"], "{output}");
 }
 
 // --- timeout ----------------------------------------------------------

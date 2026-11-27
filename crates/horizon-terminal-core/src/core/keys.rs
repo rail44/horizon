@@ -486,7 +486,20 @@ mod tests {
                 // xterm does: see `legacy_shift_dropped`.)
                 "\\u{1}",
             ),
-            ("KeyA", KeyCode::Char('a'), alt, Some("a"), "\\u{1b}a"),
+            (
+                "KeyA",
+                KeyCode::Char('a'),
+                alt,
+                Some("a"),
+                // (On macOS the engine takes Option for a key that makes
+                // text, as Ghostty's `macos-option-as-alt` does by
+                // default: the text is written, with no Escape before it.)
+                if cfg!(target_os = "macos") {
+                    "a"
+                } else {
+                    "\\u{1b}a"
+                },
+            ),
             (
                 "KeyA",
                 KeyCode::Char('a'),

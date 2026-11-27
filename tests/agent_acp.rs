@@ -54,35 +54,39 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let socket = self.0.join("logd.sock");
         // The daemon is the process started with this socket.
-        for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-            let Ok(command) = std::fs::read(entry.path().join("cmdline")) else {
-                continue;
-            };
-            let command = String::from_utf8_lossy(&command);
+        for (pid, _, command) in processes() {
             if command.contains("horizon-logd") && command.contains(&*socket.to_string_lossy()) {
-                let _ = Command::new("kill").arg(entry.file_name()).status();
+                let _ = Command::new("kill").arg(pid.to_string()).status();
             }
         }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
+/// Every process, with its parent and its command line, as `ps` lists
+/// them: on Linux and macOS alike, where `/proc` is Linux's alone.
+fn processes() -> Vec<(u32, u32, String)> {
+    let listed = Command::new("ps")
+        .args(["-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "args="])
+        .output()
+        .expect("ps");
+    String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            let parent = words.next()?.parse().ok()?;
+            Some((pid, parent, words.collect::<Vec<_>>().join(" ")))
+        })
+        .collect()
+}
+
 /// The test's `horizon-agent-acp` child, if one runs.
 fn agent_child_of_now() -> Option<u32> {
-    let own = std::process::id().to_string();
-    std::fs::read_dir("/proc")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .find_map(|entry| {
-            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
-            let status = std::fs::read_to_string(entry.path().join("status")).ok()?;
-            let parent = status.lines().find_map(|line| line.strip_prefix("PPid:"))?;
-            let command = std::fs::read(entry.path().join("cmdline")).ok()?;
-            (parent.trim() == own
-                && String::from_utf8_lossy(&command).contains("horizon-agent-acp"))
-            .then_some(pid)
-        })
+    let own = std::process::id();
+    processes().into_iter().find_map(|(pid, parent, command)| {
+        (parent == own && command.contains("horizon-agent-acp")).then_some(pid)
+    })
 }
 
 /// The test's `horizon-agent-acp` child.

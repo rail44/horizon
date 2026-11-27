@@ -4,8 +4,13 @@ use std::os::unix::net::UnixListener;
 use super::*;
 use crate::contract::{HelloAck, Workspace};
 
+// A short name: the socket inside it must stay under SUN_LEN (~104 bytes on
+// macOS), and temp_dir() alone is ~50 bytes there.
 fn scratch() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("horizon-control-client-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "hzn-cc-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
