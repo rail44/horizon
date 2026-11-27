@@ -160,10 +160,10 @@ mime_guess = { version = "2", default-features = false }
 nucleo = "0.5"
 # Reads an extension's manifest out of its component: the version
 # wasmtime itself is built on.
-wasmparser = "0.261"
+wasmparser = "0.263"
 futures = "0.3"
 kurbo = "0.13"
-notify = "8"
+notify = "9"
 # `complex-scripts`: the word breaker with its dictionary for Chinese and
 # Japanese. Without it a debug build writes a warning to stderr for each
 # such run of text it shapes.
@@ -179,7 +179,7 @@ uuid = { version = "1.18", features = ["v4"] }
 # The desktop's notification service (`src/desktop_notify.rs`).
 notify-rust = "4"
 # The runtime a preview's plugin runs in (`src/preview.rs`).
-wasmtime = { version = "50", default-features = false, features = [
+wasmtime = { version = "51", default-features = false, features = [
     "async",
     "cache",
     "demangle",
@@ -189,7 +189,7 @@ wasmtime = { version = "50", default-features = false, features = [
     "parallel-compilation",
     "wave",
 ] }
-wasmtime-wasi = "50"
+wasmtime-wasi = "51"
 
 [dev-dependencies]
 # The terminal view's tests run the terminal core over a PTY of their own.

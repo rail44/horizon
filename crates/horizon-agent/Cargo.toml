@@ -22,7 +22,7 @@ test-fixtures = []
 anyhow = "1.0"
 async-trait = "0.1"
 crossbeam-channel = "0.5"
-dom_smoothie = "0.19"
+dom_smoothie = "0.20"
 duckdb = { version = "1", default-features = false }
 # `default-features = false` keeps the build on an installed library. From
 # 1.20000.0 the crate's defaults add libduckdb-sys's `download-lib`, which
@@ -40,16 +40,16 @@ ignore = "0.4"
 libc = "0.2"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-rig-core = { version = "0.46.0", features = ["reqwest"] }
+rig-core = { version = "0.47.1", features = ["reqwest"] }
 # rig's own shared reqwest client, handed to a turn's model: rig-core
 # builds it behind its `reqwest` feature without re-exporting it.
-rig-reqwest = "0.46.0"
+rig-reqwest = "0.47.1"
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_path_to_error = "0.1"
 # SKILL.md frontmatter, read as YAML per the Agent Skills spec (`skills`).
-serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
+serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"

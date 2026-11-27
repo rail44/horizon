@@ -342,17 +342,13 @@ async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
         .await
         .expect("local provider timed out");
         server.await.unwrap();
-        // Both adapters report the cap; only the Anthropic wire also reports the
-        // call as open. The OpenAI decoder closes an unclosed tool call itself
-        // when the reply ends, so its `unfinished_calls` is empty and the cap is
-        // what names the truncation. Measured against rig 0.45 with a canned
-        // stream through the public client seam, not assumed.
-        let expected = match kind.wire() {
-            Wire::OpenAi => crate::providers::rig::completion::Truncation::OutputCap,
-            Wire::Anthropic => crate::providers::rig::completion::Truncation::Tools {
-                unfinished: std::num::NonZeroUsize::new(1).expect("one open call"),
-                output_cap: true,
-            },
+        // Both adapters report the cap and the call as open. Measured against
+        // rig 0.47 with a canned stream through the public client seam, not
+        // assumed: before 0.47 the OpenAI decoder closed an unclosed tool call
+        // itself when the reply ended, and only the cap named its truncation.
+        let expected = crate::providers::rig::completion::Truncation::Tools {
+            unfinished: std::num::NonZeroUsize::new(1).expect("one open call"),
+            output_cap: true,
         };
         assert_eq!(
             outcome.stop,
