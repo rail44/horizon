@@ -53,15 +53,15 @@ pub mod windowed;
 #[cfg(not(target_family = "wasm"))]
 pub use app::{App, Live};
 #[cfg(not(target_family = "wasm"))]
-pub use dispatch::{prevent_default, stop_propagation};
+pub use dispatch::{capture_pointer, prevent_default, stop_propagation};
 #[cfg(not(target_family = "wasm"))]
 pub use el::{El, copy, el, is_text_field, request_paste, svg};
 #[cfg(not(target_family = "wasm"))]
 pub use frame::{each_effects, frame, relayout};
 #[cfg(target_family = "wasm")]
 pub use guest::{
-    Bounds, El, Page, dispatched, each_layout, el, is_text_field, prevent_default, relayout,
-    stop_propagation, svg,
+    Bounds, El, Page, capture_pointer, dispatched, each_layout, el, is_text_field, prevent_default,
+    relayout, stop_propagation, svg,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use input_method::{InputPurpose, input_purpose};

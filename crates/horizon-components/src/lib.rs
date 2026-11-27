@@ -12,8 +12,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon_ui::El;
 use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::{El, capture_pointer};
 
 mod alert;
 mod button;
@@ -48,20 +48,51 @@ pub use slider::{Range, Slider};
 type Moved = Rc<dyn Fn(f32, f32)>;
 /// A drag in progress: what hears its moves, and what hears where its
 /// button came up.
-type Drag = (Moved, Option<Moved>);
+type Held = (Moved, Option<Moved>);
 
-/// What follows the pointer while a button is held: a thumb being
-/// dragged, text being selected. A component begins a drag on its own
-/// element; the moves that follow arrive wherever the pointer is, so the
-/// view wires them in at its root.
-#[derive(Clone, Default)]
-pub struct Drags(Rc<RefCell<Option<Drag>>>);
+/// What follows the pointer while a button pressed on an element is held:
+/// a thumb being dragged, text being selected. The press captures the
+/// pointer for the element (`capture_pointer`), so the moves that follow
+/// and the release arrive at the element wherever the pointer is.
+#[derive(Clone)]
+pub struct Drag {
+    element: El,
+    held: Rc<RefCell<Option<Held>>>,
+}
 
-impl Drags {
-    /// From a component: `moved` hears where the pointer is, on the page,
-    /// until the button comes up.
+impl Drag {
+    /// Drags begun on `element`: its pointer moves and releases drive the
+    /// one in progress.
+    pub fn on(element: El) -> Self {
+        let held = Rc::<RefCell<Option<Held>>>::default();
+        let (moving, ending) = (held.clone(), held.clone());
+        element
+            .on("pointermove", move |event| {
+                let DomEventData::PointerMove(pointer) = &event.data else {
+                    return;
+                };
+                let moved = moving.borrow().clone();
+                if let Some((moved, _)) = moved {
+                    moved(pointer.page_x(), pointer.page_y());
+                }
+            })
+            .on("pointerup", move |event| {
+                let held = ending.borrow_mut().take();
+                let (Some((_, Some(ended))), DomEventData::PointerUp(pointer)) =
+                    (held, &event.data)
+                else {
+                    return;
+                };
+                ended(pointer.page_x(), pointer.page_y());
+            });
+        Self { element, held }
+    }
+
+    /// From the element's press: `moved` hears where the pointer is, on
+    /// the page, until the button comes up.
     pub fn begin(&self, moved: impl Fn(f32, f32) + 'static) {
-        *self.0.borrow_mut() = Some((Rc::new(moved), None));
+        *self.held.borrow_mut() = Some((Rc::new(moved), None));
+        capture_pointer(self.element);
     }
 
     /// [`begin`](Self::begin), and `ended` hears where the button came
@@ -71,29 +102,7 @@ impl Drags {
         moved: impl Fn(f32, f32) + 'static,
         ended: impl Fn(f32, f32) + 'static,
     ) {
-        *self.0.borrow_mut() = Some((Rc::new(moved), Some(Rc::new(ended))));
-    }
-
-    /// From the view: `root`'s pointer moves and releases drive the drag
-    /// in progress.
-    pub fn wire(&self, root: El) -> El {
-        let (moving, ending) = (self.clone(), self.clone());
-        root.on("pointermove", move |event| {
-            let DomEventData::PointerMove(pointer) = &event.data else {
-                return;
-            };
-            let moved = moving.0.borrow().clone();
-            if let Some((moved, _)) = moved {
-                moved(pointer.page_x(), pointer.page_y());
-            }
-        })
-        .on("pointerup", move |event| {
-            let drag = ending.0.borrow_mut().take();
-            let (Some((_, Some(ended))), DomEventData::PointerUp(pointer)) = (drag, &event.data)
-            else {
-                return;
-            };
-            ended(pointer.page_x(), pointer.page_y());
-        })
+        *self.held.borrow_mut() = Some((Rc::new(moved), Some(Rc::new(ended))));
+        capture_pointer(self.element);
     }
 }

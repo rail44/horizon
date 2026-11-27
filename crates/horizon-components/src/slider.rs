@@ -7,7 +7,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
 use horizon_ui::{Callable, Callback, Component, El, dispatched, el, prevent_default};
 use keyboard_types::{Key, NamedKey};
 
-use super::Drags;
+use super::Drag;
 
 mod styles {
     horizon_ui::css_module! {"
@@ -48,31 +48,22 @@ impl Range {
 
 /// Builds a slider over `value`. `changed` hears each value a person
 /// moved it to.
-pub struct Slider<'a> {
+pub struct Slider {
     /// The value: the slider follows it, and sets it as it is dragged.
     pub value: RwSignal<f64>,
     pub range: Range,
-    /// Where a drag that leaves the slider is heard (`Drags::wire`).
-    pub drags: &'a Drags,
     /// Told of each value a person set.
     pub on_change: Callback<f64>,
 }
 
-impl Component for Slider<'_> {
+impl Component for Slider {
     fn view(self) -> El {
         let on_change = self.on_change;
-        slider(self.value, self.range, self.drags, move |value| {
-            on_change.run(value)
-        })
+        slider(self.value, self.range, move |value| on_change.run(value))
     }
 }
 
-fn slider(
-    value: RwSignal<f64>,
-    range: Range,
-    drags: &Drags,
-    changed: impl Fn(f64) + Clone + 'static,
-) -> El {
+fn slider(value: RwSignal<f64>, range: Range, changed: impl Fn(f64) + Clone + 'static) -> El {
     let track = el("div").class(styles::TRACK);
     let moved = {
         let changed = changed.clone();
@@ -99,8 +90,8 @@ fn slider(
         }
     };
     let percent = move || format!("{}%", range.share(value.get()) * 100.);
-    let drags = drags.clone();
     let slider = el("div");
+    let drag = Drag::on(slider);
     slider
         .class(styles::SLIDER)
         .attr("tabindex", "0")
@@ -110,7 +101,7 @@ fn slider(
             };
             toward(pointer.page_x());
             let toward = toward.clone();
-            drags.begin(move |x, _| toward(x));
+            drag.begin(move |x, _| toward(x));
             // Not the start of a selection in the text around it, which
             // keeps the focus where it was too: the press gives it the keys.
             prevent_default();

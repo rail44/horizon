@@ -47,19 +47,17 @@ fn open_at(style: &str) -> Opened {
     let (given, log) = (session.clone(), opened_urls.clone());
     let mut terminal = None;
     let app = App::new(900, 540, "Test", "", || {
-        let drags = horizon_components::Drags::default();
         let look = RwSignal::new(Theme::built_in().terminal());
         followed = Some(look);
         let (root, state) = build(TerminalView {
             session: given,
             look: look.into(),
             open_link: Some(Rc::new(move |url| log.borrow_mut().push(url.to_string()))),
-            drags: drags.clone(),
         });
         terminal = Some(state);
         root.focus();
-        // The page around the view: where a drag that leaves it is heard.
-        let around = horizon_ui::el("div")
+        // The page around the view.
+        horizon_ui::el("div")
             .attr("style", "width: 100%; height: 100%;")
             .child(
                 horizon_ui::el("div")
@@ -68,8 +66,7 @@ fn open_at(style: &str) -> Opened {
                         &format!("height: 100%; box-sizing: border-box; {style}"),
                     )
                     .child(root),
-            );
-        drags.wire(around)
+            )
     });
     app.resolve();
     let opened = Opened {

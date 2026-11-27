@@ -114,6 +114,13 @@ pub fn stop_propagation() {
     STOPPED.set(true);
 }
 
+/// From a pointer's handler (its press): the pointer's moves and its
+/// release go to `element` until its button comes up, wherever the
+/// pointer is.
+pub fn capture_pointer(element: El) {
+    host::capture_pointer(id(element));
+}
+
 /// An element being built: a node of the host's document already.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct El(pub NodeId);

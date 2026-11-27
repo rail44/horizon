@@ -8,7 +8,9 @@ use horizon::workspace::{Modal, Opening, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_dom::NodeId;
-use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
+use horizon_ui::blitz_traits::events::{
+    BlitzImeEvent, BlitzKeyEvent, BlitzPointerId, KeyState, UiEvent,
+};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_ui::testing::{Pointer, click_at, pointer};
 use horizon_workspace::{Cursor, PaneId, SessionId, SessionKind, Side, Workspace};
@@ -670,8 +672,16 @@ fn a_boundary_dragged_changes_the_panes_shares_and_builds_nothing() {
     pointer(&opened.app, x, y, Pointer::Move);
     pointer(&opened.app, x, y, Pointer::Down);
     pointer(&opened.app, 500., y + 30., Pointer::Drag);
+    // Off the boundary, the drag is still the boundary's (its cursor too).
+    let captured = || {
+        let document = opened.app.document();
+        let document = document.borrow();
+        document.pointer_capture_target(BlitzPointerId::MOUSE)
+    };
+    assert_eq!(captured(), Some(opened.all("divider")[0]));
     pointer(&opened.app, 400., y + 60., Pointer::Drag);
     pointer(&opened.app, 400., y + 60., Pointer::Up);
+    assert_eq!(captured(), None);
     opened.app.resolve();
     let after = opened.bounds(panes[0]);
     // (Two panes in a tab's card, a line between them.)

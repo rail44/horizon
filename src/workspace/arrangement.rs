@@ -12,7 +12,7 @@ use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{Owner, on_cleanup};
 use horizon_ui::reactive_graph::traits::{Get, Set, Update, With, WithUntracked, WithValue};
-use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
+use horizon_ui::{El, capture_pointer, dispatched, el, prevent_default, stop_propagation};
 use horizon_workspace::types::{LayoutNode, NodeKey, TabGroupId, TabId, TabSummary};
 use horizon_workspace::{Cursor, PaneId, SplitAxis, Workspace};
 
@@ -365,17 +365,19 @@ fn arrange(
                 before: index - 1,
                 ..resize.clone()
             };
-            split.child(
-                el("div")
-                    .class(styles::DIVIDER)
-                    .child(el("div").class(styles::GRIP))
-                    .on("pointerdown", move |_| {
-                        let resize = resize.clone();
-                        shell.resizing.update(|resizing| *resizing = Some(resize));
-                        // Not the start of a selection in the text around it.
-                        prevent_default();
-                    }),
-            );
+            let divider = el("div").class(styles::DIVIDER);
+            split.child(divider.child(el("div").class(styles::GRIP)).on(
+                "pointerdown",
+                move |_| {
+                    let resize = resize.clone();
+                    shell.resizing.update(|resizing| *resizing = Some(resize));
+                    // The drag stays the divider's, and keeps its cursor,
+                    // wherever the pointer goes.
+                    capture_pointer(divider);
+                    // Not the start of a selection in the text around it.
+                    prevent_default();
+                },
+            ));
         }
         split.child(cell);
     }

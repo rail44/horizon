@@ -30,7 +30,7 @@ use parley::{Layout, PositionedLayoutItem};
 use peniko::{Color, Fill};
 use termwiz::input::{KeyCode, Modifiers};
 
-use horizon_components::Drags;
+use horizon_components::Drag;
 use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
 use horizon_shell_runtime::terminal_links::url_from_lines;
 use horizon_theme_css::TerminalLook;
@@ -179,7 +179,8 @@ struct State {
     reporting: Cell<Option<TerminalMouseButton>>,
     /// What a link clicked with Ctrl held (Cmd on macOS) is followed with.
     open_link: Option<OpenLink>,
-    drags: Drags,
+    /// What follows the pointer from a press in the view.
+    drag: Drag,
     /// Whether a button went down here and is still held, and whether what
     /// it drags is a selection (or, otherwise, a report to the program).
     dragging: Cell<Option<bool>>,
@@ -187,12 +188,11 @@ struct State {
 
 impl State {
     /// A view of `given`'s session, before anything of it is drawn.
-    fn new(given: TerminalView) -> Self {
+    fn new(given: TerminalView, drag: Drag) -> Self {
         let TerminalView {
             session,
             look,
             open_link,
-            drags,
         } = given;
         let look = look.get_untracked();
         Self {
@@ -216,7 +216,7 @@ impl State {
             clicked: Cell::new(None),
             reporting: Cell::new(None),
             open_link,
-            drags,
+            drag,
             dragging: Cell::new(None),
         }
     }
@@ -234,10 +234,6 @@ pub struct TerminalView {
     pub look: Signal<TerminalLook>,
     /// Follows a link clicked with Ctrl held (Cmd on macOS).
     pub open_link: Option<OpenLink>,
-    /// Where the moves of a drag begun here are heard, wherever on the
-    /// page the pointer goes, and where the button comes up
-    /// (`Drags::wire`, at the root of whatever the view is placed in).
-    pub drags: Drags,
 }
 
 impl Component for TerminalView {
@@ -456,7 +452,8 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
 /// Builds the view, with the way into it.
 pub fn build(given: TerminalView) -> (El, Terminal) {
     let TerminalView { look, .. } = given;
-    let state = Rc::new(State::new(given));
+    let element = el("div").class(styles::TERMINAL).attr("tabindex", "0");
+    let state = Rc::new(State::new(given, Drag::on(element)));
     // The session has a terminal of its own while this view is on the
     // page: from here until whoever placed the view says it is off it
     // (`Terminal::shown`), or the view ends.
@@ -475,7 +472,6 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
         *restyled.look.borrow_mut() = look;
         restyled.restyled.set(restyled.restyled.get() + 1);
     });
-    let element = el("div").class(styles::TERMINAL).attr("tabindex", "0");
 
     // The cell under a point of the element's box.
     let cell_at = {
@@ -797,7 +793,7 @@ fn scroll_back(state: &State, rows: f32) {
 /// with `modifiers`, the press's.
 fn drag(state: &Rc<State>, modifiers: TerminalMouseModifiers) {
     let (moved, lifted) = (state.clone(), state.clone());
-    state.drags.begin_until(
+    state.drag.begin_until(
         move |x, y| {
             let point = cell_on_page(&moved, x, y);
             match moved.dragging.get() {

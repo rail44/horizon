@@ -3,7 +3,6 @@
 
 use std::rc::Rc;
 
-use horizon_components::Drags;
 use horizon_terminal_core::TerminalCommand;
 use horizon_theme_css::TerminalLook;
 use horizon_ui::reactive_graph::wrappers::read::Signal;
@@ -18,8 +17,6 @@ pub struct TerminalPlugin {
     pub session: Rc<Session>,
     pub look: Signal<TerminalLook>,
     pub open_link: Option<OpenLink>,
-    /// Where a drag that leaves the pane is heard.
-    pub drags: Drags,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,7 +34,6 @@ impl TerminalPlugin {
             session: self.session,
             look: self.look,
             open_link: self.open_link,
-            drags: self.drags,
         });
         let run = Callback::new(move |command| match command {
             TerminalPaneCommand::CopySelection => session.copy_selection(),

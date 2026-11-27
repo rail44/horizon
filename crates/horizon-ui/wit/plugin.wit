@@ -37,6 +37,10 @@ interface document {
     /// Has the plugin hear an event at a node: on its way in to what is
     /// inside the node, or at the node and on its way out.
     listen: func(node: u64, event: string, capture: bool);
+    /// From a handler of a pointer's press: the pointer's moves and its
+    /// release go to a node until its button comes up, wherever the
+    /// pointer is.
+    capture-pointer: func(node: u64);
     /// From work after a layout: lay out again before painting.
     relayout: func();
     /// Effects of the plugin's wait to be run: the host runs them

@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use horizon_components::{
-    AlertDialog, ColorPicker, Drags, MenuButton, MenuItem, MenuLabel, ROW_SELECTED, Range, Select,
-    Slider, list_row,
+    AlertDialog, ColorPicker, MenuButton, MenuItem, MenuLabel, ROW_SELECTED, Range, Select, Slider,
+    list_row,
 };
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::NodeId;
@@ -28,20 +28,19 @@ const HOST: &str = "
 
 /// A page with what `build` makes on it, and beside it something else
 /// that takes the focus.
-fn open(build: impl FnOnce(&Drags) -> El) -> App {
+fn open(build: impl FnOnce() -> El) -> App {
     open_with(build)
 }
 
 /// [`open`], for a test whose own `open` is a signal.
-fn open_with(build: impl FnOnce(&Drags) -> El) -> App {
+fn open_with(build: impl FnOnce() -> El) -> App {
     let sheet = [horizon_theme_css::CSS, HOST].concat();
     let app = App::new(400, 400, "Test", &sheet, || {
-        let drags = Drags::default();
         let host = el("div")
             .class("host")
-            .child(build(&drags))
+            .child(build())
             .child(el("div").class("other").attr("tabindex", "0"));
-        themed(Theme::built_in, drags.wire(host))
+        themed(Theme::built_in, host)
     });
     app.resolve();
     app
@@ -117,7 +116,7 @@ fn painted(app: &App) -> impl Fn(f32, f32) -> [u8; 3] {
 
 #[test]
 fn list_rows_draw_an_accent_border_for_selection_and_a_band_on_hover() {
-    let app = open(|_| {
+    let app = open(|| {
         let row = || list_row().attr("style", "width: 100px; height: 28px;");
         el("div")
             .attr("style", "--accent: #ff0000; --band: #00ff00;")
@@ -156,11 +155,10 @@ fn a_slider_follows_a_press_a_drag_and_the_keys_in_its_steps() {
         max: 10.,
         step: 0.5,
     };
-    let app = open(|drags| {
+    let app = open(|| {
         Slider {
             value,
             range,
-            drags,
             on_change: Callback::new(move |to| log.borrow_mut().push(to)),
         }
         .view()
@@ -211,7 +209,7 @@ fn a_select_opens_its_options_and_one_is_chosen_by_click_or_key() {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
     let options = ["red", "green", "custom"].map(String::from).to_vec();
-    let app = open(|_| {
+    let app = open(|| {
         Select {
             options,
             chosen,
@@ -270,7 +268,7 @@ fn a_menu_button_opens_its_items_and_one_is_done_by_click_or_key() {
         key: Some(key.to_string()),
         danger: label == "Terminate",
     };
-    let app = open_with(|_| {
+    let app = open_with(|| {
         // What it is in hears its own clicks, not the menu's.
         el("div")
             .on("click", move |_| *behind.borrow_mut() += 1)
@@ -332,7 +330,7 @@ fn a_menu_button_opens_its_items_and_one_is_done_by_click_or_key() {
 
 #[test]
 fn a_menu_button_s_three_dots_are_drawn_in_the_middle_of_its_box() {
-    let app = open_with(|_| {
+    let app = open_with(|| {
         MenuButton {
             label: MenuLabel::More,
             items: Vec::new(),
@@ -367,7 +365,7 @@ fn a_menu_button_s_three_dots_are_drawn_in_the_middle_of_its_box() {
 #[test]
 fn a_menu_button_opens_upward_where_below_would_pass_what_it_is_in() {
     let open = RwSignal::new(false);
-    let app = open_with(|_| {
+    let app = open_with(|| {
         let within = el("div").class("within");
         within.child(el("div").class("filler")).child(
             MenuButton {
@@ -401,7 +399,7 @@ fn an_alert_dialog_is_answered_by_its_buttons_and_its_keys() {
     let (done, kept) = (heard.clone(), heard.clone());
     let behind = Rc::new(RefCell::new(0));
     let keys_behind = behind.clone();
-    let app = open_with(|_| {
+    let app = open_with(|| {
         // What is behind it hears none of its keys.
         el("div")
             .on("keydown", move |_| *keys_behind.borrow_mut() += 1)
@@ -449,10 +447,9 @@ fn a_color_picker_chooses_on_its_area_and_its_bar_of_hues() {
     let value = RwSignal::new([255, 0, 0]);
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
-    let app = open(|drags| {
+    let app = open(|| {
         ColorPicker {
             value,
-            drags,
             on_change: Callback::new(move |color| log.borrow_mut().push(color)),
         }
         .view()
@@ -508,10 +505,9 @@ fn a_color_picker_is_worked_from_the_keyboard() {
     let value = RwSignal::new([255, 0, 0]);
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
-    let app = open(|drags| {
+    let app = open(|| {
         ColorPicker {
             value,
-            drags,
             on_change: Callback::new(move |color| log.borrow_mut().push(color)),
         }
         .view()
@@ -567,7 +563,7 @@ fn a_button_is_pressed_by_a_click_and_by_enter_or_space_and_leaves_the_keys_wher
 
     let presses = Rc::new(RefCell::new(0));
     let counted = presses.clone();
-    let app = open(move |_| {
+    let app = open(move || {
         Button {
             label: "Save",
             on_press: Some(Callback::new(move |()| *counted.borrow_mut() += 1)),

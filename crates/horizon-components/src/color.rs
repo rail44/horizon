@@ -20,7 +20,7 @@ use horizon_ui::{
 };
 use keyboard_types::{Key, NamedKey};
 
-use super::Drags;
+use super::Drag;
 
 mod styles {
     // The picker draws colors themselves: the spectrum, white and black.
@@ -113,27 +113,21 @@ fn from_hsv((hue, saturation, value): Hsv) -> [u8; 3] {
 
 /// Builds a color picker over `value`. `changed` hears each color a
 /// person chose.
-pub struct ColorPicker<'a> {
+pub struct ColorPicker {
     /// The color: the picker follows it, and sets it as one is picked.
     pub value: RwSignal<[u8; 3]>,
-    /// Where a drag that leaves the picker is heard (`Drags::wire`).
-    pub drags: &'a Drags,
     /// Told of each color a person picked.
     pub on_change: Callback<[u8; 3]>,
 }
 
-impl Component for ColorPicker<'_> {
+impl Component for ColorPicker {
     fn view(self) -> El {
         let on_change = self.on_change;
-        color_picker(self.value, self.drags, move |color| on_change.run(color))
+        color_picker(self.value, move |color| on_change.run(color))
     }
 }
 
-fn color_picker(
-    value: RwSignal<[u8; 3]>,
-    drags: &Drags,
-    changed: impl Fn([u8; 3]) + 'static,
-) -> El {
+fn color_picker(value: RwSignal<[u8; 3]>, changed: impl Fn([u8; 3]) + 'static) -> El {
     let open = RwSignal::new(false);
     // Opened from the keyboard, the panel takes the keys.
     let from_keys = Rc::new(Cell::new(false));
@@ -158,7 +152,6 @@ fn color_picker(
             relayout();
         }
     });
-    let drags = drags.clone();
     root.on("keydown", move |event| {
         let DomEventData::KeyDown(key) = &event.data else {
             return;
@@ -262,7 +255,7 @@ fn color_picker(
                     });
                 }
             };
-            let (area_drags, bar_drags) = (drags.clone(), drags.clone());
+            let (area_drag, bar_drag) = (Drag::on(area), Drag::on(bar));
             let written = set.clone();
             let field = el("input").attr("type", "text");
             // The field follows the color, except while it is what is
@@ -287,7 +280,7 @@ fn color_picker(
                                 return;
                             };
                             on_area(pointer.page_x(), pointer.page_y());
-                            area_drags.begin(on_area.clone());
+                            area_drag.begin(on_area.clone());
                             // Keeps the focus where it was too: the press
                             // gives the area the keys.
                             prevent_default();
@@ -306,7 +299,7 @@ fn color_picker(
                         };
                         on_bar(pointer.page_x());
                         let on_bar = on_bar.clone();
-                        bar_drags.begin(move |x, _| on_bar(x));
+                        bar_drag.begin(move |x, _| on_bar(x));
                         prevent_default();
                         bar.focus();
                     }),

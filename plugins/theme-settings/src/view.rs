@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use horizon_components::{ColorPicker, Drags, Range, Select, Slider};
+use horizon_components::{ColorPicker, Range, Select, Slider};
 use horizon_theme::scheme::{Scheme, TEXT_CONTRAST_FLOOR, scheme_from};
 use horizon_theme::seed::{AccentValue, HueSlot, Seed};
 use horizon_ui::guest::bindings::horizon::ui::theme as host;
@@ -178,7 +178,6 @@ pub fn view() -> El {
     let seed = RwSignal::new(current());
     let dirty = RwSignal::new(false);
     let status = RwSignal::new(None::<String>);
-    let drags = Drags::default();
     // A change of any control: the seed changed, and the theme of it
     // applied.
     let change = move |change: &dyn Fn(&mut Seed)| {
@@ -194,7 +193,6 @@ pub fn view() -> El {
         let change = change.clone();
         ColorPicker {
             value,
-            drags: &drags,
             on_change: Callback::new(move |color| {
                 change(&|seed| seed.surface_base = packed(color));
             }),
@@ -207,7 +205,6 @@ pub fn view() -> El {
         let change = change.clone();
         let control = ColorPicker {
             value,
-            drags: &drags,
             on_change: Callback::new(move |color| {
                 change(&|seed| *seed = seed.with_hue(slot, packed(color)));
             }),
@@ -244,7 +241,6 @@ pub fn view() -> El {
         }),
     };
     let by_color = change.clone();
-    let custom_drags = drags.clone();
     let accent = el("div")
         .class((styles::INLINE, styles::ACCENT))
         .child(accent_select)
@@ -254,7 +250,6 @@ pub fn view() -> El {
                 let change = by_color.clone();
                 ColorPicker {
                     value: custom,
-                    drags: &custom_drags,
                     on_change: Callback::new(move |color| {
                         change(&|seed| seed.accent = AccentValue::Hex(packed(color)));
                     }),
@@ -273,7 +268,6 @@ pub fn view() -> El {
     let contrast_slider = Slider {
         value: contrast,
         range,
-        drags: &drags,
         on_change: Callback::new(move |value| {
             by_contrast(&|seed| seed.text_contrast = Seed::clamp_contrast(value));
         }),
@@ -379,11 +373,10 @@ pub fn view() -> El {
             },
         );
 
-    let root = el("div")
+    el("div")
         .class(styles::THEME_SETTINGS)
         .attr("tabindex", "0")
         .child(header)
         .child(seed_section)
-        .child(preview);
-    drags.wire(root)
+        .child(preview)
 }

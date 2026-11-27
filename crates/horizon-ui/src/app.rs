@@ -137,6 +137,14 @@ impl App {
             UiEvent::PointerUp(pointer) => Some((pointer.page_x(), pointer.page_y(), false)),
             _ => None,
         };
+        // A release of a captured pointer is the capturing element's, not
+        // that of what is under it.
+        let captured = match &event {
+            UiEvent::PointerUp(pointer) => {
+                (self.shared.document.borrow()).pointer_capture_target(pointer.id)
+            }
+            _ => None,
+        };
         if let UiEvent::Paste(text) = &event {
             let focused = self.shared.document.borrow().get_focussed_node_id();
             let taker = focused.and_then(|id| self.shared.pastes.borrow().get(&id).cloned());
@@ -154,7 +162,7 @@ impl App {
         let prevented = self.shared.prevented.replace(false);
         match pressed {
             Some((x, y, true)) if !prevented => self.focus_on_press(x, y),
-            Some((x, y, false)) => self.focus_from(x, y),
+            Some((x, y, false)) => self.focus_from(x, y, captured),
             _ => {}
         }
         crate::frame::flush_pending_events(&self.shared);
@@ -189,8 +197,10 @@ impl App {
     /// A click on something that cannot take focus leaves the page itself
     /// focused (blitz-dom drops the focus then), and keys then go to the
     /// page and to no view. A browser gives the focus to the nearest thing
-    /// around the press that can take it; this does that.
-    fn focus_from(&self, x: f32, y: f32) {
+    /// around the press that can take it; this does that. Around the
+    /// element that had the pointer captured, where it had: the release of
+    /// a drag is that element's, wherever the pointer went.
+    fn focus_from(&self, x: f32, y: f32, captured: Option<NodeId>) {
         let mut document = self.shared.document.borrow_mut();
         let on_a_view = document.get_focussed_node_id().is_some_and(|id| {
             let tag = document.get_node(id).and_then(|node| node.element_data());
@@ -199,7 +209,8 @@ impl App {
         if on_a_view {
             return;
         }
-        if let Some(found) = nearest_focusable(&document, x, y) {
+        let from = captured.or_else(|| document.hit(x, y).map(|hit| hit.node_id));
+        if let Some(found) = focusable_around(&document, from) {
             document.set_focus_to(found);
         }
     }
@@ -215,7 +226,11 @@ impl App {
 /// The element at `(x, y)`, or the nearest one around it, that can take
 /// the focus.
 fn nearest_focusable(document: &BaseDocument, x: f32, y: f32) -> Option<NodeId> {
-    let mut node = document.hit(x, y).map(|hit| hit.node_id);
+    focusable_around(document, document.hit(x, y).map(|hit| hit.node_id))
+}
+
+/// `node`, or the nearest element around it, that can take the focus.
+fn focusable_around(document: &BaseDocument, mut node: Option<NodeId>) -> Option<NodeId> {
     while let Some(id) = node {
         let found = document.get_node(id)?;
         if found.is_focussable() {

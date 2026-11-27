@@ -36,7 +36,9 @@ use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
-use horizon_ui::{El, dispatched, el, host, prevent_default, relayout, stop_propagation};
+use horizon_ui::{
+    El, capture_pointer, dispatched, el, host, prevent_default, relayout, stop_propagation,
+};
 use keyboard_types::Key;
 use wasmtime::component::{
     Accessor, Component, HasSelf, Instance, Linker, Resource, ResourceTable,
@@ -562,6 +564,11 @@ impl Host for State {
             return Ok(());
         };
         (self.left.lock().unwrap().listens).push((element.0, event, capture));
+        Ok(())
+    }
+
+    fn capture_pointer(&mut self, node: u64) -> wasmtime::Result<()> {
+        capture_pointer(El(self.own(node)?));
         Ok(())
     }
 
