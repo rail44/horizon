@@ -304,7 +304,7 @@ impl Shared {
             this.connection.wait_until_resume_ready().await;
             let session_id = new.session_id;
             if !servers.is_empty() {
-                match crate::mcp::connect(servers).await {
+                match crate::mcp::connect(servers, session_id).await {
                     Ok(connected) => this.connection.hand_mcp(session_id, connected),
                     Err(message) => {
                         let _ = responder.respond_with_error(call_error(message));
@@ -408,7 +408,7 @@ impl Shared {
             this.connection.wait_until_resume_ready().await;
             // A session already running keeps the servers it started with.
             if !servers.is_empty() && !this.connection.is_running(session_id) {
-                match crate::mcp::connect(servers).await {
+                match crate::mcp::connect(servers, session_id).await {
                     Ok(connected) => this.connection.hand_mcp(session_id, connected),
                     Err(message) => {
                         let _ = responder.respond_with_error(call_error(message));

@@ -181,8 +181,8 @@ struct Inner {
     /// `horizon-agent-host`'s `session::run_session` can construct a
     /// `horizon_board::Store` (it knows the workspace root and the logd
     /// socket). `None` (every construction site in this crate's own tests)
-    /// makes `board_read`/`board_comment` resolve to an actionable error
-    /// rather than a silent no-op.
+    /// makes `board_session` resolve to an actionable error rather than a
+    /// silent no-op.
     board: Option<Arc<dyn crate::tools::board::BoardHost>>,
     /// The primary checkout this session may modify only after one explicit
     /// approval. `None` for isolated or non-primary working roots. Until it

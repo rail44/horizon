@@ -18,6 +18,7 @@ mod cli;
 mod client;
 mod commands;
 pub mod confirm;
+mod mcp;
 mod output;
 
 use std::io::{BufReader, Read, Write};
@@ -62,6 +63,10 @@ pub fn run(
     // before `cli::parse` because board's own flags (--body, --after, …)
     // would be rejected by the global flag parser.
     if let Some(code) = board::try_run(args, stdout, stderr) {
+        return code;
+    }
+    // `mcp` serves over the process's own standard input and output.
+    if let Some(code) = mcp::try_run(args, stderr) {
         return code;
     }
 

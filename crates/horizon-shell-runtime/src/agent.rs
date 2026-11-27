@@ -131,6 +131,7 @@ pub(super) fn spawn(
                     routes.clone(),
                     control.clone(),
                     served,
+                    program.mcp_servers.clone(),
                 )
                 .await;
                 // The child's input is closed with the connection: it
@@ -226,6 +227,7 @@ pub(super) fn spawn_test_stream<S>(
             routes.clone(),
             control.clone(),
             false,
+            Vec::new(),
         ));
         match end {
             StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
@@ -318,6 +320,7 @@ async fn run_stream<R, W>(
     routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
     again: bool,
+    servers: Vec<super::McpServer>,
 ) -> StreamEnd
 where
     R: AsyncRead + Send + 'static,
@@ -340,7 +343,7 @@ where
             // The sessions the connection before had open are opened again.
             if again {
                 for route in main_routes.reopened() {
-                    resume(&main_routes, route, &connection, None);
+                    resume(&main_routes, route, &connection, None, &servers);
                 }
             }
             let end = loop {
@@ -355,7 +358,7 @@ where
                         let Some(op) = op else {
                             break StreamEnd::Dropped;
                         };
-                        handle_op(op, &connection, &main_routes, establish);
+                        handle_op(op, &connection, &main_routes, establish, &servers);
                     }
                 }
             };
@@ -449,6 +452,7 @@ fn handle_op(
     connection: &V2ConnectionTo<Agent>,
     routes: &Arc<AgentRoutes>,
     _establish: Duration,
+    servers: &[super::McpServer],
 ) {
     match op {
         Op::NewAgent {
@@ -463,7 +467,8 @@ fn handle_op(
                 routes.agent_failed(route, error);
                 return;
             };
-            let request = v2::NewSessionRequest::new(workspace_root);
+            let request = v2::NewSessionRequest::new(workspace_root.clone())
+                .mcp_servers(mcp_servers(servers, Some(&workspace_root)));
             open_session(
                 routes,
                 route,
@@ -504,7 +509,9 @@ fn handle_op(
                 },
             );
         }
-        Op::AttachAgent { route, commands } => resume(routes, route, connection, Some(commands)),
+        Op::AttachAgent { route, commands } => {
+            resume(routes, route, connection, Some(commands), servers)
+        }
         Op::SessionList { reply } => {
             let connection = connection.clone();
             tokio::spawn(async move {
@@ -537,17 +544,71 @@ fn handle_op(
 /// Attaches to a session the agent has, with `session/resume` and its
 /// history replayed from the start. `commands`: the pane's, when the
 /// session is first attached to; none when it is attached to again.
+///
+/// With MCP servers to name, the session's directory is read from
+/// `session/list` first: it is the servers' `{directory}`, and the resume's
+/// `cwd`.
 fn resume(
     routes: &Arc<AgentRoutes>,
     route: RouteKey<SessionId>,
     connection: &V2ConnectionTo<Agent>,
     commands: Option<UnboundedReceiver<AgentCommand>>,
+    servers: &[super::McpServer],
 ) {
-    let request = v2::ResumeSessionRequest::new(
-        acp_session_id(routes.agent_of(route.session_id())),
-        resume_cwd(),
-    )
-    .replay_from(v2::ReplayFrom::from(v2::ReplayFromStart::new()));
+    if servers.is_empty() {
+        resume_in(
+            routes,
+            route,
+            connection,
+            commands,
+            resume_cwd(),
+            Vec::new(),
+        );
+        return;
+    }
+    let (routes, connection, servers) = (routes.clone(), connection.clone(), servers.to_vec());
+    tokio::spawn(async move {
+        let agent = routes.agent_of(route.session_id());
+        let directory = (list_sessions(&connection).await.ok())
+            .and_then(|list| list.into_iter().find(|summary| summary.session_id == agent))
+            .and_then(|summary| summary.workspace_root);
+        let named = mcp_servers(&servers, directory.as_deref());
+        let cwd = directory.unwrap_or_else(resume_cwd);
+        resume_in(&routes, route, &connection, commands, cwd, named);
+    });
+}
+
+/// The `mcpServers` to name for a session in `directory`.
+fn mcp_servers(servers: &[super::McpServer], directory: Option<&Path>) -> Vec<v2::McpServer> {
+    let directory = directory.map(|directory| directory.display().to_string());
+    servers
+        .iter()
+        .map(|server| {
+            let args = (server.args.iter())
+                .map(|arg| match &directory {
+                    Some(directory) => arg.replace("{directory}", directory),
+                    None => arg.clone(),
+                })
+                .collect();
+            v2::McpServer::Stdio(
+                v2::McpServerStdio::new(server.name.clone(), server.program.clone()).args(args),
+            )
+        })
+        .collect()
+}
+
+fn resume_in(
+    routes: &Arc<AgentRoutes>,
+    route: RouteKey<SessionId>,
+    connection: &V2ConnectionTo<Agent>,
+    commands: Option<UnboundedReceiver<AgentCommand>>,
+    cwd: PathBuf,
+    servers: Vec<v2::McpServer>,
+) {
+    let request =
+        v2::ResumeSessionRequest::new(acp_session_id(routes.agent_of(route.session_id())), cwd)
+            .mcp_servers(servers)
+            .replay_from(v2::ReplayFrom::from(v2::ReplayFromStart::new()));
     open_session(routes, route, connection, commands, |connection, routes| {
         connection
             .resume_session_from(request)
@@ -603,5 +664,29 @@ async fn list_sessions(connection: &V2ConnectionTo<Agent>) -> Result<Vec<Session
             Some(next) => cursor = Some(next),
             None => return Ok(summaries),
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_server_tests {
+    use super::*;
+
+    /// A session's servers are named with its directory in place of
+    /// `{directory}`.
+    #[test]
+    fn a_sessions_servers_name_its_directory() {
+        let servers = [super::super::McpServer {
+            name: "board".into(),
+            program: "/bin/horizon".into(),
+            args: ["mcp", "board", "--dir", "{directory}"]
+                .map(String::from)
+                .to_vec(),
+        }];
+        let named = mcp_servers(&servers, Some(Path::new("/work/project")));
+        let [v2::McpServer::Stdio(stdio)] = named.as_slice() else {
+            panic!("{named:?}");
+        };
+        assert_eq!(stdio.name, "board");
+        assert_eq!(stdio.args, ["mcp", "board", "--dir", "/work/project"]);
     }
 }

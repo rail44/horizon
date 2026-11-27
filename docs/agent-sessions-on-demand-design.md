@@ -1,6 +1,6 @@
 # Board and wiki as ACP clients, and sessions hosted on demand
 
-Status: designed; stage 1 implemented. Board item #117 holds the
+Status: designed; stages 1 and 2 implemented. Board item #117 holds the
 decisions this design follows.
 
 ## Goal
@@ -109,11 +109,20 @@ has no way to reach an agent at all. The agent never reads
 
 ### The board
 
-- **Tools as an MCP server.** `horizon mcp board`, a subcommand of the
-  `horizon` CLI (which already reads and writes the board through logd),
-  serves `board_read`, `board_comment`, `board_update` over stdio; the
-  agent starts it for a session that names it in `session/new`'s
-  `mcpServers` (#117).
+- **Tools as an MCP server.** `horizon mcp board --dir <dir>`, a
+  subcommand of the `horizon` CLI (which already reads and writes the
+  board through logd), serves `board_read`, `board_comment`,
+  `board_update` over stdio, on the logic in `horizon-board`'s `tools`;
+  the agent starts it for a session that names it in `session/new`'s
+  `mcpServers` (#117), and the model sees them as
+  `mcp__board__board_read` and so on.
+  - The shell names it for every session it starts or resumes, with the
+    session's directory as `--dir` (the project is server configuration,
+    #117; MCP's roots, which would carry it, are deprecated by SEP-2577).
+    For a resume, the directory is read from `session/list` first.
+  - A comment's author is the session in `HORIZON_SESSION_ID`, which the
+    agent sets for every MCP server it starts, as a Horizon pane's
+    programs have it.
 - **Sessions the board starts.** The board's code in the shell becomes a
   client of the agent runtime: it starts a task's session, prompts it,
   takes the final answer of the turn, and posts it to the task's thread
@@ -157,8 +166,10 @@ settings (#117):
 
 ### Sessions on demand (after the move)
 
-- Each session's log has a lock of its own; the data home's lock and the
-  startup resume of every live session go. A process hosts a session
+- Each session's log has a lock of its own, and the data home's lock
+  goes. (Starting every live session at startup already went, before
+  stage 2: the startup only settles the logs, `session/list` lists the
+  sessions resting, and a `session/resume` runs one, #117.) A process hosts a session
   when it takes that session's lock: when a pane opens it, or a client
   prompts it.
 - The shell starts one `horizon-agent-acp` per session it hosts, so a

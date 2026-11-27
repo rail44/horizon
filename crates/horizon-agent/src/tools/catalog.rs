@@ -353,67 +353,10 @@ fn build_definitions() -> Vec<Definition> {
             ),
         ),
         Definition {
-            id: "board_read".to_string(),
-            title: "Read Board".to_string(),
-            description: "Read the task board. If `id` is given, show that item with its \
-                full comment thread; otherwise list all items in rank order, optionally \
-                filtered by status. Items include their hierarchy, priority, dependencies, \
-                completion, associated sessions, and conversation."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "id": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Show this item with its comments. If omitted, lists all items.",
-                    },
-                    "status": {
-                        "type": "string",
-                        "description": "Filter the list by status (e.g. proposed, ready, in-progress, review, done, blocked). Ignored when `id` is given.",
-                    },
-                }
-            }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "board_update".into(),
-            title: "Update Board Task".into(),
-            description: "Create or edit ordinary tasks, set parent/dependencies, reorder among siblings, or record project-defined status and closure. For move, provide position and relative_to for before/after. Use close with is_closed=true for finished or withdrawn work, or false to reopen; optional status is updated atomically. Status text alone never changes is_closed.".into(),
-            input_schema: super::board::update_schema(),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
             id: "board_session".into(),
             title: "Work on Board Task".into(),
             description: "consult: send a task session a request whose final answer goes to that task's board conversation. implement: request a worktree at explicit base for your assigned task, retaining this session. Wait for the environment outcome before editing. review: ask the task's separate reviewer to inspect base..tip with checks; its final answer returns to you. send: deliver text to a session, optionally requesting a reply to a session UUID. Inputs never cancel a running tool.".into(),
             input_schema: super::board::session_schema(),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "board_comment".to_string(),
-            title: "Add Board Comment".to_string(),
-            description: "Add a comment to a board item. The comment author is set \
-                automatically from this session's id — you cannot set it. Comments are \
-                append-only; the board event log is the audit trail. No approval required."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["id", "text"],
-                "properties": {
-                    "id": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Item id to comment on.",
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Comment text (markdown).",
-                    },
-                }
-            }),
             permission: ToolPermission::AutoAllowRead,
         },
     ]

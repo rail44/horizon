@@ -17,5 +17,8 @@ thiserror = "2.0"
 # synchronous file folds.
 tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

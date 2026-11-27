@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use agent_client_protocol::v2::schema as v2;
+use horizon_agent::contract::SessionId;
 use horizon_agent::tools::{SessionTool, SessionToolCall};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{Peer, RunningService};
@@ -40,9 +41,14 @@ impl Drop for McpServers {
     }
 }
 
-/// Starts the stdio servers in `servers` and lists their tools. A server of
-/// another transport is refused: this agent advertises stdio alone.
-pub async fn connect(servers: Vec<v2::McpServer>) -> Result<McpServers, String> {
+/// Starts the stdio servers in `servers` for `session_id` and lists their
+/// tools. A server is told which session it serves (`HORIZON_SESSION_ID`,
+/// as a Horizon pane's programs are). A server of another transport is
+/// refused: this agent advertises stdio alone.
+pub async fn connect(
+    servers: Vec<v2::McpServer>,
+    session_id: SessionId,
+) -> Result<McpServers, String> {
     runtime()
         .spawn(async move {
             let mut connected = McpServers {
@@ -54,10 +60,11 @@ pub async fn connect(servers: Vec<v2::McpServer>) -> Result<McpServers, String> 
                     return Err("only stdio MCP servers are taken".to_string());
                 };
                 let name = stdio.name.clone();
-                let (running, tools) = tokio::time::timeout(CONNECT_TIMEOUT, start(stdio))
-                    .await
-                    .map_err(|_| format!("MCP server `{name}` did not start in time"))?
-                    .map_err(|error| format!("MCP server `{name}`: {error}"))?;
+                let (running, tools) =
+                    tokio::time::timeout(CONNECT_TIMEOUT, start(stdio, session_id))
+                        .await
+                        .map_err(|_| format!("MCP server `{name}` did not start in time"))?
+                        .map_err(|error| format!("MCP server `{name}`: {error}"))?;
                 connected.tools.extend(tools);
                 connected.running.push(running);
             }
@@ -69,12 +76,14 @@ pub async fn connect(servers: Vec<v2::McpServer>) -> Result<McpServers, String> 
 
 async fn start(
     server: v2::McpServerStdio,
+    session_id: SessionId,
 ) -> Result<(RunningService<RoleClient, ()>, Vec<SessionTool>), String> {
     let mut command = tokio::process::Command::new(server.command.into_inner());
     command.args(&server.args);
     for variable in &server.env {
         command.env(&variable.name, &variable.value);
     }
+    command.env("HORIZON_SESSION_ID", session_id.as_uuid().to_string());
     let transport = TokioChildProcess::new(command).map_err(|error| error.to_string())?;
     let running = ().serve(transport).await.map_err(|error| error.to_string())?;
     let listed = running

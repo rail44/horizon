@@ -217,6 +217,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         horizon_shell_runtime::AgentProgram {
             program: binary("horizon-agent-acp"),
             args: Vec::new(),
+            mcp_servers: Vec::new(),
         },
         &directory.join("control.sock"),
         &directory.join("agent.log"),

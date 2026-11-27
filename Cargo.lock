@@ -2821,6 +2821,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -2846,7 +2847,9 @@ version = "0.1.0"
 dependencies = [
  "horizon-board",
  "horizon-control",
+ "rmcp",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -4121,7 +4124,7 @@ dependencies = [
  "lazy_static",
  "lightningcss-derive",
  "parcel_selectors",
- "pastey",
+ "pastey 0.1.1",
  "pathdiff",
  "smallvec",
 ]
@@ -5304,6 +5307,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
 name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6418,9 +6427,11 @@ dependencies = [
  "indexmap 2.14.2",
  "jiff 1.0.1",
  "libc",
+ "pastey 0.2.3",
  "percent-encoding",
  "pin-project-lite",
  "process-wrap",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -6431,6 +6442,7 @@ dependencies = [
  "tracing",
  "unicode-general-category",
  "unicode-normalization",
+ "uuid",
 ]
 
 [[package]]

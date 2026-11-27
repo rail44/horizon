@@ -20,6 +20,14 @@ serde_json = "1.0"
 # `horizon-board::Store`'s async write methods). The CLI is a plain
 # synchronous process, so `run_board` owns the one tokio runtime.
 tokio = { version = "1.52", features = ["rt", "net", "time"] }
+# `horizon mcp board` serves the board's tools to an agent session as an MCP
+# server over stdio.
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "transport-io"] }
+
+[dev-dependencies]
+# The board MCP server's test speaks to it as an agent's client does.
+rmcp = { version = "3.9.0", default-features = false, features = ["client"] }
+tempfile = "3"
 
 [lints]
 workspace = true

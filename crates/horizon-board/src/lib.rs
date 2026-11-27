@@ -10,6 +10,7 @@ mod model;
 mod path;
 mod rank;
 mod store;
+pub mod tools;
 pub mod wire;
 
 pub use model::{Comment, Item, read_position_advances};

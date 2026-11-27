@@ -85,12 +85,8 @@ fn builtin(definition: Definition) -> Arc<dyn Tool> {
         "task" => run_task,
         "task_output" => run_task_output,
         "worktree_enter" => |cx, _| super::worktree::enter(cx.host, cx.session_id).into(),
-        "board_read" => run_board_read,
-        "board_update" | "board_session" => {
+        "board_session" => {
             |cx, call| super::board::execute_operation(cx.state, cx.session_id, call).into()
-        }
-        "board_comment" => {
-            |cx, call| super::board::execute_comment(cx.state, cx.session_id, call).into()
         }
         "workspace_snapshot" => run_host,
         // Always planned for approval: nothing runs without asking.
@@ -186,13 +182,6 @@ fn run_task_output(cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch {
         ToolInput::TaskOutput(input) => super::explore::output(cx.session_id, call, input).into(),
         _ => run_unavailable(cx, call),
     }
-}
-
-fn run_board_read(cx: &RunContext<'_>, call: &PreparedCall<'_>) -> Dispatch {
-    super::board::execute_auto(cx.state, &call.tool_id, &call.request.input)
-        .map(Response::external)
-        .unwrap_or_else(|| error_output("board_read is unavailable for this session"))
-        .into()
 }
 
 /// A tool whose effect lives in the host (`HostTools::execute_auto`).

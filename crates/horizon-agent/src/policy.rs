@@ -804,7 +804,7 @@ mod tests {
                 "{tool_id}"
             );
         }
-        for tool_id in ["fs_read", "web_fetch", "board_update", "task"] {
+        for tool_id in ["fs_read", "web_fetch", "board_session", "task"] {
             assert!(
                 !writes_without_containment(tool_id, &ToolInput::External, false),
                 "{tool_id}"

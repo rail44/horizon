@@ -70,9 +70,24 @@ fn run_window() {
         &control_socket,
     );
     // The ACP agent the configuration names, else Horizon's own.
-    let program = (horizon_config::load().agent.program())
-        .map(|(program, args)| horizon_shell_runtime::AgentProgram { program, args })
+    let mut program = (horizon_config::load().agent.program())
+        .map(|(program, args)| horizon_shell_runtime::AgentProgram {
+            program,
+            args,
+            mcp_servers: Vec::new(),
+        })
         .unwrap_or_else(horizon_shell_runtime::AgentProgram::horizon);
+    // Every session has the board of its project, served by this binary
+    // (`horizon mcp board`).
+    if let Ok(horizon) = std::env::current_exe() {
+        program.mcp_servers.push(horizon_shell_runtime::McpServer {
+            name: "board".into(),
+            program: horizon,
+            args: ["mcp", "board", "--dir", "{directory}"]
+                .map(String::from)
+                .to_vec(),
+        });
+    }
     let agent_acp = AgentAcp::start(
         program,
         &control_socket,

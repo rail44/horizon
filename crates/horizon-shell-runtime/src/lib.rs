@@ -67,9 +67,20 @@ const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6
 pub const AGENT_BINARY_NAME: &str = "horizon-agent-acp";
 
 /// The ACP agent the runtime starts as its child: a program and its
-/// arguments.
+/// arguments, and the MCP servers every session it starts or resumes is
+/// named in ACP's `mcpServers`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentProgram {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub mcp_servers: Vec<McpServer>,
+}
+
+/// An MCP server over stdio to name for each session: an argument
+/// `{directory}` is the session's directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServer {
+    pub name: String,
     pub program: PathBuf,
     pub args: Vec<String>,
 }
@@ -80,6 +91,7 @@ impl AgentProgram {
         Self {
             program: horizon_wire::spawn::resolve_daemon_binary(AGENT_BINARY_NAME),
             args: Vec::new(),
+            mcp_servers: Vec::new(),
         }
     }
 }
