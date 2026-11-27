@@ -34,7 +34,7 @@ pub fn pointer_with(app: &App, x: f32, y: f32, step: Pointer, secondary: bool) {
         false => (MouseEventButton::Main, MouseEventButtons::Primary),
     };
     let event = |buttons| BlitzPointerEvent {
-        id: BlitzPointerId::Mouse,
+        id: BlitzPointerId::MOUSE,
         is_primary: true,
         coords: PointerCoords {
             page_x: x,

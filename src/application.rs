@@ -274,10 +274,10 @@ impl ApplicationHandler for Application {
 /// Finishes the window's renderer, once it is ready, and paints the first
 /// frame.
 ///
-/// A copy of blitz-shell's `View::complete_resume` at the revision
-/// `Cargo.toml` pins, with `horizon_ui::frame` where that resolves the
-/// document, as [`redraw`] has it: compare it with the new revision's when
-/// Blitz is moved. The waker it gives the window is blitz-shell's
+/// A copy of blitz-shell's `View::complete_resume` at the version
+/// `Cargo.toml` pins, with `horizon_ui::frame` where that resolves and
+/// settles the document, as [`redraw`] has it: compare it with the new
+/// version's when Blitz is moved. The waker it gives the window is blitz-shell's
 /// `create_waker`'s, which blitz-shell does not export. False if the
 /// renderer is not ready yet.
 fn complete_resume(view: &mut View<Renderer>) -> bool {
@@ -344,11 +344,13 @@ impl Wake for PollOnWake {
 /// is animating, visible and not waiting on a resource: the frame its
 /// animation draws next is the caller's to ask for.
 ///
-/// A copy of blitz-shell's `View::redraw` at the revision `Cargo.toml`
-/// pins, with `horizon_ui::frame` where that resolves the document, and
-/// with the next frame for an animation returned rather than asked for at
-/// once: when Blitz is moved to another revision, compare this with that
-/// revision's `View::redraw` and carry its changes over.
+/// A copy of blitz-shell's `View::redraw` at the version `Cargo.toml`
+/// pins, with `horizon_ui::frame` where that resolves and settles the
+/// document (`horizon_ui::frame` dispatches what laying out queued, and
+/// lays out again, itself), and with the next frame for an animation
+/// returned rather than asked for at once: when Blitz is moved to another
+/// version, compare this with that version's `View::redraw` and carry its
+/// changes over.
 fn redraw(view: &mut View<Renderer>) -> bool {
     // A renderer that is polled rather than ready by `ResumeReady` is
     // finished here.

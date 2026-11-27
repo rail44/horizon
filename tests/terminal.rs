@@ -639,7 +639,7 @@ fn press_with(
 ) {
     use horizon_ui::blitz_traits::events::{BlitzPointerEvent, BlitzPointerId, MouseEventButtons};
     let event = |buttons| BlitzPointerEvent {
-        id: BlitzPointerId::Mouse,
+        id: BlitzPointerId::MOUSE,
         is_primary: true,
         coords: PointerCoords {
             page_x: x,

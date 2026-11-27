@@ -245,14 +245,15 @@ target once with `rustup target add wasm32-wasip2`. No WASI C toolchain is
 needed. Each is a workspace member whose crate is empty for any other
 target; the root package builds for the host alone.
 
-Blitz is a beta, pinned to one release and patched past it in the root
-`Cargo.toml` (`[patch.crates-io]`). What Horizon needs of the window
+Blitz is a beta, pinned to one release in the root `Cargo.toml`, and
+patched past it there (`[patch.crates-io]`) only while a fix Horizon
+needs is not released. What Horizon needs of the window
 beyond `blitz-shell` is done around it, not in a copy of it:
 `src/application.rs` wraps its application and holds copies of its
-`View::redraw` and `View::complete_resume` at the pinned revision. A
-Blitz bump moves the pin and the patch revision together, compares those
-copies with the new revision's, and moves the workspace's `taffy` to the revision the
-new Blitz takes: `horizon-ui` rounds blitz-dom's layout again to the
+`View::redraw` and `View::complete_resume` at the pinned version. A
+Blitz bump moves the pin (and a patch's revision, when there is one)
+together, compares those copies with the new version's, and moves the
+workspace's `taffy` to the version the new Blitz takes: `horizon-ui` rounds blitz-dom's layout again to the
 display's pixels with it (`crates/horizon-ui/src/display_scale.rs`), and
 its types must be blitz-dom's own.
 

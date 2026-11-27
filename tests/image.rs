@@ -312,7 +312,7 @@ fn a_link_to_an_image_clicked_in_a_terminal_with_the_platform_s_key_opens_it() {
     let (x, y, _, _) = opened.bounds(*terminal.first().expect("the terminal"));
     let (x, y) = (x + 40., y + 6.);
     let event = |buttons| BlitzPointerEvent {
-        id: BlitzPointerId::Mouse,
+        id: BlitzPointerId::MOUSE,
         is_primary: true,
         coords: PointerCoords {
             page_x: x,

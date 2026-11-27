@@ -82,7 +82,8 @@ dependencies = [
 [[package]]
 name = "accesskit_xplat"
 version = "0.2.2"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce64bc127b5de9e711ee2e7020e8cf7a505573a71f24fcb052bafae573433b3a"
 dependencies = [
  "accesskit",
  "accesskit_ios",
@@ -158,7 +159,6 @@ checksum = "54dae3d1d7b8956f3506c4e999a74e77f932a59153ccf38ab8cf96db74bb9dc0"
 dependencies = [
  "cfg-if",
  "const-random",
- "getrandom 0.3.4",
  "getrandom 0.4.3",
  "once_cell",
  "serde",
@@ -287,7 +287,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1bd870c6d450ef2203120f1ae6e37406d83dc4dae65e3b2b60e9d0b80c036cf"
 dependencies = [
  "anyrender",
- "debug_timer 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "debug_timer",
  "futures-channel",
  "kurbo",
  "peniko",
@@ -308,7 +308,7 @@ dependencies = [
  "anyrender",
  "bytemuck",
  "color",
- "debug_timer 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "debug_timer",
  "glifo",
  "kurbo",
  "peniko",
@@ -734,8 +734,9 @@ dependencies = [
 
 [[package]]
 name = "blitz-dom"
-version = "0.3.0-beta.5"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
+version = "0.3.0-beta.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddb8cfa4fe78baf7b3da6376a8b55586181df9ace375e0ca55e49c139bb65c62"
 dependencies = [
  "accesskit",
  "anyrender",
@@ -746,7 +747,7 @@ dependencies = [
  "color",
  "cssparser 0.38.0",
  "cursor-icon",
- "debug_timer 0.1.3 (git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938)",
+ "debug_timer",
  "euclid",
  "html-escape",
  "icu_casemap",
@@ -785,8 +786,9 @@ dependencies = [
 
 [[package]]
 name = "blitz-paint"
-version = "0.3.0-beta.5"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
+version = "0.3.0-beta.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e23aec63c288da0e1b0335fc482b0e8d6c81a6c31467d1cae340c365b5e8160b"
 dependencies = [
  "anyrender",
  "anyrender_svg",
@@ -805,8 +807,9 @@ dependencies = [
 
 [[package]]
 name = "blitz-shell"
-version = "0.3.0-beta.5"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
+version = "0.3.0-beta.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f052bb81c10a0fe2fae9b9c12823a24fcf8abdf5dc12a35b9b02a946de49e93b"
 dependencies = [
  "accesskit",
  "accesskit_xplat",
@@ -828,8 +831,9 @@ dependencies = [
 
 [[package]]
 name = "blitz-traits"
-version = "0.3.0-beta.5"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
+version = "0.3.0-beta.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e15fa1bafd39e7710e35f83375a8d1966e65ab4d5496e58083c47bb4c70d8bbd"
 dependencies = [
  "atomic_refcell",
  "bitflags 2.13.2",
@@ -1647,11 +1651,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da220af51a1a335e9a930beaaef53d261e41ea9eecfb3d973a3ddae1a7284b9c"
 
 [[package]]
-name = "debug_timer"
-version = "0.1.3"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
-
-[[package]]
 name = "deltae"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1930,7 +1929,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5918,7 +5917,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6503,7 +6502,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6572,7 +6571,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7375,8 +7374,9 @@ dependencies = [
 
 [[package]]
 name = "stylo_taffy"
-version = "0.3.0-beta.5"
-source = "git+https://github.com/DioxusLabs/blitz?rev=084aa573539a4e099fbca852c6e5874e65371938#084aa573539a4e099fbca852c6e5874e65371938"
+version = "0.3.0-beta.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7612e90a64f9521cb2ff39aed9178165f1b1d2b53ff02cbcbe80bb9a8b6e8bf0"
 dependencies = [
  "bitflags 2.13.2",
  "stylo",
@@ -7573,10 +7573,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9410,7 +9410,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

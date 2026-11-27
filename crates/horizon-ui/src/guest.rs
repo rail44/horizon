@@ -510,7 +510,7 @@ fn key_event(event: &KeyEvent) -> BlitzKeyEvent {
 
 fn pointer_event(event: &PointerEvent) -> BlitzPointerEvent {
     BlitzPointerEvent {
-        id: BlitzPointerId::Mouse,
+        id: BlitzPointerId::MOUSE,
         is_primary: true,
         coords: PointerCoords {
             page_x: event.page_x,
