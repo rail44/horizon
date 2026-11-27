@@ -14,7 +14,7 @@ use libghostty_vt::grid_ref::TrackedGridRef;
 use libghostty_vt::mode::Mode;
 use libghostty_vt::point::{Coordinate, Point};
 use libghostty_vt::report::SizeReportSize;
-use libghostty_vt::selection::{SelectLineOptions, SelectWordOptions, Selection};
+use libghostty_vt::selection::Selection;
 use libghostty_vt::snapshot::Decoder;
 use libghostty_vt::terminal::ScrollViewport;
 use termwiz::input::{KeyCode, Modifiers};
@@ -309,7 +309,9 @@ impl TerminalCore {
 
     pub fn scroll_display(&mut self, lines: i32) {
         // (The engine counts down the screen: back into history is up.)
-        (self.terminal).scroll_viewport(ScrollViewport::Delta(-(lines as isize)));
+        let _ = self
+            .terminal
+            .scroll_viewport(ScrollViewport::Delta(-(lines as isize)));
     }
 
     /// Puts the viewport `rows` rows above the live bottom, or as far as
@@ -320,10 +322,10 @@ impl TerminalCore {
         let wanted = rows.min(history);
         let now = render::display_offset(&self.terminal).min(history);
         if wanted == 0 {
-            (self.terminal).scroll_viewport(ScrollViewport::Bottom);
+            let _ = self.terminal.scroll_viewport(ScrollViewport::Bottom);
         } else if wanted != now {
             let moved = now as isize - wanted as isize;
-            (self.terminal).scroll_viewport(ScrollViewport::Delta(moved));
+            let _ = self.terminal.scroll_viewport(ScrollViewport::Delta(moved));
         }
         wanted
     }
@@ -464,14 +466,14 @@ impl TerminalCore {
         let selected = match kind {
             TerminalSelectionKind::Simple => None,
             TerminalSelectionKind::Word => {
-                (self.terminal.select_word(SelectWordOptions::new(under))).unwrap_or(None)
+                self.terminal.select_word(under).finish().unwrap_or(None)
             }
             TerminalSelectionKind::Line => {
-                (self.terminal.select_line(SelectLineOptions::new(under))).unwrap_or(None)
+                self.terminal.select_line(under).finish().unwrap_or(None)
             }
         };
         if let Some(selected) = selected {
-            let _ = self.terminal.set_selection(Some(&selected));
+            let _ = self.terminal.set_selection(Some(selected));
         }
     }
 
@@ -490,18 +492,14 @@ impl TerminalCore {
         let terminal = &self.terminal;
         let around = |at| match kind {
             TerminalSelectionKind::Simple => None,
-            TerminalSelectionKind::Word => terminal
-                .select_word(SelectWordOptions::new(at))
-                .unwrap_or(None),
-            TerminalSelectionKind::Line => terminal
-                .select_line(SelectLineOptions::new(at))
-                .unwrap_or(None),
+            TerminalSelectionKind::Word => terminal.select_word(at).finish().unwrap_or(None),
+            TerminalSelectionKind::Line => terminal.select_line(at).finish().unwrap_or(None),
         };
         // By word or by line: from the start of the earlier one's to the
         // end of the later one's.
         let backwards = {
             let at =
-                |end: &_| terminal.point_from_grid_ref(end, libghostty_vt::point::Space::Screen);
+                |end: &_| terminal.point_from_grid_ref(*end, libghostty_vt::point::Space::Screen);
             match (at(&began), at(&reached)) {
                 (Ok(Some(began)), Ok(Some(reached))) => (reached.y, reached.x) < (began.y, began.x),
                 _ => false,
@@ -511,13 +509,15 @@ impl TerminalCore {
             true => (reached, began),
             false => (began, reached),
         };
-        let from = around(first.clone()).map_or(first, |around| around.start());
-        let to = around(last.clone()).map_or(last, |around| around.end());
-        let _ = terminal.set_selection(Some(&Selection::new(from, to, false)));
+        let from = around(first).map_or(first, |around| around.start());
+        let to = around(last).map_or(last, |around| around.end());
+        let _ = terminal.set_selection(Some(Selection::new(terminal, from, to, false)));
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        let mut formatter = Formatter::new_selection(&self.terminal).ok()??;
+        let selection = self.terminal.selection().ok()??;
+        let mut formatter = Formatter::new(&self.terminal).ok()?;
+        let _ = formatter.set_selection(Some(selection));
         let _ = formatter.set_format(Format::Plain);
         let _ = formatter.set_unwrap(true);
         let _ = formatter.set_trim(true);

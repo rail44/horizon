@@ -602,10 +602,10 @@ fn what_the_engine_says_of_rows_as_the_viewport_scrolls() {
     let nothing = read(&terminal, &mut state);
     describe("nothing done", &first.rows, &nothing);
 
-    terminal.scroll_viewport(ScrollViewport::Delta(-3));
+    terminal.scroll_viewport(ScrollViewport::Delta(-3)).unwrap();
     let up = read(&terminal, &mut state);
     describe("the viewport three rows up", &nothing.rows, &up);
-    terminal.scroll_viewport(ScrollViewport::Delta(-3));
+    terminal.scroll_viewport(ScrollViewport::Delta(-3)).unwrap();
     let further = read(&terminal, &mut state);
     describe("three rows further up", &up.rows, &further);
     let still = read(&terminal, &mut state);
@@ -627,7 +627,7 @@ fn what_the_engine_says_of_rows_as_the_viewport_scrolls() {
     state.set_overscan(Overscan { above: 1, below: 1 }).unwrap();
     let overscanned = read(&terminal, &mut state);
     describe("one row of overscan asked for", &burst.rows, &overscanned);
-    terminal.scroll_viewport(ScrollViewport::Delta(-3));
+    terminal.scroll_viewport(ScrollViewport::Delta(-3)).unwrap();
     let overscanned_up = read(&terminal, &mut state);
     describe(
         "with overscan, three rows up",
@@ -635,7 +635,7 @@ fn what_the_engine_says_of_rows_as_the_viewport_scrolls() {
         &overscanned_up,
     );
 
-    terminal.scroll_viewport(ScrollViewport::Bottom);
+    terminal.scroll_viewport(ScrollViewport::Bottom).unwrap();
     let bottom = read(&terminal, &mut state);
     describe("back at the bottom", &overscanned_up.rows, &bottom);
 }

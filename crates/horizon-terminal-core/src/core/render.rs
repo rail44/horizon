@@ -9,11 +9,10 @@ use std::collections::HashMap;
 
 use libghostty_vt::mode::Mode;
 use libghostty_vt::point::{Coordinate, Point, Space};
-use libghostty_vt::render::{
-    CellIterator, CursorVisualStyle, Dirty, Overscan, RenderState, RowId, RowIterator,
-};
+use libghostty_vt::render::{CellIterator, Dirty, Overscan, RenderState, RowId, RowIterator};
 use libghostty_vt::screen::{CellContentTag, CellWide, Screen};
 use libghostty_vt::style::{Style, StyleColor, Underline};
+use libghostty_vt::terminal::CursorStyle;
 use libghostty_vt::{Error, Terminal};
 
 use crate::types::{
@@ -182,9 +181,9 @@ fn drawn(
             row: at.y as usize,
             col: at.x as usize,
             shape: match cursor.visual_style {
-                CursorVisualStyle::Bar => TerminalCursorShape::Beam,
-                CursorVisualStyle::Underline => TerminalCursorShape::Underline,
-                CursorVisualStyle::BlockHollow => TerminalCursorShape::HollowBlock,
+                CursorStyle::Bar => TerminalCursorShape::Beam,
+                CursorStyle::Underline => TerminalCursorShape::Underline,
+                CursorStyle::BlockHollow => TerminalCursorShape::HollowBlock,
                 _ => TerminalCursorShape::Block,
             },
         })
@@ -269,7 +268,7 @@ fn selection_in_rows(
 ) -> Option<TerminalSelection> {
     let selection = terminal.selection().ok()??;
     let at = |end: &libghostty_vt::grid_ref::GridRef<'_>| {
-        let at = terminal.point_from_grid_ref(end, Space::Screen).ok()??;
+        let at = terminal.point_from_grid_ref(*end, Space::Screen).ok()??;
         Some((at.y as i64 - top as i64, at.x as usize))
     };
     let (mut start, mut end) = (at(&selection.start())?, at(&selection.end())?);
