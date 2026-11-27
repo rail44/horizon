@@ -291,13 +291,13 @@ lands:
   the agent loses its board and wiki knowledge, the views start and
   prompt sessions as ACP clients and hand tools in as MCP servers, and a
   session is hosted, one process each, only while something needs it.
-- **Task flow, from a task on the board to a change on main —
-  proposed 2026-11-27** (`docs/agent-task-flow-design.md`): the board
-  starts a task's session and carries the conversation, shows a phase
-  derived from the session and git, shows the task's diff with comments
-  sent back to the session, and integrates by the owner's command;
-  agents divide work through their own subagents. Builds on #117's
-  stage 3. Decisions pending on the board.
+- **Tasks, a minimal extension from a task to a change on main —
+  proposed 2026-11-27** (`docs/agent-task-flow-design.md`): a new wasm
+  extension beside the board, tasks as Markdown files; it starts a
+  task's agent session, shows where each task stands from the session
+  and the branch, shows the branch's diff with comments sent to the
+  session, and integrates by the owner's command. One host capability
+  per stage. Decisions pending on the board.
 - **The agent as a stdio ACP child of the shell — implemented
   2026-11-26** (board #114, `docs/agent-stdio-child-design.md`): the
   agent is a library that is an ACP agent, composed from what it is
