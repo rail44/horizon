@@ -100,19 +100,19 @@ blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a
 blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
 blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
 blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "084aa573539a4e099fbca852c6e5874e65371938" }
-# winit at upstream's fix for Wayland clipboard text (rust-windowing/winit
-# db09864, "winit-wayland: fix some text not being copied due to missing
-# mime types"), not in a release yet. 0.31.0-beta.4 offers copied text as
+# winit at upstream's master (2026-11-24), past its fix for Wayland
+# clipboard text (rust-windowing/winit db09864, "winit-wayland: fix some
+# text not being copied due to missing mime types"), not in a release yet. 0.31.0-beta.4 offers copied text as
 # `text/plain; charset=utf-8` and `text/plain` only, without the standard
 # `text/plain;charset=utf-8` or `UTF8_STRING`, so an application that reads
 # one of those pastes nothing of what Horizon copied. The crates move
 # together: winit-wayland alone leaves two winit-cores in the graph. Drop
 # these once a release has the fix.
-winit = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
-winit-core = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
-winit-common = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
-winit-wayland = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
-winit-x11 = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
+winit = { git = "https://github.com/rust-windowing/winit", rev = "b1a0534633c3afffd604c8ed7156e7d8617b266d" }
+winit-core = { git = "https://github.com/rust-windowing/winit", rev = "b1a0534633c3afffd604c8ed7156e7d8617b266d" }
+winit-common = { git = "https://github.com/rust-windowing/winit", rev = "b1a0534633c3afffd604c8ed7156e7d8617b266d" }
+winit-wayland = { git = "https://github.com/rust-windowing/winit", rev = "b1a0534633c3afffd604c8ed7156e7d8617b266d" }
+winit-x11 = { git = "https://github.com/rust-windowing/winit", rev = "b1a0534633c3afffd604c8ed7156e7d8617b266d" }
 
 [package]
 name = "horizon"
