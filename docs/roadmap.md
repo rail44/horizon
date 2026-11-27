@@ -294,10 +294,11 @@ lands:
 - **Tasks, a minimal extension from a task to a change on main —
   proposed 2026-11-27** (`docs/agent-task-flow-design.md`): a new wasm
   extension beside the board, tasks as Markdown files; it starts a
-  task's agent session, shows where each task stands from the session
-  and the branch, shows the branch's diff with comments sent to the
-  session, and integrates by the owner's command. One host capability
-  per stage. Decisions pending on the board.
+  task's agent session through the agent extension's own WIT package
+  (extensions linked by the host), reads branch state in the guest
+  through WASI, shows the branch's diff with comments sent to the
+  session, and integrates through a terminal running a command, the one
+  generic host addition. Decisions pending on the board.
 - **The agent as a stdio ACP child of the shell — implemented
   2026-11-26** (board #114, `docs/agent-stdio-child-design.md`): the
   agent is a library that is an ACP agent, composed from what it is
