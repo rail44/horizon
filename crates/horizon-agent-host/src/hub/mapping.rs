@@ -577,11 +577,9 @@ impl Mapper {
                     cleared.recovered_chars
                 );
                 vec![Outgoing::update(v2::SessionUpdate::CompactionUpdate(
-                    v2::CompactionUpdate::new(
-                        self.id("compaction").to_string(),
-                        v2::CompactionStatus::Completed,
-                    )
-                    .summary(vec![summary.into()]),
+                    v2::CompactionUpdate::new(self.id("compaction").to_string())
+                        .status(v2::CompactionStatus::Completed)
+                        .summary(vec![summary.into()]),
                 ))]
             }
             Event::ProviderRequestSent(_) => {

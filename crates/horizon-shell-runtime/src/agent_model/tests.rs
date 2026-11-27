@@ -544,7 +544,8 @@ fn notices_compactions_and_a_failed_turns_error_are_lines() {
     apply(
         &mut model,
         v2::SessionUpdate::CompactionUpdate(
-            v2::CompactionUpdate::new("c1", v2::CompactionStatus::Completed)
+            v2::CompactionUpdate::new("c1")
+                .status(v2::CompactionStatus::Completed)
                 .summary(vec!["2 tool outputs".into()]),
         ),
     );

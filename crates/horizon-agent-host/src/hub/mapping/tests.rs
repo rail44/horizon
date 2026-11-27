@@ -664,7 +664,10 @@ fn rate_limits_are_live_notices_and_clearing_is_a_compaction() {
     let v2::SessionUpdate::CompactionUpdate(compaction) = &live[1] else {
         panic!("a compaction, got {:?}", live[1]);
     };
-    assert_eq!(compaction.status, v2::CompactionStatus::Completed);
+    assert_eq!(
+        compaction.status,
+        MaybeUndefined::Value(v2::CompactionStatus::Completed)
+    );
     assert_eq!(
         compaction.summary,
         MaybeUndefined::Value(vec!["2 tool outputs, 4096 characters reclaimed".into()])

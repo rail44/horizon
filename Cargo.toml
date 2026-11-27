@@ -65,7 +65,7 @@ remoc = { version = "=0.20.6", default-features = false, features = ["rtc"] }
 # The ACP SDK: an exact pin (docs/acp-agentd-implementation-plan.md). The
 # shell and horizon-agent-acp are built with it from this workspace; what
 # they compare is ACP's own protocol version.
-agent-client-protocol = { version = "=5.4.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors", "unstable_session_options"] }
+agent-client-protocol = { version = "=5.6.1", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_session_cursors", "unstable_session_options"] }
 # The UI stack (`docs/ui-foundation-migration-design.md`): Blitz is a beta,
 # pinned to one release, and patched past it below only while a fix it
 # needs is not released. 0.3.0-beta.6 has every fix this needs (the

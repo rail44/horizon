@@ -44,6 +44,18 @@ exact pin し、同時に上げる。** 手元の rustc 1.96 で v2 feature 付�
 - 前回の実測に従って `HORIZON_ACP_EXT_VERSION` を 6 から 7 に上げた。語彙は
   変えていない。
 
+2026-11-27 に 5.6.1 / 1.22.0（SDK が `=1.22.0` で固定）へ上げた。
+
+- schema の v2 で Horizon に関わる変更は、`CompactionUpdate` の `status` が
+  必須の引数から patch のフィールド（`MaybeUndefined`）になったことだけで、
+  送る側は `.status(..)` で付ける。受ける側の fold は `status` を読んで
+  いない。
+- SDK の 5.6.1 は MCP の要求をセッションではなくサーバー ID で振り分ける
+  （rust-sdk#529）。
+- 今の線は Horizon の拡張を載せない標準の ACP v2 で（`AGENTS.md`）、
+  比べる版を持たないので、`HORIZON_ACP_EXT_VERSION` のような上げる番号は
+  ない。
+
 crate の実行モデルで守ること。
 
 - tokio 依存なし。`ByteStreams::new(write, read)` は `futures::io` の trait を
