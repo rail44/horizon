@@ -291,13 +291,13 @@ lands:
   the agent loses its board and wiki knowledge, the views start and
   prompt sessions as ACP clients and hand tools in as MCP servers, and a
   session is hosted, one process each, only while something needs it.
-- **Task flow: attempts, derived phase, review and scoped coordination
-  — proposed 2026-11-27** (`docs/agent-task-flow-design.md`): the shape
-  #117's stage 3 and the stages after it build toward — a task with
-  attempts, a phase derived from sessions and git, a diff view whose
-  comments go back to the attempt, integration as the owner's command,
-  and agents running only their own task's subtree. Decisions pending
-  on the board.
+- **Task flow, from a task on the board to a change on main —
+  proposed 2026-11-27** (`docs/agent-task-flow-design.md`): the board
+  starts a task's session and carries the conversation, shows a phase
+  derived from the session and git, shows the task's diff with comments
+  sent back to the session, and integrates by the owner's command;
+  agents divide work through their own subagents. Builds on #117's
+  stage 3. Decisions pending on the board.
 - **The agent as a stdio ACP child of the shell — implemented
   2026-11-26** (board #114, `docs/agent-stdio-child-design.md`): the
   agent is a library that is an ACP agent, composed from what it is
