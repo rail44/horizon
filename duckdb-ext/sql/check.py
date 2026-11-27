@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["duckdb==2.0.0"]
+# dependencies = ["duckdb==2.0.1"]
 # ///
 """Execute the code database SQL files in order and check their rows.
 

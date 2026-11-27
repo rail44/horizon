@@ -1,6 +1,6 @@
 """Time one query over a SCIP index in a fresh process and report peak RSS.
 
-uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_perf.py EXTENSION INDEX FUNCTION count|table
+uv run --with duckdb==2.0.1 python duckdb-ext/scripts/scip_perf.py EXTENSION INDEX FUNCTION count|table
 
 `count` runs `SELECT count(*) FROM FUNCTION(INDEX)`, `table` runs
 `CREATE TABLE t AS SELECT * FROM FUNCTION(INDEX)` in an in-memory database.

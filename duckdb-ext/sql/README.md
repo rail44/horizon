@@ -24,7 +24,7 @@ with the earlier tree-sitter units that it starts from is in
 
 `code-db` is the way to use this layer from the shell. It is a Rust command in
 `../code-db/`, built by `duckdb-ext/build.sh` into `duckdb-ext/code-db/target/release/code-db`
-(written `code-db` below) and linked against the machine's libduckdb 2.0.0 as Horizon's
+(written `code-db` below) and linked against the machine's libduckdb 2.0.1 as Horizon's
 daemon is (`../README.md`). It reads the SQL files and the extensions of the Horizon
 checkout it was built in, and works on any repository `REPO`:
 
@@ -84,7 +84,7 @@ code-db limits REPO [--json]             # the limits the loading would set
   command's own process through the `duckdb` crate, and the command prints each result
   as the DuckDB CLI's markdown mode does (byte for byte, `docs/research/code-db-launcher-2026-10-29.md`);
   a SQL file may use the CLI's `.print` and `.read`, and no other dot command. Any other
-  `FORMAT`, and `shell`, hand the same loading to the DuckDB 2.0.0 CLI (`DUCKDB_CLI`,
+  `FORMAT`, and `shell`, hand the same loading to the DuckDB 2.0.1 CLI (`DUCKDB_CLI`,
   default `~/.local/bin/duckdb2`) as a script, because the crate has no renderer for
   the CLI's other modes and no interactive session; `shell` writes the script to
   `REPO/target/code-db/shell-init-PID.sql` for `-init` and removes it on exit.
@@ -211,7 +211,7 @@ tools run unbounded and `code-db` says so. `code-db` prints the cap it chose, an
 with its exit status or signal and the cap; that workspace's previous index is kept.
 
 The rest of this section is what `code-db` does, for other clients. Every client needs
-DuckDB **2.0.0** (the extensions load only into that version), unsigned extensions
+DuckDB **2.0.1** (the extensions load only into that version), unsigned extensions
 allowed, and the git_history and scip_index binaries built (`duckdb-ext/build.sh` builds
 both). Run from the root of this Horizon checkout: `00_load.sql` loads both by paths
 relative to it, and `views/clones.sql` and `refresh.sql` read
@@ -237,8 +237,8 @@ lists the ones that do (`scip_indexes`, `clone_reports`), and the views over an 
 list are empty. Only `00_load.sql` (the file snapshot from `git_tracked_files` and the two
 lists) and `refresh.sql` read a source when they are executed.
 
-DuckDB CLI 2.0.0 (here `~/.local/bin/duckdb2`; the system `duckdb` is 1.5.0 and refuses
-the extensions; on macOS, Homebrew's `duckdb` is 2.0.0):
+DuckDB CLI 2.0.1 (here `~/.local/bin/duckdb2`; the system `duckdb` is 1.5.0 and refuses
+the extensions; on macOS, Homebrew's `duckdb` is 2.0.1):
 
 ```sh
 duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
@@ -259,7 +259,7 @@ SET VARIABLE level = 'package';
 .read duckdb-ext/sql/queries/size.sql
 ```
 
-When stdout is not a terminal and `AI_AGENT` is set, the 2.0.0 CLI switches to an "agent
+When stdout is not a terminal and `AI_AGENT` is set, the 2.0.1 CLI switches to an "agent
 mode" with Markdown tables; `-no-agent` turns it off. The CLI goes on after a failing
 statement unless started with `-bail` (or after `.bail on`); the checks in `refresh.sql`
 stop the file only then.

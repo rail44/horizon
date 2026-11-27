@@ -16,8 +16,8 @@ publish = false
 
 [dependencies]
 # The version the root Cargo.lock pins; features as in crates/horizon-agent.
-# Linked against the machine's libduckdb 2.0.0 (AGENTS.md, Build setup).
-duckdb = { version = "=1.20000.0", default-features = false }
+# Linked against the machine's libduckdb 2.0.1 (AGENTS.md, Build setup).
+duckdb = { version = "=1.20001.0", default-features = false }
 # statvfs (the spill file system's free space).
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

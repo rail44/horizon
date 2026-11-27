@@ -1,6 +1,6 @@
 """Compare the scip_index extension's rows with scip-probe's TSV, in order.
 
-uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_ext_parity.py EXTENSION PROBE INDEX
+uv run --with duckdb==2.0.1 python duckdb-ext/scripts/scip_ext_parity.py EXTENSION PROBE INDEX
 
 The rows are formatted as scip-probe prints them (see its module doc), without the
 extension's trailing index_path.

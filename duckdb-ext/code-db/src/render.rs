@@ -1,4 +1,4 @@
-//! Result sets as the DuckDB 2.0.0 CLI prints them in `.mode markdown`: the
+//! Result sets as the DuckDB 2.0.1 CLI prints them in `.mode markdown`: the
 //! header centred, values left-aligned and padded to the column's display
 //! width, `|` escaped, NULL as `NULL`, and a `:` in the separator of numeric
 //! columns.

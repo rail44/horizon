@@ -86,7 +86,7 @@ const TERM_VIEW_FILES: &[&str] = &[
 const NEEDS_INDEX: &str = "Needs the SCIP indexes";
 const NEEDS_CLONES: &str = "Needs the jscpd reports";
 const SQL_DIR: &str = "duckdb-ext/sql";
-const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.0/host";
+const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.1/host";
 /// The variables the limits are derived from; the derived values replace them.
 const LIMIT_NAMES: &[&str] = &["memory_limit", "threads", "temp_limit"];
 /// The file every command reads on its own connection before the saved
@@ -587,7 +587,7 @@ impl Session {
             });
         if !cli.is_file() {
             die(format!(
-                "DuckDB 2.0.0 CLI not found at {} (set DUCKDB_CLI)",
+                "DuckDB 2.0.1 CLI not found at {} (set DUCKDB_CLI)",
                 cli.display()
             ));
         }

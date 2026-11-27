@@ -21,8 +21,8 @@
 
 INSTALL sitting_duck FROM community;
 LOAD sitting_duck;
-LOAD 'duckdb-ext/target/extension/v2.0.0/host/git_history.duckdb_extension';
-LOAD 'duckdb-ext/target/extension/v2.0.0/host/scip_index.duckdb_extension';
+LOAD 'duckdb-ext/target/extension/v2.0.1/host/git_history.duckdb_extension';
+LOAD 'duckdb-ext/target/extension/v2.0.1/host/scip_index.duckdb_extension';
 
 SET VARIABLE repo = CASE
     WHEN getvariable('repo') LIKE '/%' THEN rtrim(getvariable('repo'), '/')

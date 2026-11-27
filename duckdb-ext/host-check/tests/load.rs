@@ -17,7 +17,7 @@ fn extension(name: &str, variable: &str) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-                "../target/extension/v2.0.0/host/{name}.duckdb_extension"
+                "../target/extension/v2.0.1/host/{name}.duckdb_extension"
             ))
         });
     assert!(
@@ -80,7 +80,7 @@ fn horizon_linked_duckdb_loads_the_extension() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, "v2.0.0");
+    assert_eq!(version, "v2.0.1");
     conn.execute_batch(&format!("LOAD '{}'", git_history().display()))
         .unwrap();
     let path = dir.to_str().unwrap();

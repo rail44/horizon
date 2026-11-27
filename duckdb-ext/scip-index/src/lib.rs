@@ -8,7 +8,7 @@ mod functions;
 use duckdb_loadable_macros::duckdb_entrypoint_c_api_v2;
 use duckdb_neo::{Result, extension::Extension};
 
-#[duckdb_entrypoint_c_api_v2(extension_name = "scip_index", api_version = "v2.0.0")]
+#[duckdb_entrypoint_c_api_v2(extension_name = "scip_index", api_version = "v2.0.1")]
 pub fn entrypoint(extension: &Extension) -> Result<()> {
     functions::register(extension)
 }

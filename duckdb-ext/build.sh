@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build git_history.duckdb_extension and scip_index.duckdb_extension for this
 # machine's platform (linux_amd64, linux_arm64, osx_arm64 or osx_amd64) / DuckDB
-# v2.0.0, then the code-db command, and print their paths.
+# v2.0.1, then the code-db command, and print their paths.
 #
 # The extensions use DuckDB's unstable C API v2 (ABI type C_STRUCT_UNSTABLE),
 # so the binaries load only into exactly TARGET_DUCKDB_VERSION. They go to
@@ -9,7 +9,7 @@
 # to that directory: the path sql/00_load.sql loads them from.
 set -eu
 
-TARGET_DUCKDB_VERSION=v2.0.0
+TARGET_DUCKDB_VERSION=v2.0.1
 case "$(uname -s)/$(uname -m)" in
     Linux/x86_64) PLATFORM=linux_amd64 LIB_SUFFIX=so ;;
     Linux/aarch64) PLATFORM=linux_arm64 LIB_SUFFIX=so ;;

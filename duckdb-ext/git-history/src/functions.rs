@@ -8,9 +8,9 @@ use std::sync::Mutex;
 
 use duckdb_neo::{
     DuckDBType, Error, Result,
-    bind_arguments::BindArgument,
+    bind_arguments::BindArguments,
     connection::Context,
-    data_chunk::DataChunkRef,
+    data_chunk::DataChunk,
     extension::Extension,
     signature::{
         FunctionDocumentationBuilder, FunctionParameter, FunctionParameterKind, SignatureBuilder,
@@ -43,7 +43,7 @@ fn strings<'a, 'r>(
     column.set_size(len)?;
     let mut writer = column.writer()?;
     for index in 0..len {
-        writer.set(index, value(index))?;
+        writer.set_option(index, value(index))?;
     }
     Ok(())
 }
@@ -57,7 +57,7 @@ fn bools<'a>(
     column.set_size(len)?;
     let mut writer = column.writer()?;
     for index in 0..len {
-        writer.set(index, Some(value(index)))?;
+        writer.set(index, &value(index))?;
     }
     Ok(())
 }
@@ -86,15 +86,14 @@ impl TableFunctionCallbacks for TrackedFiles {
     fn bind(
         &self,
         context: &Context,
-        arguments: Vec<BindArgument>,
+        arguments: BindArguments<'_>,
         bind: BindFunctionHandle<'_>,
     ) -> Result<TrackedParams> {
-        let value = |index: usize| {
-            arguments
-                .get(index)
-                .and_then(|argument| argument.value.as_ref())
+        let value = |index: usize| match arguments.iter()?.nth(index) {
+            Some(argument) => argument.value(),
+            None => Ok(None),
         };
-        let repo = value(0)
+        let repo = value(0)?
             .map(|value| value.get::<String>())
             .transpose()?
             .flatten()
@@ -103,7 +102,7 @@ impl TableFunctionCallbacks for TrackedFiles {
                     "{TRACKED_FILES}: repo must be a constant, non-NULL path"
                 ))
             })?;
-        let include_untracked = value(1)
+        let include_untracked = value(1)?
             .map(|value| value.get::<bool>())
             .transpose()?
             .flatten()
@@ -126,22 +125,22 @@ impl TableFunctionCallbacks for TrackedFiles {
 
     fn init_global_state(
         &self,
-        params: &TrackedParams,
         _context: &Context,
+        params: &TrackedParams,
         _columns: InitColumnData<'_>,
-    ) -> Result<(Option<Self::GlobalState>, Option<usize>)> {
+    ) -> Result<Option<Self::GlobalState>> {
         let repo = history::open(&params.repo).map_err(git_error)?;
         let rows = history::tracked_files(&repo, params.include_untracked).map_err(git_error)?;
-        Ok((Some(Mutex::new(Scan { rows, next: 0 })), Some(1)))
+        Ok(Some(Mutex::new(Scan { rows, next: 0 })))
     }
 
     fn exec(
         &self,
-        _params: &TrackedParams,
-        global: Option<&Self::GlobalState>,
-        _local: Option<&mut ()>,
         _context: &Context,
-        mut output: DataChunkRef<'_>,
+        _params: &TrackedParams,
+        _local: Option<&mut ()>,
+        global: Option<&Self::GlobalState>,
+        output: &mut DataChunk<'_>,
         _columns: ExecColumnInfo<'_>,
     ) -> Result<()> {
         let mut scan = global

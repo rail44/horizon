@@ -28,7 +28,7 @@ The extension uses DuckDB's **C API v2** (`USE_UNSTABLE_C_API=1`, ABI type
 `C_STRUCT_UNSTABLE`) through `duckdb-neo`, the route of the official Rust
 template since its "Neo template" (PR #55). A `C_STRUCT_UNSTABLE` binary
 loads only into the exact DuckDB version written in its footer, here
-**v2.0.0**; any other version refuses it at `LOAD` (see below). Moving to a
+**v2.0.1**; any other version refuses it at `LOAD` (see below). Moving to a
 new DuckDB release means bumping `duckdb-neo` and `duckdb-loadable-macros`
 to the bindings for that release, fixing whatever the v2 API changed (it
 changes without deprecation), changing `TARGET_DUCKDB_VERSION` in
@@ -42,11 +42,11 @@ Pins:
 | --- | --- |
 | Template studied | `duckdb/extension-template-rs` at `bedafd45415531d32a595b52854c540697877b58` (2026-10-23, merge of PR #55 "Neo template") |
 | CI tools studied | `duckdb/extension-ci-tools` at `2de802913caf5c9bba0ef267658b20f3cc0486c3` (2026-10-23); `scripts/append_extension_metadata.py` last changed in `7860c98d15ffaa7556522237bede317eb67a86a6` |
-| DuckDB | v2.0.0 (`PRAGMA version`: `v2.0.0`, source id `d54cbbe3df`) |
-| `duckdb-neo` | `=0.20000.0`, feature `build-extension` |
-| `duckdb-loadable-macros` | `=1.20000.0`, feature `neo` |
+| DuckDB | v2.0.1 (`PRAGMA version`: `v2.0.1`, source id `8d78114e90`) |
+| `duckdb-neo` | `=0.20001.0`, feature `build-extension` |
+| `duckdb-loadable-macros` | `=1.20001.0`, feature `neo` |
 | `gix` | 0.90.0, no default features, features `sha1`, `max-performance`, `status` (resolves `gix-status` 0.37.0, `gix-dir` 0.32.0, `gix-filter` 0.36.1, `gix-odb` 0.87.0, `gix-pack` 0.77.0; `status` still pulls `gix-diff` 0.70.0 and `gix-imara-diff` 0.3.2) |
-| `duckdb` (host check only) | `=1.20000.0`, the version the root `Cargo.lock` pins |
+| `duckdb` (host check only) | `=1.20001.0`, the version the root `Cargo.lock` pins |
 | `scip.proto` (field numbers cited, not vendored) | `scip-code/scip` v0.10.0, commit `1c2b6db7e560d5233c944f36e4ac1377cc6963fc` |
 | `scip` CLI (tests only, never linked) | v0.10.0 `scip-<platform>.tar.gz` (linux-amd64 sha256 `eeb28ebbff443c01609fb1691809958f3f0c7a8651af689a5bc8560061cd8ab0`; the other platforms' digests, from the release's assets, are in the script), fetched by `scripts/fetch-scip-cli.sh` into `target/tools/scip-v0.10.0/` |
 | `rust-analyzer` (tests and measurements) | whatever is on `PATH`; the numbers below are from 1.99.1 (58cf8f9 2026-10-13) |
@@ -55,7 +55,7 @@ Pins:
 What was kept from the template: the `cdylib` with the
 `#[duckdb_entrypoint_c_api_v2]` entrypoint, the release profile (`lto`,
 `strip`), and the Makefile's variables (`EXTENSION_NAME`,
-`TARGET_DUCKDB_VERSION=v2.0.0`, `USE_UNSTABLE_C_API=1`, `CAPI_VERSION=2`).
+`TARGET_DUCKDB_VERSION=v2.0.1`, `USE_UNSTABLE_C_API=1`, `CAPI_VERSION=2`).
 What was dropped: the `core`/`native`/`wasm` crate split (one native crate
 is enough; there is no Wasm build), the `extension-ci-tools` git submodule,
 its Makefiles and venv, and the sqllogictest runner. `CAPI_VERSION=2` has no
@@ -68,7 +68,7 @@ declares no license, so it is not vendored). For the same input and
 arguments it produces a byte-identical file (checked with `cmp` against the
 upstream script at the commit above). Fields: platform (the machine's, as
 `build.sh` names it: `linux_amd64`, `linux_arm64`, `osx_arm64`, `osx_amd64`), DuckDB
-version `v2.0.0`, extension version `v<crate version>`, ABI type
+version `v2.0.1`, extension version `v<crate version>`, ABI type
 `C_STRUCT_UNSTABLE`.
 
 ## Licenses
@@ -119,9 +119,9 @@ duckdb-ext/build.sh      # builds and stamps both extensions, then code-db; prin
 duckdb-ext/check.sh      # fetches the scip CLI, fmt, clippy, tests of every member, build.sh, then the host check and code-db's
 ```
 
-Output, in `duckdb-ext/target/extension/v2.0.0/<platform>/` (`linux_amd64`,
+Output, in `duckdb-ext/target/extension/v2.0.1/<platform>/` (`linux_amd64`,
 `linux_arm64`, `osx_arm64` or `osx_amd64`, from `uname`), with
-`target/extension/v2.0.0/host` linked to it: the path `sql/00_load.sql`,
+`target/extension/v2.0.1/host` linked to it: the path `sql/00_load.sql`,
 `code-db` and the host check load from.
 `git_history.duckdb_extension` (about 4.7 MB) and
 `scip_index.duckdb_extension` (about 0.6 MB), each with its own footer
@@ -131,7 +131,7 @@ on Linux both link only `libc` and `libgcc_s` dynamically. `check.sh` also needs
 `rust-analyzer` on `PATH` (`rustup component add rust-analyzer`); `scip-go`
 on `PATH` for code-db's Go test, which is skipped without it.
 
-On macOS, Homebrew's `duckdb` (2.0.0) provides both the CLI and `libduckdb`:
+On macOS, Homebrew's `duckdb` (2.0.1) provides both the CLI and `libduckdb`:
 build with `DUCKDB_LIB_DIR=/opt/homebrew/lib` (its library's install name is
 absolute, so no rpath is needed), and point `DUCKDB_CLI` at
 `/opt/homebrew/bin/duckdb` for `code-db`'s non-markdown formats and `shell`.
@@ -145,7 +145,7 @@ The extensions are unsigned, so the host must allow unsigned extensions and
 `LOAD` them by absolute path. They are independent: load either or both
 into the same connection.
 
-Python (`duckdb==2.0.0`):
+Python (`duckdb==2.0.1`):
 
 ```python
 import duckdb
@@ -157,7 +157,7 @@ con.sql("SELECT * FROM read_scip(['target/code-db/scip/root.scip']) WHERE is_def
 ```
 
 Rust, with the `duckdb` crate linked against the machine-installed
-`libduckdb` 2.0.0 the way Horizon links it (AGENTS.md "Build setup"):
+`libduckdb` 2.0.1 the way Horizon links it (AGENTS.md "Build setup"):
 
 ```rust
 let config = duckdb::Config::default().allow_unsigned_extensions()?;
@@ -181,7 +181,7 @@ the extensions. Its dependencies besides `duckdb` are `serde` and `toml`
 space) and `unicode-width` (the markdown renderer's column widths).
 
 The DuckDB CLI: `duckdb -unsigned -c "LOAD '/abs/path/git_history.duckdb_extension'"`,
-only with a v2.0.0 CLI (`~/.local/bin/duckdb2 -unsigned -no-agent` loads
+only with a v2.0.1 CLI (`~/.local/bin/duckdb2 -unsigned -no-agent` loads
 both here). The system CLI here is v1.5.0 and refuses it:
 
 ```
@@ -303,7 +303,7 @@ racily clean), and gix runs that check on several threads.
   the clean filter's effect on a CRLF id, and that two runs agree. A second
   fixture with a merge conflict asserts the one row of an unmerged path.
 - `host-check/tests/load.rs`: loads the built extension into the `duckdb`
-  crate with the machine's `libduckdb` 2.0.0 and checks `git_tracked_files`
+  crate with the machine's `libduckdb` 2.0.1 and checks `git_tracked_files`
   with `include_untracked` on a fixture; a second test loads both extensions
   into one connection and checks the four SCIP functions on a hand-encoded
   index (packed and typed ranges, a NULL enclosing range, the role booleans,
@@ -487,8 +487,8 @@ TSVs for all three functions on all three indexes
 ```sh
 SCIP_INDEX=/abs/target/code-db/scip/root.scip cargo test --release -p scip_index_core \
     --test cli_parity -- --ignored --nocapture
-uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_ext_parity.py \
-    "$PWD/duckdb-ext/target/extension/v2.0.0/host/scip_index.duckdb_extension" \
+uv run --with duckdb==2.0.1 python duckdb-ext/scripts/scip_ext_parity.py \
+    "$PWD/duckdb-ext/target/extension/v2.0.1/host/scip_index.duckdb_extension" \
     duckdb-ext/target/release/scip-probe target/code-db/scip/root.scip
 ```
 

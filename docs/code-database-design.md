@@ -48,7 +48,7 @@ Consequences:
 
 | Layer | Decision | Record |
 | --- | --- | --- |
-| Extension route | Rust on the DuckDB C API v2 (official `extension-template-rs`, `duckdb-neo`), binaries pinned to DuckDB 2.0.0; accepted 2026-10-24 | [extension options](research/duckdb-extension-options-2026-10-24.md) |
+| Extension route | Rust on the DuckDB C API v2 (official `extension-template-rs`, `duckdb-neo`), binaries pinned to one DuckDB release (2.0.0 when accepted, 2.0.1 since 2026-11-27); accepted 2026-10-24 | [extension options](research/duckdb-extension-options-2026-10-24.md) |
 | Placement | `duckdb-ext/`, a Cargo sub-workspace of this repository excluded from the root workspace (like `preview-plugin/`) | `duckdb-ext/README.md` |
 | Git facts | Own extension `git_history` (`git_commits`, `git_file_changes`, `git_hunks`) on gitoxide; chosen over libgit2 plus ported git logic (GPL) after measuring parity with `git log`: commits and file changes exact, `-U0` hunk placement differs in about 0.4 % of rows with no effect found on unit attribution | [gix record](research/gix-parity-2026-10-24.md) |
 | Syntax facts | The community extension `sitting_duck` (`read_ast`): its node rows matched an independent tree-sitter parse of all 515 Rust files exactly, and SQL views over them reproduced the reference units and tags exactly | [evaluation](research/sitting-duck-evaluation-2026-10-24.md) |
@@ -58,7 +58,7 @@ Consequences:
 ## First increment: views only (2026-10-24)
 
 `duckdb-ext/sql/` holds the views and the first two questions as plain
-SQL files read in order by any DuckDB 2.0.0 client (`00_load.sql` with
+SQL files read in order by any DuckDB 2.0.1 client (`00_load.sql` with
 parameters as variables, `views/`, `lang/rust.sql`, `queries/`), plus
 `check.py` (fixture, counts, timings, CLI comparison) and `jscpd.sh`. No
 Rust changed. Measured on this repository
@@ -1179,7 +1179,7 @@ repository's root now has a `.code-db.toml` whose one entry puts it under `tests
 - **How the views are loaded** (SQL files read by the client today;
   registration by an extension is not available on the C API v2 without a
   catalog surface), and whether `duckdb-ext/` is extracted for use in
-  other repositories. The DuckDB 2.0.0 CLI is installed as
+  other repositories. A DuckDB CLI of the pinned release is installed as
   `~/.local/bin/duckdb2` for interactive use.
 - **Go** has its units, packages, complexity, implementations and `go.work`
   (above); a reading on a real Go repository is open. **TypeScript**'s adapter exists only in the
